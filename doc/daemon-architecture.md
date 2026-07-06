@@ -33,11 +33,10 @@ The prototype has:
 - `agent_collab.server_http`: local HTTP server for session control and event reads.
 - `agent_collab.daemon`: in-memory `SessionManager` that owns live sessions.
 - `agent_collab.client`: HTTP client used by CLI commands.
+- `agent_collab.mcp_tools`: shared MCP tool schemas and dispatch.
 - `agent_collab.mcp_server`: stdio MCP adapter that connects to the local server.
 
-The current MCP process no longer owns live referee execution. It is a transitional stdio adapter for MCP clients that launch servers as subprocesses.
-
-The next target is to expose MCP Streamable HTTP directly from `agent-collab serve`, at `/mcp`, so the foreground server is the only long-running process.
+The current MCP process no longer owns live referee execution. MCP clients can connect directly to `agent-collab serve` at `/mcp`, and the stdio adapter remains available for clients that launch servers as subprocesses.
 
 ## Target state
 
@@ -127,13 +126,14 @@ GET  /sessions/{session_id}/transcript
 POST /sessions/{session_id}/stop
 ```
 
-Planned MCP endpoint:
+MCP endpoint:
 
 ```text
 POST /mcp
+GET  /mcp  -> 405 until SSE is implemented
 ```
 
-`/mcp` should implement MCP Streamable HTTP enough for `initialize`, `tools/list`, and `tools/call`. JSON responses are enough for the first implementation. SSE can be added later if a client requires it.
+`/mcp` implements the Streamable HTTP JSON POST path for `initialize`, `tools/list`, and `tools/call`. It accepts MCP notifications and client responses with HTTP `202`, validates non-local `Origin` headers on all `/mcp` methods, validates supported `MCP-Protocol-Version` headers, and returns `405 Method Not Allowed` for `GET /mcp` because SSE is not implemented yet.
 
 Optional later session event stream:
 
@@ -171,20 +171,20 @@ This makes it useful even without a running server.
 
 ## MCP shape
 
-Current MCP shape:
+Preferred MCP shape:
+
+```text
+MCP client
+  -> http://127.0.0.1:8765/mcp
+  -> SessionManager
+```
+
+Compatibility MCP shape:
 
 ```text
 MCP client
   -> stdio agent_collab.mcp_server
   -> local HTTP server
-  -> SessionManager
-```
-
-Target MCP shape:
-
-```text
-MCP client
-  -> http://127.0.0.1:8765/mcp
   -> SessionManager
 ```
 

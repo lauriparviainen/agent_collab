@@ -10,7 +10,6 @@ Start here:
 
 Implementation stages:
 
-- [Stage 4.25: Foreground Streamable HTTP server](tasks_open/stage-4.25-foreground-streamable-http-server.md)
 - [Stage 4.5: TUI watch](tasks_open/stage-4.5-tui-watch.md)
 - [Stage 5: Hardening and operations](tasks_open/stage-5-hardening.md)
 
@@ -21,10 +20,11 @@ Completed stages:
 - [Stage 2: Local daemon and session manager](tasks_closed/stage-2-daemon-api.md)
 - [Stage 3: CLI client commands](tasks_closed/stage-3-cli-client.md)
 - [Stage 4: MCP daemon adapter](tasks_closed/stage-4-mcp-daemon-adapter.md)
+- [Stage 4.25: Foreground Streamable HTTP server](tasks_closed/stage-4.25-foreground-streamable-http-server.md)
 
 Task folders:
 
 - [Open tasks](tasks_open/)
 - [Closed tasks](tasks_closed/)
 
-The current implementation already has the core event model, runners, referee loop, log writing, foreground server, CLI client commands, and stdio MCP adapter. The next architecture step is to move MCP into the foreground server through Streamable HTTP.
+The current implementation already has the core event model, runners, referee loop, log writing, foreground server, CLI client commands, stdio MCP adapter, and Streamable HTTP MCP endpoint. The next architecture step is TUI watch.

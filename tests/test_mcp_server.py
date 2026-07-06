@@ -10,6 +10,11 @@ def _payload(result):
     return json.loads(result["content"][0]["text"])
 
 
+def _assert_tool_result(testcase, result, payload, is_error=False):
+    testcase.assertEqual(_payload(result), payload)
+    testcase.assertEqual(result.get("isError"), is_error)
+
+
 class McpServerTests(unittest.TestCase):
     def test_tools_list_includes_daemon_tools(self):
         response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -40,7 +45,7 @@ class McpServerTests(unittest.TestCase):
             result = handle_tool("agent_collab_start", args)
 
         client.start_session.assert_called_once_with(args)
-        self.assertEqual(_payload(result), {"session_id": "s1", "status": "running"})
+        _assert_tool_result(self, result, {"session_id": "s1", "status": "running"})
 
     def test_list_maps_to_client_list_sessions(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -50,7 +55,7 @@ class McpServerTests(unittest.TestCase):
             result = handle_tool("agent_collab_list_sessions", {})
 
         client.list_sessions.assert_called_once_with()
-        self.assertEqual(_payload(result), {"sessions": [{"session_id": "s1"}]})
+        _assert_tool_result(self, result, {"sessions": [{"session_id": "s1"}]})
 
     def test_status_maps_to_client_get_session(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -60,7 +65,7 @@ class McpServerTests(unittest.TestCase):
             result = handle_tool("agent_collab_status", {"session_id": "s1"})
 
         client.get_session.assert_called_once_with("s1")
-        self.assertEqual(_payload(result), {"session_id": "s1", "status": "done"})
+        _assert_tool_result(self, result, {"session_id": "s1", "status": "done"})
 
     def test_read_events_maps_to_client_read_events(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -70,7 +75,7 @@ class McpServerTests(unittest.TestCase):
             result = handle_tool("agent_collab_read_events", {"session_id": "s1", "cursor": 2})
 
         client.read_events.assert_called_once_with("s1", 2)
-        self.assertEqual(_payload(result), {"cursor": 4, "events": [{"text": "hello"}]})
+        _assert_tool_result(self, result, {"cursor": 4, "events": [{"text": "hello"}]})
 
     def test_wait_events_maps_to_client_wait_events(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -83,7 +88,7 @@ class McpServerTests(unittest.TestCase):
             )
 
         client.wait_events.assert_called_once_with("s1", 2, 30000)
-        self.assertEqual(_payload(result), {"cursor": 4, "events": []})
+        _assert_tool_result(self, result, {"cursor": 4, "events": []})
 
     def test_transcript_maps_to_client_read_transcript_as_direct_text(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -93,7 +98,7 @@ class McpServerTests(unittest.TestCase):
             result = handle_tool("agent_collab_read_transcript", {"session_id": "s1"})
 
         client.read_transcript.assert_called_once_with("s1")
-        self.assertEqual(result, {"content": [{"type": "text", "text": "# transcript\n\nhello\n"}]})
+        self.assertEqual(result, {"content": [{"type": "text", "text": "# transcript\n\nhello\n"}], "isError": False})
 
     def test_stop_maps_to_client_stop_session(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -103,7 +108,7 @@ class McpServerTests(unittest.TestCase):
             result = handle_tool("agent_collab_stop", {"session_id": "s1"})
 
         client.stop_session.assert_called_once_with("s1")
-        self.assertEqual(_payload(result), {"session_id": "s1", "status": "stopped"})
+        _assert_tool_result(self, result, {"session_id": "s1", "status": "stopped"})
 
     def test_client_error_returns_tool_content_error(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -112,7 +117,7 @@ class McpServerTests(unittest.TestCase):
 
             result = handle_tool("agent_collab_status", {"session_id": "s1"})
 
-        self.assertEqual(_payload(result), {"error": "could not reach daemon"})
+        _assert_tool_result(self, result, {"error": "could not reach daemon"}, is_error=True)
 
     def test_client_error_through_jsonrpc_call_is_not_jsonrpc_error(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -133,7 +138,41 @@ class McpServerTests(unittest.TestCase):
 
         self.assertNotIn("error", response)
         self.assertEqual(response["id"], 7)
-        self.assertEqual(_payload(response["result"]), {"error": "could not reach daemon"})
+        _assert_tool_result(self, response["result"], {"error": "could not reach daemon"}, is_error=True)
+
+    def test_unknown_tool_through_jsonrpc_call_is_protocol_error(self):
+        response = handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": {"name": "not_a_tool", "arguments": {}},
+            }
+        )
+
+        self.assertEqual(response["id"], 8)
+        self.assertEqual(response["error"]["code"], -32602)
+        self.assertIn("Unknown tool", response["error"]["message"])
+
+    def test_non_object_tool_arguments_are_protocol_error(self):
+        response = handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {"name": "agent_collab_list_sessions", "arguments": []},
+            }
+        )
+
+        self.assertEqual(response["id"], 9)
+        self.assertEqual(response["error"]["code"], -32602)
+        self.assertIn("arguments must be an object", response["error"]["message"])
+
+    def test_notification_returns_no_response(self):
+        self.assertIsNone(handle({"jsonrpc": "2.0", "method": "notifications/cancelled"}))
+
+    def test_client_response_returns_no_response(self):
+        self.assertIsNone(handle({"jsonrpc": "2.0", "id": 10, "result": {}}))
 
 
 if __name__ == "__main__":

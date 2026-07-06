@@ -16,7 +16,7 @@ agent-collab serve
   starts Claude/Codex subprocesses
   writes JSONL/Markdown logs
   serves CLI clients
-  will serve MCP Streamable HTTP at /mcp
+  serves MCP Streamable HTTP at /mcp
 ```
 
 ## Current Implementation
@@ -30,11 +30,11 @@ Implemented now:
 - JSONL and Markdown logs under `WORKDIR/.agent-collab/sessions/`.
 - Mock and dry-run runners for testing without Claude/Codex.
 - Configurable agents and modes through `.agent-collab/config.toml`.
+- MCP Streamable HTTP endpoint in `agent-collab serve`.
 - Stdio MCP adapter that connects to the foreground server.
 
 Not implemented yet:
 
-- MCP Streamable HTTP endpoint in `agent-collab serve`.
 - TUI watch mode.
 - Auth/workdir allowlist hardening.
 - Background daemonization or service management.
@@ -43,16 +43,13 @@ Not implemented yet:
 
 The next planned implementation stage is:
 
-[doc/tasks_open/stage-4.25-foreground-streamable-http-server.md](doc/tasks_open/stage-4.25-foreground-streamable-http-server.md)
-
-Do this before TUI work.
+[doc/tasks_open/stage-4.5-tui-watch.md](doc/tasks_open/stage-4.5-tui-watch.md)
 
 High-level goal:
 
-- Add `POST /mcp` to `agent-collab serve`.
-- Implement enough MCP Streamable HTTP for `initialize`, `tools/list`, and `tools/call`.
-- Make MCP tools call the same in-process `SessionManager` as the CLI HTTP routes.
-- Keep the server foreground-only with useful request/session logs.
+- Add a TUI watch mode as an additive layer.
+- Keep existing plain `watch` pipe-friendly.
+- Do not replace cursor-based event reads or long-polling.
 
 ## Important Files
 
@@ -64,6 +61,7 @@ High-level goal:
 - `agent_collab/events.py`: normalized event model and stream parsers.
 - `agent_collab/client.py`: HTTP client used by CLI watch/start/list/status.
 - `agent_collab/mcp_server.py`: current stdio MCP adapter.
+- `agent_collab/mcp_tools.py`: shared MCP tool schemas and dispatch.
 - `agent_collab/logging.py`: JSONL/Markdown session logs.
 - `doc/`: architecture docs and staged task docs.
 - `tests/`: stdlib `unittest` test suite.
@@ -142,14 +140,7 @@ codex exec --json
 
 Add focused tests with each behavior change.
 
-For the Stage 4.25 MCP-over-HTTP work, add tests for:
-
-- `POST /mcp` `initialize`,
-- `POST /mcp` `tools/list`,
-- `POST /mcp` `tools/call`,
-- MCP-started session visible through normal session listing,
-- MCP-started session readable through normal event endpoints,
-- non-local `Origin` rejected for `/mcp`.
+For server and MCP changes, cover the affected route or tool behavior plus one shared-session path when relevant.
 
 Before handing back, run:
 

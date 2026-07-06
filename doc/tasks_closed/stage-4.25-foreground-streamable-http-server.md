@@ -8,6 +8,18 @@ This stage focuses on plumbing, not UI. The server should own sessions, expose t
 
 Do not daemonize yet. Running in a terminal is useful while the protocol is still changing because connection events, request logs, MCP tool calls, and session lifecycle logs are visible.
 
+## Completion notes
+
+Implemented:
+
+- `POST /mcp` for Streamable HTTP JSON requests.
+- `initialize`, `tools/list`, and `tools/call`.
+- `202 Accepted` with no body for MCP notifications and client responses.
+- Non-local `Origin` rejection for all `/mcp` methods.
+- `MCP-Protocol-Version` validation for supported protocol versions.
+- `GET /mcp` returns `405 Method Not Allowed`; SSE is still out of scope.
+- Shared `SessionManager` use between `/mcp` and the normal session HTTP routes.
+
 ## Target shape
 
 ```text

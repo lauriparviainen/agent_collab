@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from .daemon import SessionManager, StartSessionRequest
+from .mcp_tools import SUPPORTED_PROTOCOL_VERSIONS, SessionManagerToolBackend, handle_request as handle_mcp_request
 
 
 class HttpError(Exception):
@@ -16,9 +19,17 @@ class HttpError(Exception):
         self.message = message
 
 
+@dataclass
+class HttpResponse:
+    status: int
+    payload: Optional[Any] = None
+
+
 class AgentCollabHttpServer:
-    def __init__(self, manager: Optional[SessionManager] = None):
+    def __init__(self, manager: Optional[SessionManager] = None, log_requests: Optional[bool] = None):
+        owns_manager = manager is None
         self.manager = manager or SessionManager(lifecycle_logger=self._log)
+        self.log_requests = owns_manager if log_requests is None else bool(log_requests)
 
     async def serve(self, host: str = "127.0.0.1", port: int = 8765) -> None:
         server = await asyncio.start_server(self._handle_connection, host, port)
@@ -32,16 +43,28 @@ class AgentCollabHttpServer:
 
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            request = await self._read_request(reader)
-            result = await self._dispatch(*request)
-            await self._write_json(writer, 200, result)
+            method, target, headers, body = await self._read_request(reader)
+            path = urlparse(target).path
+            self._log_request(f"request {method} {path}")
+            result = await self._dispatch(method, target, headers, body)
+            if isinstance(result, HttpResponse):
+                if result.payload is None:
+                    await self._write_empty(writer, result.status)
+                else:
+                    await self._write_json(writer, result.status, result.payload)
+            else:
+                await self._write_json(writer, 200, result)
         except HttpError as exc:
+            self._log_request(f"request error {exc.status} {exc.message}")
             await self._write_json(writer, exc.status, {"error": exc.message})
         except KeyError as exc:
+            self._log_request(f"request error 404 {exc}")
             await self._write_json(writer, 404, {"error": str(exc)})
         except ValueError as exc:
+            self._log_request(f"request error 400 {exc}")
             await self._write_json(writer, 400, {"error": str(exc)})
         except Exception as exc:
+            self._log_request(f"request error 500 {exc}")
             await self._write_json(writer, 500, {"error": str(exc)})
         finally:
             writer.close()
@@ -77,6 +100,9 @@ class AgentCollabHttpServer:
 
         if method == "GET" and path_parts == ["health"]:
             return {"status": "ok", "sessions": len(self.manager.list_sessions())}
+
+        if path_parts == ["mcp"]:
+            return await self._dispatch_mcp(method, headers, body)
 
         if method == "POST" and path_parts == ["sessions"]:
             data = _decode_json_object(body)
@@ -117,9 +143,38 @@ class AgentCollabHttpServer:
 
         raise HttpError(404, f"not found: {method} {parsed.path}")
 
+    async def _dispatch_mcp(self, method: str, headers: Dict[str, str], body: bytes) -> Any:
+        _validate_mcp_origin(headers.get("origin"))
+        _validate_mcp_protocol_version(headers.get("mcp-protocol-version"))
+
+        if method == "GET":
+            raise HttpError(405, "MCP SSE streams are not implemented")
+        if method != "POST":
+            raise HttpError(405, "MCP endpoint only supports POST")
+
+        request = _decode_json_object(body)
+        self._log_mcp(request)
+        response = await handle_mcp_request(request, SessionManagerToolBackend(self.manager))
+        return HttpResponse(202) if response is None else response
+
+    def _log_request(self, message: str) -> None:
+        if self.log_requests:
+            self._log(message)
+
+    def _log_mcp(self, request: Dict[str, Any]) -> None:
+        if not self.log_requests:
+            return
+        method = request.get("method")
+        if method == "tools/call":
+            params = request.get("params") or {}
+            tool_name = params.get("name") if isinstance(params, dict) else None
+            self._log(f"MCP tools/call {tool_name}")
+        elif method in {"initialize", "tools/list"}:
+            self._log(f"MCP {method}")
+
     async def _write_json(self, writer: asyncio.StreamWriter, status: int, payload: Any) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 500: "Internal Server Error"}.get(status, "Error")
+        reason = _http_reason(status)
         writer.write(
             (
                 f"HTTP/1.1 {status} {reason}\r\n"
@@ -129,6 +184,17 @@ class AgentCollabHttpServer:
                 "\r\n"
             ).encode("ascii")
             + body
+        )
+        await writer.drain()
+
+    async def _write_empty(self, writer: asyncio.StreamWriter, status: int) -> None:
+        writer.write(
+            (
+                f"HTTP/1.1 {status} {_http_reason(status)}\r\n"
+                "Content-Length: 0\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+            ).encode("ascii")
         )
         await writer.drain()
 
@@ -157,6 +223,43 @@ def _query_int(query: Dict[str, Any], key: str, default: int) -> int:
     if not values:
         return default
     return int(values[0])
+
+
+def _validate_mcp_origin(origin: Optional[str]) -> None:
+    if not origin:
+        return
+    parsed = urlparse(origin)
+    if parsed.scheme not in {"http", "https"}:
+        raise HttpError(403, "non-local Origin rejected for /mcp")
+    host = parsed.hostname
+    if host == "localhost":
+        return
+    if host is not None:
+        try:
+            if ip_address(host).is_loopback:
+                return
+        except ValueError:
+            pass
+    raise HttpError(403, "non-local Origin rejected for /mcp")
+
+
+def _validate_mcp_protocol_version(protocol_version: Optional[str]) -> None:
+    if not protocol_version:
+        return
+    if protocol_version not in SUPPORTED_PROTOCOL_VERSIONS:
+        raise HttpError(400, f"unsupported MCP-Protocol-Version: {protocol_version}")
+
+
+def _http_reason(status: int) -> str:
+    return {
+        200: "OK",
+        202: "Accepted",
+        400: "Bad Request",
+        403: "Forbidden",
+        404: "Not Found",
+        405: "Method Not Allowed",
+        500: "Internal Server Error",
+    }.get(status, "Error")
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765) -> None:

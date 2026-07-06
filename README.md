@@ -13,6 +13,7 @@ Implemented:
 - Configurable agent commands and collaboration modes.
 - Foreground local session server at `127.0.0.1:8765`.
 - CLI client commands: `serve`, `start`, `list`, `status`, `events`, `watch`, `stop`.
+- MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.
 - Stdio MCP adapter that connects to the local server.
 - Cursor-based event reads and long-polling.
 - JSONL and Markdown logs under `WORKDIR/.agent-collab/sessions/`.
@@ -20,9 +21,9 @@ Implemented:
 Current transition:
 
 - `agent-collab serve` is the long-running foreground process that owns sessions.
-- The current MCP implementation is still a stdio adapter launched by an MCP client.
-- Next plumbing stage is to add MCP Streamable HTTP directly to `agent-collab serve` at `/mcp`.
-- TUI watch is planned after the Streamable HTTP plumbing.
+- MCP clients can connect directly to `agent-collab serve` over Streamable HTTP.
+- The stdio MCP adapter remains available for clients that launch MCP servers as subprocesses.
+- TUI watch is planned next.
 
 ## Install Locally
 
@@ -135,7 +136,33 @@ The referee invokes agents as subprocesses. Agent prompts include guardrails tel
 
 ## MCP
 
-Current MCP shape:
+Preferred MCP shape:
+
+```text
+MCP client -> http://127.0.0.1:8765/mcp -> in-process SessionManager
+```
+
+Start the foreground server first:
+
+```bash
+python3 -m agent_collab.cli serve
+```
+
+Then configure an MCP client to use:
+
+```text
+http://127.0.0.1:8765/mcp
+```
+
+The `/mcp` endpoint implements the Streamable HTTP JSON POST path for `initialize`, `tools/list`, and `tools/call`. It accepts MCP notifications and client responses with `202 Accepted`, validates non-local `Origin` headers, validates supported `MCP-Protocol-Version` headers, and returns `405 Method Not Allowed` for `GET /mcp` because SSE streams are not implemented yet. It uses the same live `SessionManager` as the CLI HTTP routes, so sessions started through MCP can be listed, watched, and stopped with the normal CLI client commands.
+
+Codex can register the direct Streamable HTTP endpoint with:
+
+```bash
+codex mcp add agent-collab --url http://127.0.0.1:8765/mcp
+```
+
+Compatibility stdio shape:
 
 ```text
 MCP client
@@ -144,19 +171,13 @@ MCP client
       starts/watches server-owned sessions
 ```
 
-Start the server first:
-
-```bash
-python3 -m agent_collab.cli serve
-```
-
-Then configure an MCP client to run:
+Configure a subprocess-based MCP client to run:
 
 ```bash
 python3 -m agent_collab.mcp_server
 ```
 
-Example Codex MCP config:
+Compatibility Codex stdio config:
 
 ```toml
 [mcp_servers.agent_collab]
@@ -179,14 +200,6 @@ Exposed tools:
 - `agent_collab_read_transcript`
 - `agent_collab_stop`
 
-Planned MCP shape:
-
-```text
-MCP client -> http://127.0.0.1:8765/mcp -> in-process SessionManager
-```
-
-That is documented in [doc/tasks_open/stage-4.25-foreground-streamable-http-server.md](doc/tasks_open/stage-4.25-foreground-streamable-http-server.md).
-
 ## Development
 
 Run tests:
@@ -204,5 +217,6 @@ Important implementation files:
 - `agent_collab/runners.py`: Claude/Codex/mock/dry-run subprocess runners.
 - `agent_collab/events.py`: normalized event model and stream parsers.
 - `agent_collab/mcp_server.py`: current stdio MCP adapter.
+- `agent_collab/mcp_tools.py`: shared MCP tool schemas and dispatch.
 
 For agent handoff notes, read [AGENTS.md](AGENTS.md).
