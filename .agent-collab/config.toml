@@ -1,0 +1,20 @@
+[agents.claude]
+type = "claude"
+command = "claude"
+args = ["-p", "--model", "sonnet", "--output-format", "stream-json", "--verbose"]
+enabled = true
+
+[agents.codex]
+type = "codex"
+command = "codex"
+args = ["exec", "--json"]
+enabled = true
+
+[modes.claude-leads]
+sequence = ["claude", "codex", "claude"]
+
+[modes.codex-leads]
+sequence = ["codex", "claude", "codex"]
+
+[modes.debate]
+sequence = ["claude", "codex", "claude", "codex"]

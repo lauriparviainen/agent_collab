@@ -1,0 +1,190 @@
+import contextlib
+import io
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from agent_collab import cli
+from agent_collab.events import Event
+from agent_collab.watch import resolve_jsonl_path, watch_jsonl
+
+
+def _write_events(path, events):
+    path.write_text("\n".join(event.to_json() for event in events) + "\n", encoding="utf-8")
+
+
+class WatchTests(unittest.TestCase):
+    def test_watch_jsonl_prints_existing_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            _write_events(
+                path,
+                [
+                    Event.create("human", "message", "hello"),
+                    Event.create("referee", "status", "ready"),
+                ],
+            )
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                watch_jsonl(path, follow=False, color=False)
+
+            text = output.getvalue()
+            self.assertIn("HUMAN   hello", text)
+            self.assertIn("REFEREE ready", text)
+
+    def test_watch_jsonl_respects_cursor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            _write_events(
+                path,
+                [
+                    Event.create("human", "message", "first"),
+                    Event.create("codex", "message", "second"),
+                    Event.create("claude", "message", "third"),
+                ],
+            )
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                watch_jsonl(path, follow=False, start_cursor=1, color=False)
+
+            text = output.getvalue()
+            self.assertNotIn("first", text)
+            self.assertIn("CODEX   second", text)
+            self.assertIn("CLAUDE  third", text)
+
+    def test_resolve_jsonl_path_from_workdir_and_session_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            expected = root / ".agent-collab" / "sessions" / "mcp-1.jsonl"
+
+            self.assertEqual(resolve_jsonl_path(workdir=root, session_id="mcp-1"), expected)
+            self.assertEqual(resolve_jsonl_path("mcp-1", workdir=root), expected)
+
+    def test_resolve_jsonl_path_accepts_direct_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            path.touch()
+
+            self.assertEqual(resolve_jsonl_path(path), path.resolve())
+
+    def test_resolve_jsonl_path_uses_latest_log_when_session_omitted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log_dir = root / ".agent-collab" / "sessions"
+            log_dir.mkdir(parents=True)
+            old_path = log_dir / "old.jsonl"
+            new_path = log_dir / "new.jsonl"
+            old_path.write_text("{}\n", encoding="utf-8")
+            new_path.write_text("{}\n", encoding="utf-8")
+            os.utime(old_path, (1, 1))
+            os.utime(new_path, (2, 2))
+
+            self.assertEqual(resolve_jsonl_path(workdir=root), new_path)
+
+    def test_watch_jsonl_prints_malformed_lines_as_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session.jsonl"
+            path.write_text(
+                Event.create("human", "message", "ok").to_json() + "\nnot-json\n",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                watch_jsonl(path, follow=False, color=False)
+
+            text = output.getvalue()
+            self.assertIn("HUMAN   ok", text)
+            self.assertIn("ERROR   malformed JSONL line 2: not-json", text)
+
+    def test_cli_watch_no_follow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log_dir = root / ".agent-collab" / "sessions"
+            log_dir.mkdir(parents=True)
+            path = log_dir / "mcp-1.jsonl"
+            _write_events(path, [Event.create("codex", "message", "from cli")])
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = cli.main(["watch", "--workdir", str(root), "--session-id", "mcp-1", "--no-follow"])
+
+            self.assertEqual(code, 0)
+            self.assertIn("CODEX   from cli", output.getvalue())
+
+    def test_cli_watch_without_session_uses_latest_daemon_session(self):
+        class FakeClient:
+            def list_sessions(self):
+                return {
+                    "sessions": [
+                        {"session_id": "old", "updated_at": "2026-01-01T00:00:00+00:00"},
+                        {"session_id": "new", "updated_at": "2026-01-02T00:00:00+00:00"},
+                    ]
+                }
+
+            def read_events(self, session_id, cursor):
+                self.session_id = session_id
+                return {"cursor": 1, "events": [Event.create("human", "message", f"from {session_id}").to_dict()]}
+
+        fake = FakeClient()
+        output = io.StringIO()
+        with mock.patch("agent_collab.cli._client", return_value=fake):
+            with contextlib.redirect_stdout(output):
+                code = cli.main(["watch", "--no-follow", "--no-color"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("HUMAN   from new", output.getvalue())
+
+    def test_cli_start_watch_starts_then_watches_session(self):
+        class FakeClient:
+            def __init__(self):
+                self.sent = False
+
+            def start_session(self, payload):
+                self.payload = payload
+                return {
+                    "session_id": "started",
+                    "status": "running",
+                    "workdir": payload["workdir"],
+                    "jsonl_path": "/tmp/started.jsonl",
+                    "markdown_path": "/tmp/started.md",
+                }
+
+            def wait_events(self, session_id, cursor, timeout_ms):
+                if self.sent:
+                    return {"cursor": cursor, "events": []}
+                self.sent = True
+                return {"cursor": 1, "events": [Event.create("referee", "message", f"watching {session_id}").to_dict()]}
+
+            def get_session(self, session_id):
+                return {"session_id": session_id, "status": "done"}
+
+        fake = FakeClient()
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("agent_collab.cli._client", return_value=fake):
+                with contextlib.redirect_stdout(output):
+                    code = cli.main([
+                        "start",
+                        "--mock",
+                        "--watch",
+                        "--watch-wait-ms",
+                        "1",
+                        "--no-color",
+                        "--workdir",
+                        tmp,
+                        "task",
+                    ])
+
+        self.assertEqual(code, 0)
+        text = output.getvalue()
+        self.assertIn("session_id: started", text)
+        self.assertIn("REFEREE watching started", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
