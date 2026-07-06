@@ -7,10 +7,13 @@ Start here:
 - [Agent handoff notes](../AGENTS.md)
 - [Daemon architecture](daemon-architecture.md)
 - [Agent configuration](agent-configuration.md)
+- [Runtime layout](runtime-layout.md)
+- [Development notes](development.md)
 
 Implementation stages:
 
 - [Stage 4.5: TUI watch](tasks_open/stage-4.5-tui-watch.md)
+- [Stage 4.8: Global runtime and config migrations](tasks_open/stage-4.8-global-runtime-and-config-migrations.md)
 - [Stage 5: Hardening and operations](tasks_open/stage-5-hardening.md)
 
 Completed stages:
@@ -28,4 +31,4 @@ Task folders:
 - [Open tasks](tasks_open/)
 - [Closed tasks](tasks_closed/)
 
-The current implementation already has the core event model, runners, referee loop, log writing, foreground server, project-local daemon lifecycle, CLI client commands, stdio MCP adapter, Streamable HTTP MCP endpoint, and typed validated start options for agents. The next architecture step is the additive TUI watch mode.
+The current implementation already has the core event model, runners, referee loop, log writing, foreground server, project-local daemon lifecycle, CLI client commands, stdio MCP adapter, Streamable HTTP MCP endpoint, and typed validated start options for agents. Open architecture work includes the additive TUI watch mode and moving daemon runtime state to a global session registry with per-session workdirs.
