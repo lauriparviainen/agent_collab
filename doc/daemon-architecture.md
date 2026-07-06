@@ -1,16 +1,20 @@
-# Foreground server architecture
+# Local server architecture
 
 ## Goal
 
 Move `agent-collab` from a one-shot process model to a joinable session model.
 
-The implementation is currently a foreground local server, not a background service. Keep it that way until the protocol and client shape settle.
+The implementation has both a foreground local server and a project-local background daemon lifecycle. `agent-collab serve` remains the foreground debugging path; `agent-collab daemon start` starts the same server model in the background.
 
 The desired shape is:
 
 ```text
 agent-collab serve
   owns sessions, subprocess lifetimes, logs, and event delivery
+
+agent-collab daemon start
+  starts the same server model in the background
+  writes runtime state under WORKDIR/.agent-collab/data/
 
 CLI client
   starts sessions, watches sessions, and prints human-readable transcripts
@@ -40,7 +44,7 @@ The current MCP process no longer owns live referee execution. MCP clients can c
 
 ## Target state
 
-The foreground server owns live collaboration sessions. Both CLI and MCP connect to it.
+The foreground server or project-local daemon owns live collaboration sessions. CLI and MCP connect to whichever local server is running.
 
 ```text
                  starts/watches
@@ -48,7 +52,7 @@ Human terminal -----------------> CLI client
                                       |
                                       | HTTP/local API
                                       v
-                               agent-collab serve
+                               agent-collab serve/daemon
                                       |
                     starts Claude/Codex subprocesses
                                       |
@@ -67,7 +71,7 @@ being hardcoded to exactly one Claude runner and one Codex runner. See
 
 1. A client asks the server to start a session.
 2. The server creates a `session_id`.
-3. The server creates log paths under `WORKDIR/.agent-collab/sessions/`.
+3. The server validates typed start options before creating session state. Foreground sessions use `WORKDIR/.agent-collab/sessions/`; daemon-owned sessions use `WORKDIR/.agent-collab/data/sessions/`.
 4. The server runs the existing `Referee` in a background task.
 5. Each emitted event is:
    - appended to in-memory session history,
@@ -118,6 +122,7 @@ Suggested endpoints:
 
 ```text
 POST /sessions
+POST /options
 GET  /sessions
 GET  /sessions/{session_id}
 GET  /sessions/{session_id}/events?cursor=N
@@ -155,6 +160,10 @@ Client/server commands:
 
 ```bash
 agent-collab serve
+agent-collab daemon start --workdir /repo
+agent-collab daemon status --workdir /repo
+agent-collab daemon logs --workdir /repo --tail 100
+agent-collab daemon stop --workdir /repo
 agent-collab start --mock --workdir /repo "task"
 agent-collab watch SESSION_ID
 agent-collab status SESSION_ID
@@ -191,6 +200,7 @@ MCP client
 Tools:
 
 ```text
+agent_collab_describe_options
 agent_collab_start
 agent_collab_list_sessions
 agent_collab_status
@@ -201,6 +211,8 @@ agent_collab_stop
 ```
 
 MCP code should not run the referee loop directly and should not own a separate session registry.
+
+Before agents pass non-default model, reasoning, permission, or sandbox settings, they should call `agent_collab_describe_options` and then start sessions with typed `codex_options` and `claude_options`. Invalid options are rejected before subprocess launch with field-level feedback.
 
 ## Safety model
 

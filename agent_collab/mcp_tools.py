@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol
 
 from .daemon import SessionManager, StartSessionRequest
+from .options import StartOptionsError
 
 
 PROTOCOL_VERSION = "2025-11-25"
@@ -14,7 +15,10 @@ SUPPORTED_PROTOCOL_VERSIONS = {"2025-03-26", "2025-06-18", PROTOCOL_VERSION}
 TOOLS = [
     {
         "name": "agent_collab_start",
-        "description": "Start a supervised Claude/Codex collaboration session and return a session id.",
+        "description": (
+            "Start a supervised Claude/Codex collaboration session and return a session id. "
+            "Call agent_collab_describe_options first before passing non-default codex_options or claude_options."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -25,8 +29,18 @@ TOOLS = [
                 "timeout": {"type": "integer"},
                 "mock": {"type": "boolean"},
                 "dry_run": {"type": "boolean"},
+                "codex_options": {"type": "object", "additionalProperties": True},
+                "claude_options": {"type": "object", "additionalProperties": True},
             },
             "required": ["task"],
+        },
+    },
+    {
+        "name": "agent_collab_describe_options",
+        "description": "Describe modes, configured agents, and accepted codex_options and claude_options for starts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"workdir": {"type": "string"}},
         },
     },
     {
@@ -86,6 +100,9 @@ class ToolBackend(Protocol):
     async def start_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         ...
 
+    async def describe_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        ...
+
     async def list_sessions(self) -> Dict[str, Any]:
         ...
 
@@ -119,9 +136,15 @@ class SessionManagerToolBackend:
                 timeout=_int_arg(payload, "timeout", 900),
                 mock=bool(payload.get("mock", False)),
                 dry_run=bool(payload.get("dry_run", False)),
+                codex_options=_optional_payload(payload, "codex_options"),
+                claude_options=_optional_payload(payload, "claude_options"),
             )
         )
         return state.to_dict()
+
+    async def describe_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        workdir = payload.get("workdir")
+        return self.manager.describe_options(Path(str(workdir)) if workdir else None)
 
     async def list_sessions(self) -> Dict[str, Any]:
         return {"sessions": [state.to_dict() for state in self.manager.list_sessions()]}
@@ -150,6 +173,9 @@ class HttpClientToolBackend:
 
     async def start_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.client_factory().start_session(payload)
+
+    async def describe_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.client_factory().describe_options(payload)
 
     async def list_sessions(self) -> Dict[str, Any]:
         return self.client_factory().list_sessions()
@@ -198,6 +224,8 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
     try:
         if name == "agent_collab_start":
             return content(await backend.start_session(_start_payload(args)))
+        if name == "agent_collab_describe_options":
+            return content(await backend.describe_options(_describe_payload(args)))
         if name == "agent_collab_list_sessions":
             return content(await backend.list_sessions())
 
@@ -218,7 +246,12 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
             return text_content(await backend.read_transcript(session_id))
         if name == "agent_collab_stop":
             return content(await backend.stop_session(session_id))
+    except StartOptionsError as exc:
+        return content(exc.to_dict(), is_error=True)
     except Exception as exc:
+        error_payload = getattr(exc, "payload", None)
+        if isinstance(error_payload, dict):
+            return content(error_payload, is_error=True)
         return content({"error": str(exc)}, is_error=True)
 
     raise McpProtocolError(-32602, f"Unknown tool: {name}")
@@ -244,8 +277,10 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {"tools": {}},
                     "instructions": (
-                        "Use agent_collab_start to create daemon-owned collaboration sessions. "
+                        "Call agent_collab_describe_options before starting a session when you need non-default model, reasoning, sandbox, or permission settings. "
+                        "Use agent_collab_start with task, mode, workdir, max_turns, timeout, and typed codex_options or claude_options. "
                         "Use agent_collab_wait_events with a cursor for long-running watches; do not make one blocking call. "
+                        "If agent_collab_start returns isError, fix the invalid option and retry instead of guessing. "
                         "The foreground agent-collab server owns sessions and exposes this MCP endpoint at /mcp."
                     ),
                     "serverInfo": {"name": "agent-collab", "version": "0.1.0"},
@@ -295,10 +330,35 @@ def _int_arg(args: Dict[str, Any], key: str, default: int) -> int:
 
 
 def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
-    payload = {key: args[key] for key in ("task", "mode", "workdir", "max_turns", "timeout", "mock", "dry_run") if key in args}
+    payload = {
+        key: args[key]
+        for key in (
+            "task",
+            "mode",
+            "workdir",
+            "max_turns",
+            "timeout",
+            "mock",
+            "dry_run",
+            "codex_options",
+            "claude_options",
+        )
+        if key in args
+    }
     if not isinstance(payload.get("task"), str) or not payload["task"]:
         raise ValueError("task is required")
     return payload
+
+
+def _describe_payload(args: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {key: args[key] for key in ("workdir",) if key in args}
+    if "workdir" in payload and not isinstance(payload["workdir"], str):
+        raise ValueError("workdir must be a string")
+    return payload
+
+
+def _optional_payload(args: Dict[str, Any], key: str) -> Any:
+    return {} if key not in args or args[key] is None else args[key]
 
 
 def _is_jsonrpc_notification(request: Dict[str, Any]) -> bool:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import asyncio
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .config import CollaborationConfig, builtin_config, load_config, validate_config, validate_mode
 from .events import Event
@@ -28,6 +28,8 @@ class RefereeConfig:
     log_dir: Optional[Path] = None
     session_id: Optional[str] = None
     collab_config: Optional[CollaborationConfig] = None
+    codex_options: Optional[Dict[str, Any]] = None
+    claude_options: Optional[Dict[str, Any]] = None
 
 
 class Referee:
@@ -48,10 +50,23 @@ class Referee:
             if self.config.mock:
                 runners[agent_id] = MockRunner(agent.name or agent.id)
             elif self.config.dry_run and agent.type != "mock":
-                runners[agent_id] = DryRunRunner(agent.id, [agent.command or agent.id] + list(agent.args), cwd=agent.cwd)
+                from .options import apply_agent_options
+
+                runners[agent_id] = DryRunRunner(
+                    agent.id,
+                    apply_agent_options([agent.command or agent.id] + list(agent.args), agent, self._options_for(agent.type)),
+                    cwd=agent.cwd,
+                )
             else:
-                runners[agent_id] = configured_runner(agent, self.config.verbose)
+                runners[agent_id] = configured_runner(agent, self.config.verbose, self._options_for(agent.type))
         return runners
+
+    def _options_for(self, agent_type: str) -> Dict[str, Any]:
+        if agent_type == "codex":
+            return dict(self.config.codex_options or {})
+        if agent_type == "claude":
+            return dict(self.config.claude_options or {})
+        return {}
 
     def _sequence(self) -> List[str]:
         return list(self.collab_config.modes[self.config.mode].sequence)

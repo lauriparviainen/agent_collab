@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from typing import Any, Dict
 
 from .referee import RefereeConfig, run_sync
 
@@ -43,6 +44,8 @@ def build_serve_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-collab serve", description="Run the local agent-collab daemon.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--workdir", type=Path, default=Path("."), help=argparse.SUPPRESS)
+    parser.add_argument("--session-log-dir", type=Path, help=argparse.SUPPRESS)
     return parser
 
 
@@ -56,10 +59,43 @@ def build_start_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--codex-options", help="JSON object for typed Codex start options.")
+    parser.add_argument("--claude-options", help="JSON object for typed Claude start options.")
     parser.add_argument("--watch", action="store_true", help="Start the session and immediately watch its transcript.")
     parser.add_argument("--watch-wait-ms", type=int, default=30000, help="Long-poll timeout while watching.")
     parser.add_argument("--no-color", action="store_true")
     return parser
+
+
+def build_daemon_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agent-collab daemon", description="Manage the project-local background server.")
+    subparsers = parser.add_subparsers(dest="action", required=True)
+
+    start = subparsers.add_parser("start", help="Start the background server.")
+    _add_daemon_workdir(start)
+    start.add_argument("--host", default="127.0.0.1")
+    start.add_argument("--port", type=int, default=8765)
+
+    status = subparsers.add_parser("status", help="Show daemon status.")
+    _add_daemon_workdir(status)
+
+    stop = subparsers.add_parser("stop", help="Stop the daemon.")
+    _add_daemon_workdir(stop)
+
+    restart = subparsers.add_parser("restart", help="Restart the daemon.")
+    _add_daemon_workdir(restart)
+    restart.add_argument("--host", default="127.0.0.1")
+    restart.add_argument("--port", type=int, default=8765)
+
+    logs = subparsers.add_parser("logs", help="Print daemon logs.")
+    _add_daemon_workdir(logs)
+    logs.add_argument("--tail", type=int, default=100)
+    logs.add_argument("--stderr", action="store_true", help="Read daemon.stderr.log instead of daemon.log.")
+    return parser
+
+
+def _add_daemon_workdir(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--workdir", type=Path, default=Path("."), help="Project root for daemon runtime data.")
 
 
 def build_client_parser(prog: str, description: str) -> argparse.ArgumentParser:
@@ -167,7 +203,12 @@ def _main_serve(argv) -> int:
     parser = build_serve_parser()
     args = parser.parse_args(argv)
     try:
-        run_server(args.host, args.port)
+        run_server(
+            args.host,
+            args.port,
+            default_workdir=args.workdir,
+            session_log_dir=args.session_log_dir,
+        )
     except KeyboardInterrupt:
         return 130
     return 0
@@ -183,6 +224,8 @@ def _main_start(argv) -> int:
     parser = build_start_parser()
     args = parser.parse_args(argv)
     try:
+        codex_options = _json_object_arg(args.codex_options, "--codex-options")
+        claude_options = _json_object_arg(args.claude_options, "--claude-options")
         result = _client(args.server_url).start_session(
             {
                 "task": args.task,
@@ -192,6 +235,8 @@ def _main_start(argv) -> int:
                 "timeout": args.timeout,
                 "mock": args.mock,
                 "dry_run": args.dry_run,
+                "codex_options": codex_options,
+                "claude_options": claude_options,
             }
         )
         _print_session(result)
@@ -209,6 +254,52 @@ def _main_start(argv) -> int:
         print(f"ERROR   {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _main_daemon(argv) -> int:
+    from .daemon_supervisor import DaemonSupervisorError, daemon_status, start_daemon, stop_daemon, tail_daemon_log
+
+    parser = build_daemon_parser()
+    args = parser.parse_args(argv)
+    workdir = args.workdir.expanduser().resolve()
+    try:
+        if args.action == "start":
+            state = start_daemon(workdir, host=args.host, port=args.port)
+            print(f"started agent-collab daemon pid {state['pid']}")
+            print(f"server_url: {state['server_url']}")
+            print(f"mcp_url: {state['mcp_url']}")
+            print(f"data_dir: {state['data_dir']}")
+            return 0
+        if args.action == "status":
+            status = daemon_status(workdir)
+            print(status.message)
+            if status.state:
+                for key in ("server_url", "mcp_url", "data_dir", "daemon_log_path", "daemon_stderr_path"):
+                    if key in status.state:
+                        print(f"{key}: {status.state[key]}")
+            return 0 if status.running else 1
+        if args.action == "stop":
+            print(stop_daemon(workdir).message)
+            return 0
+        if args.action == "restart":
+            stop_daemon(workdir)
+            state = start_daemon(workdir, host=args.host, port=args.port)
+            print(f"restarted agent-collab daemon pid {state['pid']}")
+            print(f"server_url: {state['server_url']}")
+            print(f"mcp_url: {state['mcp_url']}")
+            return 0
+        if args.action == "logs":
+            text = tail_daemon_log(workdir, tail=args.tail, stderr=args.stderr)
+            if text:
+                print(text)
+            return 0
+    except DaemonSupervisorError as exc:
+        print(f"ERROR   {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"ERROR   {exc}", file=sys.stderr)
+        return 1
+    return 1
 
 
 def _main_list(argv) -> int:
@@ -278,6 +369,18 @@ def _print_session(session) -> None:
             print(f"{key}: {session[key]}")
 
 
+def _json_object_arg(value: str, label: str) -> Dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} must be a JSON object: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return parsed
+
+
 def main(argv=None) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -286,6 +389,7 @@ def main(argv=None) -> int:
     subcommands = {
         "watch": _main_watch,
         "serve": _main_serve,
+        "daemon": _main_daemon,
         "start": _main_start,
         "list": _main_list,
         "status": _main_status,

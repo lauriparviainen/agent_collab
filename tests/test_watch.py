@@ -59,10 +59,31 @@ class WatchTests(unittest.TestCase):
     def test_resolve_jsonl_path_from_workdir_and_session_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            expected = root / ".agent-collab" / "sessions" / "mcp-1.jsonl"
+            expected = root / ".agent-collab" / "data" / "sessions" / "mcp-1.jsonl"
 
             self.assertEqual(resolve_jsonl_path(workdir=root, session_id="mcp-1"), expected)
             self.assertEqual(resolve_jsonl_path("mcp-1", workdir=root), expected)
+
+    def test_resolve_jsonl_path_falls_back_to_legacy_session_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / ".agent-collab" / "sessions" / "mcp-1.jsonl"
+            legacy.parent.mkdir(parents=True)
+            legacy.touch()
+
+            self.assertEqual(resolve_jsonl_path(workdir=root, session_id="mcp-1"), legacy)
+
+    def test_resolve_jsonl_path_prefers_data_session_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / ".agent-collab" / "data" / "sessions" / "mcp-1.jsonl"
+            legacy = root / ".agent-collab" / "sessions" / "mcp-1.jsonl"
+            data.parent.mkdir(parents=True)
+            legacy.parent.mkdir(parents=True)
+            data.touch()
+            legacy.touch()
+
+            self.assertEqual(resolve_jsonl_path(workdir=root, session_id="mcp-1"), data)
 
     def test_resolve_jsonl_path_accepts_direct_path(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -83,7 +104,7 @@ class WatchTests(unittest.TestCase):
             os.utime(old_path, (1, 1))
             os.utime(new_path, (2, 2))
 
-            self.assertEqual(resolve_jsonl_path(workdir=root), new_path)
+            self.assertEqual(resolve_jsonl_path(log_dir=log_dir), new_path)
 
     def test_watch_jsonl_prints_malformed_lines_as_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -184,6 +205,41 @@ class WatchTests(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("session_id: started", text)
         self.assertIn("REFEREE watching started", text)
+
+    def test_cli_start_passes_typed_option_json(self):
+        class FakeClient:
+            def start_session(self, payload):
+                self.payload = payload
+                return {
+                    "session_id": "started",
+                    "status": "running",
+                    "workdir": payload["workdir"],
+                    "jsonl_path": "/tmp/started.jsonl",
+                    "markdown_path": "/tmp/started.md",
+                }
+
+        fake = FakeClient()
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("agent_collab.cli._client", return_value=fake):
+                with contextlib.redirect_stdout(output):
+                    code = cli.main(
+                        [
+                            "start",
+                            "--mock",
+                            "--workdir",
+                            tmp,
+                            "--codex-options",
+                            '{"reasoning_effort": "medium"}',
+                            "--claude-options",
+                            '{"model": "sonnet"}',
+                            "task",
+                        ]
+                    )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.payload["codex_options"], {"reasoning_effort": "medium"})
+        self.assertEqual(fake.payload["claude_options"], {"model": "sonnet"})
 
 
 if __name__ == "__main__":

@@ -13,7 +13,9 @@ SERVER_URL_ENV = "AGENT_COLLAB_SERVER"
 
 
 class ClientError(RuntimeError):
-    pass
+    def __init__(self, message: str, payload: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.payload = payload
 
 
 def default_server_url() -> str:
@@ -27,6 +29,9 @@ class AgentCollabClient:
 
     def start_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request("POST", "/sessions", payload)
+
+    def describe_options(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self._request("POST", "/options", payload or {})
 
     def list_sessions(self) -> Dict[str, Any]:
         return self._request("GET", "/sessions")
@@ -75,10 +80,12 @@ class AgentCollabClient:
         except HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             try:
-                error = json.loads(body).get("error", body)
+                payload = json.loads(body)
             except json.JSONDecodeError:
-                error = body or str(exc)
-            raise ClientError(f"{method} {path} failed: {error}") from exc
+                raise ClientError(body or str(exc)) from exc
+            if isinstance(payload, dict):
+                raise ClientError(_format_error_payload(payload), payload=payload) from exc
+            raise ClientError(str(payload)) from exc
         except URLError as exc:
             raise ClientError(f"could not reach agent-collab daemon at {self.server_url}: {exc.reason}") from exc
 
@@ -88,3 +95,16 @@ class AgentCollabClient:
             return json.loads(body)
         except json.JSONDecodeError as exc:
             raise ClientError(f"invalid JSON response from daemon: {body[:200]}") from exc
+
+
+def _format_error_payload(payload: Dict[str, Any]) -> str:
+    error = payload.get("error", payload)
+    if error == "invalid_start_options" and isinstance(payload.get("details"), list):
+        lines = [str(error)]
+        for detail in payload["details"]:
+            if isinstance(detail, dict):
+                path = str(detail.get("path", ""))
+                message = str(detail.get("message", ""))
+                lines.append(f"{path}: {message}" if path else message)
+        return "\n".join(lines)
+    return str(error)

@@ -20,6 +20,7 @@ class McpServerTests(unittest.TestCase):
         response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 
         names = {tool["name"] for tool in response["result"]["tools"]}
+        self.assertIn("agent_collab_describe_options", names)
         self.assertIn("agent_collab_start", names)
         self.assertIn("agent_collab_list_sessions", names)
         self.assertIn("agent_collab_status", names)
@@ -46,6 +47,32 @@ class McpServerTests(unittest.TestCase):
 
         client.start_session.assert_called_once_with(args)
         _assert_tool_result(self, result, {"session_id": "s1", "status": "running"})
+
+    def test_start_maps_typed_options_to_client_start_session(self):
+        args = {
+            "task": "mcp test",
+            "workdir": "/repo",
+            "codex_options": {"reasoning_effort": "medium"},
+            "claude_options": {"model": "sonnet"},
+        }
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            client.start_session.return_value = {"session_id": "s1", "status": "running"}
+
+            result = handle_tool("agent_collab_start", args)
+
+        client.start_session.assert_called_once_with(args)
+        _assert_tool_result(self, result, {"session_id": "s1", "status": "running"})
+
+    def test_describe_options_maps_to_client_describe_options(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            client.describe_options.return_value = {"modes": [], "codex_options": {}, "claude_options": {}}
+
+            result = handle_tool("agent_collab_describe_options", {"workdir": "/repo"})
+
+        client.describe_options.assert_called_once_with({"workdir": "/repo"})
+        _assert_tool_result(self, result, {"modes": [], "codex_options": {}, "claude_options": {}})
 
     def test_list_maps_to_client_list_sessions(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:

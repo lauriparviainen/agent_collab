@@ -104,6 +104,66 @@ timeout = 900
 
 Avoid adding broad permission fields at first. Permission policy should remain explicit in the underlying agent command or profile.
 
+## Start options
+
+MCP and CLI callers can pass typed per-agent-type start options. The server validates these options before creating session state or launching a subprocess.
+
+The request shape keeps Codex and Claude options separate because their CLIs expose different controls:
+
+```json
+{
+  "codex_options": {
+    "model": "gpt-5-codex",
+    "thinking_level": "medium",
+    "sandbox": "workspace-write",
+    "approval_policy": "on-request"
+  },
+  "claude_options": {
+    "model": "opus",
+    "permission_mode": "default",
+    "thinking_level": "high"
+  }
+}
+```
+
+Config can advertise accepted values and defaults, and the MCP layer exposes the effective schema through `agent_collab_describe_options`. Defaults are applied when callers omit an option. Unknown keys, wrong types, unsupported values, and options that do not apply to the selected mode are rejected with actionable field-path errors.
+
+Example option rules:
+
+```toml
+[agents.codex.options]
+model.allowed = ["gpt-5-codex", "gpt-5"]
+thinking_level.default = "high"
+thinking_level.allowed = ["minimal", "low", "medium", "high", "xhigh"]
+sandbox.allowed = ["read-only", "workspace-write"]
+approval_policy.allowed = ["on-request", "never"]
+search.allowed = [true, false]
+
+[agents.claude.options]
+model.default = "opus"
+model.allowed = ["sonnet", "opus"]
+permission_mode.default = "default"
+permission_mode.allowed = ["default", "acceptEdits"]
+thinking_level.default = "high"
+thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
+thinking_budget_tokens.min = 0
+thinking_budget_tokens.max = 32768
+```
+
+CLI callers can pass JSON option objects:
+
+```bash
+agent-collab start --codex-options '{"thinking_level":"medium"}' --claude-options '{"model":"opus","thinking_level":"high"}' "Task"
+```
+
+The option-to-command mapping is explicit. Unknown option keys are never appended as arbitrary shell flags.
+
+Prefer `thinking_level` for both built-in agent types:
+
+- Codex `thinking_level` accepts `minimal`, `low`, `medium`, `high`, or `xhigh` and maps to the Codex config override `model_reasoning_effort`.
+- Claude `thinking_level` accepts `low`, `medium`, `high`, `xhigh`, or `max` and maps to Claude Code `--effort`.
+- Codex `reasoning_effort` is kept as a provider-specific alias for compatibility. Claude `thinking_budget_tokens` is kept for advanced raw-token configurations, but should not be combined with `thinking_level`.
+
 ## Agent types
 
 Start with a small set:

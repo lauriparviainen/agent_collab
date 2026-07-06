@@ -21,6 +21,7 @@ class AgentConfig:
     env: Dict[str, str] = field(default_factory=dict)
     cwd: Optional[str] = None
     timeout: Optional[int] = None
+    options: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -130,6 +131,7 @@ def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping
         env=dict(existing.env),
         cwd=existing.cwd,
         timeout=existing.timeout,
+        options={key: dict(value) for key, value in existing.options.items()},
     )
     for key, value in values.items():
         if key == "type":
@@ -148,6 +150,8 @@ def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping
             agent.cwd = _expect_str(value, f"agents.{agent_id}.cwd")
         elif key == "timeout":
             agent.timeout = _expect_int(value, f"agents.{agent_id}.timeout")
+        elif key == "options":
+            agent.options = _expect_option_config(value, f"agents.{agent_id}.options")
         else:
             raise ConfigError(f"unknown field agents.{agent_id}.{key}")
     return agent
@@ -232,8 +236,21 @@ def _parse_toml_subset(text: str) -> Dict[str, Any]:
         key = key.strip()
         if not key:
             raise ConfigError(f"line {line_number}: empty TOML key")
-        current[key] = _parse_toml_value(raw_value.strip(), line_number)
+        _set_dotted_key(current, key, _parse_toml_value(raw_value.strip(), line_number), line_number)
     return root
+
+
+def _set_dotted_key(current: Dict[str, Any], key: str, value: Any, line_number: int) -> None:
+    parts = [part.strip() for part in key.split(".")]
+    if any(not part for part in parts):
+        raise ConfigError(f"line {line_number}: invalid dotted key {key!r}")
+    target = current
+    for part in parts[:-1]:
+        child = target.setdefault(part, {})
+        if not isinstance(child, dict):
+            raise ConfigError(f"line {line_number}: key conflicts with table {key!r}")
+        target = child
+    target[parts[-1]] = value
 
 
 def _strip_comment(line: str) -> str:
@@ -258,13 +275,10 @@ def _parse_toml_value(value: str, line_number: int) -> Any:
     if value in {"true", "false"}:
         return value == "true"
     if value.startswith("[") and value.endswith("]"):
-        try:
-            parsed = ast.literal_eval(value)
-        except (SyntaxError, ValueError) as exc:
-            raise ConfigError(f"line {line_number}: invalid TOML array") from exc
-        if not isinstance(parsed, list):
-            raise ConfigError(f"line {line_number}: invalid TOML array")
-        return parsed
+        inner = value[1:-1].strip()
+        if not inner:
+            return []
+        return [_parse_toml_value(item, line_number) for item in _split_top_level(inner, ",")]
     if value.startswith("{") and value.endswith("}"):
         return _parse_inline_table(value[1:-1], line_number)
     if value.startswith(("'", '"')) and value.endswith(("'", '"')):
@@ -345,3 +359,30 @@ def _expect_str_dict(value: Any, label: str) -> Dict[str, str]:
     if not isinstance(value, Mapping) or not all(isinstance(key, str) and isinstance(val, str) for key, val in value.items()):
         raise ConfigError(f"{label} must be a table of string values")
     return dict(value)
+
+
+def _expect_option_config(value: Any, label: str) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        raise ConfigError(f"{label} must be a table")
+    result: Dict[str, Dict[str, Any]] = {}
+    for option_name, settings in value.items():
+        option_label = f"{label}.{option_name}"
+        if not isinstance(settings, Mapping):
+            raise ConfigError(f"{option_label} must be a table")
+        parsed: Dict[str, Any] = {}
+        for key, setting in settings.items():
+            setting_label = f"{option_label}.{key}"
+            if key == "allowed":
+                if not isinstance(setting, list) or not all(isinstance(item, (str, bool, int)) for item in setting):
+                    raise ConfigError(f"{setting_label} must be an array of strings, booleans, or integers")
+                parsed[key] = list(setting)
+            elif key in {"min", "max"}:
+                parsed[key] = _expect_int(setting, setting_label)
+            elif key == "default":
+                if not isinstance(setting, (str, bool, int)):
+                    raise ConfigError(f"{setting_label} must be a string, boolean, or integer")
+                parsed[key] = setting
+            else:
+                raise ConfigError(f"unknown field {setting_label}")
+        result[str(option_name)] = parsed
+    return result

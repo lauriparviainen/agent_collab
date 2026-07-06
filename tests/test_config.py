@@ -85,6 +85,42 @@ sequence = ["codex_readonly", "claude", "codex_readonly"]
         self.assertEqual(data["agents"]["codex_readonly"]["env"], {"CODEX_HOME": "/tmp/codex"})
         self.assertEqual(data["modes"]["readonly-review"]["sequence"], ["codex_readonly", "claude", "codex_readonly"])
 
+    def test_toml_subset_parser_supports_dotted_option_keys(self):
+        data = _parse_toml_subset(
+            """
+[agents.codex.options]
+model.allowed = ["gpt-5-codex", "gpt-5"]
+search.allowed = [true, false]
+"""
+        )
+
+        self.assertEqual(data["agents"]["codex"]["options"]["model"]["allowed"], ["gpt-5-codex", "gpt-5"])
+        self.assertEqual(data["agents"]["codex"]["options"]["search"]["allowed"], [True, False])
+
+    def test_agent_options_config_loads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            home.mkdir()
+            _write_config(
+                root,
+                """
+[agents.claude.options]
+model.default = "opus"
+model.allowed = ["sonnet", "opus"]
+thinking_level.default = "high"
+thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
+""",
+            )
+
+            config = load_config(root, home=home)
+
+            self.assertEqual(config.agents["claude"].options["model"]["allowed"], ["sonnet", "opus"])
+            self.assertEqual(config.agents["claude"].options["model"]["default"], "opus")
+            self.assertEqual(config.agents["claude"].options["thinking_level"]["default"], "high")
+            self.assertEqual(config.agents["claude"].options["thinking_level"]["allowed"], ["low", "medium", "high", "xhigh", "max"])
+
     def test_mode_sequence_rejects_unknown_agent(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"

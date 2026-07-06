@@ -1,14 +1,27 @@
 [agents.claude]
 type = "claude"
 command = "claude"
-args = ["-p", "--model", "sonnet", "--output-format", "stream-json", "--verbose"]
+args = ["-p", "--output-format", "stream-json", "--verbose"]
 enabled = true
+
+[agents.claude.options]
+model.default = "opus"
+model.allowed = ["sonnet", "opus"]
+permission_mode.allowed = ["default", "acceptEdits"]
+thinking_level.default = "high"
+thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
+thinking_budget_tokens.min = 0
+thinking_budget_tokens.max = 32768
 
 [agents.codex]
 type = "codex"
 command = "codex"
 args = ["exec", "--json"]
 enabled = true
+
+[agents.codex.options]
+thinking_level.default = "high"
+thinking_level.allowed = ["minimal", "low", "medium", "high", "xhigh"]
 
 [modes.claude-leads]
 sequence = ["claude", "codex", "claude"]

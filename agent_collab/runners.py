@@ -7,6 +7,7 @@ from typing import AsyncIterator, Callable, Dict, List, Optional
 
 from .config import AgentConfig, ConfigError
 from .events import Event, parse_claude_line, parse_codex_line
+from .options import apply_agent_options
 
 
 Parser = Callable[[str, bool], Optional[Event]]
@@ -134,7 +135,7 @@ class SubprocessRunner(AgentRunner):
                 process.terminate()
 
 
-def configured_runner(agent: AgentConfig, verbose: bool = False) -> AgentRunner:
+def configured_runner(agent: AgentConfig, verbose: bool = False, options: Optional[Dict[str, object]] = None) -> AgentRunner:
     if agent.type == "mock":
         return MockRunner(agent.name or agent.id)
     if agent.type == "claude":
@@ -145,9 +146,10 @@ def configured_runner(agent: AgentConfig, verbose: bool = False) -> AgentRunner:
         raise ConfigError(f"unsupported agent type for {agent.id!r}: {agent.type!r}")
     if not agent.command:
         raise ConfigError(f"agents.{agent.id}.command is required")
+    command = apply_agent_options([agent.command] + list(agent.args), agent, options or {})
     return SubprocessRunner(
         agent.id,
-        [agent.command] + list(agent.args),
+        command,
         parser,
         verbose,
         env=dict(agent.env),

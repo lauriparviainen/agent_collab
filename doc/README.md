@@ -21,10 +21,11 @@ Completed stages:
 - [Stage 3: CLI client commands](tasks_closed/stage-3-cli-client.md)
 - [Stage 4: MCP daemon adapter](tasks_closed/stage-4-mcp-daemon-adapter.md)
 - [Stage 4.25: Foreground Streamable HTTP server](tasks_closed/stage-4.25-foreground-streamable-http-server.md)
+- [Stage 4.75: Daemonize server and typed session options](tasks_closed/stage-4.75-daemonize-and-session-options.md)
 
 Task folders:
 
 - [Open tasks](tasks_open/)
 - [Closed tasks](tasks_closed/)
 
-The current implementation already has the core event model, runners, referee loop, log writing, foreground server, CLI client commands, stdio MCP adapter, and Streamable HTTP MCP endpoint. The next architecture step is TUI watch.
+The current implementation already has the core event model, runners, referee loop, log writing, foreground server, project-local daemon lifecycle, CLI client commands, stdio MCP adapter, Streamable HTTP MCP endpoint, and typed validated start options for agents. The next architecture step is the additive TUI watch mode.

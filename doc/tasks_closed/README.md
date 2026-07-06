@@ -8,3 +8,4 @@ Completed task docs move here when their implementation is done and verified.
 - [Stage 3: CLI client commands](stage-3-cli-client.md)
 - [Stage 4: MCP daemon adapter](stage-4-mcp-daemon-adapter.md)
 - [Stage 4.25: Foreground Streamable HTTP server](stage-4.25-foreground-streamable-http-server.md)
+- [Stage 4.75: Daemonize server and typed session options](stage-4.75-daemonize-and-session-options.md)

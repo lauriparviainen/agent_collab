@@ -6,6 +6,7 @@ import time
 from typing import Callable, Iterable, Optional, Union
 
 from .events import Event, compact_json
+from .paths import default_session_log_dirs
 from .terminal import print_event
 
 
@@ -37,16 +38,21 @@ def resolve_jsonl_path(
             return Path(value).expanduser().resolve()
         session_id = value
 
-    base_dir = log_dir
-    if base_dir is None:
-        root = (workdir or Path(".")).expanduser().resolve()
-        base_dir = root / ".agent-collab" / "sessions"
-    else:
-        base_dir = base_dir.expanduser().resolve()
+    if log_dir is not None:
+        base_dir = log_dir.expanduser().resolve()
+        if session_id is None:
+            return latest_jsonl_path(base_dir)
+        return base_dir / _session_jsonl_name(session_id)
 
+    roots = default_session_log_dirs(workdir or Path("."))
     if session_id is None:
-        return latest_jsonl_path(base_dir)
-    return base_dir / _session_jsonl_name(session_id)
+        return latest_jsonl_path_multi(roots)
+    name = _session_jsonl_name(session_id)
+    for base_dir in roots:
+        candidate = base_dir / name
+        if candidate.exists():
+            return candidate
+    return roots[0] / name
 
 
 def latest_jsonl_path(log_dir: Path) -> Path:
@@ -55,6 +61,16 @@ def latest_jsonl_path(log_dir: Path) -> Path:
     if not candidates:
         raise ValueError(f"no session JSONL logs found in {base_dir}")
     return max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name))
+
+
+def latest_jsonl_path_multi(log_dirs: Iterable[Path]) -> Path:
+    errors = []
+    for log_dir in log_dirs:
+        try:
+            return latest_jsonl_path(log_dir)
+        except ValueError as exc:
+            errors.append(str(exc))
+    raise ValueError("; ".join(errors) if errors else "no session JSONL logs found")
 
 
 def event_from_jsonl_line(line: str, line_number: int) -> Optional[Event]:

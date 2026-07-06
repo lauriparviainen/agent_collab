@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from agent_collab.daemon import SessionManager
+from agent_collab.options import StartOptionsError
 from agent_collab.server_http import AgentCollabHttpServer, HttpError, HttpResponse
 
 
@@ -57,8 +58,21 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         response = await server._dispatch("POST", "/mcp", {}, _mcp_body(2, "tools/list"))
 
         names = {tool["name"] for tool in response["result"]["tools"]}
+        self.assertIn("agent_collab_describe_options", names)
         self.assertIn("agent_collab_start", names)
         self.assertIn("agent_collab_wait_events", names)
+
+    async def test_options_route_describes_start_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = AgentCollabHttpServer(manager=SessionManager(default_workdir=root))
+
+            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+                response = await server._dispatch("POST", "/options", {}, json.dumps({"workdir": str(root)}).encode("utf-8"))
+
+        self.assertIn("modes", response)
+        self.assertIn("codex_options", response)
+        self.assertIn("claude_options", response)
 
     async def test_mcp_start_is_visible_and_readable_through_session_routes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,6 +107,27 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(listed["sessions"][0]["session_id"], session_id)
             self.assertGreater(waited["cursor"], 0)
+
+    async def test_invalid_start_options_raise_before_session_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            server = AgentCollabHttpServer(manager=manager)
+            body = json.dumps(
+                {
+                    "task": "bad http options",
+                    "workdir": str(root),
+                    "mock": True,
+                    "codex_options": {"reasoning_effort": "maximum"},
+                }
+            ).encode("utf-8")
+
+            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+                with self.assertRaises(StartOptionsError) as ctx:
+                    await server._dispatch("POST", "/sessions", {}, body)
+
+        self.assertEqual(manager.list_sessions(), [])
+        self.assertEqual(ctx.exception.to_dict()["error"], "invalid_start_options")
 
     async def test_mcp_rejects_non_local_origin(self):
         server = AgentCollabHttpServer(manager=SessionManager())
@@ -195,6 +230,69 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         result = response["result"]
         self.assertTrue(result["isError"])
         self.assertEqual(json.loads(result["content"][0]["text"]), {"error": "task is required"})
+
+    async def test_mcp_start_option_validation_error_sets_is_error_with_details(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = AgentCollabHttpServer(manager=SessionManager())
+
+            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+                response = await server._dispatch(
+                    "POST",
+                    "/mcp",
+                    {},
+                    _mcp_body(
+                        11,
+                        "tools/call",
+                        {
+                            "name": "agent_collab_start",
+                            "arguments": {
+                                "task": "bad mcp options",
+                                "workdir": str(root),
+                                "mock": True,
+                                "codex_options": {"reasoning_effort": "maximum"},
+                            },
+                        },
+                    ),
+                )
+
+        result = response["result"]
+        payload = json.loads(result["content"][0]["text"])
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["error"], "invalid_start_options")
+        self.assertEqual(payload["details"][0]["path"], "codex_options.reasoning_effort")
+
+    async def test_mcp_start_rejects_non_object_option_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = AgentCollabHttpServer(manager=SessionManager())
+
+            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+                response = await server._dispatch(
+                    "POST",
+                    "/mcp",
+                    {},
+                    _mcp_body(
+                        12,
+                        "tools/call",
+                        {
+                            "name": "agent_collab_start",
+                            "arguments": {
+                                "task": "bad mcp options",
+                                "workdir": str(root),
+                                "mock": True,
+                                "codex_options": [],
+                            },
+                        },
+                    ),
+                )
+
+        result = response["result"]
+        payload = json.loads(result["content"][0]["text"])
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["error"], "invalid_start_options")
+        self.assertEqual(payload["details"][0]["path"], "codex_options")
+        self.assertIn("object", payload["details"][0]["message"])
 
 
 def _mcp_body(request_id, method, params=None):

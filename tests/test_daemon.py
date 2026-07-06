@@ -6,6 +6,8 @@ import unittest
 from unittest import mock
 
 from agent_collab.daemon import StartSessionRequest, SessionManager
+from agent_collab.options import StartOptionsError
+from agent_collab.paths import DataPaths
 
 
 TERMINAL_STATUSES = {"done", "failed", "stopped"}
@@ -118,6 +120,40 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(Path(first_done.jsonl_path).parent, root_a / ".agent-collab" / "sessions")
             self.assertEqual(Path(second_done.jsonl_path).parent, root_b / ".agent-collab" / "sessions")
             self.assertEqual({state.session_id for state in manager.list_sessions()}, {first.session_id, second.session_id})
+
+    async def test_default_log_dir_can_point_daemon_sessions_to_data_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = DataPaths.from_workdir(root)
+            manager = SessionManager(default_workdir=root, default_log_dir=paths.session_dir)
+
+            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(task="data log task", mock=True, max_turns=1, timeout=5, workdir=root)
+                )
+                final = await self._wait_for_terminal(manager, state.session_id)
+
+            self.assertEqual(final.status, "done")
+            self.assertEqual(Path(final.jsonl_path).parent, paths.session_dir)
+            self.assertTrue(Path(final.jsonl_path).exists())
+
+    async def test_invalid_options_fail_before_session_state_is_created(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+
+            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+                with self.assertRaises(StartOptionsError):
+                    await manager.start_session(
+                        StartSessionRequest(
+                            task="bad options",
+                            mock=True,
+                            workdir=root,
+                            codex_options={"reasoning_effort": "maximum"},
+                        )
+                    )
+
+            self.assertEqual(manager.list_sessions(), [])
 
     async def test_stop_session_transitions_running_session_to_stopped(self):
         with tempfile.TemporaryDirectory() as tmp:

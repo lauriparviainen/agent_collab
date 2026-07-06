@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 import uuid
 
+from .config import load_config
 from .events import Event, utc_timestamp
+from .options import describe_options, validate_start_options
 from .referee import Referee, RefereeConfig
 
 
@@ -32,6 +34,8 @@ class StartSessionRequest:
     color: bool = False
     log_dir: Optional[Union[str, Path]] = None
     session_id: Optional[str] = None
+    codex_options: Optional[Dict[str, Any]] = None
+    claude_options: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -76,14 +80,36 @@ class _ManagedSession:
 
 
 class SessionManager:
-    def __init__(self, lifecycle_logger: Optional[Callable[[str], None]] = None) -> None:
+    def __init__(
+        self,
+        lifecycle_logger: Optional[Callable[[str], None]] = None,
+        default_workdir: Union[str, Path] = Path("."),
+        default_log_dir: Optional[Union[str, Path]] = None,
+    ) -> None:
         self._sessions: Dict[str, _ManagedSession] = {}
         self._notify_tasks: Set[asyncio.Task] = set()
         self._lifecycle_logger = lifecycle_logger
+        self.default_workdir = Path(default_workdir).expanduser().resolve()
+        self.default_log_dir = Path(default_log_dir).expanduser().resolve() if default_log_dir else None
 
     async def start_session(self, request: StartSessionRequest) -> SessionState:
         workdir = Path(request.workdir).expanduser().resolve()
-        log_dir = Path(request.log_dir).expanduser().resolve() if request.log_dir else workdir / ".agent-collab" / "sessions"
+        if str(request.workdir) == ".":
+            workdir = self.default_workdir
+        log_dir = (
+            Path(request.log_dir).expanduser().resolve()
+            if request.log_dir
+            else self.default_log_dir or workdir / ".agent-collab" / "sessions"
+        )
+        collab_config = load_config(workdir)
+        normalized_options = validate_start_options(
+            collab_config,
+            request.mode,
+            request.codex_options,
+            request.claude_options,
+        )
+        request.codex_options = normalized_options["codex_options"]
+        request.claude_options = normalized_options["claude_options"]
         session_id = request.session_id or self._new_session_id()
         self._validate_new_session_id(session_id)
 
@@ -116,6 +142,10 @@ class SessionManager:
             f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
         )
         return self._copy_state(state)
+
+    def describe_options(self, workdir: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+        root = Path(workdir).expanduser().resolve() if workdir else self.default_workdir
+        return describe_options(load_config(root), root)
 
     async def stop_session(self, session_id: str) -> SessionState:
         managed = self._get_managed(session_id)
@@ -178,6 +208,9 @@ class SessionManager:
             workdir=workdir,
             log_dir=log_dir,
             session_id=state.session_id,
+            collab_config=load_config(workdir),
+            codex_options=dict(request.codex_options or {}),
+            claude_options=dict(request.claude_options or {}),
         )
 
         try:

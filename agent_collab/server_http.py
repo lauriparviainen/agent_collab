@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .daemon import SessionManager, StartSessionRequest
 from .mcp_tools import SUPPORTED_PROTOCOL_VERSIONS, SessionManagerToolBackend, handle_request as handle_mcp_request
+from .options import StartOptionsError
 
 
 class HttpError(Exception):
@@ -26,9 +27,19 @@ class HttpResponse:
 
 
 class AgentCollabHttpServer:
-    def __init__(self, manager: Optional[SessionManager] = None, log_requests: Optional[bool] = None):
+    def __init__(
+        self,
+        manager: Optional[SessionManager] = None,
+        log_requests: Optional[bool] = None,
+        default_workdir: Path = Path("."),
+        session_log_dir: Optional[Path] = None,
+    ):
         owns_manager = manager is None
-        self.manager = manager or SessionManager(lifecycle_logger=self._log)
+        self.manager = manager or SessionManager(
+            lifecycle_logger=self._log,
+            default_workdir=default_workdir,
+            default_log_dir=session_log_dir,
+        )
         self.log_requests = owns_manager if log_requests is None else bool(log_requests)
 
     async def serve(self, host: str = "127.0.0.1", port: int = 8765) -> None:
@@ -60,6 +71,9 @@ class AgentCollabHttpServer:
         except KeyError as exc:
             self._log_request(f"request error 404 {exc}")
             await self._write_json(writer, 404, {"error": str(exc)})
+        except StartOptionsError as exc:
+            self._log_request(f"request error 400 {exc.code}")
+            await self._write_json(writer, 400, exc.to_dict())
         except ValueError as exc:
             self._log_request(f"request error 400 {exc}")
             await self._write_json(writer, 400, {"error": str(exc)})
@@ -104,6 +118,11 @@ class AgentCollabHttpServer:
         if path_parts == ["mcp"]:
             return await self._dispatch_mcp(method, headers, body)
 
+        if method in {"GET", "POST"} and path_parts == ["options"]:
+            data = _decode_json_object(body) if method == "POST" else {}
+            workdir = Path(str(data.get("workdir", "."))) if data.get("workdir") else None
+            return self.manager.describe_options(workdir)
+
         if method == "POST" and path_parts == ["sessions"]:
             data = _decode_json_object(body)
             state = await self.manager.start_session(
@@ -115,6 +134,8 @@ class AgentCollabHttpServer:
                     timeout=int(data.get("timeout", 900)),
                     mock=bool(data.get("mock", False)),
                     dry_run=bool(data.get("dry_run", False)),
+                    codex_options=_optional_payload(data, "codex_options"),
+                    claude_options=_optional_payload(data, "claude_options"),
                 )
             )
             return state.to_dict()
@@ -225,6 +246,10 @@ def _query_int(query: Dict[str, Any], key: str, default: int) -> int:
     return int(values[0])
 
 
+def _optional_payload(data: Dict[str, Any], key: str) -> Any:
+    return {} if key not in data or data[key] is None else data[key]
+
+
 def _validate_mcp_origin(origin: Optional[str]) -> None:
     if not origin:
         return
@@ -262,5 +287,11 @@ def _http_reason(status: int) -> str:
     }.get(status, "Error")
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8765) -> None:
-    asyncio.run(AgentCollabHttpServer().serve(host, port))
+def run_server(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    *,
+    default_workdir: Path = Path("."),
+    session_log_dir: Optional[Path] = None,
+) -> None:
+    asyncio.run(AgentCollabHttpServer(default_workdir=default_workdir, session_log_dir=session_log_dir).serve(host, port))

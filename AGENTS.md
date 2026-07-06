@@ -6,17 +6,22 @@ This file is the handoff briefing for coding agents working in this repository.
 
 `agent-collab` is a Linux terminal tool that supervises collaboration between Claude Code and Codex.
 
-The user wants one foreground server process that owns collaboration sessions and lets humans and agents attach to the same live transcript.
+The user wants one local server process that owns collaboration sessions and lets humans and agents attach to the same live transcript. It can run either as a foreground server for debugging or as a project-local background daemon.
 
 Current direction:
 
 ```text
 agent-collab serve
+  foreground debugging/development server
   owns sessions
   starts Claude/Codex subprocesses
   writes JSONL/Markdown logs
   serves CLI clients
   serves MCP Streamable HTTP at /mcp
+
+agent-collab daemon start
+  background lifecycle for the same server model
+  writes PID/state/daemon logs under WORKDIR/.agent-collab/data/
 ```
 
 ## Current Implementation
@@ -25,11 +30,14 @@ Implemented now:
 
 - One-shot CLI session runner.
 - Foreground local server at `127.0.0.1:8765`.
-- Daemon-owned sessions through `SessionManager`.
-- CLI client commands: `serve`, `start`, `list`, `status`, `events`, `watch`, `stop`.
+- Server-owned sessions through `SessionManager`.
+- CLI client commands: `serve`, `daemon`, `start`, `list`, `status`, `events`, `watch`, `stop`.
 - JSONL and Markdown logs under `WORKDIR/.agent-collab/sessions/`.
+- Daemon runtime data and daemon-owned session logs under `WORKDIR/.agent-collab/data/`.
 - Mock and dry-run runners for testing without Claude/Codex.
 - Configurable agents and modes through `.agent-collab/config.toml`.
+- Typed Claude/Codex start options with validation feedback.
+- MCP option discovery through `agent_collab_describe_options`.
 - MCP Streamable HTTP endpoint in `agent-collab serve`.
 - Stdio MCP adapter that connects to the foreground server.
 
@@ -37,7 +45,7 @@ Not implemented yet:
 
 - TUI watch mode.
 - Auth/workdir allowlist hardening.
-- Background daemonization or service management.
+- Service-manager integration.
 
 ## Next Task
 
@@ -60,6 +68,9 @@ High-level goal:
 - `agent_collab/runners.py`: Claude/Codex/mock/dry-run subprocess runners.
 - `agent_collab/events.py`: normalized event model and stream parsers.
 - `agent_collab/client.py`: HTTP client used by CLI watch/start/list/status.
+- `agent_collab/daemon_supervisor.py`: background daemon PID/state/log lifecycle.
+- `agent_collab/options.py`: typed start option schemas, validation, and explicit CLI flag mapping.
+- `agent_collab/paths.py`: project data and session log path helpers.
 - `agent_collab/mcp_server.py`: current stdio MCP adapter.
 - `agent_collab/mcp_tools.py`: shared MCP tool schemas and dispatch.
 - `agent_collab/logging.py`: JSONL/Markdown session logs.
@@ -67,6 +78,16 @@ High-level goal:
 - `tests/`: stdlib `unittest` test suite.
 
 ## Commands
+
+Source checkout helper:
+
+```bash
+./agent_collab.sh help
+./agent_collab.sh test
+./agent_collab.sh smoke
+```
+
+The wrapper is a thin passthrough to `python3 -m agent_collab.cli`; daemon helper commands default to `--workdir .` unless the caller passes another `--workdir`.
 
 Run tests:
 
@@ -98,6 +119,14 @@ Watch latest server-owned session:
 python3 -m agent_collab.cli watch
 ```
 
+Start and inspect the project-local daemon:
+
+```bash
+./agent_collab.sh daemon start
+./agent_collab.sh daemon status
+./agent_collab.sh daemon logs --tail 100
+```
+
 ## Local Runtime Notes
 
 The server binds to `127.0.0.1:8765` by default.
@@ -113,13 +142,13 @@ This repo has project-local agent config at:
 It currently configures Claude with:
 
 ```bash
-claude -p --model sonnet --output-format stream-json --verbose
+claude -p --output-format stream-json --verbose --model opus --effort high
 ```
 
-The Codex runner uses:
+It currently configures Codex with:
 
 ```bash
-codex exec --json
+codex exec --json -c model_reasoning_effort="high"
 ```
 
 `SubprocessRunner` closes child stdin with `DEVNULL`; keep this. It prevents `codex exec --json` from waiting on the server terminal for additional stdin.
@@ -128,13 +157,15 @@ codex exec --json
 
 - Keep dependencies minimal.
 - Prefer Python standard library.
-- Keep `agent-collab serve` foreground-only for now.
-- Do not daemonize, add pidfiles, add systemd, or background fork yet.
+- Keep `agent-collab serve` foreground-only; add separate daemon lifecycle commands instead of making `serve` fork itself.
+- Do not add systemd, launchd, or other service-manager integration until a later hardening stage.
 - Keep localhost as the default security boundary.
 - Do not dump every transcript event into server logs by default.
 - Preserve cursor-based event reads and long-polling.
 - Do not let agents recursively spawn Claude, Codex, `agent-collab`, or other agent processes.
 - Keep `watch` plain and pipe-friendly; TUI is a later additive mode.
+- MCP agents should call `agent_collab_describe_options` before passing non-default model, reasoning, sandbox, or permission settings.
+- Invalid `agent_collab_start` options should be fixed from the returned field-path details, not retried by guessing.
 
 ## Testing Expectations
 

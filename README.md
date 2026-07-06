@@ -12,18 +12,23 @@ Implemented:
 - Mock and dry-run modes.
 - Configurable agent commands and collaboration modes.
 - Foreground local session server at `127.0.0.1:8765`.
-- CLI client commands: `serve`, `start`, `list`, `status`, `events`, `watch`, `stop`.
+- Project-local background daemon lifecycle commands.
+- CLI client commands: `serve`, `daemon`, `start`, `list`, `status`, `events`, `watch`, `stop`.
 - MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.
 - Stdio MCP adapter that connects to the local server.
 - Cursor-based event reads and long-polling.
+- Typed `codex_options` and `claude_options` with pre-launch validation.
+- MCP option discovery through `agent_collab_describe_options`.
 - JSONL and Markdown logs under `WORKDIR/.agent-collab/sessions/`.
+- Daemon runtime data and daemon-owned session logs under `WORKDIR/.agent-collab/data/`.
 
 Current transition:
 
 - `agent-collab serve` is the long-running foreground process that owns sessions.
+- `agent-collab daemon start` runs the same server model in the background.
 - MCP clients can connect directly to `agent-collab serve` over Streamable HTTP.
 - The stdio MCP adapter remains available for clients that launch MCP servers as subprocesses.
-- TUI watch is planned next.
+- TUI watch remains planned as an additive mode.
 
 ## Install Locally
 
@@ -34,6 +39,15 @@ python3 -m pip install -e .
 Runtime dependencies are intentionally minimal; the current package uses the Python standard library.
 
 ## Quick Start
+
+From a source checkout, the thin shell wrapper is the easiest entrypoint:
+
+```bash
+./agent_collab.sh help
+./agent_collab.sh smoke
+```
+
+The wrapper sets `PYTHONPATH` to the repo root and passes normal commands through to `python3 -m agent_collab.cli`.
 
 Run a mock one-shot session without Claude or Codex installed:
 
@@ -47,16 +61,22 @@ Run the foreground server:
 python3 -m agent_collab.cli serve
 ```
 
+Or start a project-local background daemon:
+
+```bash
+./agent_collab.sh daemon start
+```
+
 From another terminal, start and watch a mock server-owned session:
 
 ```bash
-python3 -m agent_collab.cli start --mock --watch --workdir . "Smoke test"
+./agent_collab.sh start --mock --watch --workdir . "Smoke test"
 ```
 
 Watch the latest server-owned session:
 
 ```bash
-python3 -m agent_collab.cli watch
+./agent_collab.sh watch
 ```
 
 ## CLI Commands
@@ -72,7 +92,17 @@ agent-collab --dry-run --workdir /path/to/project "Task"
 Foreground server and client mode:
 
 ```bash
+./agent_collab.sh serve
+./agent_collab.sh daemon start
+./agent_collab.sh daemon status
+./agent_collab.sh daemon logs --tail 100
+./agent_collab.sh daemon stop
+./agent_collab.sh smoke
 agent-collab serve
+agent-collab daemon start --workdir /path/to/project
+agent-collab daemon status --workdir /path/to/project
+agent-collab daemon logs --workdir /path/to/project --tail 100
+agent-collab daemon stop --workdir /path/to/project
 agent-collab start --mock --watch --workdir /path/to/project "Task"
 agent-collab list
 agent-collab status SESSION_ID
@@ -89,15 +119,31 @@ Useful options:
 - `--workdir /path/to/project`
 - `--log-dir /path/to/logs`
 - `--server-url http://127.0.0.1:8765`
+- `--codex-options '{"thinking_level":"medium"}'`
+- `--claude-options '{"model":"opus","thinking_level":"high"}'`
 
-`agent-collab watch` without a session id watches the latest server-owned session. `agent-collab watch --workdir /path/to/project` watches the newest JSONL log in that workdir.
+`agent-collab watch` without a session id watches the latest server-owned session. `agent-collab watch --workdir /path/to/project` resolves JSONL logs from `.agent-collab/data/sessions/` first, then falls back to the legacy `.agent-collab/sessions/` directory.
 
 ## Logs
 
-Logs default to:
+One-shot and foreground server logs default to:
 
 ```text
 WORKDIR/.agent-collab/sessions/
+```
+
+Daemon runtime data defaults to:
+
+```text
+WORKDIR/.agent-collab/data/
+  daemon/
+    pid
+    state.json
+    daemon.log
+    daemon.stderr.log
+  sessions/
+    SESSION.jsonl
+    SESSION.md
 ```
 
 Each session writes:
@@ -105,7 +151,7 @@ Each session writes:
 - `SESSION.jsonl`
 - `SESSION.md`
 
-The JSONL file preserves normalized events and raw agent payloads. The Markdown file is a readable transcript.
+The JSONL file preserves normalized events and raw agent payloads. The Markdown file is a readable transcript. Daemon operational logs do not dump full transcript events by default.
 
 ## Agent Configuration
 
@@ -126,10 +172,11 @@ claude -p --output-format stream-json --verbose "prompt"
 codex exec --json "prompt"
 ```
 
-This repo currently includes a project config at `.agent-collab/config.toml` that uses a lower-tier Claude model for testing:
+This repo currently includes a project config at `.agent-collab/config.toml` that defaults Claude to Opus with high effort and Codex to high reasoning effort:
 
 ```bash
-claude -p --model sonnet --output-format stream-json --verbose "prompt"
+claude -p --output-format stream-json --verbose --model opus --effort high "prompt"
+codex exec --json -c model_reasoning_effort="high" "prompt"
 ```
 
 The referee invokes agents as subprocesses. Agent prompts include guardrails telling them not to spawn Claude, Codex, `agent-collab`, or other agent subprocesses.
@@ -192,6 +239,7 @@ enabled = true
 
 Exposed tools:
 
+- `agent_collab_describe_options`
 - `agent_collab_start`
 - `agent_collab_list_sessions`
 - `agent_collab_status`
@@ -199,6 +247,8 @@ Exposed tools:
 - `agent_collab_wait_events`
 - `agent_collab_read_transcript`
 - `agent_collab_stop`
+
+Agents should call `agent_collab_describe_options` before passing non-default model, reasoning, sandbox, or permission settings. Prefer `thinking_level` over provider-specific raw fields: Codex accepts `minimal`, `low`, `medium`, `high`, or `xhigh`; Claude accepts `low`, `medium`, `high`, `xhigh`, or `max`. `agent_collab_start` rejects unknown keys, wrong types, unsupported values, and options that do not apply to the selected mode before any subprocess is launched.
 
 ## Development
 
@@ -216,6 +266,10 @@ Important implementation files:
 - `agent_collab/referee.py`: bounded turn loop.
 - `agent_collab/runners.py`: Claude/Codex/mock/dry-run subprocess runners.
 - `agent_collab/events.py`: normalized event model and stream parsers.
+- `agent_collab/client.py`: HTTP client used by CLI watch/start/list/status.
+- `agent_collab/daemon_supervisor.py`: background daemon PID/state/log lifecycle.
+- `agent_collab/options.py`: typed start option schemas, validation, and explicit CLI flag mapping.
+- `agent_collab/paths.py`: project data and session log path helpers.
 - `agent_collab/mcp_server.py`: current stdio MCP adapter.
 - `agent_collab/mcp_tools.py`: shared MCP tool schemas and dispatch.
 
