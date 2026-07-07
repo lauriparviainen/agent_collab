@@ -5,6 +5,8 @@ import ast
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from .paths import AgentCollabHome, project_config_path, user_config_path
+
 
 class ConfigError(ValueError):
     """Raised when agent-collab configuration is invalid."""
@@ -70,27 +72,33 @@ def builtin_config() -> CollaborationConfig:
     return config
 
 
-def config_search_paths(workdir: Path, home: Optional[Path] = None) -> List[Path]:
-    root = workdir.expanduser().resolve()
-    user_home = (home or Path.home()).expanduser()
+def config_search_paths(
+    workdir: Path,
+    home: Optional[AgentCollabHome] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> List[Path]:
+    resolved_home = home or AgentCollabHome.resolve(env)
     return [
-        root / ".agent-collab" / "config.toml",
-        user_home / ".agent-collab" / "config.toml",
+        project_config_path(workdir),
+        user_config_path(resolved_home),
     ]
 
 
 def load_config(
     workdir: Path,
-    home: Optional[Path] = None,
+    home: Optional[AgentCollabHome] = None,
+    env: Optional[Mapping[str, str]] = None,
 ) -> CollaborationConfig:
     """Load built-ins, then user config, then project config.
 
     The public lookup precedence is project config, user config, then built-ins.
     Applying the files in reverse order lets project values override user values.
+    The project config always comes from ``workdir`` (the session workdir),
+    never from the caller's current shell directory.
     """
 
     config = builtin_config()
-    project_path, user_path = config_search_paths(workdir, home)
+    project_path, user_path = config_search_paths(workdir, home, env)
     for path in (user_path, project_path):
         if path.exists():
             merge_config_data(config, _load_toml_file(path))

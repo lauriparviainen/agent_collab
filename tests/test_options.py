@@ -59,7 +59,7 @@ class StartOptionsTests(unittest.TestCase):
 sequence = ["claude"]
 """,
             )
-            config = load_config(root, home=home)
+            config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
 
             with self.assertRaises(StartOptionsError) as ctx:
                 validate_start_options(config, "claude-only", codex_options={"model": "gpt-5-codex"})
@@ -81,7 +81,7 @@ model.allowed = ["gpt-5-codex"]
 reasoning_effort.allowed = ["low", "medium"]
 """,
             )
-            config = load_config(root, home=home)
+            config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
 
             with self.assertRaises(StartOptionsError) as ctx:
                 validate_start_options(config, "codex-leads", codex_options={"model": "gpt-5", "reasoning_effort": "high"})
@@ -105,7 +105,7 @@ thinking_level.default = "high"
 thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
 """,
             )
-            config = load_config(root, home=home)
+            config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
 
             validated = validate_start_options(config, "claude-leads")
 
@@ -139,7 +139,7 @@ model.default = "opus"
 thinking_level.default = "high"
 """,
             )
-            config = load_config(root, home=home)
+            config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
 
             payload = describe_options(config, root)
 
