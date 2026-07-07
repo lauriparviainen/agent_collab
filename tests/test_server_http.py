@@ -25,7 +25,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 }
             ).encode("utf-8")
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 started = await server._dispatch("POST", "/sessions", {}, body)
                 session_id = started["session_id"]
                 waited = await server._dispatch(
@@ -67,7 +67,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             server = AgentCollabHttpServer(manager=SessionManager(default_workdir=root))
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 response = await server._dispatch("POST", "/options", {}, json.dumps({"workdir": str(root)}).encode("utf-8"))
 
         self.assertIn("workflows", response)
@@ -93,7 +93,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 response = await server._dispatch("POST", "/mcp", {}, body)
                 started = json.loads(response["result"]["content"][0]["text"])
                 session_id = started["session_id"]
@@ -122,7 +122,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 }
             ).encode("utf-8")
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 with self.assertRaises(StartOptionsError) as ctx:
                     await server._dispatch("POST", "/sessions", {}, body)
 
@@ -236,7 +236,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             server = AgentCollabHttpServer(manager=SessionManager())
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 response = await server._dispatch(
                     "POST",
                     "/mcp",
@@ -267,7 +267,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             server = AgentCollabHttpServer(manager=SessionManager())
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 response = await server._dispatch(
                     "POST",
                     "/mcp",

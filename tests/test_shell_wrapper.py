@@ -45,18 +45,18 @@ class ShellWrapperTests(unittest.TestCase):
         )
         self.assertEqual(captured["PYTHONPATH"].split(os.pathsep)[0], str(ROOT))
 
-    def test_daemon_command_adds_default_workdir(self):
+    def test_daemon_command_does_not_inject_workdir(self):
         result, captured = self._run_with_fake_python(["daemon", "status"])
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             captured["args"],
-            ["-m", "agent_collab.cli", "daemon", "status", "--workdir", "."],
+            ["-m", "agent_collab.cli", "daemon", "status"],
         )
 
-    def test_daemon_command_keeps_user_workdir(self):
+    def test_daemon_start_keeps_user_default_workdir(self):
         result, captured = self._run_with_fake_python(
-            ["daemon", "logs", "--workdir", "/tmp/project", "--tail", "5"]
+            ["daemon", "start", "--workdir", "/tmp/project"]
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -66,11 +66,9 @@ class ShellWrapperTests(unittest.TestCase):
                 "-m",
                 "agent_collab.cli",
                 "daemon",
-                "logs",
+                "start",
                 "--workdir",
                 "/tmp/project",
-                "--tail",
-                "5",
             ],
         )
         self.assertEqual(captured["args"].count("--workdir"), 1)

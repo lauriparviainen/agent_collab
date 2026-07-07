@@ -12,7 +12,7 @@ import time
 from typing import Any, Dict, Optional
 
 from .events import utc_timestamp
-from .paths import DataPaths
+from .paths import GlobalDataPaths
 
 
 @dataclass
@@ -26,14 +26,19 @@ class DaemonSupervisorError(RuntimeError):
     pass
 
 
-def start_daemon(workdir: Path, host: str = "127.0.0.1", port: int = 8765) -> Dict[str, Any]:
-    paths = DataPaths.from_workdir(workdir)
-    paths.ensure_daemon_dirs()
+def start_daemon(
+    paths: Optional[GlobalDataPaths] = None,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    default_workdir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    paths = paths or GlobalDataPaths.resolve()
+    paths.ensure_dirs()
     state = _read_state(paths)
     pid = _state_pid(state) or _read_pid(paths)
     if pid is not None:
         if _is_running(pid):
-            raise DaemonSupervisorError(f"agent-collab daemon already running for {paths.workdir} on {host}:{port} with pid {pid}")
+            raise DaemonSupervisorError(f"global agent-collab daemon already running on {host}:{port} with pid {pid}")
         _remove_pid_state(paths)
 
     stdout = paths.daemon_log_path.open("a", encoding="utf-8")
@@ -47,18 +52,18 @@ def start_daemon(workdir: Path, host: str = "127.0.0.1", port: int = 8765) -> Di
         host,
         "--port",
         str(port),
-        "--workdir",
-        str(paths.workdir),
         "--session-log-dir",
         str(paths.session_dir),
     ]
+    if default_workdir is not None:
+        argv.extend(["--workdir", str(Path(default_workdir).expanduser().resolve())])
     env = os.environ.copy()
     source_root = str(Path(__file__).resolve().parent.parent)
     pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = source_root if not pythonpath else source_root + os.pathsep + pythonpath
     process = subprocess.Popen(
         argv,
-        cwd=str(paths.workdir),
+        cwd=str(paths.home),
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=stdout,
@@ -72,30 +77,30 @@ def start_daemon(workdir: Path, host: str = "127.0.0.1", port: int = 8765) -> Di
     except Exception:
         _terminate_process(process)
         raise
-    state = _build_state(paths, process.pid, host, port, argv)
+    state = _build_state(paths, process.pid, host, port, argv, default_workdir)
     _write_state(paths, state)
     paths.pid_path.write_text(f"{process.pid}\n", encoding="utf-8")
     return state
 
 
-def daemon_status(workdir: Path) -> DaemonStatus:
-    paths = DataPaths.from_workdir(workdir)
+def daemon_status(paths: Optional[GlobalDataPaths] = None) -> DaemonStatus:
+    paths = paths or GlobalDataPaths.resolve()
     state = _read_state(paths)
     pid = _state_pid(state) or _read_pid(paths)
     if pid is None:
-        return DaemonStatus(False, state, f"agent-collab daemon is not running for {paths.workdir}")
+        return DaemonStatus(False, state, "global agent-collab daemon is not running")
     if _is_running(pid):
-        return DaemonStatus(True, state, f"agent-collab daemon is running with pid {pid}")
+        return DaemonStatus(True, state, f"global agent-collab daemon is running with pid {pid}")
     _remove_pid_state(paths)
     return DaemonStatus(False, state, f"removed stale agent-collab daemon state for pid {pid}")
 
 
-def stop_daemon(workdir: Path, grace_seconds: float = 3.0) -> DaemonStatus:
-    paths = DataPaths.from_workdir(workdir)
+def stop_daemon(paths: Optional[GlobalDataPaths] = None, grace_seconds: float = 3.0) -> DaemonStatus:
+    paths = paths or GlobalDataPaths.resolve()
     state = _read_state(paths)
     pid = _state_pid(state) or _read_pid(paths)
     if pid is None:
-        return DaemonStatus(False, state, f"agent-collab daemon is not running for {paths.workdir}")
+        return DaemonStatus(False, state, "global agent-collab daemon is not running")
     if not _is_running(pid):
         _remove_pid_state(paths)
         return DaemonStatus(False, state, f"removed stale agent-collab daemon state for pid {pid}")
@@ -121,8 +126,8 @@ def stop_daemon(workdir: Path, grace_seconds: float = 3.0) -> DaemonStatus:
     return DaemonStatus(False, state, f"agent-collab daemon killed pid {pid}")
 
 
-def tail_daemon_log(workdir: Path, tail: int = 100, stderr: bool = False) -> str:
-    paths = DataPaths.from_workdir(workdir)
+def tail_daemon_log(paths: Optional[GlobalDataPaths] = None, tail: int = 100, stderr: bool = False) -> str:
+    paths = paths or GlobalDataPaths.resolve()
     path = paths.daemon_stderr_path if stderr else paths.daemon_log_path
     if not path.exists():
         return ""
@@ -131,12 +136,20 @@ def tail_daemon_log(workdir: Path, tail: int = 100, stderr: bool = False) -> str
     return "\n".join(lines[-count:] if count else lines)
 
 
-def _build_state(paths: DataPaths, pid: int, host: str, port: int, argv: Any) -> Dict[str, Any]:
+def _build_state(
+    paths: GlobalDataPaths,
+    pid: int,
+    host: str,
+    port: int,
+    argv: Any,
+    default_workdir: Optional[Path] = None,
+) -> Dict[str, Any]:
     return {
         "pid": pid,
         "host": host,
         "port": port,
-        "workdir": str(paths.workdir),
+        "home": str(paths.home),
+        "default_workdir": str(Path(default_workdir).expanduser().resolve()) if default_workdir else None,
         "data_dir": str(paths.data_dir),
         "daemon_dir": str(paths.daemon_dir),
         "session_dir": str(paths.session_dir),
@@ -149,7 +162,7 @@ def _build_state(paths: DataPaths, pid: int, host: str, port: int, argv: Any) ->
     }
 
 
-def _read_state(paths: DataPaths) -> Dict[str, Any]:
+def _read_state(paths: GlobalDataPaths) -> Dict[str, Any]:
     if not paths.state_path.exists():
         return {}
     try:
@@ -159,11 +172,11 @@ def _read_state(paths: DataPaths) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _write_state(paths: DataPaths, state: Dict[str, Any]) -> None:
+def _write_state(paths: GlobalDataPaths, state: Dict[str, Any]) -> None:
     paths.state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _read_pid(paths: DataPaths) -> Optional[int]:
+def _read_pid(paths: GlobalDataPaths) -> Optional[int]:
     try:
         text = paths.pid_path.read_text(encoding="utf-8").strip()
     except OSError:
@@ -207,7 +220,7 @@ def _is_zombie(pid: int) -> bool:
     return state == "Z"
 
 
-def _wait_for_ready(process: subprocess.Popen, host: str, port: int, paths: DataPaths, timeout: float = 3.0) -> None:
+def _wait_for_ready(process: subprocess.Popen, host: str, port: int, paths: GlobalDataPaths, timeout: float = 3.0) -> None:
     poll = getattr(process, "poll", None)
     if not callable(poll):
         return
@@ -217,7 +230,7 @@ def _wait_for_ready(process: subprocess.Popen, host: str, port: int, paths: Data
         code = poll()
         if code is not None:
             message = f"agent-collab daemon exited during startup with code {code}"
-            stderr_tail = tail_daemon_log(paths.workdir, tail=20, stderr=True)
+            stderr_tail = tail_daemon_log(paths, tail=20, stderr=True)
             if stderr_tail:
                 message += f": {stderr_tail}"
             raise DaemonSupervisorError(message)
@@ -253,7 +266,7 @@ def _terminate_process(process: subprocess.Popen) -> None:
         return
 
 
-def _remove_pid_state(paths: DataPaths) -> None:
+def _remove_pid_state(paths: GlobalDataPaths) -> None:
     for path in (paths.pid_path, paths.state_path):
         try:
             path.unlink()

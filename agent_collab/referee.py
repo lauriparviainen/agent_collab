@@ -15,6 +15,7 @@ from .config import (
 )
 from .events import Event
 from .logging import SessionLogger
+from .paths import GlobalDataPaths
 from .runners import AgentRunner, DryRunRunner, MockRunner, configured_runner
 from .terminal import print_event
 
@@ -43,7 +44,7 @@ class Referee:
     def __init__(self, config: RefereeConfig, printer: Optional[Callable[[Event], None]] = None):
         self.config = config
         self.workdir = config.workdir.expanduser().resolve()
-        self.log_dir = config.log_dir or (self.workdir / ".agent-collab" / "sessions")
+        self.log_dir = config.log_dir or GlobalDataPaths.resolve().session_dir
         self.printer = printer or (lambda event: print_event(event, config.color))
         self.collab_config = config.collab_config or load_config(self.workdir)
         if config.collab_config is not None:

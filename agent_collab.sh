@@ -20,9 +20,9 @@ Usage:
   ./agent_collab.sh help
   ./agent_collab.sh serve
   ./agent_collab.sh daemon start [--workdir DIR]
-  ./agent_collab.sh daemon status [--workdir DIR]
-  ./agent_collab.sh daemon logs [--workdir DIR] [--tail N]
-  ./agent_collab.sh daemon stop [--workdir DIR]
+  ./agent_collab.sh daemon status
+  ./agent_collab.sh daemon logs [--tail N]
+  ./agent_collab.sh daemon stop
   ./agent_collab.sh start --mock --watch --workdir . "Task"
   ./agent_collab.sh watch [SESSION_ID]
   ./agent_collab.sh list
@@ -41,18 +41,10 @@ Examples:
 Most commands pass through to:
   python3 -m agent_collab.cli
 
-Daemon helpers use --workdir . unless you pass --workdir yourself.
+The daemon is global: runtime state lives under ~/.agent-collab/data
+(override with AGENT_COLLAB_HOME). "daemon start --workdir DIR" only sets
+the default workdir for sessions that do not pass one explicitly.
 EOF
-}
-
-has_workdir_arg() {
-  local arg
-  for arg in "$@"; do
-    case "$arg" in
-      --workdir|--workdir=*) return 0 ;;
-    esac
-  done
-  return 1
 }
 
 case "${1:-help}" in
@@ -70,19 +62,6 @@ case "${1:-help}" in
       run_cli --mock "$@"
     else
       run_cli --mock --workdir . "Smoke test"
-    fi
-    ;;
-  daemon)
-    if [[ "${2:-}" =~ ^(start|status|logs|stop)$ ]]; then
-      action="$2"
-      shift 2
-      if has_workdir_arg "$@"; then
-        run_cli daemon "$action" "$@"
-      else
-        run_cli daemon "$action" --workdir . "$@"
-      fi
-    else
-      run_cli "$@"
     fi
     ;;
   *)

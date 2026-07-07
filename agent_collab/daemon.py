@@ -11,6 +11,7 @@ import uuid
 from .config import DEFAULT_WORKFLOW, load_config
 from .events import Event, utc_timestamp
 from .options import describe_options, validate_start_options
+from .paths import GlobalDataPaths
 from .referee import Referee, RefereeConfig
 
 
@@ -99,7 +100,7 @@ class SessionManager:
         log_dir = (
             Path(request.log_dir).expanduser().resolve()
             if request.log_dir
-            else self.default_log_dir or workdir / ".agent-collab" / "sessions"
+            else self.default_log_dir or GlobalDataPaths.resolve().session_dir
         )
         collab_config = load_config(workdir)
         normalized_options = validate_start_options(

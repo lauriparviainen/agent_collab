@@ -21,7 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verbose", action="store_true", help="Print compact unknown stream events.")
     parser.add_argument("--no-color", action="store_true")
     parser.add_argument("--workdir", type=Path, default=Path("."), help="Project root used as cwd for agent subprocesses.")
-    parser.add_argument("--log-dir", type=Path, help="Session log directory. Defaults to WORKDIR/.agent-collab/sessions.")
+    parser.add_argument("--log-dir", type=Path, help="Session log directory. Defaults to the global AGENT_COLLAB_HOME data/sessions directory.")
     parser.add_argument("--session-id", help=argparse.SUPPRESS)
     parser.add_argument("--mcp-server", action="store_true", help="Run the stdio MCP server instead of the CLI loop.")
     return parser
@@ -32,7 +32,7 @@ def build_watch_parser() -> argparse.ArgumentParser:
     parser.add_argument("session_or_path", nargs="?", help="Session id or path to a session JSONL log.")
     parser.add_argument("--server-url", help="Daemon URL for watching a daemon-owned session id.")
     parser.add_argument("--workdir", type=Path, help="Project root used to resolve SESSION_ID logs.")
-    parser.add_argument("--log-dir", type=Path, help="Session log directory. Defaults to WORKDIR/.agent-collab/sessions.")
+    parser.add_argument("--log-dir", type=Path, help="Session log directory. Defaults to the global AGENT_COLLAB_HOME data/sessions directory.")
     parser.add_argument("--session-id", help="Session id to resolve under the session log directory.")
     parser.add_argument("--cursor", type=int, default=0, help="Start after this zero-based JSONL line offset.")
     parser.add_argument("--no-follow", action="store_true", help="Print current events and exit instead of following.")
@@ -69,34 +69,36 @@ def build_start_parser() -> argparse.ArgumentParser:
 
 
 def build_daemon_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-collab daemon", description="Manage the project-local background server.")
+    parser = argparse.ArgumentParser(prog="agent-collab daemon", description="Manage the global background server.")
     subparsers = parser.add_subparsers(dest="action", required=True)
 
-    start = subparsers.add_parser("start", help="Start the background server.")
-    _add_daemon_workdir(start)
+    start = subparsers.add_parser("start", help="Start the global background server.")
+    _add_daemon_default_workdir(start)
     start.add_argument("--host", default="127.0.0.1")
     start.add_argument("--port", type=int, default=8765)
 
-    status = subparsers.add_parser("status", help="Show daemon status.")
-    _add_daemon_workdir(status)
+    subparsers.add_parser("status", help="Show daemon status.")
 
     stop = subparsers.add_parser("stop", help="Stop the daemon.")
-    _add_daemon_workdir(stop)
 
     restart = subparsers.add_parser("restart", help="Restart the daemon.")
-    _add_daemon_workdir(restart)
+    _add_daemon_default_workdir(restart)
     restart.add_argument("--host", default="127.0.0.1")
     restart.add_argument("--port", type=int, default=8765)
 
     logs = subparsers.add_parser("logs", help="Print daemon logs.")
-    _add_daemon_workdir(logs)
     logs.add_argument("--tail", type=int, default=100)
     logs.add_argument("--stderr", action="store_true", help="Read daemon.stderr.log instead of daemon.log.")
     return parser
 
 
-def _add_daemon_workdir(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--workdir", type=Path, default=Path("."), help="Project root for daemon runtime data.")
+def _add_daemon_default_workdir(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--workdir",
+        type=Path,
+        default=None,
+        help="Default workdir for sessions that do not pass one explicitly. Never affects daemon runtime paths.",
+    )
 
 
 def build_client_parser(prog: str, description: str) -> argparse.ArgumentParser:
@@ -262,17 +264,17 @@ def _main_daemon(argv) -> int:
 
     parser = build_daemon_parser()
     args = parser.parse_args(argv)
-    workdir = args.workdir.expanduser().resolve()
+    default_workdir = args.workdir.expanduser().resolve() if getattr(args, "workdir", None) else None
     try:
         if args.action == "start":
-            state = start_daemon(workdir, host=args.host, port=args.port)
+            state = start_daemon(host=args.host, port=args.port, default_workdir=default_workdir)
             print(f"started agent-collab daemon pid {state['pid']}")
             print(f"server_url: {state['server_url']}")
             print(f"mcp_url: {state['mcp_url']}")
             print(f"data_dir: {state['data_dir']}")
             return 0
         if args.action == "status":
-            status = daemon_status(workdir)
+            status = daemon_status()
             print(status.message)
             if status.state:
                 for key in ("server_url", "mcp_url", "data_dir", "daemon_log_path", "daemon_stderr_path"):
@@ -280,17 +282,17 @@ def _main_daemon(argv) -> int:
                         print(f"{key}: {status.state[key]}")
             return 0 if status.running else 1
         if args.action == "stop":
-            print(stop_daemon(workdir).message)
+            print(stop_daemon().message)
             return 0
         if args.action == "restart":
-            stop_daemon(workdir)
-            state = start_daemon(workdir, host=args.host, port=args.port)
+            stop_daemon()
+            state = start_daemon(host=args.host, port=args.port, default_workdir=default_workdir)
             print(f"restarted agent-collab daemon pid {state['pid']}")
             print(f"server_url: {state['server_url']}")
             print(f"mcp_url: {state['mcp_url']}")
             return 0
         if args.action == "logs":
-            text = tail_daemon_log(workdir, tail=args.tail, stderr=args.stderr)
+            text = tail_daemon_log(tail=args.tail, stderr=args.stderr)
             if text:
                 print(text)
             return 0

@@ -7,7 +7,7 @@ from unittest import mock
 
 from agent_collab.daemon import StartSessionRequest, SessionManager
 from agent_collab.options import StartOptionsError
-from agent_collab.paths import DataPaths
+from agent_collab.paths import GlobalDataPaths
 
 
 TERMINAL_STATUSES = {"done", "failed", "stopped"}
@@ -29,7 +29,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             manager = SessionManager()
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
                     StartSessionRequest(
                         task="daemon mock task",
@@ -44,7 +44,8 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 final = await self._wait_for_terminal(manager, state.session_id)
 
             self.assertEqual(final.status, "done")
-            self.assertEqual(Path(final.jsonl_path).parent, root / ".agent-collab" / "sessions")
+            global_sessions = GlobalDataPaths.resolve(env={"AGENT_COLLAB_HOME": str(root / "home")}).session_dir
+            self.assertEqual(Path(final.jsonl_path).parent, global_sessions)
             self.assertTrue(Path(final.jsonl_path).exists())
             self.assertTrue(Path(final.markdown_path).exists())
 
@@ -59,7 +60,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             manager = SessionManager()
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
                     StartSessionRequest(task="cursor task", mock=True, max_turns=1, timeout=5, workdir=root)
                 )
@@ -79,7 +80,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             manager = SessionManager()
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
                     StartSessionRequest(task="wait task", mock=True, max_turns=2, timeout=5, workdir=root)
                 )
@@ -100,7 +101,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             root_b.mkdir()
             manager = SessionManager()
 
-            with mock.patch.dict(os.environ, {"HOME": str(base / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(base / "home")}):
                 first, second = await asyncio.gather(
                     manager.start_session(
                         StartSessionRequest(task="first workdir", mock=True, max_turns=1, timeout=5, workdir=root_a)
@@ -117,24 +118,27 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(first.session_id, second.session_id)
             self.assertEqual(first_done.status, "done")
             self.assertEqual(second_done.status, "done")
-            self.assertEqual(Path(first_done.jsonl_path).parent, root_a / ".agent-collab" / "sessions")
-            self.assertEqual(Path(second_done.jsonl_path).parent, root_b / ".agent-collab" / "sessions")
+            self.assertEqual(first_done.workdir, str(root_a.resolve()))
+            self.assertEqual(second_done.workdir, str(root_b.resolve()))
+            global_sessions = GlobalDataPaths.resolve(env={"AGENT_COLLAB_HOME": str(base / "home")}).session_dir
+            self.assertEqual(Path(first_done.jsonl_path).parent, global_sessions)
+            self.assertEqual(Path(second_done.jsonl_path).parent, global_sessions)
             self.assertEqual({state.session_id for state in manager.list_sessions()}, {first.session_id, second.session_id})
 
-    async def test_default_log_dir_can_point_daemon_sessions_to_data_dir(self):
+    async def test_default_log_dir_overrides_global_session_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            paths = DataPaths.from_workdir(root)
-            manager = SessionManager(default_workdir=root, default_log_dir=paths.session_dir)
+            custom_log_dir = root / "custom-logs"
+            manager = SessionManager(default_workdir=root, default_log_dir=custom_log_dir)
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
                     StartSessionRequest(task="data log task", mock=True, max_turns=1, timeout=5, workdir=root)
                 )
                 final = await self._wait_for_terminal(manager, state.session_id)
 
             self.assertEqual(final.status, "done")
-            self.assertEqual(Path(final.jsonl_path).parent, paths.session_dir)
+            self.assertEqual(Path(final.jsonl_path).parent, custom_log_dir)
             self.assertTrue(Path(final.jsonl_path).exists())
 
     async def test_invalid_options_fail_before_session_state_is_created(self):
@@ -142,7 +146,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             manager = SessionManager()
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 with self.assertRaises(StartOptionsError):
                     await manager.start_session(
                         StartSessionRequest(
@@ -160,7 +164,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             manager = SessionManager()
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
                     StartSessionRequest(task="stop task", mock=True, max_turns=100, timeout=5, workdir=root)
                 )
@@ -178,7 +182,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             messages = []
             manager = SessionManager(lifecycle_logger=messages.append)
 
-            with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
                     StartSessionRequest(task="logging task", mock=True, max_turns=1, timeout=5, workdir=root)
                 )
