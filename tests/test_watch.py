@@ -16,6 +16,13 @@ def _write_events(path, events):
 
 
 class WatchTests(unittest.TestCase):
+    def setUp(self):
+        self._home_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._home_tmp.cleanup)
+        patcher = mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": self._home_tmp.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_watch_jsonl_prints_existing_events(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "session.jsonl"
@@ -56,13 +63,31 @@ class WatchTests(unittest.TestCase):
             self.assertIn("CODEX   second", text)
             self.assertIn("CLAUDE  third", text)
 
-    def test_resolve_jsonl_path_from_workdir_and_session_id(self):
+    def test_resolve_jsonl_path_defaults_to_global_home(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            expected = root / ".agent-collab" / "data" / "sessions" / "mcp-1.jsonl"
+            expected = Path(self._home_tmp.name).resolve() / "data" / "sessions" / "mcp-1.jsonl"
 
             self.assertEqual(resolve_jsonl_path(workdir=root, session_id="mcp-1"), expected)
             self.assertEqual(resolve_jsonl_path("mcp-1", workdir=root), expected)
+
+    def test_resolve_jsonl_path_finds_global_home_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            global_log = Path(self._home_tmp.name).resolve() / "data" / "sessions" / "mcp-1.jsonl"
+            global_log.parent.mkdir(parents=True)
+            global_log.touch()
+
+            self.assertEqual(resolve_jsonl_path(workdir=root, session_id="mcp-1"), global_log)
+
+    def test_resolve_jsonl_path_falls_back_to_project_data_session_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / ".agent-collab" / "data" / "sessions" / "mcp-1.jsonl"
+            data.parent.mkdir(parents=True)
+            data.touch()
+
+            self.assertEqual(resolve_jsonl_path(workdir=root, session_id="mcp-1"), data)
 
     def test_resolve_jsonl_path_falls_back_to_legacy_session_log(self):
         with tempfile.TemporaryDirectory() as tmp:
