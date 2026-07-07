@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 import uuid
 
-from .config import load_config
+from .config import DEFAULT_WORKFLOW, load_config
 from .events import Event, utc_timestamp
 from .options import describe_options, validate_start_options
 from .referee import Referee, RefereeConfig
@@ -24,7 +24,7 @@ TERMINAL_STATUSES = {DONE, FAILED, STOPPED}
 @dataclass
 class StartSessionRequest:
     task: str
-    mode: str = "claude-leads"
+    workflow: str = DEFAULT_WORKFLOW
     workdir: Union[str, Path] = Path(".")
     max_turns: int = 3
     timeout: int = 900
@@ -43,7 +43,7 @@ class SessionState:
     session_id: str
     status: str
     task: str
-    mode: str
+    workflow: str
     workdir: str
     jsonl_path: str
     markdown_path: str
@@ -104,7 +104,7 @@ class SessionManager:
         collab_config = load_config(workdir)
         normalized_options = validate_start_options(
             collab_config,
-            request.mode,
+            request.workflow,
             request.codex_options,
             request.claude_options,
         )
@@ -118,7 +118,7 @@ class SessionManager:
             session_id=session_id,
             status=RUNNING,
             task=request.task,
-            mode=request.mode,
+            workflow=request.workflow,
             workdir=str(workdir),
             jsonl_path=str(log_dir / f"{session_id}.jsonl"),
             markdown_path=str(log_dir / f"{session_id}.md"),
@@ -138,7 +138,7 @@ class SessionManager:
         self._sessions[session_id] = managed
         managed.task = asyncio.create_task(self._run_session(managed), name=f"agent-collab-session-{session_id}")
         self._log_lifecycle(
-            f"session {session_id} started mode={state.mode} max_turns={state.max_turns} "
+            f"session {session_id} started workflow={state.workflow} max_turns={state.max_turns} "
             f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
         )
         return self._copy_state(state)
@@ -198,7 +198,7 @@ class SessionManager:
         workdir = Path(state.workdir)
         log_dir = Path(state.jsonl_path).parent
         config = RefereeConfig(
-            mode=request.mode,
+            workflow=request.workflow,
             max_turns=int(request.max_turns),
             timeout=int(request.timeout),
             dry_run=bool(request.dry_run),

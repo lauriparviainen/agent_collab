@@ -1,3 +1,5 @@
+schema_version = 2
+
 [agents.claude]
 type = "claude"
 command = "claude"
@@ -23,11 +25,14 @@ enabled = true
 thinking_level.default = "high"
 thinking_level.allowed = ["minimal", "low", "medium", "high", "xhigh"]
 
-[modes.claude-leads]
+[workflows.single-claude]
+sequence = ["claude"]
+
+[workflows.single-codex]
+sequence = ["codex"]
+
+[workflows.cross-review]
 sequence = ["claude", "codex", "claude"]
 
-[modes.codex-leads]
-sequence = ["codex", "claude", "codex"]
-
-[modes.debate]
-sequence = ["claude", "codex", "claude", "codex"]
+[workflows.compare]
+sequence = ["claude", "codex"]

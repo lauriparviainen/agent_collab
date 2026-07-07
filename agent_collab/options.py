@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set
 
-from .config import AgentConfig, CollaborationConfig, load_config, validate_mode
+from .config import AgentConfig, CollaborationConfig, load_config, validate_workflow
 
 
 CODEX_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"]
@@ -54,7 +54,7 @@ def format_validation_error(details: Sequence[Mapping[str, str]]) -> str:
 
 def validate_start_options(
     config: CollaborationConfig,
-    mode_id: str,
+    workflow_id: str,
     codex_options: Any = None,
     claude_options: Any = None,
 ) -> Dict[str, Dict[str, Any]]:
@@ -67,22 +67,25 @@ def validate_start_options(
     if errors:
         raise StartOptionsError(errors)
 
-    validate_mode(config, mode_id)
-    mode = config.modes[mode_id]
-    mode_types = _mode_agent_types(config, mode.sequence)
+    validate_workflow(config, workflow_id)
+    workflow = config.workflows[workflow_id]
+    workflow_types = _workflow_agent_types(config, workflow.sequence)
 
     for agent_type, payload in option_payloads.items():
         path = f"{agent_type}_options"
-        if payload and agent_type not in mode_types:
+        if payload and agent_type not in workflow_types:
             errors.append(
                 {
                     "path": path,
-                    "message": f"does not apply to mode {mode_id!r}; mode uses: {', '.join(sorted(mode_types))}",
+                    "message": (
+                        f"does not apply to workflow {workflow_id!r}; "
+                        f"workflow uses: {', '.join(sorted(workflow_types))}"
+                    ),
                 }
             )
             continue
-        if agent_type in mode_types:
-            agent_ids = [agent_id for agent_id in mode.sequence if config.agents[agent_id].type == agent_type]
+        if agent_type in workflow_types:
+            agent_ids = [agent_id for agent_id in workflow.sequence if config.agents[agent_id].type == agent_type]
             merged_payload = _default_options_for_agent_type(config, agent_type, agent_ids)
             explicit_keys = set(payload)
             merged_payload.update(payload)
@@ -112,24 +115,24 @@ def describe_options(config: CollaborationConfig, workdir: Optional[Path] = None
         }
         for agent in sorted(config.agents.values(), key=lambda item: item.id)
     ]
-    modes = []
-    mode_agent_types: Dict[str, List[str]] = {}
-    for mode_id, mode in sorted(config.modes.items()):
-        types = sorted(_mode_agent_types(config, mode.sequence))
-        mode_agent_types[mode_id] = types
-        modes.append({"id": mode_id, "sequence": list(mode.sequence), "agent_types": types})
+    workflows = []
+    workflow_agent_types: Dict[str, List[str]] = {}
+    for workflow_id, workflow in sorted(config.workflows.items()):
+        types = sorted(_workflow_agent_types(config, workflow.sequence))
+        workflow_agent_types[workflow_id] = types
+        workflows.append({"id": workflow_id, "sequence": list(workflow.sequence), "agent_types": types})
 
     return {
         "workdir": str(workdir.expanduser().resolve()) if workdir else None,
         "agents": agents,
-        "modes": modes,
-        "mode_agent_types": mode_agent_types,
+        "workflows": workflows,
+        "workflow_agent_types": workflow_agent_types,
         "codex_options": _schema_for_agent_type(config, "codex"),
         "claude_options": _schema_for_agent_type(config, "claude"),
         "examples": [
             {
                 "task": "Review this repository",
-                "mode": "codex-leads",
+                "workflow": "compare",
                 "codex_options": {"thinking_level": "medium", "sandbox": "workspace-write"},
                 "claude_options": {"model": "opus", "thinking_level": "high"},
             },
@@ -452,7 +455,7 @@ def _flag_value(args: Sequence[str], flag: str) -> Optional[str]:
     return None
 
 
-def _mode_agent_types(config: CollaborationConfig, sequence: Iterable[str]) -> Set[str]:
+def _workflow_agent_types(config: CollaborationConfig, sequence: Iterable[str]) -> Set[str]:
     return {config.agents[agent_id].type for agent_id in sequence}
 
 

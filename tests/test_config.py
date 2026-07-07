@@ -36,12 +36,13 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.agents["claude"].args, ["-p", "--output-format", "stream-json", "--verbose"])
             self.assertEqual(config.agents["codex"].command, "codex")
             self.assertEqual(config.agents["codex"].args, ["exec", "--json"])
-            self.assertEqual(config.modes["claude-leads"].sequence, ["claude", "codex", "claude"])
-            self.assertEqual(config.modes["codex-leads"].sequence, ["codex", "claude", "codex"])
-            self.assertEqual(config.modes["debate"].sequence, ["claude", "codex", "claude", "codex"])
+            self.assertEqual(config.workflows["single-claude"].sequence, ["claude"])
+            self.assertEqual(config.workflows["single-codex"].sequence, ["codex"])
+            self.assertEqual(config.workflows["cross-review"].sequence, ["claude", "codex", "claude"])
+            self.assertEqual(config.workflows["compare"].sequence, ["claude", "codex"])
             self.assertEqual(config.loaded_paths, [])
 
-    def test_project_config_overrides_user_config_and_adds_custom_mode(self):
+    def test_project_config_overrides_user_config_and_adds_custom_workflow(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             home = Path(tmp) / "home"
@@ -66,7 +67,7 @@ command = "codex"
 args = ["exec", "--json", "--profile", "readonly"]
 enabled = true
 
-[modes.readonly-review]
+[workflows.readonly-review]
 sequence = ["codex_readonly", "claude", "codex_readonly"]
 """,
             )
@@ -75,7 +76,7 @@ sequence = ["codex_readonly", "claude", "codex_readonly"]
 
             self.assertEqual(config.agents["codex"].command, "project-codex")
             self.assertEqual(config.agents["codex_readonly"].args, ["exec", "--json", "--profile", "readonly"])
-            self.assertEqual(config.modes["readonly-review"].sequence, ["codex_readonly", "claude", "codex_readonly"])
+            self.assertEqual(config.workflows["readonly-review"].sequence, ["codex_readonly", "claude", "codex_readonly"])
 
     def test_user_config_overrides_builtin(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -130,6 +131,22 @@ command = "project-b-codex"
                 [project_b.resolve() / ".agent-collab" / "config.toml"],
             )
 
+    def test_legacy_modes_section_is_rejected_with_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_config(
+                root,
+                """
+[modes.claude-leads]
+sequence = ["claude", "codex", "claude"]
+""",
+            )
+
+            with self.assertRaisesRegex(ConfigError, "workflows"):
+                load_config(root, env=_env(home))
+
     def test_toml_subset_parser_supports_config_shape(self):
         data = _parse_toml_subset(
             """
@@ -140,13 +157,13 @@ args = ["exec", "--json", "--profile", "readonly"]
 enabled = true
 env = { CODEX_HOME = "/tmp/codex" }
 
-[modes.readonly-review]
+[workflows.readonly-review]
 sequence = ["codex_readonly", "claude", "codex_readonly"]
 """
         )
 
         self.assertEqual(data["agents"]["codex_readonly"]["env"], {"CODEX_HOME": "/tmp/codex"})
-        self.assertEqual(data["modes"]["readonly-review"]["sequence"], ["codex_readonly", "claude", "codex_readonly"])
+        self.assertEqual(data["workflows"]["readonly-review"]["sequence"], ["codex_readonly", "claude", "codex_readonly"])
 
     def test_toml_subset_parser_supports_dotted_option_keys(self):
         data = _parse_toml_subset(
@@ -184,7 +201,7 @@ thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
             self.assertEqual(config.agents["claude"].options["thinking_level"]["default"], "high")
             self.assertEqual(config.agents["claude"].options["thinking_level"]["allowed"], ["low", "medium", "high", "xhigh", "max"])
 
-    def test_mode_sequence_rejects_unknown_agent(self):
+    def test_workflow_sequence_rejects_unknown_agent(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             home = Path(tmp) / "home"
@@ -193,7 +210,7 @@ thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
             _write_config(
                 root,
                 """
-[modes.bad]
+[workflows.bad]
 sequence = ["missing"]
 """,
             )
@@ -201,7 +218,7 @@ sequence = ["missing"]
             with self.assertRaisesRegex(ConfigError, "unknown agent"):
                 load_config(root, env=_env(home))
 
-    def test_mode_sequence_rejects_disabled_agent(self):
+    def test_workflow_sequence_rejects_disabled_agent(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             home = Path(tmp) / "home"
@@ -216,7 +233,7 @@ command = "codex"
 args = ["exec", "--json"]
 enabled = false
 
-[modes.bad]
+[workflows.bad]
 sequence = ["disabled_codex"]
 """,
             )

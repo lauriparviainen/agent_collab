@@ -28,7 +28,7 @@ class AgentConfig:
 
 
 @dataclass
-class ModeConfig:
+class WorkflowConfig:
     id: str
     sequence: List[str] = field(default_factory=list)
 
@@ -36,8 +36,11 @@ class ModeConfig:
 @dataclass
 class CollaborationConfig:
     agents: Dict[str, AgentConfig] = field(default_factory=dict)
-    modes: Dict[str, ModeConfig] = field(default_factory=dict)
+    workflows: Dict[str, WorkflowConfig] = field(default_factory=dict)
     loaded_paths: List[Path] = field(default_factory=list)
+
+
+DEFAULT_WORKFLOW = "cross-review"
 
 
 BUILTIN_CONFIG: Dict[str, Any] = {
@@ -56,10 +59,11 @@ BUILTIN_CONFIG: Dict[str, Any] = {
             "enabled": True,
         },
     },
-    "modes": {
-        "claude-leads": {"sequence": ["claude", "codex", "claude"]},
-        "codex-leads": {"sequence": ["codex", "claude", "codex"]},
-        "debate": {"sequence": ["claude", "codex", "claude", "codex"]},
+    "workflows": {
+        "single-claude": {"sequence": ["claude"]},
+        "single-codex": {"sequence": ["codex"]},
+        "cross-review": {"sequence": ["claude", "codex", "claude"]},
+        "compare": {"sequence": ["claude", "codex"]},
     },
 }
 
@@ -110,12 +114,14 @@ def load_config(
     return config
 
 
-KNOWN_TOP_LEVEL_KEYS = {"schema_version", "agents", "modes"}
+KNOWN_TOP_LEVEL_KEYS = {"schema_version", "agents", "workflows"}
 
 
 def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> None:
     for key in data:
         if key not in KNOWN_TOP_LEVEL_KEYS:
+            if key == "modes":
+                raise ConfigError("unknown config section 'modes'; use [workflows.*] instead")
             raise ConfigError(f"unknown config section {key!r}")
 
     agents = data.get("agents", {})
@@ -127,14 +133,16 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
                 raise ConfigError(f"[agents.{agent_id}] must be a table")
             config.agents[str(agent_id)] = _merge_agent(config.agents.get(str(agent_id)), str(agent_id), values)
 
-    modes = data.get("modes", {})
-    if modes is not None:
-        if not isinstance(modes, Mapping):
-            raise ConfigError("[modes] must be a table")
-        for mode_id, values in modes.items():
+    workflows = data.get("workflows", {})
+    if workflows is not None:
+        if not isinstance(workflows, Mapping):
+            raise ConfigError("[workflows] must be a table")
+        for workflow_id, values in workflows.items():
             if not isinstance(values, Mapping):
-                raise ConfigError(f"[modes.{mode_id}] must be a table")
-            config.modes[str(mode_id)] = _merge_mode(config.modes.get(str(mode_id)), str(mode_id), values)
+                raise ConfigError(f"[workflows.{workflow_id}] must be a table")
+            config.workflows[str(workflow_id)] = _merge_workflow(
+                config.workflows.get(str(workflow_id)), str(workflow_id), values
+            )
 
 
 def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping[str, Any]) -> AgentConfig:
@@ -174,21 +182,25 @@ def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping
     return agent
 
 
-def _merge_mode(existing: Optional[ModeConfig], mode_id: str, values: Mapping[str, Any]) -> ModeConfig:
-    mode = ModeConfig(id=mode_id) if existing is None else ModeConfig(id=existing.id, sequence=list(existing.sequence))
+def _merge_workflow(existing: Optional[WorkflowConfig], workflow_id: str, values: Mapping[str, Any]) -> WorkflowConfig:
+    workflow = (
+        WorkflowConfig(id=workflow_id)
+        if existing is None
+        else WorkflowConfig(id=existing.id, sequence=list(existing.sequence))
+    )
     for key, value in values.items():
         if key == "sequence":
-            mode.sequence = _expect_str_list(value, f"modes.{mode_id}.sequence")
+            workflow.sequence = _expect_str_list(value, f"workflows.{workflow_id}.sequence")
         else:
-            raise ConfigError(f"unknown field modes.{mode_id}.{key}")
-    return mode
+            raise ConfigError(f"unknown field workflows.{workflow_id}.{key}")
+    return workflow
 
 
 def validate_config(config: CollaborationConfig) -> None:
     for agent in config.agents.values():
         validate_agent(agent)
-    for mode in config.modes.values():
-        validate_mode(config, mode.id)
+    for workflow in config.workflows.values():
+        validate_workflow(config, workflow.id)
 
 
 def validate_agent(agent: AgentConfig) -> None:
@@ -200,18 +212,18 @@ def validate_agent(agent: AgentConfig) -> None:
         raise ConfigError(f"agents.{agent.id}.command is required for type {agent.type!r}")
 
 
-def validate_mode(config: CollaborationConfig, mode_id: str) -> None:
-    mode = config.modes.get(mode_id)
-    if mode is None:
-        raise ConfigError(f"unknown mode {mode_id!r}")
-    if not mode.sequence:
-        raise ConfigError(f"modes.{mode_id}.sequence must not be empty")
-    for agent_id in mode.sequence:
+def validate_workflow(config: CollaborationConfig, workflow_id: str) -> None:
+    workflow = config.workflows.get(workflow_id)
+    if workflow is None:
+        raise ConfigError(f"unknown workflow {workflow_id!r}")
+    if not workflow.sequence:
+        raise ConfigError(f"workflows.{workflow_id}.sequence must not be empty")
+    for agent_id in workflow.sequence:
         agent = config.agents.get(agent_id)
         if agent is None:
-            raise ConfigError(f"modes.{mode_id}.sequence references unknown agent {agent_id!r}")
+            raise ConfigError(f"workflows.{workflow_id}.sequence references unknown agent {agent_id!r}")
         if not agent.enabled:
-            raise ConfigError(f"modes.{mode_id}.sequence references disabled agent {agent_id!r}")
+            raise ConfigError(f"workflows.{workflow_id}.sequence references disabled agent {agent_id!r}")
 
 
 def _load_toml_file(path: Path) -> Dict[str, Any]:

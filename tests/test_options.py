@@ -18,7 +18,7 @@ class StartOptionsTests(unittest.TestCase):
 
         validated = validate_start_options(
             config,
-            "codex-leads",
+            "cross-review",
             codex_options={"thinking_level": "xhigh", "sandbox": "workspace-write", "search": False},
             claude_options={"model": "sonnet", "thinking_level": "max"},
         )
@@ -34,7 +34,7 @@ class StartOptionsTests(unittest.TestCase):
         with self.assertRaises(StartOptionsError) as ctx:
             validate_start_options(
                 config,
-                "claude-leads",
+                "cross-review",
                 codex_options={"reasoning_effort": "maximum", "extra": True},
                 claude_options={"thinking_budget_tokens": "large"},
             )
@@ -47,7 +47,7 @@ class StartOptionsTests(unittest.TestCase):
         self.assertIn("claude_options.thinking_budget_tokens", by_path)
         self.assertIn("integer", by_path["claude_options.thinking_budget_tokens"])
 
-    def test_mode_inapplicable_options_are_rejected(self):
+    def test_workflow_inapplicable_options_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             home = root / "home"
@@ -55,7 +55,7 @@ class StartOptionsTests(unittest.TestCase):
             _write_config(
                 root,
                 """
-[modes.claude-only]
+[workflows.claude-only]
 sequence = ["claude"]
 """,
             )
@@ -84,7 +84,7 @@ reasoning_effort.allowed = ["low", "medium"]
             config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
 
             with self.assertRaises(StartOptionsError) as ctx:
-                validate_start_options(config, "codex-leads", codex_options={"model": "gpt-5", "reasoning_effort": "high"})
+                validate_start_options(config, "cross-review", codex_options={"model": "gpt-5", "reasoning_effort": "high"})
 
         messages = {detail["path"]: detail["message"] for detail in ctx.exception.to_dict()["details"]}
         self.assertIn("gpt-5-codex", messages["codex_options.model"])
@@ -107,18 +107,18 @@ thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
             )
             config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
 
-            validated = validate_start_options(config, "claude-leads")
+            validated = validate_start_options(config, "cross-review")
 
         self.assertEqual(validated["claude_options"]["model"], "opus")
         self.assertEqual(validated["claude_options"]["thinking_level"], "high")
 
-    def test_describe_options_returns_modes_agents_and_schemas(self):
+    def test_describe_options_returns_workflows_agents_and_schemas(self):
         config = builtin_config()
 
         payload = describe_options(config, Path("."))
 
         self.assertIn("agents", payload)
-        self.assertIn("modes", payload)
+        self.assertIn("workflows", payload)
         self.assertIn("codex_options", payload)
         self.assertIn("claude_options", payload)
         self.assertIn("reasoning_effort", payload["codex_options"]["properties"])
@@ -206,7 +206,7 @@ thinking_level.default = "high"
         with self.assertRaises(StartOptionsError) as codex_ctx:
             validate_start_options(
                 config,
-                "codex-leads",
+                "cross-review",
                 codex_options={"thinking_level": "low", "reasoning_effort": "high"},
             )
         codex_messages = {detail["path"]: detail["message"] for detail in codex_ctx.exception.to_dict()["details"]}
@@ -215,7 +215,7 @@ thinking_level.default = "high"
         with self.assertRaises(StartOptionsError) as claude_ctx:
             validate_start_options(
                 config,
-                "claude-leads",
+                "cross-review",
                 claude_options={"thinking_level": "high", "thinking_budget_tokens": 8192},
             )
         claude_messages = {detail["path"]: detail["message"] for detail in claude_ctx.exception.to_dict()["details"]}

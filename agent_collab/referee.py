@@ -5,19 +5,26 @@ import asyncio
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from .config import CollaborationConfig, builtin_config, load_config, validate_config, validate_mode
+from .config import (
+    DEFAULT_WORKFLOW,
+    CollaborationConfig,
+    builtin_config,
+    load_config,
+    validate_config,
+    validate_workflow,
+)
 from .events import Event
 from .logging import SessionLogger
 from .runners import AgentRunner, DryRunRunner, MockRunner, configured_runner
 from .terminal import print_event
 
 
-MODES = set(builtin_config().modes)
+WORKFLOWS = set(builtin_config().workflows)
 
 
 @dataclass
 class RefereeConfig:
-    mode: str = "claude-leads"
+    workflow: str = DEFAULT_WORKFLOW
     max_turns: int = 3
     timeout: int = 900
     dry_run: bool = False
@@ -69,7 +76,7 @@ class Referee:
         return {}
 
     def _sequence(self) -> List[str]:
-        return list(self.collab_config.modes[self.config.mode].sequence)
+        return list(self.collab_config.workflows[self.config.workflow].sequence)
 
     def _prompt_for(self, task: str, agent: str, turn: int, transcript: List[Event]) -> str:
         prior = "\n".join(f"{event.source.upper()}: {event.text}" for event in transcript[-12:])
@@ -113,7 +120,7 @@ class Referee:
             )
 
     async def run(self, task: str) -> Dict[str, str]:
-        validate_mode(self.collab_config, self.config.mode)
+        validate_workflow(self.collab_config, self.config.workflow)
         if not self.workdir.exists() or not self.workdir.is_dir():
             raise ValueError(f"workdir does not exist or is not a directory: {self.workdir}")
 
@@ -129,7 +136,7 @@ class Referee:
                 Event.create(
                     "referee",
                     "status",
-                    f"mode={self.config.mode} max_turns={self.config.max_turns} timeout={self.config.timeout}s workdir={self.workdir}",
+                    f"workflow={self.config.workflow} max_turns={self.config.max_turns} timeout={self.config.timeout}s workdir={self.workdir}",
                 ),
             )
             for turn, agent_name in enumerate(sequence, start=1):

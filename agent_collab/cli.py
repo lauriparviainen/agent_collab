@@ -6,13 +6,14 @@ from pathlib import Path
 import sys
 from typing import Any, Dict
 
+from .config import DEFAULT_WORKFLOW
 from .referee import RefereeConfig, run_sync
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-collab", description="Watch Claude Code and Codex collaborate in a supervised terminal loop.")
     parser.add_argument("task", nargs="?", help="Task to send to the collaboration loop.")
-    parser.add_argument("--mode", default="claude-leads", help="Mode name from agent-collab config.")
+    parser.add_argument("--workflow", default=DEFAULT_WORKFLOW, help="Workflow name from agent-collab config.")
     parser.add_argument("--max-turns", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=900, help="Per-agent turn timeout in seconds.")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running Claude or Codex.")
@@ -53,7 +54,7 @@ def build_start_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-collab start", description="Start a daemon-owned collaboration session.")
     parser.add_argument("task")
     parser.add_argument("--server-url")
-    parser.add_argument("--mode", default="claude-leads")
+    parser.add_argument("--workflow", default=DEFAULT_WORKFLOW)
     parser.add_argument("--workdir", type=Path, default=Path("."))
     parser.add_argument("--max-turns", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=900)
@@ -229,7 +230,7 @@ def _main_start(argv) -> int:
         result = _client(args.server_url).start_session(
             {
                 "task": args.task,
-                "mode": args.mode,
+                "workflow": args.workflow,
                 "workdir": str(args.workdir.expanduser().resolve()),
                 "max_turns": args.max_turns,
                 "timeout": args.timeout,
@@ -410,7 +411,7 @@ def main(argv=None) -> int:
         parser.error("task is required unless --mcp-server is used")
 
     config = RefereeConfig(
-        mode=args.mode,
+        workflow=args.workflow,
         max_turns=args.max_turns,
         timeout=args.timeout,
         dry_run=args.dry_run,

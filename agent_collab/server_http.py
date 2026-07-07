@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
+from .config import DEFAULT_WORKFLOW
 from .daemon import SessionManager, StartSessionRequest
 from .mcp_tools import SUPPORTED_PROTOCOL_VERSIONS, SessionManagerToolBackend, handle_request as handle_mcp_request
 from .options import StartOptionsError
@@ -128,7 +129,7 @@ class AgentCollabHttpServer:
             state = await self.manager.start_session(
                 StartSessionRequest(
                     task=_required_str(data, "task"),
-                    mode=str(data.get("mode", "claude-leads")),
+                    workflow=str(data.get("workflow", DEFAULT_WORKFLOW)),
                     workdir=Path(str(data.get("workdir", "."))),
                     max_turns=int(data.get("max_turns", 3)),
                     timeout=int(data.get("timeout", 900)),

@@ -32,7 +32,7 @@ class McpServerTests(unittest.TestCase):
     def test_start_maps_to_client_start_session(self):
         args = {
             "task": "mcp test",
-            "mode": "codex-leads",
+            "workflow": "compare",
             "workdir": "/repo",
             "max_turns": 5,
             "timeout": 120,
@@ -67,12 +67,12 @@ class McpServerTests(unittest.TestCase):
     def test_describe_options_maps_to_client_describe_options(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
-            client.describe_options.return_value = {"modes": [], "codex_options": {}, "claude_options": {}}
+            client.describe_options.return_value = {"workflows": [], "codex_options": {}, "claude_options": {}}
 
             result = handle_tool("agent_collab_describe_options", {"workdir": "/repo"})
 
         client.describe_options.assert_called_once_with({"workdir": "/repo"})
-        _assert_tool_result(self, result, {"modes": [], "codex_options": {}, "claude_options": {}})
+        _assert_tool_result(self, result, {"workflows": [], "codex_options": {}, "claude_options": {}})
 
     def test_list_maps_to_client_list_sessions(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:

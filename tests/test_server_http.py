@@ -70,7 +70,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.dict(os.environ, {"HOME": str(root / "home")}):
                 response = await server._dispatch("POST", "/options", {}, json.dumps({"workdir": str(root)}).encode("utf-8"))
 
-        self.assertIn("modes", response)
+        self.assertIn("workflows", response)
         self.assertIn("codex_options", response)
         self.assertIn("claude_options", response)
 

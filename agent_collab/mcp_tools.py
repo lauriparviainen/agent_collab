@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol
 
+from .config import DEFAULT_WORKFLOW
 from .daemon import SessionManager, StartSessionRequest
 from .options import StartOptionsError
 
@@ -23,7 +24,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "task": {"type": "string"},
-                "mode": {"type": "string"},
+                "workflow": {"type": "string"},
                 "workdir": {"type": "string"},
                 "max_turns": {"type": "integer"},
                 "timeout": {"type": "integer"},
@@ -37,7 +38,7 @@ TOOLS = [
     },
     {
         "name": "agent_collab_describe_options",
-        "description": "Describe modes, configured agents, and accepted codex_options and claude_options for starts.",
+        "description": "Describe workflows, configured agents, and accepted codex_options and claude_options for starts.",
         "inputSchema": {
             "type": "object",
             "properties": {"workdir": {"type": "string"}},
@@ -130,7 +131,7 @@ class SessionManagerToolBackend:
         state = await self.manager.start_session(
             StartSessionRequest(
                 task=_required_str(payload, "task"),
-                mode=str(payload.get("mode", "claude-leads")),
+                workflow=str(payload.get("workflow", DEFAULT_WORKFLOW)),
                 workdir=Path(str(payload.get("workdir", "."))),
                 max_turns=_int_arg(payload, "max_turns", 3),
                 timeout=_int_arg(payload, "timeout", 900),
@@ -278,7 +279,7 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                     "capabilities": {"tools": {}},
                     "instructions": (
                         "Call agent_collab_describe_options before starting a session when you need non-default model, reasoning, sandbox, or permission settings. "
-                        "Use agent_collab_start with task, mode, workdir, max_turns, timeout, and typed codex_options or claude_options. "
+                        "Use agent_collab_start with task, workflow, workdir, max_turns, timeout, and typed codex_options or claude_options. "
                         "Use agent_collab_wait_events with a cursor for long-running watches; do not make one blocking call. "
                         "If agent_collab_start returns isError, fix the invalid option and retry instead of guessing. "
                         "The foreground agent-collab server owns sessions and exposes this MCP endpoint at /mcp."
@@ -334,7 +335,7 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
         key: args[key]
         for key in (
             "task",
-            "mode",
+            "workflow",
             "workdir",
             "max_turns",
             "timeout",
