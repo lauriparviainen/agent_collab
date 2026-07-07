@@ -5,6 +5,7 @@ import ast
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from .config_migrations import migrate_config_data
 from .paths import AgentCollabHome, project_config_path, user_config_path
 
 
@@ -40,6 +41,7 @@ class CollaborationConfig:
 
 
 BUILTIN_CONFIG: Dict[str, Any] = {
+    "schema_version": 2,
     "agents": {
         "claude": {
             "type": "claude",
@@ -68,7 +70,7 @@ AGENT_TYPES = SUBPROCESS_AGENT_TYPES | {"mock"}
 
 def builtin_config() -> CollaborationConfig:
     config = CollaborationConfig()
-    merge_config_data(config, BUILTIN_CONFIG)
+    merge_config_data(config, migrate_config_data(BUILTIN_CONFIG, source="built-in defaults"))
     return config
 
 
@@ -101,14 +103,21 @@ def load_config(
     project_path, user_path = config_search_paths(workdir, home, env)
     for path in (user_path, project_path):
         if path.exists():
-            merge_config_data(config, _load_toml_file(path))
+            merge_config_data(config, migrate_config_data(_load_toml_file(path), source=str(path)))
             config.loaded_paths.append(path)
 
     validate_config(config)
     return config
 
 
+KNOWN_TOP_LEVEL_KEYS = {"schema_version", "agents", "modes"}
+
+
 def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> None:
+    for key in data:
+        if key not in KNOWN_TOP_LEVEL_KEYS:
+            raise ConfigError(f"unknown config section {key!r}")
+
     agents = data.get("agents", {})
     if agents is not None:
         if not isinstance(agents, Mapping):
