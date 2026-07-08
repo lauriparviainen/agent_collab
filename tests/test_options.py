@@ -2,14 +2,24 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from agent_collab.backends.base import (
+    CREDENTIALS_OK,
+    HEALTH_OK,
+    BackendHealth,
+)
 from agent_collab.config import AgentConfig, builtin_config, load_config
 from agent_collab.options import (
     StartOptionsError,
     apply_agent_options,
     build_session_settings,
     describe_options,
+    validate_start_backends,
     validate_start_options,
 )
+
+
+def _ok_health(backend):
+    return BackendHealth(status=HEALTH_OK, credentials=CREDENTIALS_OK, version="1.0.0", checked_at="t")
 
 
 def _write_config(root: Path, text: str) -> None:
@@ -192,6 +202,40 @@ thinking_level.default = "high"
         self.assertIn("thinking_level", payload["codex_options"]["properties"])
         self.assertIn("thinking_level", payload["claude_options"]["properties"])
         self.assertIn("thinking_budget_tokens", payload["claude_options"]["properties"])
+
+    def test_describe_options_includes_backends_section(self):
+        config = builtin_config()
+
+        payload = describe_options(config, Path("."), health=_ok_health)
+
+        self.assertIn("backends", payload)
+        self.assertIn("antigravity_options", payload)
+        for agent_type in ("claude", "codex"):
+            section = payload["backends"][agent_type]
+            self.assertEqual(section["default"], "cli")
+            self.assertEqual(section["backends"], ["cli"])
+            entry = section["entries"]["cli"]
+            self.assertTrue(entry["available"])
+            self.assertEqual(
+                entry["capabilities"], {"resume": False, "interrupt": False, "tool_gate": False}
+            )
+            self.assertEqual(entry["health"]["status"], "ok")
+
+    def test_build_session_settings_records_backend_and_capabilities(self):
+        config = builtin_config()
+        normalized = validate_start_options(config, "single-claude")
+        selection = validate_start_backends(config, "single-claude")
+
+        settings = build_session_settings(
+            config, "single-claude", normalized, agent_backends=selection.agent_backends
+        )
+
+        claude = settings["agents"]["claude"]
+        self.assertEqual(claude["backend"], "cli")
+        self.assertEqual(
+            claude["capabilities"], {"resume": False, "interrupt": False, "tool_gate": False}
+        )
+        self.assertEqual(claude["command_preview"][0], "claude")
 
     def test_describe_options_reports_configured_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -76,6 +76,9 @@ class SessionState:
     ended_at: Optional[str] = None
     error: Optional[str] = None
     settings: Optional[Dict[str, Any]] = None
+    # Honest session-level capability summary derived from the backends actually
+    # in use (all false this stage); persisted so it survives daemon restart.
+    capabilities: Optional[Dict[str, bool]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -197,9 +200,12 @@ class SessionManager:
             collab_config,
             request.workflow,
             normalized_options,
+            agent_backends=selection.agent_backends,
+            warnings=selection.warnings,
             interactive=request.interactive,
             interactive_idle_timeout=request.interactive_idle_timeout,
         )
+        capabilities = self._session_capabilities(collab_config, selection.agent_backends)
         session_id = request.session_id or self._new_session_id()
         self._validate_new_session_id(session_id)
 
@@ -221,6 +227,7 @@ class SessionManager:
             interactive=bool(request.interactive),
             interactive_idle_timeout=float(request.interactive_idle_timeout),
             settings=settings,
+            capabilities=capabilities,
         )
         managed = _ManagedSession(
             request=request,
@@ -236,6 +243,15 @@ class SessionManager:
             f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
         )
         return self._copy_state(state)
+
+    def _session_capabilities(self, config: Any, agent_backends: Dict[str, str]) -> Dict[str, bool]:
+        from . import backends as backend_registry
+
+        per_agent = {
+            agent_id: backend_registry.capabilities_for(config.agents[agent_id].type, backend_id)
+            for agent_id, backend_id in agent_backends.items()
+        }
+        return backend_registry.summarize_session_capabilities(per_agent)
 
     def _backend_health(self, agent_type: str, backend_id: str) -> Any:
         # Start requests always re-probe fresh (bypass the TTL cache) so gating

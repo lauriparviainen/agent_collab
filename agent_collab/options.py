@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set
 
-from .config import SUBPROCESS_AGENT_TYPES, AgentConfig, CollaborationConfig, load_config, validate_workflow
+from .config import AgentConfig, CollaborationConfig, load_config, validate_workflow
 
 
 CODEX_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"]
@@ -269,13 +269,19 @@ def _health_reject_message(agent_id: str, backend_id: str, status: Any) -> str:
     return f"backend {backend_id!r} for agent {agent_id!r} is unavailable{detail}"
 
 
-def describe_options(config: CollaborationConfig, workdir: Optional[Path] = None) -> Dict[str, Any]:
+def describe_options(
+    config: CollaborationConfig,
+    workdir: Optional[Path] = None,
+    *,
+    health: Any = None,
+) -> Dict[str, Any]:
     agents = [
         {
             "id": agent.id,
             "type": agent.type,
             "enabled": agent.enabled,
             "name": agent.name,
+            "backend": agent.backend,
         }
         for agent in sorted(config.agents.values(), key=lambda item: item.id)
     ]
@@ -291,8 +297,10 @@ def describe_options(config: CollaborationConfig, workdir: Optional[Path] = None
         "agents": agents,
         "workflows": workflows,
         "workflow_agent_types": workflow_agent_types,
+        "backends": _describe_backends(config, health),
         "codex_options": _schema_for_agent_type(config, "codex"),
         "claude_options": _schema_for_agent_type(config, "claude"),
+        "antigravity_options": _schema_for_agent_type(config, "antigravity"),
         "examples": [
             {
                 "task": "Review this repository",
@@ -312,6 +320,42 @@ def describe_options(config: CollaborationConfig, workdir: Optional[Path] = None
 def describe_options_for_workdir(workdir: Path) -> Dict[str, Any]:
     root = workdir.expanduser().resolve()
     return describe_options(load_config(root), root)
+
+
+def _describe_backends(config: CollaborationConfig, health: Any = None) -> Dict[str, Any]:
+    """Per agent type: registered backend ids, the default, availability,
+    capability flags, and health/reason. Health is the discoverability surface
+    ("install the CLI / sign in, then start"); it uses the short-TTL cache by
+    default so it does not hammer the filesystem.
+    """
+
+    from . import backends as backend_registry
+
+    if health is None:
+        health = lambda backend: backend_registry.health(backend, fresh=False)
+
+    config_types = {agent.type for agent in config.agents.values() if agent.type != "mock"}
+    types = sorted(config_types | set(backend_registry.registered_agent_types()))
+    result: Dict[str, Any] = {}
+    for agent_type in types:
+        ids = backend_registry.registered_backends(agent_type)
+        if not ids:
+            continue
+        entries: Dict[str, Any] = {}
+        for backend_id in ids:
+            backend = backend_registry.get_backend(agent_type, backend_id)
+            status = health(backend)
+            entries[backend_id] = {
+                "available": status.available,
+                "capabilities": backend.capabilities.to_dict(),
+                "health": status.to_dict(),
+            }
+        result[agent_type] = {
+            "default": backend_registry.DEFAULT_BACKEND,
+            "backends": ids,
+            "entries": entries,
+        }
+    return result
 
 
 def _effective_options_for_agent(agent: AgentConfig, options: Mapping[str, Any]) -> Dict[str, Any]:
@@ -335,16 +379,23 @@ def build_session_settings(
     workflow_id: str,
     normalized_options: Mapping[str, Mapping[str, Any]],
     *,
+    agent_backends: Optional[Mapping[str, str]] = None,
+    warnings: Optional[Sequence[Mapping[str, str]]] = None,
     interactive: bool = False,
     interactive_idle_timeout: float = 600.0,
 ) -> Dict[str, Any]:
     """Build the effective session settings confirmation for start responses.
 
     Reflects effective config plus validated start options; fields that are
-    unavailable for an agent are omitted rather than invented. Command
-    previews never include the task prompt (runners append it separately).
+    unavailable for an agent are omitted rather than invented. Records the
+    effective backend and its capability flags per agent. Command previews apply
+    to the ``cli`` backend only and never include the task prompt (runners append
+    it separately); a non-``cli`` backend contributes an equivalent summary.
     """
 
+    from . import backends as backend_registry
+
+    resolved = dict(agent_backends or {})
     workflow = config.workflows[workflow_id]
     agents: Dict[str, Dict[str, Any]] = {}
     for agent_id in workflow.sequence:
@@ -352,6 +403,7 @@ def build_session_settings(
             continue
         agent = config.agents[agent_id]
         entry: Dict[str, Any] = {"type": agent.type}
+        options: Dict[str, Any] = {}
         if agent.type in OPTION_FIELDS:
             options = dict(normalized_options.get(f"{agent.type}_options") or {})
             effective = _effective_options_for_agent(agent, options)
@@ -360,17 +412,45 @@ def build_session_settings(
                     entry[field] = effective[field]
             if "thinking_level" not in entry and "reasoning_effort" in effective:
                 entry["thinking_level"] = effective["reasoning_effort"]
-            if agent.type in SUBPROCESS_AGENT_TYPES and agent.command:
-                entry["command_preview"] = apply_agent_options(
-                    [agent.command] + list(agent.args), agent, options
-                )
+        if agent.type != "mock":
+            backend_id = resolved.get(agent_id) or backend_registry.resolve_backend_id(agent)
+            entry["backend"] = backend_id
+            entry["capabilities"] = backend_registry.capabilities_for(agent.type, backend_id).to_dict()
+            if backend_id == "cli":
+                if agent.command:
+                    entry["command_preview"] = apply_agent_options(
+                        [agent.command] + list(agent.args), agent, options
+                    )
+            else:
+                summary = _backend_settings_summary(agent, backend_id, options)
+                if summary is not None:
+                    entry["backend_summary"] = summary
         agents[agent_id] = entry
-    return {
+    settings: Dict[str, Any] = {
         "workflow": {"name": workflow_id, "sequence": list(workflow.sequence)},
         "agents": agents,
         "interactive": bool(interactive),
         "interactive_idle_timeout": float(interactive_idle_timeout),
     }
+    if warnings:
+        settings["warnings"] = [dict(warning) for warning in warnings]
+    return settings
+
+
+def _backend_settings_summary(
+    agent: AgentConfig, backend_id: str, options: Mapping[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Non-``cli`` backends describe themselves in place of a command preview."""
+
+    from . import backends as backend_registry
+
+    if not backend_registry.is_registered(agent.type, backend_id):
+        return None
+    backend = backend_registry.get_backend(agent.type, backend_id)
+    describe = getattr(backend, "settings_summary", None)
+    if callable(describe):
+        return describe(agent, dict(options))
+    return None
 
 
 def apply_agent_options(command: List[str], agent: AgentConfig, options: Mapping[str, Any]) -> List[str]:
