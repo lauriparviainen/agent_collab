@@ -74,7 +74,7 @@ agent_collab/backends/codex_sdk.py   codex sdk runner (lazy import)
 class AgentBackend(Protocol):
     id: str                      # "cli", "sdk"
     agent_type: str              # "claude", "codex"
-    def available(self) -> Optional[str]: ...   # None, or reason unavailable
+    def probe(self) -> BackendHealth: ...       # see "Backend health" below
     def create_runner(self, agent: AgentConfig, verbose: bool,
                       options: Dict[str, Any]) -> AgentRunner: ...
 ```
@@ -184,9 +184,9 @@ Semantics of the session-level override:
   stage 4.75 decision on per-agent options.
 
 Validation happens in `validate_start_options` / before
-`SessionManager.start_session` creates state — including an availability
-check (`backend.available()`), so a missing SDK package fails the start
-request with an actionable message ("backend 'sdk' for agent 'claude'
+`SessionManager.start_session` creates state — including a fresh health
+probe (see "Backend health and self-healing"), so a missing SDK package
+fails the start request with an actionable message ("backend 'sdk' for agent 'claude'
 requires the claude-sdk extra: pip install agent-collab[claude-sdk]")
 instead of erroring mid-session.
 
@@ -230,6 +230,66 @@ Provider session/thread IDs are stored in `SessionState` as
 `agent_sessions: {agent_id: provider_session_id}` and persisted through the
 session index. Nothing resumes them in this stage; they exist so a future
 "continue session" stage has the IDs it needs.
+
+### Backend health and self-healing
+
+Backend availability must be a **live** property of the daemon, not a fact
+frozen at daemon startup. Installing the Gemini CLI, `pip install`-ing an
+SDK extra, or exporting an API key should make the backend usable without a
+daemon restart; removing one should make failures diagnosable before a
+session burns a turn on them.
+
+Health model — each `(agent_type, backend_id)` pair has a probed status:
+
+```json
+{
+  "status": "ok" | "unavailable" | "unknown",
+  "reason": "gemini: command not found on PATH",
+  "credentials": "ok" | "missing" | "unknown",
+  "checked_at": "2026-07-08T12:00:00Z"
+}
+```
+
+Probes, in increasing cost, all standard-library and side-effect free:
+
+1. **Presence** (reliable): `shutil.which(command)` for `cli` backends;
+   import check for SDK backends. Definite `ok`/`unavailable`.
+2. **Version** (reliable when present): run `<command> --version` with a
+   short timeout; records the version for `describe_options` and catches
+   broken installs.
+3. **Credentials** (best-effort, per provider): environment/config checks
+   only — e.g. `GEMINI_API_KEY` set or a Gemini OAuth credentials file
+   present; `codex login status` where the CLI offers a cheap auth query.
+   Providers with no cheap, side-effect-free check report `"unknown"`.
+   Never probe by making a real model call — health checks must not cost
+   tokens or mutate provider state.
+
+Freshness and self-healing:
+
+- Probe results are cached with a short TTL (~60s). The daemon runs a
+  periodic refresh task (same ~60s cadence) so `describe_options` and
+  `daemon status` always show near-current health, and logs lifecycle
+  transitions ("backend gemini/cli became available") for troubleshooting.
+- Start requests always re-probe the backends the workflow needs, bypassing
+  the cache, so gating decisions never act on stale state — this is what
+  makes "install the CLI, then start a session" work with no restart.
+
+Gating policy — block only on certainty:
+
+- `status: unavailable` → reject the start with the existing
+  `invalid_start_options`-style error, including the probe `reason` and the
+  fix hint (install command / extras). No session state is created.
+- `credentials: missing` (definite, e.g. required env var absent and no
+  credentials file) → reject with a hint naming the expected variable or
+  login command.
+- `credentials: unknown` → allow the start but include a warning in the
+  start response and session settings metadata. False negatives must never
+  block a working setup; the first turn's real error remains the authority.
+
+Reporting: health is included per backend in `describe_options` (so MCP
+agents see what is truly startable and why not, before trying) and in
+`daemon status`. This is diagnostic surface, not new API semantics — the
+existing error shapes carry it.
 
 ### Gemini CLI provider
 
@@ -327,19 +387,23 @@ Caveats, reflected in capabilities:
    available) before any session state is created.
 5. Extend `describe_options` and `build_session_settings` with backend
    info; add `agent_sessions` to `SessionState` and the session index.
-6. Add the `gemini` provider: agent type + `VALID_SOURCES` entry, built-in
+6. Add backend health probes (presence, version, best-effort credentials),
+   the TTL cache plus daemon refresh task with transition logging, fresh
+   re-probe and gating on start, and health in `describe_options` /
+   `daemon status`.
+7. Add the `gemini` provider: agent type + `VALID_SOURCES` entry, built-in
    disabled config entry, `parse_gemini_line` from captured stream-json
    samples, typed `gemini_options` end to end (validate, CLI flag, HTTP,
    MCP schema, describe/settings).
-7. Implement `backends/claude_sdk.py` with typed-message → `Event` mapping
+8. Implement `backends/claude_sdk.py` with typed-message → `Event` mapping
    and explicit option mapping.
-8. Implement `backends/codex_sdk.py` the same way.
-9. Add pyproject extras; update README, `doc/agent-configuration.md`, and
-   `doc/daemon-architecture.md` (including Gemini enablement + auth notes).
+9. Implement `backends/codex_sdk.py` the same way.
+10. Add pyproject extras; update README, `doc/agent-configuration.md`, and
+    `doc/daemon-architecture.md` (including Gemini enablement + auth notes).
 
-Steps 1–5 are useful on their own (registry + selection with `cli` as the
-only real backend) and should land before the SDK runners. Step 6 is
-independent of 7–8 and can land in either order after 5.
+Steps 1–6 are useful on their own (registry, selection, and live health
+with `cli` as the only real backend) and should land before the SDK
+runners. Step 7 is independent of 8–9 and can land in either order after 6.
 
 ## Tests
 
@@ -353,6 +417,13 @@ independent of 7–8 and can land in either order after 5.
   the install-hint error; valid request records effective backends in
   session settings.
 - `describe_options` includes backends with availability and capabilities.
+- Health probes: missing command → `unavailable` with reason; command
+  appearing on PATH flips the cached status to `ok` on the next refresh
+  without daemon restart (fake PATH/clock, no real CLIs); credential
+  checks report `ok`/`missing`/`unknown` per provider rules; start
+  requests re-probe fresh and reject `unavailable`/`missing` with fix
+  hints while `unknown` starts with a warning recorded in settings
+  metadata; probes never launch a model call.
 - Capability honesty: session with all-`cli` agents reports
   `resumable: false`; SDK-backed session reports `resumable: true` only
   after IDs are captured, and degrades to false when capture fails; a
@@ -388,6 +459,14 @@ independent of 7–8 and can land in either order after 5.
   brand; Gemini-CLI sessions always report `resumable: false`.
 - Selecting an uninstalled SDK backend fails the start request with a
   machine-readable error and an install hint; no session state is created.
+- Backend availability is live: installing the Gemini CLI (or an SDK
+  extra, or exporting a required key) makes the backend startable within
+  one refresh interval, with no daemon restart; the transition is visible
+  in `describe_options`, `daemon status`, and the daemon log.
+- A start request against a truly unusable backend (missing binary/SDK or
+  definitely missing credentials) is rejected before any session state
+  exists, with the probe reason and a fix hint; uncertain credential state
+  never blocks a start, only warns.
 - Enabling `agents.gemini` and adding it to a workflow runs Gemini turns
   through the standard `cli` backend with correct transcript attribution
   and typed `gemini_options`, with no changes outside config for the user.
