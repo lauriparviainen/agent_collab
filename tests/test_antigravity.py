@@ -153,6 +153,8 @@ sequence = ["antigravity"]
                 entry["capabilities"], {"resume": False, "interrupt": False, "tool_gate": False}
             )
             self.assertEqual(entry["command_preview"][0], "agy")
+            # mode is a displayed settings field, defaulted from the agent args.
+            self.assertEqual(entry["mode"], "accept-edits")
 
 
 class AntigravityMockSourceTests(unittest.TestCase):

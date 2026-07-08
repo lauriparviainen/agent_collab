@@ -9,8 +9,10 @@ missing-extra behaviour (the module genuinely is not importable here).
 import asyncio
 import dataclasses
 import json
+import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from agent_collab.backends.antigravity_sdk import (
     AntigravitySdkBackend,
@@ -121,19 +123,26 @@ class SdkEventMappingTests(unittest.TestCase):
 
 
 class SdkMissingExtraTests(unittest.TestCase):
+    """Hermetic regardless of whether the real extra happens to be installed:
+    force the module absent so the missing-extra path is exercised without
+    reading real ~/.gemini credentials."""
+
     def test_probe_reports_unavailable_with_install_hint(self):
-        health = AntigravitySdkBackend().probe()
+        with mock.patch("importlib.util.find_spec", return_value=None):
+            health = AntigravitySdkBackend().probe()
         self.assertEqual(health.status, "unavailable")
         self.assertIn("antigravity-sdk", health.reason)
 
     def test_default_factory_raises_backend_unavailable(self):
-        with self.assertRaises(BackendUnavailable) as ctx:
-            _default_agent_factory(AGENT, {}, Path("."))
+        with mock.patch.dict(sys.modules, {"google.antigravity": None}):
+            with self.assertRaises(BackendUnavailable) as ctx:
+                _default_agent_factory(AGENT, {}, Path("."))
         self.assertIn("antigravity-sdk", str(ctx.exception))
 
     def test_runner_with_default_factory_emits_actionable_error_event(self):
         runner = AntigravitySdkBackend().create_runner(AGENT, False, {})
-        events = asyncio.run(_collect(runner))
+        with mock.patch.dict(sys.modules, {"google.antigravity": None}):
+            events = asyncio.run(_collect(runner))
         self.assertTrue(any(e.type == "error" and "antigravity-sdk" in e.text for e in events))
 
 

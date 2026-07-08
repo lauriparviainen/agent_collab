@@ -386,6 +386,7 @@ def _effective_options_for_agent(agent: AgentConfig, options: Mapping[str, Any])
 SETTINGS_DISPLAY_FIELDS = {
     "claude": ("model", "thinking_level", "thinking_budget_tokens", "permission_mode"),
     "codex": ("model", "profile", "thinking_level", "sandbox", "approval_policy", "search"),
+    "antigravity": ("model", "mode"),
 }
 
 
