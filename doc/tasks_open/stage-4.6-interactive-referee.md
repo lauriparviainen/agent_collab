@@ -176,6 +176,13 @@ Once this stage lands, Stage 4.5 reserved input becomes active:
 - terminal sessions and sessions without a live runner keep input disabled with
   a clear inline message.
 
+The input line should also provide slash-command discovery like Codex CLI and
+Claude Code CLI. When the user starts typing `/`, show an inline list of
+available slash commands with short descriptions. Filter the list as the user
+types: `/s` should show only commands starting with `s`, such as `/sessions`
+and `/stop`. This completion UI is discoverability only; selecting or pressing
+Enter still dispatches through the same command parser and validation path.
+
 ## Tests
 
 Add focused headless tests before TUI wiring:
@@ -193,6 +200,8 @@ Add focused headless tests before TUI wiring:
 - sessions restored from the index without a live runner cannot accept new
   messages,
 - client and MCP wrappers map to the same manager method.
+- slash-command completion lists commands after `/`, filters by prefix such as
+  `/s`, and dispatches through the normal parser rather than a separate path.
 
 Mock runners should capture prompts so tests can prove note visibility without
 calling real Claude or Codex.
@@ -211,6 +220,8 @@ calling real Claude or Codex.
 - Terminal statuses, including `interrupted`, reject new input.
 - Sessions restored from the index without a live runner reject new input.
 - MCP and CLI/TUI use the same daemon message API.
+- Typing `/` in the TUI shows available slash commands, and typing a prefix
+  such as `/s` filters that list to matching commands.
 
 ## Risks
 

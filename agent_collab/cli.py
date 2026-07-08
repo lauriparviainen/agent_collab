@@ -41,6 +41,13 @@ def build_watch_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_tui_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agent-collab tui", description="Open the interactive daemon session TUI.")
+    parser.add_argument("session_id", nargs="?", help="Daemon session id to open. Defaults to the latest updated session.")
+    parser.add_argument("--server-url", help="Daemon URL for the TUI.")
+    return parser
+
+
 def build_serve_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-collab serve", description="Run the local agent-collab daemon.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -154,6 +161,20 @@ def _main_watch(argv) -> int:
         print(f"ERROR   {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _main_tui(argv) -> int:
+    parser = build_tui_parser()
+    args = parser.parse_args(argv)
+    from .tui import run_tui
+
+    try:
+        return run_tui(session_id=args.session_id, server_url=args.server_url)
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:
+        print(f"ERROR   {exc}", file=sys.stderr)
+        return 1
 
 
 def _watch_should_use_file(args) -> bool:
@@ -452,6 +473,7 @@ def main(argv=None) -> int:
         argv = list(argv)
     subcommands = {
         "watch": _main_watch,
+        "tui": _main_tui,
         "serve": _main_serve,
         "daemon": _main_daemon,
         "start": _main_start,
