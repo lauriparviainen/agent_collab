@@ -185,7 +185,7 @@ def _watch_daemon_session(session_id: str, server_url, cursor: int, follow: bool
         if not follow:
             return
         state = client.get_session(session_id)
-        if state.get("status") in {"done", "failed", "stopped"} and not result.get("events"):
+        if state.get("status") in {"done", "failed", "stopped", "interrupted"} and not result.get("events"):
             return
 
 

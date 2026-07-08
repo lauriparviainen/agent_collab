@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
+import json
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 import uuid
@@ -13,13 +14,15 @@ from .events import Event, utc_timestamp
 from .options import build_session_settings, describe_options, validate_start_options
 from .paths import GlobalDataPaths
 from .referee import Referee, RefereeConfig
+from .session_index import SessionIndex
 
 
 RUNNING = "running"
 DONE = "done"
 FAILED = "failed"
 STOPPED = "stopped"
-TERMINAL_STATUSES = {DONE, FAILED, STOPPED}
+INTERRUPTED = "interrupted"
+TERMINAL_STATUSES = {DONE, FAILED, STOPPED, INTERRUPTED}
 
 
 @dataclass
@@ -74,7 +77,8 @@ class EventBatch:
 
 @dataclass
 class _ManagedSession:
-    request: StartSessionRequest
+    # request is None for sessions restored from the on-disk index.
+    request: Optional[StartSessionRequest]
     state: SessionState
     events: List[Dict[str, Any]]
     condition: asyncio.Condition
@@ -87,12 +91,56 @@ class SessionManager:
         lifecycle_logger: Optional[Callable[[str], None]] = None,
         default_workdir: Union[str, Path] = Path("."),
         default_log_dir: Optional[Union[str, Path]] = None,
+        index_path: Optional[Union[str, Path]] = None,
     ) -> None:
         self._sessions: Dict[str, _ManagedSession] = {}
         self._notify_tasks: Set[asyncio.Task] = set()
         self._lifecycle_logger = lifecycle_logger
         self.default_workdir = Path(default_workdir).expanduser().resolve()
         self.default_log_dir = Path(default_log_dir).expanduser().resolve() if default_log_dir else None
+        self._index = SessionIndex(Path(index_path)) if index_path else None
+        self._restore_from_index()
+
+    def _restore_from_index(self) -> None:
+        if self._index is None:
+            return
+        for session_id, record in sorted(self._index.load().items()):
+            state = self._state_from_record(record)
+            if state is None or state.session_id in self._sessions:
+                continue
+            if state.status not in TERMINAL_STATUSES:
+                now = utc_timestamp()
+                state.status = INTERRUPTED
+                state.error = "daemon restarted while session was running"
+                state.updated_at = now
+                state.ended_at = now
+                self._persist(state)
+                self._log_lifecycle(f"session {state.session_id} interrupted by daemon restart")
+            self._sessions[state.session_id] = _ManagedSession(
+                request=None,
+                state=state,
+                events=[],
+                condition=asyncio.Condition(),
+            )
+
+    @staticmethod
+    def _state_from_record(record: Dict[str, Any]) -> Optional[SessionState]:
+        known = {field.name for field in fields(SessionState)}
+        data = {key: value for key, value in record.items() if key in known}
+        if not data.get("session_id") or not data.get("status"):
+            return None
+        try:
+            return SessionState(**data)
+        except TypeError:
+            return None
+
+    def _persist(self, state: SessionState) -> None:
+        if self._index is None:
+            return
+        try:
+            self._index.upsert(state.to_dict())
+        except OSError as exc:
+            self._log_lifecycle(f"failed to persist session index for {state.session_id}: {exc}")
 
     async def start_session(self, request: StartSessionRequest) -> SessionState:
         workdir = Path(request.workdir).expanduser().resolve()
@@ -140,6 +188,7 @@ class SessionManager:
             condition=asyncio.Condition(),
         )
         self._sessions[session_id] = managed
+        self._persist(state)
         managed.task = asyncio.create_task(self._run_session(managed), name=f"agent-collab-session-{session_id}")
         self._log_lifecycle(
             f"session {session_id} started workflow={state.workflow} max_turns={state.max_turns} "
@@ -173,6 +222,8 @@ class SessionManager:
     def read_events(self, session_id: str, cursor: int = 0) -> EventBatch:
         managed = self._get_managed(session_id)
         cursor = self._normalize_cursor(cursor)
+        if managed.request is None and not managed.events:
+            managed.events = _load_events_from_jsonl(Path(managed.state.jsonl_path))
         events = [copy.deepcopy(event) for event in managed.events[cursor:]]
         return EventBatch(session_id=session_id, cursor=len(managed.events), events=events)
 
@@ -221,6 +272,7 @@ class SessionManager:
             result = await Referee(config, printer=lambda event: self._record_event(managed, event)).run(request.task)
             state.jsonl_path = result.get("jsonl_path", state.jsonl_path)
             state.markdown_path = result.get("markdown_path", state.markdown_path)
+            self._persist(state)
             if state.status == RUNNING:
                 await self._set_status(managed, DONE)
         except asyncio.CancelledError:
@@ -250,6 +302,7 @@ class SessionManager:
             managed.state.ended_at = now
         if error is not None:
             managed.state.error = error
+        self._persist(managed.state)
         async with managed.condition:
             managed.condition.notify_all()
         if status in TERMINAL_STATUSES:
@@ -299,3 +352,22 @@ class SessionManager:
     def _log_lifecycle(self, message: str) -> None:
         if self._lifecycle_logger is not None:
             self._lifecycle_logger(message)
+
+
+def _load_events_from_jsonl(path: Path) -> List[Dict[str, Any]]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    events: List[Dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            events.append(payload)
+    return events

@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .config import DEFAULT_WORKFLOW
 from .daemon import SessionManager, StartSessionRequest
+from .paths import GlobalDataPaths
 from .mcp_tools import SUPPORTED_PROTOCOL_VERSIONS, SessionManagerToolBackend, handle_request as handle_mcp_request
 from .options import StartOptionsError
 
@@ -34,12 +35,14 @@ class AgentCollabHttpServer:
         log_requests: Optional[bool] = None,
         default_workdir: Path = Path("."),
         session_log_dir: Optional[Path] = None,
+        session_index_path: Optional[Path] = None,
     ):
         owns_manager = manager is None
         self.manager = manager or SessionManager(
             lifecycle_logger=self._log,
             default_workdir=default_workdir,
             default_log_dir=session_log_dir,
+            index_path=session_index_path or GlobalDataPaths.resolve().session_index_path,
         )
         self.log_requests = owns_manager if log_requests is None else bool(log_requests)
 
