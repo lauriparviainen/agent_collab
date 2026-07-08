@@ -108,9 +108,14 @@ def health(backend: AgentBackend, *, fresh: bool = False) -> BackendHealth:
 
 
 def _register_builtins() -> None:
+    from .antigravity_sdk import build_sdk_backends
     from .cli import build_cli_backends
 
     for backend in build_cli_backends():
+        register(backend)
+    # The sdk module lazy-imports the real SDK (only in probe/factory), so
+    # registering it here costs nothing and needs no dependency.
+    for backend in build_sdk_backends():
         register(backend)
 
 

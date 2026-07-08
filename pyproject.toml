@@ -11,6 +11,13 @@ requires-python = ">=3.9"
 authors = [{ name = "agent-collab prototype" }]
 dependencies = []
 
+[project.optional-dependencies]
+# The `sdk` backend for Antigravity. Base install + default `cli` backend stay
+# standard-library only; this extra is the only dependency and is lazy-imported.
+# Version range is the plan's hypothesis (the SDK could not be installed to pin
+# a tested version — see doc/tasks_closed/stage-4.9 spike outcome).
+antigravity-sdk = ["google-antigravity>=0.1,<1"]
+
 [project.scripts]
 agent-collab = "agent_collab.cli:main"
 agent-collab-mcp = "agent_collab.mcp_server:main"
