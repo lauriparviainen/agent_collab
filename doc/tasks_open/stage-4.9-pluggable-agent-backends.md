@@ -489,6 +489,32 @@ The spike's captured fixtures become the parser/mapper test corpus. If the
 spike shows the SDK API differs from the hypothesis in "Verified provider
 facts," update this plan's mapping section before implementing.
 
+#### Spike outcome (2026-07-08)
+
+- **CLI (`agy`) — confirmed, matches the plan.** `agy --version` = `1.1.0`.
+  `agy -p --mode accept-edits "<prompt>"` (signed in) prints **free-form plain
+  text / Markdown prose**: multiple lines, blank lines, `###` headers, `*`
+  bullets, fenced code blocks — **no JSON, no NDJSON, no stable per-line event
+  marker**, empty stderr. So `parse_antigravity_line` emits one `antigravity`
+  `message` event per non-empty line (message-only), exactly as designed.
+  Fixtures: `tests/fixtures/antigravity/agy-version.txt`,
+  `agy-print-sample.stdout.txt`, `agy-print-sample.stderr.txt`.
+- **SDK (`google-antigravity`) — BLOCKED on live capture.** System Python here
+  is 3.9.25 (< the SDK's required 3.10) and `pip install
+  "google-antigravity>=0.1,<1"` finds no installable distribution, so the SDK
+  cannot be imported and its real object shapes cannot be captured. Per the
+  spike rule we do not guess shapes into production code. The `sdk` backend is
+  therefore implemented against the plan's hypothesis with a fake
+  `google.antigravity` module injected in tests (driven by
+  `tests/fixtures/antigravity/sdk-hypothesis.json`), **degrades to message-only**
+  if typed tool events are absent, ships **no** `agent_sessions` conversation id
+  (unconfirmed), rejects `antigravity_options.mode` on `sdk`, and has one real,
+  fully-tested path: a missing module fails the start with the `antigravity-sdk`
+  extra install hint. Re-run the SDK half on a Python>=3.10 host with the SDK
+  installed, replace the hypothesis fixture with a real capture, and reconcile
+  `backends/antigravity_sdk.py` and this section. This resolves open questions
+  1–3 as "blocked, conservative default taken" and 4 as "`mode` is cli-only".
+
 ### Backend health
 
 Backend availability must be a **live** property of the daemon, not a fact

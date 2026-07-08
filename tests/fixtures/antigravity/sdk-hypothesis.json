@@ -1,0 +1,17 @@
+{
+  "_note": "HYPOTHESIS, NOT A LIVE CAPTURE. The google-antigravity SDK could not be installed in this environment (Python 3.9 < required 3.10; no installable distribution). These shapes follow the plan's hypothesized v0.1.x API and drive the fake-module SDK tests in tests/test_backend_sdk.py. Replace with a real capture once Python>=3.10 + the SDK are available, then reconcile agent_collab/backends/antigravity_sdk.py.",
+  "chat_response": {
+    "text": "Added a print statement and ran the test.",
+    "thoughts": "The user wants a quick change; I will edit main.py then run pytest.",
+    "tool_calls": [
+      {"name": "write_file", "input": {"path": "main.py", "content": "print('hi')\n"}},
+      {"name": "run_command", "input": {"command": "pytest -q"}},
+      {"name": "read_file", "input": {"path": "README.md"}}
+    ]
+  },
+  "text_only_response": {
+    "text": "Here is the summary you asked for.",
+    "thoughts": null,
+    "tool_calls": []
+  }
+}

@@ -1,0 +1,25 @@
+The `--mode` flag in the Antigravity CLI (`agy`) controls the agent's execution behavior and editing autonomy during a session. 
+
+### Supported Modes
+
+*   **`plan`**: The agent runs in a planning-first workflow. Before making any changes, it generates an **Implementation Plan** artifact summarizing its proposed edits and steps. This allows you to review the plan, provide feedback, and explicitly approve (`Proceed`) or reject the proposed changes before code is written.
+*   **`accept-edits`**: The agent has the autonomy to directly apply modifications, refactor code, and write files to your workspace without presenting a separate implementation plan for manual approval first.
+
+---
+
+### Usage Examples
+
+To launch the CLI in planning mode:
+```bash
+agy --mode plan
+```
+
+To launch the CLI in direct-edit mode:
+```bash
+agy --mode accept-edits
+```
+
+For more CLI usage options, refer to the [Antigravity CLI Reference](file:///home/devel/.gemini/antigravity-cli/builtin/skills/antigravity_guide/references/cli.md) or run:
+```bash
+agy --help
+```
