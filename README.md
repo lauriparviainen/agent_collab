@@ -19,7 +19,8 @@ Implemented:
 - MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.
 - Stdio MCP adapter that connects to the local server.
 - Cursor-based event reads and long-polling.
-- Typed `codex_options` and `claude_options` with pre-launch validation.
+- Typed `codex_options`, `claude_options`, and `antigravity_options` with pre-launch validation.
+- Pluggable agent backends: an agent's provider (`type`) is separate from its execution mechanism (`backend`). The default `cli` subprocess backend keeps the base install standard-library only; an optional extras-gated `sdk` backend runs a provider SDK in-process. Antigravity is available on both (`agy` plain text, or the `google-antigravity` SDK), opt-in and disabled by default. Backends, availability/health, and honest per-session capability flags are discoverable via `agent_collab_describe_options`.
 - MCP option discovery through `agent_collab_describe_options` and usage guidance through `agent_collab_guidance`.
 - Start/status/list responses include the effective session settings: workflow sequence, per-agent typed options, and a prompt-free `command_preview`.
 - Centralized config schema migrations (`schema_version`, currently 2).
@@ -40,7 +41,11 @@ Current transition:
 python3 -m pip install -e .
 ```
 
-Runtime dependencies are intentionally minimal; the current package uses the Python standard library.
+Runtime dependencies are intentionally minimal; the base package uses only the Python standard library. The Antigravity `sdk` backend is the sole optional dependency, behind an extra:
+
+```bash
+python3 -m pip install -e '.[antigravity-sdk]'
+```
 
 ## Quick Start
 
@@ -128,6 +133,8 @@ Useful options:
 - `--server-url http://127.0.0.1:8765`
 - `--codex-options '{"thinking_level":"medium"}'`
 - `--claude-options '{"model":"opus","thinking_level":"high"}'`
+- `--backend sdk` (only when every selected agent's type registers it)
+- `--antigravity-options '{"model":"gemini-3-pro","mode":"accept-edits"}'`
 
 `agent-collab start` and `agent-collab status` print the effective session settings: the workflow sequence, each agent's model/thinking settings, and a prompt-free `command_preview` of the exact subprocess command. `agent-collab list` shows sessions across all projects with their workflow and agents.
 
@@ -281,8 +288,9 @@ Important implementation files:
 - `agent_collab/server_http.py`: foreground HTTP server.
 - `agent_collab/daemon.py`: in-memory session manager and session lifecycle.
 - `agent_collab/referee.py`: bounded turn loop.
-- `agent_collab/runners.py`: Claude/Codex/mock/dry-run subprocess runners.
-- `agent_collab/events.py`: normalized event model and stream parsers.
+- `agent_collab/runners.py`: runner primitives (subprocess/mock/dry-run) and the registry-backed `configured_runner`.
+- `agent_collab/backends/`: backend registry, capabilities, health probes, the `cli` backend, and the extras-gated Antigravity `sdk` backend.
+- `agent_collab/events.py`: normalized event model and stream parsers (`claude`, `codex`, `antigravity`).
 - `agent_collab/client.py`: HTTP client used by CLI watch/start/list/status.
 - `agent_collab/daemon_supervisor.py`: background daemon PID/state/log lifecycle.
 - `agent_collab/options.py`: typed start option schemas, validation, session settings metadata, and explicit CLI flag mapping.

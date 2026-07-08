@@ -30,7 +30,8 @@ This keeps the human terminal UI and the agent tool API separate while letting b
 The prototype has:
 
 - `agent_collab.events`: normalized event model and stream parsers.
-- `agent_collab.runners`: Claude, Codex, dry-run, and mock runners.
+- `agent_collab.runners`: runner primitives (subprocess, dry-run, mock) and the registry-backed `configured_runner`.
+- `agent_collab.backends`: backend registry keyed by `(agent_type, backend_id)`, capabilities, live health probes, the `cli` subprocess backend, and the extras-gated Antigravity `sdk` backend. An agent's provider (`type`) is separate from its execution mechanism (`backend`); the resolved per-agent backend map is computed once at start validation and threaded into execution.
 - `agent_collab.referee`: bounded turn loop.
 - `agent_collab.logging`: JSONL and Markdown session logs.
 - `agent_collab.cli`: one-shot runner plus foreground server/client commands.
@@ -248,3 +249,9 @@ If the stdlib server becomes awkward, add one focused dependency:
 - `aiohttp` for async HTTP server and client.
 
 Avoid adding a larger stack until the API shape is proven.
+
+Backend dependencies follow the same rule. The base install and the default
+`cli` backend stay standard-library only; a provider SDK backend is an optional,
+extras-gated dependency (`antigravity-sdk = ["google-antigravity>=0.1,<1"]`) and
+all SDK imports are lazy, so the SDK is never required to import, register, or
+run the `cli` path.

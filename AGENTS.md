@@ -27,6 +27,14 @@ Stage 4.8 landed the global runtime model:
 - sessions persist in `data/session-index.json` across daemon restarts; interrupted sessions get status `interrupted`,
 - start/status/list responses carry effective `settings` with prompt-free `command_preview` per agent.
 
+Stage 4.9 added pluggable agent backends:
+
+- an agent's provider (`type`: `claude`, `codex`, `antigravity`, `mock`) is separate from its execution `backend` (`cli` subprocess, or the extras-gated in-process `sdk`); backends live in `agent_collab/backends/` in a registry keyed by `(agent_type, backend_id)` with resolution `start request > agents.<id>.backend > default "cli"`,
+- the base install and default `cli` backend stay standard-library only; all SDK imports are lazy and behind the `antigravity-sdk` extra,
+- the resolved per-agent backend map is computed once at start validation and threaded into `RefereeConfig` → `Referee._runners()` → `configured_runner` (it must reach execution, not only the start settings), reusing the start-time config snapshot,
+- backend capabilities (`resume`/`interrupt`/`tool_gate`) are all `false` this stage and are honest runtime facts, never inferred from provider brand; live backend health gates starts on certainty and is reported in `describe_options` (not `daemon status`),
+- Antigravity is disabled by default and opt-in; its `cli` path is message-only (agy print mode is plain text) and its `sdk` path is hypothesis-driven against a fake module because the SDK could not be captured live (see the closed stage-4.9 doc).
+
 Open tasks are indexed in [doc/README.md](doc/README.md).
 
 ## Essential Commands

@@ -91,12 +91,15 @@ type = "codex"
 enabled = true
 ```
 
-Required for subprocess agents:
+Required for the `cli` backend (subprocess execution):
 
 ```toml
 command = "codex"
 args = ["exec", "--json"]
 ```
+
+`command` is required only for the `cli` backend; other backends (e.g. `sdk`)
+run in-process and need no command.
 
 Optional fields:
 
@@ -105,9 +108,41 @@ name = "display-name"
 env = { KEY = "VALUE" }
 cwd = "/path/override"
 timeout = 900
+backend = "cli"          # execution mechanism; default "cli"
 ```
 
 Avoid adding broad permission fields at first. Permission policy should remain explicit in the underlying agent command or profile.
+
+## Backends
+
+An agent's `type` (the *provider*: `claude`, `codex`, `antigravity`) is separate
+from its `backend` (the *execution mechanism*). The registry is keyed by
+`(type, backend)`:
+
+| provider (`type`) | `cli`                | `sdk`                          |
+| ----------------- | -------------------- | ------------------------------ |
+| `claude`          | ✅ (default)          | — (deferred)                   |
+| `codex`           | ✅ (default)          | — (deferred)                   |
+| `antigravity`     | ✅ (`agy`, plain text) | ✅ (`google-antigravity`, typed) |
+
+- `cli` runs the agent as a subprocess and parses its stdout. It is the default
+  and keeps the base install standard-library only.
+- `sdk` runs the provider's Python SDK in-process. It is optional and
+  extras-gated (`pip install agent-collab[antigravity-sdk]`); all SDK imports are
+  lazy.
+
+Resolution is most-specific-wins: `start-request backend > agents.<id>.backend >
+default "cli"`. A `--backend NAME` / `"backend"` start override applies uniformly
+to every selected agent and is rejected before any session state when any
+selected agent's type does not register that backend (so `--backend sdk` against
+a Claude/Codex workflow fails this stage).
+
+Every backend this stage reports `resume`, `interrupt`, and `tool_gate` as
+`false` — capabilities are honest runtime facts, never inferred from the provider
+brand. `agent_collab_describe_options` exposes, per agent type, the registered
+backend ids, the default, live availability/health, and capability flags, so the
+selection is discoverable before starting. `mock` agents ignore backend selection
+and reject a `backend` field.
 
 ## Start options
 
@@ -155,10 +190,17 @@ thinking_budget_tokens.min = 0
 thinking_budget_tokens.max = 32768
 ```
 
-CLI callers can pass JSON option objects:
+Antigravity agents accept `antigravity_options` (`model`, and `mode` for the
+`cli` backend only — one of `default`, `accept-edits`, `plan`). `mode` maps to
+`agy --mode`; on the `sdk` backend `mode` is rejected until a faithful SDK
+equivalent is confirmed. `antigravity_options` are rejected when the selected
+workflow has no Antigravity agent.
+
+CLI callers can pass JSON option objects and select a backend:
 
 ```bash
 agent-collab start --codex-options '{"thinking_level":"medium"}' --claude-options '{"model":"opus","thinking_level":"high"}' "Task"
+agent-collab start --workflow antigravity-solo --backend sdk --antigravity-options '{"model":"gemini-3-pro"}' "Task"
 ```
 
 The option-to-command mapping is explicit. Unknown option keys are never appended as arbitrary shell flags.
@@ -176,10 +218,12 @@ Start with a small set:
 ```text
 claude
 codex
+antigravity   (opt-in, disabled by default)
 mock
 ```
 
-`type` controls event parsing and prompt handling.
+`type` controls event parsing and prompt handling. `backend` controls the
+execution mechanism (see [Backends](#backends)).
 
 `command` and `args` control process launch.
 
@@ -201,6 +245,33 @@ Default command:
 
 ```bash
 codex exec --json "prompt"
+```
+
+### `antigravity`
+
+Google Antigravity, available on both backends. Disabled by default and opt-in:
+it requires either the `agy` CLI installed and a Google sign-in (`cli`) or the
+`antigravity-sdk` extra installed (`sdk`).
+
+- `cli` runs `agy -p` in print mode. Print mode emits **plain text only** (no
+  JSON, no per-event markers), so its transcript fidelity is intentionally
+  **message-only** — each non-empty output line is one `antigravity` message
+  event; there is no tool/command/file-change structure. The default `args`
+  include `--mode accept-edits` so `-p` does not stall on the interactive
+  request-review approval prompt. Choose `sdk` for structured events.
+- `sdk` runs the `google-antigravity` SDK in-process. Its event fidelity is
+  whatever the SDK actually exposes (typed tool events, or message-only if not).
+
+Auth is the provider's own concern (Google OAuth cached under `~/.gemini/`);
+agent-collab only passes the environment through and never logs credentials.
+
+```toml
+[agents.antigravity]
+type = "antigravity"
+command = "agy"
+args = ["-p", "--mode", "accept-edits"]
+backend = "cli"        # or "sdk" for the google-antigravity SDK
+enabled = true
 ```
 
 ### `mock`
