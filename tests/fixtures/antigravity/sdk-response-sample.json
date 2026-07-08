@@ -1,0 +1,13 @@
+{
+  "_note": "ChatResponse/ToolCall shapes CONFIRMED via live introspection of google-antigravity 0.1.5 (see sdk-introspection.json). Values here are illustrative: a live chat requires a Gemini API key agent-collab does not manage. Drives the fake-module tests in tests/test_backend_sdk.py.",
+  "chat_response": {
+    "text": "Created hello.py and ran the tests.",
+    "thoughts": "I will create the file then run pytest.",
+    "tool_calls": [
+      {"name": "CREATE_FILE", "args": {"path": "hello.py", "content": "print('hi')\n"}, "canonical_path": "hello.py"},
+      {"name": "RUN_COMMAND", "args": {"command": "pytest -q"}, "canonical_path": null},
+      {"name": "VIEW_FILE", "args": {"path": "README.md"}, "canonical_path": "README.md"}
+    ]
+  },
+  "text_only_response": {"text": "Here is the summary you asked for.", "thoughts": null, "tool_calls": []}
+}

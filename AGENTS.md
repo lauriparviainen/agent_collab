@@ -33,7 +33,7 @@ Stage 4.9 added pluggable agent backends:
 - the base install and default `cli` backend stay standard-library only; all SDK imports are lazy and behind the `antigravity-sdk` extra,
 - the resolved per-agent backend map is computed once at start validation and threaded into `RefereeConfig` → `Referee._runners()` → `configured_runner` (it must reach execution, not only the start settings), reusing the start-time config snapshot,
 - backend capabilities (`resume`/`interrupt`/`tool_gate`) are all `false` this stage and are honest runtime facts, never inferred from provider brand; live backend health gates starts on certainty and is reported in `describe_options` (not `daemon status`),
-- Antigravity is disabled by default and opt-in; its `cli` path is message-only (agy print mode is plain text) and its `sdk` path is hypothesis-driven against a fake module because the SDK could not be captured live (see the closed stage-4.9 doc).
+- Antigravity is disabled by default and opt-in; its `cli` path is message-only (agy print mode is plain text) and its `sdk` path is implemented against the SDK's live-confirmed API (`google-antigravity` 0.1.5: `Agent`/`LocalAgentConfig(workspaces=...)`/`ChatResponse`/`ToolCall.args`/`BuiltinTools`). Only a live SDK *chat* is unexercised (it needs `GEMINI_API_KEY`, which agent-collab never manages); the mapper is tested with a fake module built to the confirmed shapes. See the closed stage-4.9 doc.
 
 Open tasks are indexed in [doc/README.md](doc/README.md).
 

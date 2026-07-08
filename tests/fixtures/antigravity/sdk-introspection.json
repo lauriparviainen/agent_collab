@@ -1,0 +1,149 @@
+{
+  "_note": "REAL live introspection of google-antigravity 0.1.5 on Python 3.12 (SDK spike now UN-blocked; installed via dnf python3.12 + pip). Authoritative shapes for backends/antigravity_sdk.py.",
+  "version": "0.1.5",
+  "top_level": [
+    "Agent",
+    "AgentConfig",
+    "Audio",
+    "BuiltinTools",
+    "CapabilitiesConfig",
+    "Content",
+    "CustomSystemInstructions",
+    "Document",
+    "GeminiAPIEndpoint",
+    "GeminiModelOptions",
+    "Image",
+    "LocalAgentConfig",
+    "ModelEndpoint",
+    "ModelTarget",
+    "ModelType",
+    "SystemInstructionSection",
+    "SystemInstructions",
+    "TemplatedSystemInstructions",
+    "ThinkingLevel",
+    "ToolContext",
+    "UsageMetadata",
+    "VertexEndpoint",
+    "Video",
+    "agent",
+    "connections",
+    "conversation",
+    "from_file",
+    "hooks",
+    "models",
+    "tools",
+    "triggers",
+    "types"
+  ],
+  "Agent": {
+    "constructor": "(config: google.antigravity.connections.connection.AgentConfig)",
+    "members": [
+      "chat",
+      "conversation",
+      "conversation_id",
+      "is_started"
+    ],
+    "chat_is_coroutine": true,
+    "chat_signature": "(self, prompt: str | google.antigravity.types.Image | google.antigravity.types.Document | google.antigravity.types.Audio | google.antigravity.types.Video | google.antigravity.types.SlashCommand | collections.abc.Sequence[str | google.antigravity.types.Image | google.antigravity.types.Document | google.antigravity.types.Audio | google.antigravity.types.Video | google.antigravity.types.SlashCommand]) -> google.antigravity.types.ChatResponse",
+    "async_context_manager": true,
+    "has_conversation_id": true
+  },
+  "LocalAgentConfig": {
+    "pydantic_fields": {
+      "system_instructions": "str | google.antigravity.types.CustomSystemInstructions | google.antigravity.types.TemplatedSystemInstructions | None",
+      "capabilities": "<class 'google.antigravity.types.CapabilitiesConfig'>",
+      "tools": "list[typing.Callable[..., typing.Any]]",
+      "policies": "list[google.antigravity.hooks.policy.Policy]",
+      "hooks": "list[google.antigravity.hooks.hooks.InspectHook | google.antigravity.hooks.hooks.DecideHook | google.antigravity.hooks.hooks.TransformHook]",
+      "triggers": "list[typing.Callable[[google.antigravity.triggers.triggers.TriggerContext], typing.Awaitable[NoneType]]]",
+      "mcp_servers": "list[google.antigravity.types.McpStdioServer | google.antigravity.types.McpStreamableHttpServer]",
+      "workspaces": "list[str]",
+      "conversation_id": "str | None",
+      "save_dir": "str | None",
+      "app_data_dir": "str | None",
+      "response_schema": "dict[str, typing.Any] | type[pydantic.main.BaseModel] | str | None",
+      "skills_paths": "list[str]",
+      "subagents": "list[google.antigravity.types.SubagentConfig]",
+      "model": "str | google.antigravity.models.ModelTarget | None",
+      "models": "list[google.antigravity.models.ModelTarget] | None",
+      "api_key": "str | None",
+      "vertex": "bool | None",
+      "project": "str | None",
+      "location": "str | None"
+    }
+  },
+  "ChatResponse": {
+    "members": [
+      "cancel",
+      "chunks",
+      "resolve",
+      "structured_output",
+      "text",
+      "thoughts",
+      "tool_calls",
+      "usage_metadata"
+    ],
+    "text_is_async_method": true,
+    "thoughts_is_property": true,
+    "tool_calls_is_property": true,
+    "resolve_signature": "(self) -> 'list[StreamChunk | ToolCall | ToolResult]'"
+  },
+  "ToolCall": {
+    "pydantic_fields": {
+      "name": "google.antigravity.types.BuiltinTools | str",
+      "args": "dict[str, typing.Any]",
+      "id": "str | None",
+      "canonical_path": "str | None"
+    }
+  },
+  "Step": {
+    "pydantic_fields": {
+      "id": "<class 'str'>",
+      "step_index": "<class 'int'>",
+      "type": "<enum 'StepType'>",
+      "source": "<enum 'StepSource'>",
+      "target": "<enum 'StepTarget'>",
+      "status": "<enum 'StepStatus'>",
+      "content": "<class 'str'>",
+      "content_delta": "<class 'str'>",
+      "thinking": "<class 'str'>",
+      "thinking_delta": "<class 'str'>",
+      "tool_calls": "list[google.antigravity.types.ToolCall]",
+      "error": "<class 'str'>",
+      "is_complete_response": "bool | None",
+      "structured_output": "typing.Any | None",
+      "usage_metadata": "google.antigravity.types.UsageMetadata | None"
+    }
+  },
+  "enums": {
+    "StepType": [
+      "TEXT_RESPONSE",
+      "TOOL_CALL",
+      "SYSTEM_MESSAGE",
+      "COMPACTION",
+      "FINISH",
+      "THINKING",
+      "UNKNOWN"
+    ],
+    "StepSource": [
+      "SYSTEM",
+      "USER",
+      "MODEL",
+      "UNKNOWN"
+    ],
+    "BuiltinTools": [
+      "LIST_DIR",
+      "SEARCH_DIR",
+      "FIND_FILE",
+      "VIEW_FILE",
+      "CREATE_FILE",
+      "EDIT_FILE",
+      "RUN_COMMAND",
+      "ASK_QUESTION",
+      "START_SUBAGENT",
+      "GENERATE_IMAGE",
+      "SEARCH_WEB",
+      "FINISH"
+    ]
+  }
+}

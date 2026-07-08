@@ -14,8 +14,8 @@ dependencies = []
 [project.optional-dependencies]
 # The `sdk` backend for Antigravity. Base install + default `cli` backend stay
 # standard-library only; this extra is the only dependency and is lazy-imported.
-# Version range is the plan's hypothesis (the SDK could not be installed to pin
-# a tested version — see doc/tasks_closed/stage-4.9 spike outcome).
+# Tested against google-antigravity 0.1.5 (needs Python >= 3.10, so this extra is
+# simply unavailable on the base 3.9 target — see doc/tasks_closed/stage-4.9).
 antigravity-sdk = ["google-antigravity>=0.1,<1"]
 
 [project.scripts]

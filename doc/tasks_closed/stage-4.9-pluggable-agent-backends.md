@@ -499,21 +499,36 @@ facts," update this plan's mapping section before implementing.
   `message` event per non-empty line (message-only), exactly as designed.
   Fixtures: `tests/fixtures/antigravity/agy-version.txt`,
   `agy-print-sample.stdout.txt`, `agy-print-sample.stderr.txt`.
-- **SDK (`google-antigravity`) — BLOCKED on live capture.** System Python here
-  is 3.9.25 (< the SDK's required 3.10) and `pip install
-  "google-antigravity>=0.1,<1"` finds no installable distribution, so the SDK
-  cannot be imported and its real object shapes cannot be captured. Per the
-  spike rule we do not guess shapes into production code. The `sdk` backend is
-  therefore implemented against the plan's hypothesis with a fake
-  `google.antigravity` module injected in tests (driven by
-  `tests/fixtures/antigravity/sdk-hypothesis.json`), **degrades to message-only**
-  if typed tool events are absent, ships **no** `agent_sessions` conversation id
-  (unconfirmed), rejects `antigravity_options.mode` on `sdk`, and has one real,
-  fully-tested path: a missing module fails the start with the `antigravity-sdk`
-  extra install hint. Re-run the SDK half on a Python>=3.10 host with the SDK
-  installed, replace the hypothesis fixture with a real capture, and reconcile
-  `backends/antigravity_sdk.py` and this section. This resolves open questions
-  1–3 as "blocked, conservative default taken" and 4 as "`mode` is cli-only".
+- **SDK (`google-antigravity`) — API CONFIRMED live; only the call is blocked.**
+  The initial spike hit Python 3.9 (< the SDK's required 3.10). That was
+  resolved by installing Python 3.12 (`dnf install python3.12`) and
+  `google-antigravity` **0.1.5** from PyPI, then introspecting the real API
+  (`tests/fixtures/antigravity/sdk-introspection.json`). Confirmed and now
+  implemented against reality in `backends/antigravity_sdk.py`:
+  `from google.antigravity import Agent, LocalAgentConfig`; async-context `Agent`;
+  `await agent.chat(prompt)` → `types.ChatResponse`; `await response.text()`
+  (async) + `response.thoughts` / `response.tool_calls` (properties);
+  `types.ToolCall` with `.name` (a `BuiltinTools` enum) + `.args` (dict, **not
+  `input`**) + `.canonical_path`; `LocalAgentConfig(workspaces=[<workdir>],
+  model=...)` (**not** `working_directory`). The mapper classifies via
+  `BuiltinTools` (`CREATE_FILE`/`EDIT_FILE` → file_change, `RUN_COMMAND` →
+  command, else tool_call) and degrades to message-only when there are no tool
+  calls. Verified end to end against the installed SDK (probe `ok`/0.1.5, real
+  `Agent`/`LocalAgentConfig` construct with no arg errors, missing-key error
+  surfaces as an `error` event).
+  - **Open question 3 (resumable id): RESOLVED — yes.** `Agent.conversation_id`
+    and `LocalAgentConfig.conversation_id` expose a stable, resume-capable id.
+    It is captured into the transcript under `verbose` (nothing resumes it;
+    capabilities stay false). A structured `agent_sessions` field is a
+    deliberately-deferred follow-up (no session-state plumbing added this stage).
+  - **Open question 4 (`mode` on sdk): RESOLVED — cli-only.** There is no
+    `--mode` equivalent; posture is `CapabilitiesConfig`/`policies`, so an
+    explicit `antigravity_options.mode` is rejected on `sdk`.
+  - **Still blocked:** a live *chat* needs a Gemini API key (`GEMINI_API_KEY` /
+    `LocalAgentConfig(api_key=...)`) — not the `~/.gemini` OAuth `agy` uses.
+    agent-collab never manages credentials; the fake-module tests exercise the
+    mapper against the confirmed shapes. Set `GEMINI_API_KEY` and re-run to
+    capture a real turn's values.
 
 ### Backend health
 

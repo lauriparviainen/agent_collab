@@ -1,9 +1,12 @@
 """Antigravity `sdk` backend tests.
 
-The real SDK could not be installed in the spike environment, so these tests
-drive the runner with a FAKE agent factory shaped like the hypothesis in
-tests/fixtures/antigravity/sdk-hypothesis.json. The only fully-real path is the
-missing-extra behaviour (the module genuinely is not importable here).
+The SDK's API shapes were CONFIRMED live against google-antigravity 0.1.5 (see
+tests/fixtures/antigravity/sdk-introspection.json); only a live *chat* is blocked
+(it needs a Gemini API key agent-collab does not manage). So the event mapper is
+driven by a FAKE agent factory built to the confirmed shapes (async
+`response.text()`, `response.thoughts`/`response.tool_calls` properties,
+`ToolCall.name`/`.args`, `Agent.conversation_id`), and the missing-extra path is
+fully real.
 """
 
 import asyncio
@@ -18,7 +21,7 @@ from agent_collab.backends.antigravity_sdk import (
     AntigravitySdkBackend,
     AntigravitySdkRunner,
     _default_agent_factory,
-    map_sdk_response,
+    map_antigravity_turn,
 )
 from agent_collab.backends.base import BackendUnavailable
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
@@ -34,26 +37,35 @@ FIXTURES = Path(__file__).parent / "fixtures" / "antigravity"
 AGENT = AgentConfig(id="antigravity", type="antigravity", backend="sdk")
 
 
-def _hypothesis():
-    return json.loads((FIXTURES / "sdk-hypothesis.json").read_text(encoding="utf-8"))
+def _sample():
+    return json.loads((FIXTURES / "sdk-response-sample.json").read_text(encoding="utf-8"))
 
 
 class _FakeToolCall:
-    def __init__(self, name, input):
+    """Shaped like google.antigravity.types.ToolCall (name/args/canonical_path)."""
+
+    def __init__(self, name, args, canonical_path=None):
         self.name = name
-        self.input = input
+        self.args = args
+        self.canonical_path = canonical_path
 
 
 class _FakeResponse:
+    """Shaped like ChatResponse: async text(), sync thoughts/tool_calls props."""
+
     def __init__(self, blob):
-        self.text = blob.get("text")
+        self._text = blob.get("text")
         self.thoughts = blob.get("thoughts")
         self.tool_calls = [_FakeToolCall(**tc) for tc in blob.get("tool_calls", [])]
 
+    async def text(self):
+        return self._text
+
 
 class _FakeAgent:
-    def __init__(self, response):
+    def __init__(self, response, conversation_id=None):
         self._response = response
+        self.conversation_id = conversation_id
 
     async def __aenter__(self):
         return self
@@ -65,9 +77,9 @@ class _FakeAgent:
         return self._response
 
 
-def _factory_for(response):
+def _factory_for(response, conversation_id=None):
     def factory(agent, options, workdir):
-        return _FakeAgent(response)
+        return _FakeAgent(response, conversation_id=conversation_id)
 
     return factory
 
@@ -76,55 +88,77 @@ async def _collect(runner, prompt="do a thing"):
     return [event async for event in runner.run(prompt, Path("."))]
 
 
-def _run(response, *, verbose=False, options=None):
-    runner = AntigravitySdkRunner(AGENT, verbose, options or {}, agent_factory=_factory_for(response))
+def _run(response, *, verbose=False, options=None, conversation_id=None):
+    runner = AntigravitySdkRunner(
+        AGENT, verbose, options or {}, agent_factory=_factory_for(response, conversation_id)
+    )
     return asyncio.run(_collect(runner))
 
 
 class SdkEventMappingTests(unittest.TestCase):
     def test_text_and_typed_tool_calls_map_to_standard_events(self):
-        events = _run(_FakeResponse(_hypothesis()["chat_response"]))
+        events = _run(_FakeResponse(_sample()["chat_response"]))
         by_type = {}
         for event in events:
             by_type.setdefault(event.type, []).append(event)
 
         # final text -> antigravity message
-        self.assertTrue(any(e.source == "antigravity" and "print statement" in e.text for e in by_type["message"]))
-        # write_file -> file_change, run_command -> command, read_file -> tool_call
+        self.assertTrue(any(e.source == "antigravity" and "Created hello.py" in e.text for e in by_type["message"]))
+        # CREATE_FILE -> file_change, RUN_COMMAND -> command, VIEW_FILE -> tool_call
         self.assertTrue(by_type.get("file_change"))
         self.assertTrue(by_type.get("command"))
         self.assertTrue(by_type.get("tool_call"))
-        self.assertTrue(all(e.source == "tool" for e in by_type["file_change"] + by_type["command"] + by_type["tool_call"]))
+        tool_events = by_type["file_change"] + by_type["command"] + by_type["tool_call"]
+        self.assertTrue(all(e.source == "tool" for e in tool_events))
+        # tool call text/raw carry the real BuiltinTools name + args (not `input`).
+        file_change = by_type["file_change"][0]
+        self.assertEqual(file_change.raw["name"], "CREATE_FILE")
+        self.assertIn("path", file_change.raw["args"])
 
     def test_reasoning_hidden_unless_verbose_and_never_leaks_signature(self):
-        quiet = _run(_FakeResponse(_hypothesis()["chat_response"]), verbose=False)
-        self.assertFalse(any(e.type == "status" and "quick change" in (e.text or "") for e in quiet))
+        quiet = _run(_FakeResponse(_sample()["chat_response"]), verbose=False)
+        self.assertFalse(any(e.type == "status" and "create the file" in (e.text or "") for e in quiet))
 
-        loud = _run(_FakeResponse(_hypothesis()["chat_response"]), verbose=True)
-        self.assertTrue(any(e.type == "status" and "quick change" in (e.text or "") for e in loud))
+        loud = _run(_FakeResponse(_sample()["chat_response"]), verbose=True)
+        self.assertTrue(any(e.type == "status" and "create the file" in (e.text or "") for e in loud))
         # thoughts carry reasoning text only, never an opaque signature.
         for event in loud:
             self.assertNotIn("signature", event.raw or {})
 
     def test_degrades_to_message_only_without_tool_calls(self):
-        events = _run(_FakeResponse(_hypothesis()["text_only_response"]))
+        events = _run(_FakeResponse(_sample()["text_only_response"]))
         self.assertFalse(any(e.source == "tool" for e in events))
         self.assertTrue(any(e.type == "message" and e.source == "antigravity" for e in events))
 
-    def test_no_conversation_id_is_captured(self):
-        events = _run(_FakeResponse(_hypothesis()["chat_response"]))
-        for event in events:
-            self.assertNotIn("conversation_id", event.raw or {})
-        # agent_sessions is not shipped this stage (spike could not confirm an id).
+    def test_conversation_id_captured_in_verbose_transcript_only(self):
+        # The SDK exposes Agent.conversation_id (confirmed). We capture it in the
+        # transcript under verbose; nothing resumes it and there is no structured
+        # agent_sessions field this stage.
+        quiet = _run(_FakeResponse(_sample()["text_only_response"]), conversation_id="conv-123")
+        self.assertFalse(any("conversation_id" in (e.raw or {}) for e in quiet))
+
+        loud = _run(_FakeResponse(_sample()["text_only_response"]), verbose=True, conversation_id="conv-123")
+        self.assertTrue(any((e.raw or {}).get("conversation_id") == "conv-123" for e in loud))
+
         field_names = {f.name for f in dataclasses.fields(SessionState)}
         self.assertNotIn("agent_sessions", field_names)
 
-    def test_map_sdk_response_is_message_only_when_tool_calls_attribute_absent(self):
-        class _MinimalResponse:
-            text = "just text"
-
-        events = list(map_sdk_response(_MinimalResponse(), verbose=False))
+    def test_map_turn_is_message_only_when_no_tool_calls(self):
+        events = list(map_antigravity_turn("just text", None, [], verbose=False))
         self.assertEqual([e.type for e in events], ["message"])
+
+    def test_builtin_tool_enum_name_is_classified(self):
+        # ToolCall.name may be a BuiltinTools enum, not a str.
+        import enum
+
+        class BuiltinTools(enum.Enum):
+            EDIT_FILE = "edit_file"
+
+        events = list(
+            map_antigravity_turn("", None, [_FakeToolCall(BuiltinTools.EDIT_FILE, {"path": "x"})], verbose=False)
+        )
+        self.assertEqual(events[0].type, "file_change")
+        self.assertEqual(events[0].raw["name"], "EDIT_FILE")
 
 
 class SdkMissingExtraTests(unittest.TestCase):
