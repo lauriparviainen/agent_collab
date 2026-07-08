@@ -6,17 +6,18 @@ from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
 
 
 TERMINAL_STATUSES = {"done", "failed", "stopped", "interrupted"}
-READ_ONLY_INPUT_MESSAGE = "referee input requires stage 4.6; this session is currently read-only"
+READ_ONLY_INPUT_MESSAGE = "referee input is available only for live interactive sessions"
 SLASH_COMMANDS = {
-    "help",
-    "sessions",
-    "session",
-    "new",
-    "details",
-    "follow",
-    "refresh",
-    "stop",
-    "quit",
+    "help": "show help",
+    "sessions": "pick from daemon sessions",
+    "session": "switch active session",
+    "new": "start an interactive daemon session",
+    "details": "toggle session details",
+    "follow": "jump to tail and follow",
+    "refresh": "re-read the active session",
+    "stop": "stop the active session",
+    "ask": "ask one agent a directed question",
+    "quit": "exit",
 }
 
 
@@ -72,6 +73,12 @@ class SessionPickerState:
     index: int = 0
 
 
+@dataclass(frozen=True)
+class SlashCommandMatch:
+    name: str
+    description: str
+
+
 def parse_input(raw: str) -> ParsedInput:
     value = raw.strip()
     if not value:
@@ -85,6 +92,11 @@ def parse_input(raw: str) -> ParsedInput:
         if name not in SLASH_COMMANDS:
             return ParsedInput(kind="invalid", command=name, error=f"unknown command /{name}; type /help")
         args = tuple(part for part in rest.split() if part)
+        if name == "ask":
+            agent, sep, message = rest.strip().partition(" ")
+            if not sep or not agent.strip() or not message.strip():
+                return ParsedInput(kind="invalid", command=name, error="usage: /ask AGENT message")
+            return ParsedInput(kind="directed", command=name, args=args, agent=agent.strip(), message=message.strip())
         return ParsedInput(kind="slash", command=name, args=args, text=rest.strip())
     if value.startswith("#"):
         target, _, message = value.partition(" ")
@@ -93,6 +105,20 @@ def parse_input(raw: str) -> ParsedInput:
                 return ParsedInput(kind="invalid", error="usage: #AGENT message")
             return ParsedInput(kind="directed", agent=target[1:], message=message.strip())
     return ParsedInput(kind="text", text=value)
+
+
+def filter_slash_commands(prefix: str) -> Tuple[SlashCommandMatch, ...]:
+    value = str(prefix or "").strip()
+    if value.startswith("/"):
+        value = value[1:]
+    if " " in value:
+        return ()
+    value = value.lower()
+    return tuple(
+        SlashCommandMatch(name=f"/{name}", description=description)
+        for name, description in SLASH_COMMANDS.items()
+        if name.startswith(value)
+    )
 
 
 def format_transcript_event(event: Any) -> Tuple[TranscriptLine, ...]:
@@ -166,6 +192,8 @@ def format_session_details(session: Mapping[str, Any]) -> Tuple[str, ...]:
         "timeout",
         "mock",
         "dry_run",
+        "interactive",
+        "interactive_idle_timeout",
         "jsonl_path",
         "markdown_path",
         "error",
@@ -393,6 +421,8 @@ def build_new_session_payload(
     timeout: int = 900,
     mock: bool = False,
     dry_run: bool = False,
+    interactive: bool = False,
+    interactive_idle_timeout: float = 600.0,
     codex_options: Optional[Mapping[str, Any]] = None,
     claude_options: Optional[Mapping[str, Any]] = None,
 ) -> dict:
@@ -411,6 +441,8 @@ def build_new_session_payload(
         "timeout": int(timeout),
         "mock": bool(mock),
         "dry_run": bool(dry_run),
+        "interactive": bool(interactive),
+        "interactive_idle_timeout": float(interactive_idle_timeout),
         "codex_options": dict(codex_options or {}),
         "claude_options": dict(claude_options or {}),
     }

@@ -13,7 +13,7 @@ Implemented:
 - Configurable agent commands and collaboration workflows.
 - One global local daemon with runtime state under `~/.agent-collab/data/` (override with `AGENT_COLLAB_HOME`).
 - Per-session `workdir` that selects the project config and the subprocess cwd, so one daemon serves sessions across projects.
-- Persistent session index; `list`/`status` survive daemon restarts, and sessions that were running when the daemon died are marked `interrupted`.
+- Persistent session index; `list`/`status` survive daemon restarts, and sessions that were running or awaiting input when the daemon died are marked `interrupted`.
 - Foreground local session server at `127.0.0.1:8765`.
 - CLI client commands: `serve`, `daemon`, `start`, `list`, `status`, `events`, `watch`, `stop`, `config show`.
 - MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.

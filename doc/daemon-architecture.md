@@ -79,7 +79,7 @@ being hardcoded to exactly one Claude runner and one Codex runner. See
    - written to JSONL,
    - written to Markdown.
 6. Clients watch by reading event history from a cursor and then waiting for new events.
-7. Session status becomes `done`, `failed`, or `stopped`. Session state is persisted to the global `session-index.json` on every change; after a daemon restart, sessions that were `running` are reported as `interrupted`.
+7. Session status becomes `done`, `failed`, or `stopped`. Interactive sessions may pause in non-terminal `awaiting_input` before a terminal status. Session state is persisted to the global `session-index.json` on every change; after a daemon restart, sessions that were `running` or `awaiting_input` are reported as `interrupted`.
 
 ## Event cursor model
 

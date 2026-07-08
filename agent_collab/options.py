@@ -170,6 +170,9 @@ def build_session_settings(
     config: CollaborationConfig,
     workflow_id: str,
     normalized_options: Mapping[str, Mapping[str, Any]],
+    *,
+    interactive: bool = False,
+    interactive_idle_timeout: float = 600.0,
 ) -> Dict[str, Any]:
     """Build the effective session settings confirmation for start responses.
 
@@ -201,6 +204,8 @@ def build_session_settings(
     return {
         "workflow": {"name": workflow_id, "sequence": list(workflow.sequence)},
         "agents": agents,
+        "interactive": bool(interactive),
+        "interactive_idle_timeout": float(interactive_idle_timeout),
     }
 
 

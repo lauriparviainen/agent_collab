@@ -13,8 +13,8 @@ sessions for any number of projects can run side by side.
 
 A session is one supervised run of a task:
 
-- it has a `session_id`, a `status` (`running`, `done`, `failed`, `stopped`,
-  `interrupted`), a `task`, a `workflow`, and a `workdir`,
+- it has a `session_id`, a `status` (`running`, `awaiting_input`, `done`,
+  `failed`, `stopped`, `interrupted`), a `task`, a `workflow`, and a `workdir`,
 - its events are appended to a JSONL log and mirrored to a Markdown
   transcript under the global data root (`~/.agent-collab/data/sessions`),
 - it survives daemon restarts in a persistent session index; sessions that
@@ -71,8 +71,8 @@ Start a session with `agent_collab_start`:
 }
 ```
 
-Optional fields: `max_turns`, `timeout`, `mock`, `dry_run`,
-`codex_options`, `claude_options`.
+Optional fields: `max_turns`, `timeout`, `mock`, `dry_run`, `interactive`,
+`interactive_idle_timeout`, `codex_options`, `claude_options`.
 
 The response is your confirmation of what the server is about to run. Check
 it before watching:
@@ -88,6 +88,12 @@ If a setting is missing from the response it was not configured; nothing is
 invented. The same `settings` block is returned by
 `agent_collab_list_sessions` and `agent_collab_status`.
 
+Interactive sessions may move to `awaiting_input` after the planned workflow
+finishes. Use `agent_collab_post_message` with `text` and optional `target` to
+append referee input or ask one enabled session agent a directed question.
+Messages are accepted only for live sessions that were started with
+`interactive: true`.
+
 ## Watch
 
 Read events incrementally with a cursor:
@@ -98,7 +104,7 @@ Read events incrementally with a cursor:
    bounded `timeout_ms` (for example 30000); it returns as soon as new
    events exist or the timeout elapses,
 3. stop when `agent_collab_status` reports a terminal status and no new
-   events arrive.
+   events arrive. `awaiting_input` is live, not terminal.
 
 Never make one unbounded blocking call. Always pass the cursor from the
 previous response, not a guess. `agent_collab_read_transcript` returns the

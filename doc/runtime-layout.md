@@ -104,4 +104,4 @@ Session records store the execution project and the effective settings confirmat
 }
 ```
 
-`settings` reflects effective config plus validated start options; `command_preview` never contains the task prompt. Statuses are `running`, `done`, `failed`, `stopped`, and `interrupted` (the session was running when the daemon died). The session index grows without bound for now; a `sessions prune` command is planned for stage 5.
+`settings` reflects effective config plus validated start options; `command_preview` never contains the task prompt. Statuses are `running`, `awaiting_input`, `done`, `failed`, `stopped`, and `interrupted` (the session was running or awaiting input when the daemon died). The session index grows without bound for now; a `sessions prune` command is planned for stage 5.

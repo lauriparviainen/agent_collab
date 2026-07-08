@@ -27,6 +27,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_read_events", names)
         self.assertIn("agent_collab_wait_events", names)
         self.assertIn("agent_collab_read_transcript", names)
+        self.assertIn("agent_collab_post_message", names)
         self.assertIn("agent_collab_stop", names)
         self.assertIn("agent_collab_guidance", names)
 
@@ -71,6 +72,8 @@ class McpServerTests(unittest.TestCase):
             "timeout": 120,
             "mock": True,
             "dry_run": False,
+            "interactive": True,
+            "interactive_idle_timeout": 60,
         }
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
@@ -159,6 +162,19 @@ class McpServerTests(unittest.TestCase):
 
         client.read_transcript.assert_called_once_with("s1")
         self.assertEqual(result, {"content": [{"type": "text", "text": "# transcript\n\nhello\n"}], "isError": False})
+
+    def test_post_message_maps_to_client_post_message(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            client.post_message.return_value = {"session_id": "s1", "cursor": 3, "events": [{"text": "hello"}]}
+
+            result = handle_tool(
+                "agent_collab_post_message",
+                {"session_id": "s1", "text": "hello", "source": "referee", "target": "claude"},
+            )
+
+        client.post_message.assert_called_once_with("s1", "hello", source="referee", target="claude")
+        _assert_tool_result(self, result, {"session_id": "s1", "cursor": 3, "events": [{"text": "hello"}]})
 
     def test_stop_maps_to_client_stop_session(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:

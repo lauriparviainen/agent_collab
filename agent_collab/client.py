@@ -50,6 +50,18 @@ class AgentCollabClient:
             timeout=max(self.timeout, (timeout_ms / 1000.0) + 5),
         )
 
+    def post_message(
+        self,
+        session_id: str,
+        text: str,
+        source: str = "referee",
+        target: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"source": source, "text": text}
+        if target is not None:
+            payload["target"] = target
+        return self._request("POST", f"/sessions/{session_id}/messages", payload)
+
     def read_transcript(self, session_id: str) -> str:
         result = self._request("GET", f"/sessions/{session_id}/transcript")
         return str(result.get("transcript", ""))

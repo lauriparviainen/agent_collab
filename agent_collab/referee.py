@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import asyncio
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from .config import (
     DEFAULT_WORKFLOW,
@@ -22,6 +22,14 @@ from .terminal import print_event
 
 WORKFLOWS = set(builtin_config().workflows)
 
+EventAppender = Callable[[Event], Awaitable[int]]
+
+
+@dataclass
+class RefereeInput:
+    event: Event
+    target: Optional[str] = None
+
 
 @dataclass
 class RefereeConfig:
@@ -38,6 +46,12 @@ class RefereeConfig:
     collab_config: Optional[CollaborationConfig] = None
     codex_options: Optional[Dict[str, Any]] = None
     claude_options: Optional[Dict[str, Any]] = None
+    interactive: bool = False
+    interactive_idle_timeout: float = 600.0
+    input_queue: Optional[asyncio.Queue[RefereeInput]] = None
+    status_callback: Optional[Callable[[str], Awaitable[None]]] = None
+    event_appender_callback: Optional[Callable[[Optional[EventAppender]], Awaitable[None]]] = None
+    turn_active_callback: Optional[Callable[[bool], Awaitable[None]]] = None
 
 
 class Referee:
@@ -49,6 +63,7 @@ class Referee:
         self.collab_config = config.collab_config or load_config(self.workdir)
         if config.collab_config is not None:
             validate_config(self.collab_config)
+        self._emit_lock: Optional[asyncio.Lock] = None
 
     def _runners(self) -> Dict[str, AgentRunner]:
         runners: Dict[str, AgentRunner] = {}
@@ -79,14 +94,20 @@ class Referee:
     def _sequence(self) -> List[str]:
         return list(self.collab_config.workflows[self.config.workflow].sequence)
 
-    def _prompt_for(self, task: str, agent: str, turn: int, transcript: List[Event]) -> str:
-        prior = "\n".join(f"{event.source.upper()}: {event.text}" for event in transcript[-12:])
-        guardrails = (
+    def _guardrails(self) -> str:
+        return (
             "You are participating in an agent-collab supervised coding session.\n"
             "Do not invoke Claude, Codex, agent-collab, or another agent subprocess.\n"
             "Use read/analysis/review style unless the human explicitly asked for edits.\n"
             "Do not grant broad shell permissions automatically.\n"
         )
+
+    def _recent_transcript(self, transcript: List[Event]) -> str:
+        return "\n".join(f"{event.source.upper()}: {event.text}" for event in transcript[-12:])
+
+    def _prompt_for(self, task: str, agent: str, turn: int, transcript: List[Event]) -> str:
+        prior = self._recent_transcript(transcript)
+        guardrails = self._guardrails()
         if turn == 1:
             role = "Lead agent: analyze the task and propose or perform the smallest useful next step."
         elif turn == 2:
@@ -95,10 +116,39 @@ class Referee:
             role = "Lead/reviser: produce a concise revision that accounts for the review."
         return f"{guardrails}\n{role}\n\nTASK:\n{task}\n\nRECENT TRANSCRIPT:\n{prior}\n"
 
-    async def _emit(self, logger: SessionLogger, transcript: List[Event], event: Event) -> None:
-        transcript.append(event)
-        logger.write(event)
-        self.printer(event)
+    def _directed_prompt_for(self, task: str, agent: str, question: str, transcript: List[Event]) -> str:
+        prior = self._recent_transcript(transcript)
+        role = (
+            "Directed agent: answer the referee's latest question using the current transcript. "
+            "Keep the response scoped to that question."
+        )
+        return (
+            f"{self._guardrails()}\n{role}\n\n"
+            f"TASK:\n{task}\n\n"
+            f"RECENT TRANSCRIPT:\n{prior}\n\n"
+            f"DIRECTED QUESTION:\n{question}\n"
+        )
+
+    async def _emit(self, logger: SessionLogger, transcript: List[Event], event: Event) -> int:
+        if self._emit_lock is None:
+            self._emit_lock = asyncio.Lock()
+        async with self._emit_lock:
+            transcript.append(event)
+            logger.write(event)
+            self.printer(event)
+            return len(transcript)
+
+    async def _set_status(self, status: str) -> None:
+        if self.config.status_callback is not None:
+            await self.config.status_callback(status)
+
+    async def _register_event_appender(self, appender: Optional[EventAppender]) -> None:
+        if self.config.event_appender_callback is not None:
+            await self.config.event_appender_callback(appender)
+
+    async def _set_turn_active(self, active: bool) -> None:
+        if self.config.turn_active_callback is not None:
+            await self.config.turn_active_callback(active)
 
     async def _run_agent_turn(
         self,
@@ -111,14 +161,100 @@ class Referee:
             async for event in runner.run(prompt, self.workdir):
                 await self._emit(logger, transcript, event)
 
+        await self._set_turn_active(True)
         try:
-            await asyncio.wait_for(consume(), timeout=self.config.timeout)
-        except asyncio.TimeoutError:
-            await self._emit(
-                logger,
-                transcript,
-                Event.create("error", "error", f"{runner.name} turn exceeded timeout of {self.config.timeout}s"),
-            )
+            try:
+                await asyncio.wait_for(consume(), timeout=self.config.timeout)
+            except asyncio.TimeoutError:
+                await self._emit(
+                    logger,
+                    transcript,
+                    Event.create("error", "error", f"{runner.name} turn exceeded timeout of {self.config.timeout}s"),
+                )
+        finally:
+            await self._set_turn_active(False)
+
+    async def _process_input_item(
+        self,
+        logger: SessionLogger,
+        transcript: List[Event],
+        runners: Dict[str, AgentRunner],
+        task: str,
+        item: RefereeInput,
+    ) -> None:
+        if not item.target:
+            return
+        await self._emit(logger, transcript, Event.create("referee", "status", f"directed turn: {item.target}"))
+        prompt = self._directed_prompt_for(task, item.target, item.event.text, transcript)
+        await self._run_agent_turn(logger, transcript, runners[item.target], prompt)
+
+    async def _process_pending_inputs(
+        self,
+        logger: SessionLogger,
+        transcript: List[Event],
+        runners: Dict[str, AgentRunner],
+        task: str,
+    ) -> None:
+        queue = self.config.input_queue
+        if queue is None:
+            return
+        while True:
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            try:
+                await self._process_input_item(logger, transcript, runners, task, item)
+            finally:
+                queue.task_done()
+
+    async def _await_interactive_input(
+        self,
+        logger: SessionLogger,
+        transcript: List[Event],
+        runners: Dict[str, AgentRunner],
+        task: str,
+    ) -> None:
+        queue = self.config.input_queue
+        if queue is None:
+            raise ValueError("interactive sessions require an input queue")
+        timeout = max(0.0, float(self.config.interactive_idle_timeout))
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=timeout)
+            except asyncio.TimeoutError:
+                await self._emit(
+                    logger,
+                    transcript,
+                    Event.create(
+                        "referee",
+                        "status",
+                        f"interactive idle timeout after {timeout:g}s; closing session",
+                        {"interactive_idle_timeout": timeout},
+                    ),
+                )
+                return
+            try:
+                await self._process_input_item(logger, transcript, runners, task, item)
+            finally:
+                queue.task_done()
+            await self._process_pending_inputs(logger, transcript, runners, task)
+
+    async def _emit_final_summary(
+        self,
+        logger: SessionLogger,
+        transcript: List[Event],
+        turns: int,
+    ) -> None:
+        await self._emit(
+            logger,
+            transcript,
+            Event.create(
+                "referee",
+                "message",
+                f"final summary: completed {turns} supervised turn(s). Logs: {logger.jsonl_path} and {logger.markdown_path}",
+            ),
+        )
 
     async def run(self, task: str) -> Dict[str, str]:
         validate_workflow(self.collab_config, self.config.workflow)
@@ -140,19 +276,26 @@ class Referee:
                     f"workflow={self.config.workflow} max_turns={self.config.max_turns} timeout={self.config.timeout}s workdir={self.workdir}",
                 ),
             )
-            for turn, agent_name in enumerate(sequence, start=1):
-                await self._emit(logger, transcript, Event.create("referee", "status", f"turn {turn}: {agent_name}"))
-                prompt = self._prompt_for(task, agent_name, turn, transcript)
-                await self._run_agent_turn(logger, transcript, runners[agent_name], prompt)
-            await self._emit(
-                logger,
-                transcript,
-                Event.create(
-                    "referee",
-                    "message",
-                    f"final summary: completed {len(sequence)} supervised turn(s). Logs: {logger.jsonl_path} and {logger.markdown_path}",
-                ),
-            )
+            if self.config.interactive:
+                await self._register_event_appender(lambda event: self._emit(logger, transcript, event))
+            try:
+                for turn, agent_name in enumerate(sequence, start=1):
+                    if self.config.interactive:
+                        await self._process_pending_inputs(logger, transcript, runners, task)
+                    await self._emit(logger, transcript, Event.create("referee", "status", f"turn {turn}: {agent_name}"))
+                    prompt = self._prompt_for(task, agent_name, turn, transcript)
+                    await self._run_agent_turn(logger, transcript, runners[agent_name], prompt)
+                if self.config.interactive:
+                    await self._process_pending_inputs(logger, transcript, runners, task)
+                    await self._set_status("awaiting_input")
+                    await self._await_interactive_input(logger, transcript, runners, task)
+                    await self._emit_final_summary(logger, transcript, len(sequence))
+                    await self._set_status("done")
+                else:
+                    await self._emit_final_summary(logger, transcript, len(sequence))
+            finally:
+                if self.config.interactive:
+                    await self._register_event_appender(None)
             return {
                 "session_id": logger.session_id,
                 "jsonl_path": str(logger.jsonl_path),

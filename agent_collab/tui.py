@@ -16,10 +16,9 @@ from .tui_core import (
     ScrollState,
     SessionPickerState,
     advance_cursor_state,
-    agents_from_options,
-    agents_from_session,
     build_new_session_payload,
     clamp_scroll,
+    filter_slash_commands,
     follow_scroll,
     format_session_details,
     format_session_picker_lines,
@@ -28,7 +27,6 @@ from .tui_core import (
     move_session_picker,
     parse_input,
     reset_cursor_state,
-    resolve_agent_selector,
     scroll_by,
     select_latest_session_id,
     selected_picker_session_id,
@@ -52,11 +50,12 @@ HELP_LINES = (
     "/follow                  jump to tail and resume follow",
     "/refresh                 re-read active session from cursor 0",
     "/stop                    stop active daemon session",
+    "/ask AGENT message       ask one directed question",
     "/quit                    exit",
     "",
     "input",
-    "#AGENT message           reserved for Stage 4.6",
-    "plain text               reserved for Stage 4.6",
+    "#AGENT message           ask one directed question",
+    "plain text               append a referee note",
     "",
     "keys",
     "q/Ctrl-C quit  arrows/page keys scroll  End follow  Esc closes overlays",
@@ -134,7 +133,7 @@ class TuiApp:
         if session_is_terminal(session):
             self.message = f"session is read-only ({session.get('status')})"
         else:
-            self.message = f"opened {session_id}"
+            self.message = f"opened {session_id}" if _session_accepts_input(session) else "session is read-only (not interactive)"
             self._start_poller()
 
     def _setup_curses(self) -> None:
@@ -364,7 +363,7 @@ class TuiApp:
             self.message = parsed.error or "invalid input"
             return
         if parsed.kind == "text":
-            self.message = READ_ONLY_INPUT_MESSAGE
+            self._post_referee_message(parsed.text)
             return
         if parsed.kind == "directed":
             self._handle_directed_input(parsed)
@@ -419,21 +418,42 @@ class TuiApp:
             self.done = True
 
     def _handle_directed_input(self, parsed: ParsedInput) -> None:
-        if not self.session:
+        self._post_referee_message(parsed.message, target=parsed.agent)
+
+    def _post_referee_message(self, text: str, target: Optional[str] = None) -> None:
+        if not self.session_id or not self.session:
             self.message = "no active session"
             return
-        agents = agents_from_session(self.session)
-        if not agents:
-            try:
-                options = self.client.describe_options({"workdir": str(self._default_workdir())})
-                agents = agents_from_options(options)
-            except Exception:
-                agents = ()
-        resolution = resolve_agent_selector(parsed.agent or "", agents)
-        if not resolution.ok:
-            self.message = resolution.error or "unknown agent"
+        if not _session_accepts_input(self.session):
+            status = self.session.get("status")
+            self.message = f"session is read-only ({status})" if session_is_terminal(self.session) else READ_ONLY_INPUT_MESSAGE
             return
-        self.message = READ_ONLY_INPUT_MESSAGE
+        self._stop_poller()
+        try:
+            batch = self.client.post_message(self.session_id, text, source="referee", target=target)
+            self.cursor_state = CursorState(
+                session_id=self.session_id,
+                cursor=max(0, int(batch.get("cursor", self.cursor_state.cursor))),
+                epoch=self.cursor_state.epoch + 1,
+            )
+            events = batch.get("events", [])
+            if events:
+                self.transcript_lines = self.transcript_lines + format_transcript_events(events)
+                self.scroll = follow_scroll(len(self.transcript_lines), self._body_height())
+            accepted = events[0] if events else {}
+            raw = accepted.get("raw") if isinstance(accepted, Mapping) else {}
+            queued = isinstance(raw, Mapping) and bool(raw.get("queued"))
+            resolved = raw.get("resolved_target") if isinstance(raw, Mapping) else None
+            if resolved:
+                self.message = f"queued for {resolved}" if queued else f"asked {resolved}"
+            else:
+                self.message = "queued note" if queued else "sent note"
+            self._refresh_session_status()
+        except Exception as exc:
+            self.message = str(exc)
+        finally:
+            if should_start_poller(self.session):
+                self._start_poller()
 
     def _open_session_picker(self) -> None:
         try:
@@ -505,6 +525,7 @@ class TuiApp:
                     task=wizard["task"],
                     workflow=wizard["workflow"],
                     workdir=workdir,
+                    interactive=True,
                 )
                 result = self.client.start_session(payload)
                 self.new_wizard = None
@@ -611,7 +632,18 @@ class TuiApp:
             return tuple(_referee_line(line) for line in wrap_plain_lines(format_session_picker_lines(self.picker), width))
         if self.overlay_lines is not None:
             return tuple(_referee_line(line) for line in wrap_plain_lines(self.overlay_lines, width))
+        completion_lines = self._slash_completion_lines()
+        if completion_lines:
+            return tuple(_referee_line(line) for line in wrap_plain_lines(completion_lines, width))
         return wrap_transcript_lines(self.transcript_lines, width)
+
+    def _slash_completion_lines(self) -> Sequence[str]:
+        if self.new_wizard or not self.input_text.startswith("/"):
+            return ()
+        matches = filter_slash_commands(self.input_text)
+        if not matches:
+            return ("commands", "no matches")
+        return ("commands",) + tuple(f"{match.name:<14} {match.description}" for match in matches)
 
     def _input_prompt(self) -> str:
         if self.new_wizard:
@@ -652,6 +684,12 @@ def _referee_line(text: str):
     from .tui_core import TranscriptLine
 
     return TranscriptLine(source="referee", text=text)
+
+
+def _session_accepts_input(session: Mapping[str, Any]) -> bool:
+    settings = session.get("settings") if isinstance(session.get("settings"), Mapping) else {}
+    interactive = bool(session.get("interactive") or settings.get("interactive"))
+    return interactive and not session_is_terminal(session)
 
 
 def run_tui(session_id: Optional[str] = None, server_url: Optional[str] = None) -> int:

@@ -104,6 +104,34 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(restored.ended_at)
             self.assertEqual(index.load()["daemon-dead"]["status"], "interrupted")
 
+    async def test_awaiting_input_sessions_marked_interrupted_on_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            index = SessionIndex(index_path)
+            index.upsert(
+                {
+                    "session_id": "daemon-awaiting",
+                    "status": "awaiting_input",
+                    "task": "was awaiting",
+                    "workflow": "cross-review",
+                    "workdir": str(root),
+                    "jsonl_path": str(root / "daemon-awaiting.jsonl"),
+                    "markdown_path": str(root / "daemon-awaiting.md"),
+                    "created_at": "2026-07-08T00:00:00+00:00",
+                    "updated_at": "2026-07-08T00:00:00+00:00",
+                    "interactive": True,
+                    "interactive_idle_timeout": 600,
+                }
+            )
+
+            manager = SessionManager(index_path=index_path)
+
+            restored = manager.get_session("daemon-awaiting")
+            self.assertEqual(restored.status, "interrupted")
+            self.assertIn("daemon restarted", restored.error)
+            self.assertEqual(index.load()["daemon-awaiting"]["status"], "interrupted")
+
     async def test_read_events_replays_jsonl_for_restored_sessions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

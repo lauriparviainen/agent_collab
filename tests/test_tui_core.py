@@ -17,6 +17,7 @@ from agent_collab.tui_core import (
     agents_from_session,
     build_new_session_payload,
     clamp_scroll,
+    filter_slash_commands,
     follow_scroll,
     format_session_picker_lines,
     format_session_details,
@@ -116,8 +117,24 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(directed.agent, "reviewer")
         self.assertEqual(directed.message, "take a look")
 
+        asked = parse_input("/ask claude compare the options")
+        self.assertEqual(asked.kind, "directed")
+        self.assertEqual(asked.command, "ask")
+        self.assertEqual(asked.agent, "claude")
+        self.assertEqual(asked.message, "compare the options")
+
         self.assertEqual(parse_input("/unknown").kind, "invalid")
         self.assertEqual(parse_input("#reviewer").kind, "invalid")
+        self.assertEqual(parse_input("/ask claude").kind, "invalid")
+
+    def test_slash_command_completion_filters_deterministically(self):
+        all_matches = filter_slash_commands("/")
+        s_matches = filter_slash_commands("/s")
+
+        self.assertEqual(all_matches[0].name, "/help")
+        self.assertIn("/ask", [match.name for match in all_matches])
+        self.assertEqual([match.name for match in s_matches], ["/sessions", "/session", "/stop"])
+        self.assertEqual(filter_slash_commands("/ask claude"), ())
 
     def test_agent_resolution_uses_active_session_settings(self):
         session = {
@@ -227,13 +244,28 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(payload["timeout"], 900)
         self.assertEqual(payload["mock"], False)
         self.assertEqual(payload["dry_run"], False)
+        self.assertEqual(payload["interactive"], False)
+        self.assertEqual(payload["interactive_idle_timeout"], 600.0)
         self.assertEqual(payload["codex_options"], {})
         self.assertEqual(payload["claude_options"], {})
 
+        interactive_payload = build_new_session_payload(
+            task="task",
+            workflow="single-codex",
+            workdir=tmp,
+            interactive=True,
+            interactive_idle_timeout=30,
+        )
+
+        self.assertEqual(interactive_payload["interactive"], True)
+        self.assertEqual(interactive_payload["interactive_idle_timeout"], 30.0)
+
     def test_terminal_status_controls_poller_and_read_only_helpers(self):
         self.assertTrue(session_is_terminal({"status": "interrupted"}))
+        self.assertFalse(session_is_terminal({"status": "awaiting_input"}))
         self.assertFalse(should_start_poller({"status": "done"}))
         self.assertTrue(should_start_poller({"status": "running"}))
+        self.assertTrue(should_start_poller({"status": "awaiting_input"}))
 
     def test_cli_tui_dispatch_is_additive(self):
         with mock.patch("agent_collab.tui.run_tui", return_value=0) as run_tui:

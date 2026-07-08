@@ -30,6 +30,8 @@ TOOLS = [
                 "timeout": {"type": "integer"},
                 "mock": {"type": "boolean"},
                 "dry_run": {"type": "boolean"},
+                "interactive": {"type": "boolean"},
+                "interactive_idle_timeout": {"type": "number"},
                 "codex_options": {"type": "object", "additionalProperties": True},
                 "claude_options": {"type": "object", "additionalProperties": True},
             },
@@ -82,6 +84,20 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"session_id": {"type": "string"}}, "required": ["session_id"]},
     },
     {
+        "name": "agent_collab_post_message",
+        "description": "Append referee input to an interactive live session, optionally targeting one agent for a directed turn.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "text": {"type": "string"},
+                "source": {"type": "string", "enum": ["referee", "human"]},
+                "target": {"type": "string"},
+            },
+            "required": ["session_id", "text"],
+        },
+    },
+    {
         "name": "agent_collab_stop",
         "description": "Request cancellation of a running daemon-owned session.",
         "inputSchema": {"type": "object", "properties": {"session_id": {"type": "string"}}, "required": ["session_id"]},
@@ -132,6 +148,9 @@ class ToolBackend(Protocol):
     async def read_transcript(self, session_id: str) -> str:
         ...
 
+    async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        ...
+
     async def stop_session(self, session_id: str) -> Dict[str, Any]:
         ...
 
@@ -150,6 +169,8 @@ class SessionManagerToolBackend:
                 timeout=_int_arg(payload, "timeout", 900),
                 mock=bool(payload.get("mock", False)),
                 dry_run=bool(payload.get("dry_run", False)),
+                interactive=bool(payload.get("interactive", False)),
+                interactive_idle_timeout=_float_arg(payload, "interactive_idle_timeout", 600.0),
                 codex_options=_optional_payload(payload, "codex_options"),
                 claude_options=_optional_payload(payload, "claude_options"),
             )
@@ -176,6 +197,16 @@ class SessionManagerToolBackend:
         state = self.manager.get_session(session_id)
         path = Path(state.markdown_path)
         return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return (
+            await self.manager.post_message(
+                session_id,
+                _required_str(payload, "text"),
+                source=str(payload.get("source", "referee")) if payload.get("source") is not None else "referee",
+                target=payload.get("target"),
+            )
+        ).to_dict()
 
     async def stop_session(self, session_id: str) -> Dict[str, Any]:
         return (await self.manager.stop_session(session_id)).to_dict()
@@ -205,6 +236,14 @@ class HttpClientToolBackend:
 
     async def read_transcript(self, session_id: str) -> str:
         return self.client_factory().read_transcript(session_id)
+
+    async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.client_factory().post_message(
+            session_id,
+            _required_str(payload, "text"),
+            source=str(payload.get("source", "referee")) if payload.get("source") is not None else "referee",
+            target=payload.get("target"),
+        )
 
     async def stop_session(self, session_id: str) -> Dict[str, Any]:
         return self.client_factory().stop_session(session_id)
@@ -303,6 +342,8 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
             )
         if name == "agent_collab_read_transcript":
             return text_content(await backend.read_transcript(session_id))
+        if name == "agent_collab_post_message":
+            return content(await backend.post_message(session_id, _post_message_payload(args)))
         if name == "agent_collab_stop":
             return content(await backend.stop_session(session_id))
     except StartOptionsError as exc:
@@ -388,6 +429,14 @@ def _int_arg(args: Dict[str, Any], key: str, default: int) -> int:
         raise ValueError(f"{key} must be an integer") from exc
 
 
+def _float_arg(args: Dict[str, Any], key: str, default: float) -> float:
+    value = args.get(key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be a number") from exc
+
+
 def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
         key: args[key]
@@ -399,6 +448,8 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
             "timeout",
             "mock",
             "dry_run",
+            "interactive",
+            "interactive_idle_timeout",
             "codex_options",
             "claude_options",
         )
@@ -406,6 +457,17 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
     }
     if not isinstance(payload.get("task"), str) or not payload["task"]:
         raise ValueError("task is required")
+    return payload
+
+
+def _post_message_payload(args: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {key: args[key] for key in ("text", "source", "target") if key in args}
+    if not isinstance(payload.get("text"), str) or not payload["text"]:
+        raise ValueError("text is required")
+    if "source" in payload and (not isinstance(payload["source"], str) or payload["source"] not in {"human", "referee"}):
+        raise ValueError("source must be 'human' or 'referee'")
+    if "target" in payload and not isinstance(payload["target"], str):
+        raise ValueError("target must be a string")
     return payload
 
 

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import tempfile
@@ -61,6 +62,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("agent_collab_describe_options", names)
         self.assertIn("agent_collab_start", names)
         self.assertIn("agent_collab_wait_events", names)
+        self.assertIn("agent_collab_post_message", names)
 
     async def test_options_route_describes_start_options(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -73,6 +75,39 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("workflows", response)
         self.assertIn("codex_options", response)
         self.assertIn("claude_options", response)
+
+    async def test_post_message_route_returns_event_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            server = AgentCollabHttpServer(manager=manager)
+            body = json.dumps(
+                {
+                    "task": "http interactive task",
+                    "workdir": str(root),
+                    "mock": True,
+                    "max_turns": 0,
+                    "timeout": 5,
+                    "interactive": True,
+                    "interactive_idle_timeout": 5,
+                }
+            ).encode("utf-8")
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                started = await server._dispatch("POST", "/sessions", {}, body)
+                session_id = started["session_id"]
+                await _wait_for_status(manager, session_id, "awaiting_input")
+                response = await server._dispatch(
+                    "POST",
+                    f"/sessions/{session_id}/messages",
+                    {},
+                    json.dumps({"text": "from http", "target": "claude"}).encode("utf-8"),
+                )
+                await manager.stop_session(session_id)
+
+        self.assertEqual(response["session_id"], session_id)
+        self.assertEqual(response["events"][0]["text"], "from http")
+        self.assertEqual(response["events"][0]["raw"]["resolved_target"], "claude")
 
     async def test_mcp_start_is_visible_and_readable_through_session_routes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -300,6 +335,17 @@ def _mcp_body(request_id, method, params=None):
     if params is not None:
         request["params"] = params
     return json.dumps(request).encode("utf-8")
+
+
+async def _wait_for_status(manager, session_id, expected):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 2.0
+    while loop.time() < deadline:
+        state = manager.get_session(session_id)
+        if state.status == expected:
+            return state
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"session {session_id} did not reach {expected}")
 
 
 if __name__ == "__main__":

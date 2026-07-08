@@ -138,6 +138,8 @@ class AgentCollabHttpServer:
                     timeout=int(data.get("timeout", 900)),
                     mock=bool(data.get("mock", False)),
                     dry_run=bool(data.get("dry_run", False)),
+                    interactive=bool(data.get("interactive", False)),
+                    interactive_idle_timeout=float(data.get("interactive_idle_timeout", 600.0)),
                     codex_options=_optional_payload(data, "codex_options"),
                     claude_options=_optional_payload(data, "claude_options"),
                 )
@@ -158,6 +160,16 @@ class AgentCollabHttpServer:
                 cursor = _query_int(query, "cursor", 0)
                 timeout_ms = _query_int(query, "timeout_ms", 30000)
                 return (await self.manager.wait_events(session_id, cursor, timeout_ms)).to_dict()
+            if method == "POST" and len(path_parts) == 3 and path_parts[2] == "messages":
+                data = _decode_json_object(body)
+                return (
+                    await self.manager.post_message(
+                        session_id,
+                        _required_str(data, "text"),
+                        source=str(data.get("source", "referee")) if data.get("source") is not None else "referee",
+                        target=data.get("target"),
+                    )
+                ).to_dict()
             if method == "GET" and len(path_parts) == 3 and path_parts[2] == "transcript":
                 state = self.manager.get_session(session_id)
                 path = Path(state.markdown_path)

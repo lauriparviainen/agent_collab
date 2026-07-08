@@ -6,8 +6,10 @@ import unittest
 from unittest import mock
 
 from agent_collab.daemon import StartSessionRequest, SessionManager
+from agent_collab.events import Event
 from agent_collab.options import StartOptionsError
 from agent_collab.paths import GlobalDataPaths
+from agent_collab.referee import Referee
 
 
 TERMINAL_STATUSES = {"done", "failed", "stopped"}
@@ -23,6 +25,16 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 return state
             await asyncio.sleep(0.02)
         self.fail(f"session {session_id} did not finish before timeout")
+
+    async def _wait_for_status(self, manager, session_id, expected, timeout=2.0):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            state = manager.get_session(session_id)
+            if state.status == expected:
+                return state
+            await asyncio.sleep(0.02)
+        self.fail(f"session {session_id} did not reach {expected!r} before timeout")
 
     async def test_start_mock_session_runs_to_done_and_writes_logs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -58,10 +70,255 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state.workflow, "cross-review")
             self.assertEqual(state.settings["workflow"]["name"], "cross-review")
             self.assertEqual(state.settings["workflow"]["sequence"], ["claude", "codex", "claude"])
+            self.assertFalse(state.interactive)
+            self.assertFalse(state.settings["interactive"])
             self.assertEqual(final.settings, state.settings)
             for agent in state.settings["agents"].values():
                 for part in agent.get("command_preview", []):
                     self.assertNotIn("daemon mock task", part)
+
+    async def test_interactive_session_awaits_input_and_post_message_appends_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="interactive note task",
+                        mock=True,
+                        max_turns=1,
+                        timeout=5,
+                        workdir=root,
+                        interactive=True,
+                        interactive_idle_timeout=5,
+                    )
+                )
+                awaiting = await self._wait_for_status(manager, state.session_id, "awaiting_input")
+                awaiting_events = manager.read_events(state.session_id, 0).events
+                cursor = manager.read_events(state.session_id, 0).cursor
+                wait_task = asyncio.create_task(manager.wait_events(state.session_id, cursor, timeout_ms=1000))
+                batch = await manager.post_message(state.session_id, " please inspect this ")
+                waited = await wait_task
+                stopped = await manager.stop_session(state.session_id)
+
+            self.assertEqual(awaiting.status, "awaiting_input")
+            self.assertTrue(awaiting.interactive)
+            self.assertTrue(awaiting.settings["interactive"])
+            self.assertFalse(any("final summary" in event["text"] for event in awaiting_events))
+            self.assertEqual(batch.session_id, state.session_id)
+            self.assertEqual(batch.events[0]["source"], "referee")
+            self.assertEqual(batch.events[0]["text"], "please inspect this")
+            self.assertEqual(batch.events[0]["raw"]["target"], None)
+            self.assertEqual(batch.events[0]["raw"]["resolved_target"], None)
+            self.assertEqual(waited.events, batch.events)
+            all_events = manager.read_events(state.session_id, 0).events
+            self.assertEqual(
+                [event["text"] for event in all_events].count("please inspect this"),
+                1,
+            )
+            self.assertIn("please inspect this", Path(stopped.jsonl_path).read_text(encoding="utf-8"))
+            self.assertIn("please inspect this", Path(stopped.markdown_path).read_text(encoding="utf-8"))
+
+    async def test_stop_session_transitions_awaiting_input_to_stopped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="stop awaiting task",
+                        mock=True,
+                        max_turns=0,
+                        timeout=5,
+                        workdir=root,
+                        interactive=True,
+                        interactive_idle_timeout=5,
+                    )
+                )
+                awaiting = await self._wait_for_status(manager, state.session_id, "awaiting_input")
+                stopped = await manager.stop_session(state.session_id)
+
+            self.assertEqual(awaiting.status, "awaiting_input")
+            self.assertEqual(stopped.status, "stopped")
+
+    async def test_interactive_directed_message_runs_one_target_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="interactive directed task",
+                        mock=True,
+                        max_turns=0,
+                        timeout=5,
+                        workdir=root,
+                        interactive=True,
+                        interactive_idle_timeout=5,
+                    )
+                )
+                await self._wait_for_status(manager, state.session_id, "awaiting_input")
+                before = manager.read_events(state.session_id, 0).cursor
+                batch = await manager.post_message(state.session_id, "what do you think?", target="codex")
+                directed = await manager.wait_events(state.session_id, batch.cursor, timeout_ms=1000)
+                await manager.stop_session(state.session_id)
+
+            self.assertGreaterEqual(batch.cursor, before + 1)
+            self.assertEqual(batch.events[0]["raw"]["target"], "codex")
+            self.assertEqual(batch.events[0]["raw"]["resolved_target"], "codex")
+            texts = [event["text"] for event in directed.events]
+            self.assertIn("directed turn: codex", texts)
+            self.assertEqual(texts.count("directed turn: codex"), 1)
+            self.assertEqual(sum("mock codex received prompt" in text for text in texts), 1)
+
+    async def test_mid_turn_referee_note_is_queued_and_visible_to_next_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            prompts = []
+            first_turn_started = asyncio.Event()
+            release_first_turn = asyncio.Event()
+            second_turn_started = asyncio.Event()
+
+            class CaptureRunner:
+                def __init__(self, name, pause=False):
+                    self.name = name
+                    self.pause = pause
+
+                async def run(self, prompt, workdir):
+                    prompts.append((self.name, prompt))
+                    if self.pause:
+                        first_turn_started.set()
+                        yield Event.create(self.name, "status", f"{self.name} started")
+                        await release_first_turn.wait()
+                    else:
+                        second_turn_started.set()
+                    yield Event.create(self.name, "message", f"{self.name} done")
+
+            runners = {
+                "claude": CaptureRunner("claude", pause=True),
+                "codex": CaptureRunner("codex"),
+            }
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="queued note task",
+                            workflow="compare",
+                            max_turns=2,
+                            timeout=5,
+                            workdir=root,
+                            interactive=True,
+                            interactive_idle_timeout=5,
+                        )
+                    )
+                    await asyncio.wait_for(first_turn_started.wait(), timeout=1)
+                    batch = await manager.post_message(state.session_id, "remember mid-turn note")
+                    release_first_turn.set()
+                    await asyncio.wait_for(second_turn_started.wait(), timeout=1)
+                    awaiting = await self._wait_for_status(manager, state.session_id, "awaiting_input")
+                    await manager.stop_session(state.session_id)
+
+            self.assertEqual(batch.events[0]["raw"]["queued"], True)
+            self.assertEqual(awaiting.status, "awaiting_input")
+            self.assertGreaterEqual(len(prompts), 2)
+            self.assertEqual(prompts[1][0], "codex")
+            self.assertIn("remember mid-turn note", prompts[1][1])
+
+    async def test_post_message_rejects_unknown_and_ambiguous_targets_in_manager_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / ".agent-collab" / "config.toml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                """
+[agents.claude-a]
+type = "claude"
+command = "claude"
+
+[agents.claude-b]
+type = "claude"
+command = "claude"
+
+[workflows.two-claudes]
+sequence = ["claude-a", "claude-b"]
+""",
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="target validation task",
+                        workflow="two-claudes",
+                        mock=True,
+                        max_turns=0,
+                        timeout=5,
+                        workdir=root,
+                        interactive=True,
+                        interactive_idle_timeout=5,
+                    )
+                )
+                await self._wait_for_status(manager, state.session_id, "awaiting_input")
+                cursor = manager.read_events(state.session_id, 0).cursor
+
+                with self.assertRaises(ValueError) as unknown_ctx:
+                    await manager.post_message(state.session_id, "hello", target="reviewer")
+                with self.assertRaises(ValueError) as ambiguous_ctx:
+                    await manager.post_message(state.session_id, "hello", target="claude")
+
+                await manager.stop_session(state.session_id)
+
+            self.assertIn("unknown target", str(unknown_ctx.exception))
+            self.assertIn("claude-a", str(unknown_ctx.exception))
+            self.assertIn("ambiguous agent type", str(ambiguous_ctx.exception))
+            self.assertIn("claude-b", str(ambiguous_ctx.exception))
+            self.assertEqual(manager.read_events(state.session_id, 0).cursor, cursor)
+
+    async def test_post_message_rejects_noninteractive_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(task="noninteractive task", mock=True, max_turns=1, timeout=5, workdir=root)
+                )
+                with self.assertRaises(ValueError) as ctx:
+                    await manager.post_message(state.session_id, "hello")
+                final = await self._wait_for_terminal(manager, state.session_id)
+
+            self.assertIn("interactive", str(ctx.exception))
+            self.assertEqual(final.status, "done")
+
+    async def test_interactive_idle_timeout_transitions_to_done_with_visible_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="idle timeout task",
+                        mock=True,
+                        max_turns=0,
+                        timeout=5,
+                        workdir=root,
+                        interactive=True,
+                        interactive_idle_timeout=0.05,
+                    )
+                )
+                final = await self._wait_for_terminal(manager, state.session_id)
+                events = manager.read_events(state.session_id, 0).events
+
+            self.assertEqual(final.status, "done")
+            self.assertTrue(any("interactive idle timeout" in event["text"] for event in events))
+            self.assertTrue(any("final summary" in event["text"] for event in events))
 
     async def test_read_events_uses_cursor(self):
         with tempfile.TemporaryDirectory() as tmp:
