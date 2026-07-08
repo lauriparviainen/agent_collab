@@ -1,5 +1,19 @@
 # Stage 4.8: Global runtime and config migrations
 
+## Status: implemented (2026-07-08)
+
+All acceptance criteria below are met. Implementation notes:
+
+- `agent_collab/paths.py` provides `AgentCollabHome`/`GlobalDataPaths` with the `AGENT_COLLAB_HOME` override, resolved per call; tests always point it at a temp dir.
+- Daemon pid/state/logs and all session logs live under the global data root; `daemon status/stop/logs` take no `--workdir`, and `daemon start --workdir` only sets the session-default workdir.
+- `mode` became `workflow` everywhere with built-ins `single-claude`, `single-codex`, `cross-review` (default; same sequence as the old `claude-leads`), and `compare`. `[modes.*]` is rejected with a hint.
+- `agent_collab/config_migrations.py` migrates each config file to `CURRENT_CONFIG_SCHEMA = 2` before merge/validation; v1 is the pre-`schema_version` era.
+- `agent_collab/options.py:build_session_settings` produces the effective settings block (workflow sequence, per-agent typed options, prompt-free `command_preview` shared with the real runner command builder); persisted on `SessionState` and returned by start/status/list on HTTP, MCP, and CLI.
+- `agent_collab/session_index.py` persists sessions to `data/session-index.json` (atomic replace); on daemon restart, formerly `running` sessions get the new terminal status `interrupted`, and their events replay from JSONL.
+- `agent_collab_guidance` serves `doc/mcp-guidance.md` whole or by topic section; `initialize.instructions` shrank to five pointers.
+- Extra beyond spec: `agent-collab config show --workdir PATH` prints the effective merged config and loaded paths.
+- Deferred to stage 5: session pruning; explicit `config migrate --write`; import of old project-local daemon state (fallback watch of legacy project log dirs works).
+
 ## Purpose
 
 Move runtime state from project-local data directories to one global user data root, while keeping project config as per-session overrides.

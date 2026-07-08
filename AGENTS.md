@@ -11,23 +11,23 @@ Short entrypoint for coding agents working in this repository.
 - [README.md](README.md): user-facing overview and common commands.
 - [doc/README.md](doc/README.md): design-doc index.
 - [doc/daemon-architecture.md](doc/daemon-architecture.md): server, session, CLI, and MCP architecture.
-- [doc/agent-configuration.md](doc/agent-configuration.md): agent config, modes, and typed start options.
-- [doc/runtime-layout.md](doc/runtime-layout.md): config/data ownership and target global runtime layout.
+- [doc/agent-configuration.md](doc/agent-configuration.md): agent config, workflows, and typed start options.
+- [doc/runtime-layout.md](doc/runtime-layout.md): global runtime layout and config precedence.
+- [doc/mcp-guidance.md](doc/mcp-guidance.md): guidance served to MCP agents by `agent_collab_guidance`.
 - [doc/development.md](doc/development.md): local commands, smoke tests, and coding constraints.
 
-## Current Architecture Task
+## Architecture Snapshot
 
-The next architecture correction is:
+Stage 4.8 landed the global runtime model:
 
-[doc/tasks_open/stage-4.8-global-runtime-and-config-migrations.md](doc/tasks_open/stage-4.8-global-runtime-and-config-migrations.md)
+- one global local daemon; runtime state lives under `~/.agent-collab/data/` (override with `AGENT_COLLAB_HOME`, which tests must always set),
+- each session carries a `workdir` that selects project config and subprocess cwd,
+- config precedence: built-ins < user config < project config (from the session workdir) < explicit start options, with centralized schema migrations in `agent_collab/config_migrations.py`,
+- orchestration is a `workflow` (`single-claude`, `single-codex`, `cross-review` default, `compare`), not a `mode`,
+- sessions persist in `data/session-index.json` across daemon restarts; interrupted sessions get status `interrupted`,
+- start/status/list responses carry effective `settings` with prompt-free `command_preview` per agent.
 
-High-level goal:
-
-- use one global local daemon and global session registry,
-- attach a `workdir` to each session,
-- load project config from the session `workdir`,
-- keep runtime data under `~/.agent-collab/data/`,
-- centralize config compatibility fixes in a config migrator.
+Open tasks are indexed in [doc/README.md](doc/README.md).
 
 ## Essential Commands
 
@@ -48,5 +48,7 @@ Use mock mode before any live Claude/Codex smoke. Real Claude/Codex runs can nee
 - Preserve cursor-based event reads and long-polling.
 - Keep plain `watch` pipe-friendly; TUI is additive.
 - Do not dump full transcript events into daemon logs by default.
-- MCP agents should call `agent_collab_describe_options` before passing non-default model, reasoning, sandbox, or permission settings.
+- MCP agents should call `agent_collab_describe_options` before passing non-default model, reasoning, sandbox, or permission settings, and `agent_collab_guidance` for usage guidance.
 - Invalid `agent_collab_start` options should be fixed from returned field-path details, not retried by guessing.
+- Tests must isolate `AGENT_COLLAB_HOME` (point it at a temp dir) so nothing writes to the real `~/.agent-collab`.
+- All config shape compatibility handling belongs in `agent_collab/config_migrations.py`; runtime code only consumes the latest schema.

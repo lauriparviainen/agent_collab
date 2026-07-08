@@ -8,12 +8,12 @@ Start here:
 - [Daemon architecture](daemon-architecture.md)
 - [Agent configuration](agent-configuration.md)
 - [Runtime layout](runtime-layout.md)
+- [MCP guidance](mcp-guidance.md)
 - [Development notes](development.md)
 
 Implementation stages:
 
 - [Stage 4.5: TUI watch](tasks_open/stage-4.5-tui-watch.md)
-- [Stage 4.8: Global runtime and config migrations](tasks_open/stage-4.8-global-runtime-and-config-migrations.md)
 - [Stage 5: Hardening and operations](tasks_open/stage-5-hardening.md)
 
 Completed stages:
@@ -25,10 +25,11 @@ Completed stages:
 - [Stage 4: MCP daemon adapter](tasks_closed/stage-4-mcp-daemon-adapter.md)
 - [Stage 4.25: Foreground Streamable HTTP server](tasks_closed/stage-4.25-foreground-streamable-http-server.md)
 - [Stage 4.75: Daemonize server and typed session options](tasks_closed/stage-4.75-daemonize-and-session-options.md)
+- [Stage 4.8: Global runtime and config migrations](tasks_closed/stage-4.8-global-runtime-and-config-migrations.md)
 
 Task folders:
 
 - [Open tasks](tasks_open/)
 - [Closed tasks](tasks_closed/)
 
-The current implementation already has the core event model, runners, referee loop, log writing, foreground server, project-local daemon lifecycle, CLI client commands, stdio MCP adapter, Streamable HTTP MCP endpoint, and typed validated start options for agents. Open architecture work includes the additive TUI watch mode and moving daemon runtime state to a global session registry with per-session workdirs.
+The current implementation already has the core event model, runners, referee loop, log writing, foreground server, global daemon lifecycle with per-session workdirs, a persistent session index, workflow-based orchestration, centralized config migrations, effective session settings confirmations, CLI client commands, stdio MCP adapter, Streamable HTTP MCP endpoint, typed validated start options, and MCP usage guidance. Open architecture work includes the additive TUI watch mode and stage 5 hardening.

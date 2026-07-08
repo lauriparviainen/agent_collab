@@ -4,7 +4,7 @@
 
 Move `agent-collab` from a one-shot process model to a joinable session model.
 
-The implementation has both a foreground local server and a project-local background daemon lifecycle. `agent-collab serve` remains the foreground debugging path; `agent-collab daemon start` starts the same server model in the background.
+The implementation has both a foreground local server and a global background daemon lifecycle. `agent-collab serve` remains the foreground debugging path; `agent-collab daemon start` starts the same server model in the background as the single global daemon.
 
 The desired shape is:
 
@@ -13,8 +13,8 @@ agent-collab serve
   owns sessions, subprocess lifetimes, logs, and event delivery
 
 agent-collab daemon start
-  starts the same server model in the background
-  writes runtime state under WORKDIR/.agent-collab/data/
+  starts the same server model in the background (one global daemon)
+  writes runtime state under ~/.agent-collab/data/ (AGENT_COLLAB_HOME)
 
 CLI client
   starts sessions, watches sessions, and prints human-readable transcripts
@@ -44,7 +44,7 @@ The current MCP process no longer owns live referee execution. MCP clients can c
 
 ## Target state
 
-The foreground server or project-local daemon owns live collaboration sessions. CLI and MCP connect to whichever local server is running.
+The foreground server or global daemon owns live collaboration sessions. CLI and MCP connect to whichever local server is running. Each session carries its own `workdir`; the daemon's location never decides which project a session works on.
 
 ```text
                  starts/watches
@@ -71,7 +71,7 @@ being hardcoded to exactly one Claude runner and one Codex runner. See
 
 1. A client asks the server to start a session.
 2. The server creates a `session_id`.
-3. The server validates typed start options before creating session state. Foreground sessions use `WORKDIR/.agent-collab/sessions/`; daemon-owned sessions use `WORKDIR/.agent-collab/data/sessions/`.
+3. The server loads config from the session `workdir`, validates typed start options, and builds the effective settings confirmation (workflow sequence, per-agent options, prompt-free command previews) before creating session state. Session logs go to the global `~/.agent-collab/data/sessions/`.
 4. The server runs the existing `Referee` in a background task.
 5. Each emitted event is:
    - appended to in-memory session history,
@@ -79,7 +79,7 @@ being hardcoded to exactly one Claude runner and one Codex runner. See
    - written to JSONL,
    - written to Markdown.
 6. Clients watch by reading event history from a cursor and then waiting for new events.
-7. Session status becomes `done`, `failed`, or `stopped`.
+7. Session status becomes `done`, `failed`, or `stopped`. Session state is persisted to the global `session-index.json` on every change; after a daemon restart, sessions that were `running` are reported as `interrupted`.
 
 ## Event cursor model
 
@@ -160,20 +160,21 @@ Client/server commands:
 
 ```bash
 agent-collab serve
-agent-collab daemon start --workdir /repo
-agent-collab daemon status --workdir /repo
-agent-collab daemon logs --workdir /repo --tail 100
-agent-collab daemon stop --workdir /repo
+agent-collab daemon start
+agent-collab daemon status
+agent-collab daemon logs --tail 100
+agent-collab daemon stop
 agent-collab start --mock --workdir /repo "task"
 agent-collab watch SESSION_ID
 agent-collab status SESSION_ID
 agent-collab stop SESSION_ID
+agent-collab config show --workdir /repo
 ```
 
 `watch` should also support direct file watching:
 
 ```bash
-agent-collab watch /repo/.agent-collab/sessions/SESSION.jsonl
+agent-collab watch ~/.agent-collab/data/sessions/SESSION.jsonl
 ```
 
 This makes it useful even without a running server.
@@ -200,6 +201,7 @@ MCP client
 Tools:
 
 ```text
+agent_collab_guidance
 agent_collab_describe_options
 agent_collab_start
 agent_collab_list_sessions
@@ -212,7 +214,7 @@ agent_collab_stop
 
 MCP code should not run the referee loop directly and should not own a separate session registry.
 
-Before agents pass non-default model, reasoning, permission, or sandbox settings, they should call `agent_collab_describe_options` and then start sessions with typed `codex_options` and `claude_options`. Invalid options are rejected before subprocess launch with field-level feedback.
+Before agents pass non-default model, reasoning, permission, or sandbox settings, they should call `agent_collab_describe_options` and then start sessions with typed `codex_options` and `claude_options`. Invalid options are rejected before subprocess launch with field-level feedback. `agent_collab_guidance` serves full Markdown usage guidance from `doc/mcp-guidance.md`. Start payloads use `task`, `workdir`, and `workflow`.
 
 ## Safety model
 

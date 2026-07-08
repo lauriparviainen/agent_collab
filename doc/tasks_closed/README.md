@@ -9,3 +9,4 @@ Completed task docs move here when their implementation is done and verified.
 - [Stage 4: MCP daemon adapter](stage-4-mcp-daemon-adapter.md)
 - [Stage 4.25: Foreground Streamable HTTP server](stage-4.25-foreground-streamable-http-server.md)
 - [Stage 4.75: Daemonize server and typed session options](stage-4.75-daemonize-and-session-options.md)
+- [Stage 4.8: Global runtime and config migrations](stage-4.8-global-runtime-and-config-migrations.md)

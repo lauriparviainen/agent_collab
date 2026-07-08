@@ -1,14 +1,14 @@
 # Runtime Layout
 
-## Direction
+## Model
 
-`agent-collab` should move toward one global local daemon and one global session registry. Each session carries its own `workdir`, and that `workdir` determines which project config applies.
+`agent-collab` runs one global local daemon and one global session registry. Each session carries its own `workdir`, and that `workdir` determines which project config applies and where agent subprocesses run.
 
-This avoids scattering daemon state and session logs across repositories. It also supports starting from project A while asking an agent to work on project B.
+This keeps daemon state and session logs out of repositories and supports starting from project A while asking an agent to work on project B.
 
-## Target Layout
+## Layout
 
-Global user-owned state:
+Global user-owned state (root overridable with `AGENT_COLLAB_HOME`):
 
 ```text
 ~/.agent-collab/
@@ -26,6 +26,8 @@ Global user-owned state:
     session-index.json
 ```
 
+`tmp/` is reserved for future temp review workdirs. `session-index.json` is the persistent session index that lets `list`/`status` survive daemon restarts.
+
 Project-owned config:
 
 ```text
@@ -33,11 +35,17 @@ PROJECT/.agent-collab/
   config.toml
 ```
 
-Project `.agent-collab/config.toml` can be tracked in git and should be treated as shared project defaults or policy. Runtime files, temp review workdirs, daemon state, and session logs should not be written under project `.agent-collab/` by default.
+Project `.agent-collab/config.toml` can be tracked in git and should be treated as shared project defaults or policy. Runtime files, temp review workdirs, daemon state, and session logs are not written under project `.agent-collab/` by default.
+
+Set `AGENT_COLLAB_HOME` to run an isolated daemon instance (tests do this so they never touch the real home):
+
+```bash
+AGENT_COLLAB_HOME=/tmp/agent-collab-home agent-collab daemon start
+```
 
 ## Config Precedence
 
-For a session with `workdir = PROJECT`, effective config should be:
+For a session with `workdir = PROJECT`, effective config is:
 
 ```text
 built-in defaults
@@ -46,25 +54,22 @@ built-in defaults
 < explicit session/start options
 ```
 
-The caller's current shell directory should not affect project config unless it is also the session `workdir`.
+The caller's current shell directory does not affect project config unless it is also the session `workdir`. Config files declare a `schema_version` (currently 2, missing means 1); `agent_collab/config_migrations.py` migrates known old shapes in memory before validation. Inspect the merged result with `agent-collab config show --workdir PROJECT`.
 
-## Current Legacy Layout
+## Legacy Project-Local Layout
 
-The current implementation still has project-local runtime paths:
+Older checkouts wrote runtime data under the project:
 
 ```text
 PROJECT/.agent-collab/data/
 PROJECT/.agent-collab/sessions/
-PROJECT/.agent-collab/mcp-review-workdir/
 ```
 
-These are legacy/fallback locations during the migration. New runtime ownership work is tracked in:
-
-[tasks_open/stage-4.8-global-runtime-and-config-migrations.md](tasks_open/stage-4.8-global-runtime-and-config-migrations.md)
+These are fallback locations only: `agent-collab watch --workdir PROJECT SESSION_ID` still resolves old logs there after checking the global `data/sessions`. The global daemon does not load old project-local daemon state; if a stale project-local daemon is still running, stop it manually once by killing the pid in `PROJECT/.agent-collab/data/daemon/pid`.
 
 ## Session Records
 
-Global sessions should store the execution project explicitly:
+Session records store the execution project and the effective settings confirmation:
 
 ```json
 {
@@ -72,9 +77,31 @@ Global sessions should store the execution project explicitly:
   "status": "running",
   "task": "Review project B",
   "workdir": "/home/devel/projects/project-b",
+  "workflow": "cross-review",
   "jsonl_path": "~/.agent-collab/data/sessions/daemon-abc123.jsonl",
   "markdown_path": "~/.agent-collab/data/sessions/daemon-abc123.md",
   "created_at": "...",
-  "updated_at": "..."
+  "updated_at": "...",
+  "settings": {
+    "workflow": {
+      "name": "cross-review",
+      "sequence": ["claude", "codex", "claude"]
+    },
+    "agents": {
+      "claude": {
+        "type": "claude",
+        "model": "opus",
+        "thinking_level": "high",
+        "command_preview": ["claude", "-p", "--output-format", "stream-json", "--verbose", "--model", "opus", "--effort", "high"]
+      },
+      "codex": {
+        "type": "codex",
+        "thinking_level": "high",
+        "command_preview": ["codex", "exec", "--json", "-c", "model_reasoning_effort=\"high\""]
+      }
+    }
+  }
 }
 ```
+
+`settings` reflects effective config plus validated start options; `command_preview` never contains the task prompt. Statuses are `running`, `done`, `failed`, `stopped`, and `interrupted` (the session was running when the daemon died). The session index grows without bound for now; a `sessions prune` command is planned for stage 5.

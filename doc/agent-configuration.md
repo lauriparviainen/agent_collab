@@ -22,20 +22,25 @@ The referee should not assume there is exactly one Claude command and one Codex 
 
 ## Config locations
 
-Initial lookup order:
+Lookup order (highest precedence first):
 
 ```text
-WORKDIR/.agent-collab/config.toml
-~/.agent-collab/config.toml
+explicit session/start options
+SESSION_WORKDIR/.agent-collab/config.toml
+~/.agent-collab/config.toml   (or $AGENT_COLLAB_HOME/config.toml)
 built-in defaults
 ```
 
-Project config should win over user config. CLI flags should win over both.
+Project config wins over user config and comes from the session `workdir`, never the caller's shell directory. CLI flags win over both.
 Agent commands should be changed in `agent-collab` config, not through dedicated Claude/Codex path flags.
+
+Config files declare a top-level `schema_version` (currently `2`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
 ## Example
 
 ```toml
+schema_version = 2
+
 [agents.claude]
 type = "claude"
 command = "claude"
@@ -64,16 +69,16 @@ type = "mock"
 name = "codex"
 enabled = false
 
-[modes.claude-leads]
+[workflows.single-claude]
+sequence = ["claude"]
+
+[workflows.cross-review]
 sequence = ["claude", "codex", "claude"]
 
-[modes.codex-leads]
-sequence = ["codex", "claude", "codex"]
+[workflows.compare]
+sequence = ["claude", "codex"]
 
-[modes.debate]
-sequence = ["claude", "codex", "claude", "codex"]
-
-[modes.readonly-review]
+[workflows.readonly-review]
 sequence = ["codex_readonly", "claude", "codex_readonly"]
 ```
 
@@ -126,7 +131,7 @@ The request shape keeps Codex and Claude options separate because their CLIs exp
 }
 ```
 
-Config can advertise accepted values and defaults, and the MCP layer exposes the effective schema through `agent_collab_describe_options`. Defaults are applied when callers omit an option. Unknown keys, wrong types, unsupported values, and options that do not apply to the selected mode are rejected with actionable field-path errors.
+Config can advertise accepted values and defaults, and the MCP layer exposes the effective schema through `agent_collab_describe_options`. Defaults are applied when callers omit an option. Unknown keys, wrong types, unsupported values, and options that do not apply to the selected workflow are rejected with actionable field-path errors. The start response echoes the effective settings, including a prompt-free `command_preview` per agent.
 
 Example option rules:
 
@@ -210,16 +215,16 @@ Generic command that emits JSONL events. This is a future extension point for ot
 
 The first version can preserve raw events and print compact verbose output for unknown shapes.
 
-## Mode fields
+## Workflow fields
 
-Modes should reference agent IDs:
+A workflow names an orchestration pattern: the ordered agent sequence a session runs. Workflows reference agent IDs:
 
 ```toml
-[modes.my-mode]
+[workflows.my-workflow]
 sequence = ["agent_a", "agent_b", "agent_a"]
 ```
 
-This removes hardcoded mode logic from the referee. Built-in modes can still exist when no config file is present.
+This removes hardcoded orchestration logic from the referee. Built-in workflows (`single-claude`, `single-codex`, `cross-review`, `compare`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
 
 ## CLI commands
 
@@ -236,7 +241,7 @@ agent-collab agents doctor
 - Agent is enabled.
 - Command exists on `PATH` or at the configured absolute path.
 - Required output parser exists for `type`.
-- Mode references only known enabled agents.
+- Workflow references only known enabled agents.
 
 ## Implementation notes
 
@@ -260,7 +265,7 @@ Given the project goal is Python 3.11+, the clean long-term design is TOML with 
 ## Acceptance criteria
 
 - Users can define multiple agents of the same type.
-- Modes can reference configured agent IDs.
+- Workflows can reference configured agent IDs.
 - Missing config falls back to built-in `claude` and `codex` defaults.
 - Mock mode remains easy for tests.
 - Existing CLI flags still work as overrides.

@@ -9,25 +9,29 @@ The prototype runs bounded turn-based sessions, streams visible agent/tool event
 Implemented:
 
 - One-shot CLI runner.
-- Mock and dry-run modes.
-- Configurable agent commands and collaboration modes.
+- Mock and dry-run runners.
+- Configurable agent commands and collaboration workflows.
+- One global local daemon with runtime state under `~/.agent-collab/data/` (override with `AGENT_COLLAB_HOME`).
+- Per-session `workdir` that selects the project config and the subprocess cwd, so one daemon serves sessions across projects.
+- Persistent session index; `list`/`status` survive daemon restarts, and sessions that were running when the daemon died are marked `interrupted`.
 - Foreground local session server at `127.0.0.1:8765`.
-- Project-local background daemon lifecycle commands.
-- CLI client commands: `serve`, `daemon`, `start`, `list`, `status`, `events`, `watch`, `stop`.
+- CLI client commands: `serve`, `daemon`, `start`, `list`, `status`, `events`, `watch`, `stop`, `config show`.
 - MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.
 - Stdio MCP adapter that connects to the local server.
 - Cursor-based event reads and long-polling.
 - Typed `codex_options` and `claude_options` with pre-launch validation.
-- MCP option discovery through `agent_collab_describe_options`.
-- JSONL and Markdown logs under `WORKDIR/.agent-collab/sessions/`.
-- Daemon runtime data and daemon-owned session logs under `WORKDIR/.agent-collab/data/`.
+- MCP option discovery through `agent_collab_describe_options` and usage guidance through `agent_collab_guidance`.
+- Start/status/list responses include the effective session settings: workflow sequence, per-agent typed options, and a prompt-free `command_preview`.
+- Centralized config schema migrations (`schema_version`, currently 2).
+- JSONL and Markdown session logs under `~/.agent-collab/data/sessions/`.
 
 Current transition:
 
 - `agent-collab serve` is the long-running foreground process that owns sessions.
-- `agent-collab daemon start` runs the same server model in the background.
+- `agent-collab daemon start` runs the same server model in the background as the global daemon.
 - MCP clients can connect directly to `agent-collab serve` over Streamable HTTP.
 - The stdio MCP adapter remains available for clients that launch MCP servers as subprocesses.
+- Project-local `.agent-collab/data/` and `.agent-collab/sessions/` directories are legacy; `watch --workdir` still falls back to them for old logs.
 - TUI watch remains planned as an additive mode.
 
 ## Install Locally
@@ -61,7 +65,7 @@ Run the foreground server:
 python3 -m agent_collab.cli serve
 ```
 
-Or start a project-local background daemon:
+Or start the global background daemon:
 
 ```bash
 ./agent_collab.sh daemon start
@@ -85,7 +89,7 @@ One-shot mode:
 
 ```bash
 agent-collab --mock "Review this repository and suggest the smallest next improvement"
-agent-collab --mode codex-leads --workdir /path/to/project "Implement the task"
+agent-collab --workflow compare --workdir /path/to/project "Implement the task"
 agent-collab --dry-run --workdir /path/to/project "Task"
 ```
 
@@ -99,21 +103,24 @@ Foreground server and client mode:
 ./agent_collab.sh daemon stop
 ./agent_collab.sh smoke
 agent-collab serve
-agent-collab daemon start --workdir /path/to/project
-agent-collab daemon status --workdir /path/to/project
-agent-collab daemon logs --workdir /path/to/project --tail 100
-agent-collab daemon stop --workdir /path/to/project
+agent-collab daemon start
+agent-collab daemon status
+agent-collab daemon logs --tail 100
+agent-collab daemon stop
 agent-collab start --mock --watch --workdir /path/to/project "Task"
 agent-collab list
 agent-collab status SESSION_ID
 agent-collab events SESSION_ID --cursor 0
 agent-collab watch SESSION_ID
 agent-collab stop SESSION_ID
+agent-collab config show --workdir /path/to/project
 ```
+
+The daemon is global: one daemon serves sessions for any number of projects, and each session's `--workdir` decides which project config applies and where agent subprocesses run. `daemon start --workdir DIR` only sets the default workdir for sessions that do not pass one; it never changes where daemon state lives.
 
 Useful options:
 
-- `--mode claude-leads | codex-leads | debate`
+- `--workflow single-claude | single-codex | cross-review | compare` (default `cross-review`)
 - `--max-turns 3`
 - `--timeout 900`
 - `--workdir /path/to/project`
@@ -122,29 +129,37 @@ Useful options:
 - `--codex-options '{"thinking_level":"medium"}'`
 - `--claude-options '{"model":"opus","thinking_level":"high"}'`
 
-`agent-collab watch` without a session id watches the latest server-owned session. `agent-collab watch --workdir /path/to/project` resolves JSONL logs from `.agent-collab/data/sessions/` first, then falls back to the legacy `.agent-collab/sessions/` directory.
+`agent-collab start` and `agent-collab status` print the effective session settings: the workflow sequence, each agent's model/thinking settings, and a prompt-free `command_preview` of the exact subprocess command. `agent-collab list` shows sessions across all projects with their workflow and agents.
 
-## Logs
+`agent-collab watch` without a session id watches the latest server-owned session. `agent-collab watch --workdir /path/to/project` resolves JSONL logs from the global `~/.agent-collab/data/sessions/` first, then falls back to the legacy project-local `.agent-collab/data/sessions/` and `.agent-collab/sessions/` directories.
 
-One-shot and foreground server logs default to:
+## Runtime layout
 
-```text
-WORKDIR/.agent-collab/sessions/
-```
-
-Daemon runtime data defaults to:
+All runtime state is global and user-owned (override the root with `AGENT_COLLAB_HOME`):
 
 ```text
-WORKDIR/.agent-collab/data/
-  daemon/
-    pid
-    state.json
-    daemon.log
-    daemon.stderr.log
-  sessions/
-    SESSION.jsonl
-    SESSION.md
+~/.agent-collab/
+  config.toml            user config
+  data/
+    daemon/
+      pid
+      state.json
+      daemon.log
+      daemon.stderr.log
+    sessions/
+      SESSION.jsonl
+      SESSION.md
+    tmp/
+    session-index.json   persistent session index
 ```
+
+Project directories only carry config, which can be tracked in git as shared project policy:
+
+```text
+PROJECT/.agent-collab/config.toml
+```
+
+Nothing is written under project `.agent-collab/` by default. If you have a stale project-local daemon from an older checkout (`PROJECT/.agent-collab/data/daemon/pid`), stop it manually once; the global daemon commands do not manage it.
 
 Each session writes:
 
@@ -155,15 +170,16 @@ The JSONL file preserves normalized events and raw agent payloads. The Markdown 
 
 ## Agent Configuration
 
-Agent commands are configured through:
+Agent commands are configured through (highest precedence first):
 
 ```text
-WORKDIR/.agent-collab/config.toml
-~/.agent-collab/config.toml
+explicit session/start options
+SESSION_WORKDIR/.agent-collab/config.toml
+~/.agent-collab/config.toml        (or $AGENT_COLLAB_HOME/config.toml)
 built-in defaults
 ```
 
-Project config wins over user config. See [doc/agent-configuration.md](doc/agent-configuration.md).
+Project config comes from the session `workdir`, never from the caller's shell directory. Config files carry a `schema_version` (currently 2); known old shapes are migrated in memory at load time by a centralized migration layer, and unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir /path/to/project`. See [doc/agent-configuration.md](doc/agent-configuration.md).
 
 Built-in defaults are:
 
@@ -239,6 +255,7 @@ enabled = true
 
 Exposed tools:
 
+- `agent_collab_guidance`
 - `agent_collab_describe_options`
 - `agent_collab_start`
 - `agent_collab_list_sessions`
@@ -248,7 +265,7 @@ Exposed tools:
 - `agent_collab_read_transcript`
 - `agent_collab_stop`
 
-Agents should call `agent_collab_describe_options` before passing non-default model, reasoning, sandbox, or permission settings. Prefer `thinking_level` over provider-specific raw fields: Codex accepts `minimal`, `low`, `medium`, `high`, or `xhigh`; Claude accepts `low`, `medium`, `high`, `xhigh`, or `max`. `agent_collab_start` rejects unknown keys, wrong types, unsupported values, and options that do not apply to the selected mode before any subprocess is launched.
+Agents can call `agent_collab_guidance` for full Markdown usage guidance (source: [doc/mcp-guidance.md](doc/mcp-guidance.md)), and should call `agent_collab_describe_options` before passing non-default model, reasoning, sandbox, or permission settings. Prefer `thinking_level` over provider-specific raw fields: Codex accepts `minimal`, `low`, `medium`, `high`, or `xhigh`; Claude accepts `low`, `medium`, `high`, `xhigh`, or `max`. `agent_collab_start` rejects unknown keys, wrong types, unsupported values, and options that do not apply to the selected workflow before any subprocess is launched, and its response confirms the effective settings including prompt-free command previews.
 
 ## Development
 
@@ -268,9 +285,11 @@ Important implementation files:
 - `agent_collab/events.py`: normalized event model and stream parsers.
 - `agent_collab/client.py`: HTTP client used by CLI watch/start/list/status.
 - `agent_collab/daemon_supervisor.py`: background daemon PID/state/log lifecycle.
-- `agent_collab/options.py`: typed start option schemas, validation, and explicit CLI flag mapping.
-- `agent_collab/paths.py`: project data and session log path helpers.
+- `agent_collab/options.py`: typed start option schemas, validation, session settings metadata, and explicit CLI flag mapping.
+- `agent_collab/paths.py`: global home (`AGENT_COLLAB_HOME`) and session log path helpers.
+- `agent_collab/config_migrations.py`: centralized config schema migrations.
+- `agent_collab/session_index.py`: persistent session index for daemon restarts.
 - `agent_collab/mcp_server.py`: current stdio MCP adapter.
-- `agent_collab/mcp_tools.py`: shared MCP tool schemas and dispatch.
+- `agent_collab/mcp_tools.py`: shared MCP tool schemas, guidance tool, and dispatch.
 
 For agent handoff notes, read [AGENTS.md](AGENTS.md).
