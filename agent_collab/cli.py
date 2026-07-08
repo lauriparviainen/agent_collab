@@ -305,6 +305,41 @@ def _main_daemon(argv) -> int:
     return 1
 
 
+def _main_config(argv) -> int:
+    from .config import load_config
+    from .config_migrations import CURRENT_CONFIG_SCHEMA
+    from .paths import AgentCollabHome
+
+    parser = argparse.ArgumentParser(prog="agent-collab config", description="Inspect effective configuration.")
+    subparsers = parser.add_subparsers(dest="action", required=True)
+    show = subparsers.add_parser("show", help="Print the effective merged config for a workdir.")
+    show.add_argument("--workdir", type=Path, default=Path("."), help="Project root whose config to resolve.")
+    args = parser.parse_args(argv)
+
+    try:
+        workdir = args.workdir.expanduser().resolve()
+        home = AgentCollabHome.resolve()
+        config = load_config(workdir, home=home)
+        print(f"schema_version: {CURRENT_CONFIG_SCHEMA}")
+        print(f"workdir: {workdir}")
+        print(f"user_config: {home.config_path}{'' if home.config_path.exists() else ' (missing)'}")
+        loaded = [str(path) for path in config.loaded_paths]
+        print(f"loaded_paths: {', '.join(loaded) if loaded else '(built-in defaults only)'}")
+        for agent_id, agent in sorted(config.agents.items()):
+            command = " ".join([agent.command or ""] + list(agent.args)).strip()
+            enabled = "" if agent.enabled else " (disabled)"
+            print(f"agent {agent_id}: type={agent.type} command={command!r}{enabled}")
+            for option, schema in sorted(agent.options.items()):
+                details = " ".join(f"{key}={value}" for key, value in sorted(schema.items()))
+                print(f"  option {option}: {details}")
+        for workflow_id, workflow in sorted(config.workflows.items()):
+            print(f"workflow {workflow_id}: {' -> '.join(workflow.sequence)}")
+    except Exception as exc:
+        print(f"ERROR   {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _main_list(argv) -> int:
     parser = build_client_parser("agent-collab list", "List daemon sessions.")
     args = parser.parse_args(argv)
@@ -424,6 +459,7 @@ def main(argv=None) -> int:
         "status": _main_status,
         "events": _main_events,
         "stop": _main_stop,
+        "config": _main_config,
     }
     if argv and argv[0] in subcommands:
         return subcommands[argv[0]](argv[1:])

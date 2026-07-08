@@ -1,8 +1,12 @@
+import contextlib
+import io
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from agent_collab import cli
 from agent_collab.config import ConfigError, _parse_toml_subset, load_config
 
 
@@ -130,6 +134,30 @@ command = "project-b-codex"
                 config.loaded_paths,
                 [project_b.resolve() / ".agent-collab" / "config.toml"],
             )
+
+    def test_cli_config_show_prints_effective_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_config(
+                root,
+                """
+[workflows.custom]
+sequence = ["claude"]
+""",
+            )
+
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, _env(home)):
+                with contextlib.redirect_stdout(output):
+                    code = cli.main(["config", "show", "--workdir", str(root)])
+
+            text = output.getvalue()
+            self.assertEqual(code, 0)
+            self.assertIn("workflow custom: claude", text)
+            self.assertIn("workflow cross-review: claude -> codex -> claude", text)
+            self.assertIn(str(root.resolve() / ".agent-collab" / "config.toml"), text)
 
     def test_legacy_modes_section_is_rejected_with_hint(self):
         with tempfile.TemporaryDirectory() as tmp:
