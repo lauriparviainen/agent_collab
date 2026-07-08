@@ -58,7 +58,24 @@ def parse_json_line(line: str) -> Optional[Any]:
 
 
 TEXT_KEYS = ("text", "content", "message", "summary", "output")
-SKIP_TEXT_KEYS = {"id", "role", "session_id", "status", "subtype", "thread_id", "type", "uuid"}
+SKIP_TEXT_KEYS = {
+    "id",
+    "model",
+    "parent_tool_use_id",
+    "request_id",
+    "role",
+    "service_tier",
+    "session_id",
+    "signature",
+    "status",
+    "stop_reason",
+    "stop_sequence",
+    "subtype",
+    "thread_id",
+    "type",
+    "usage",
+    "uuid",
+}
 
 
 def _walk_strings(value: Any) -> Iterable[str]:
@@ -116,6 +133,93 @@ def _looks_like_file_change(raw: Dict[str, Any]) -> bool:
     return any(token in haystack.lower() for token in ("patch", "edit", "file_change", "diff"))
 
 
+# Claude Code stream-json events wrap an API message under "message". Only
+# "text" content blocks carry transcript prose; thinking blocks hold opaque
+# provider metadata (verification signatures) that must never be displayed.
+_CLAUDE_THINKING_BLOCK_TYPES = {"thinking", "redacted_thinking"}
+
+
+def _claude_content_blocks(raw: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+    message = raw.get("message")
+    payload = message if isinstance(message, dict) else raw
+    content = payload.get("content")
+    if isinstance(content, str):
+        yield {"type": "text", "text": content}
+    elif isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict):
+                yield block
+
+
+def _claude_visible_text(blocks: Iterable[Dict[str, Any]]) -> str:
+    parts = []
+    for block in blocks:
+        if block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return "\n".join(parts)
+
+
+def _claude_thinking_text(blocks: Iterable[Dict[str, Any]]) -> str:
+    parts = []
+    for block in blocks:
+        if block.get("type") in _CLAUDE_THINKING_BLOCK_TYPES:
+            text = block.get("thinking")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return "\n".join(parts)
+
+
+def _classify_claude_tool_block(block: Dict[str, Any]) -> str:
+    name = str(block.get("name") or "").lower()
+    if any(token in name for token in ("edit", "write", "patch")):
+        return "file_change"
+    if any(token in name for token in ("bash", "command", "exec", "shell")):
+        return "command"
+    return "tool_call"
+
+
+def _claude_tool_text(block: Dict[str, Any]) -> str:
+    name = block.get("name")
+    if isinstance(name, str) and name:
+        input_value = block.get("input")
+        if input_value:
+            return f"{name} {compact_json(input_value)}"
+        return name
+    return _first_text(block.get("content")) or compact_json(block)
+
+
+def _parse_claude_message(raw: Dict[str, Any], verbose: bool) -> Optional[Event]:
+    blocks = list(_claude_content_blocks(raw))
+    tool_blocks = [
+        block for block in blocks if isinstance(block.get("type"), str) and "tool" in block["type"]
+    ]
+    text = _claude_visible_text(blocks)
+    if tool_blocks:
+        kinds = {_classify_claude_tool_block(block) for block in tool_blocks}
+        if "file_change" in kinds:
+            event_type = "file_change"
+        elif "command" in kinds:
+            event_type = "command"
+        else:
+            event_type = "tool_call"
+        tool_text = text or "\n".join(
+            _claude_tool_text(block) for block in tool_blocks
+        )
+        return Event.create("tool", event_type, tool_text, raw)
+    if text:
+        return Event.create("claude", "message", text, raw)
+    if verbose:
+        thinking = _claude_thinking_text(blocks)
+        if thinking:
+            return Event.create("claude", "status", thinking, raw)
+        if any(block.get("type") in _CLAUDE_THINKING_BLOCK_TYPES for block in blocks):
+            return Event.create("claude", "status", "thinking", raw)
+        return Event.create("claude", "status", str(raw.get("type") or "message"), raw)
+    return None
+
+
 def parse_claude_line(line: str, verbose: bool = False) -> Optional[Event]:
     raw = parse_json_line(line)
     if raw is None:
@@ -129,6 +233,8 @@ def parse_claude_line(line: str, verbose: bool = False) -> Optional[Event]:
     if raw.get("type") in {"system", "rate_limit_event", "result"}:
         text = str(raw.get("subtype") or raw.get("status") or raw.get("type"))
         return Event.create("claude", "status", text, raw) if verbose else None
+    if raw.get("type") in {"assistant", "user"} or isinstance(raw.get("message"), dict):
+        return _parse_claude_message(raw, verbose)
     if _looks_like_file_change(raw):
         return Event.create("tool", "file_change", _first_text(raw) or compact_json(raw), raw)
     if _looks_like_command(raw):

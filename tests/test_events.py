@@ -11,6 +11,48 @@ class EventParsingTests(unittest.TestCase):
         self.assertEqual(event.type, "message")
         self.assertEqual(event.text, "hello")
 
+    def test_claude_thinking_signature_only_hidden_without_verbose(self):
+        event = parse_claude_line(
+            '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"EustCokBCA8opaque"}]}}'
+        )
+        self.assertIsNone(event)
+
+    def test_claude_thinking_signature_not_exposed_with_verbose(self):
+        event = parse_claude_line(
+            '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"EustCokBCA8opaque"}]}}',
+            verbose=True,
+        )
+        self.assertIsNotNone(event)
+        self.assertEqual(event.type, "status")
+        self.assertNotIn("EustCokBCA8opaque", event.text)
+
+    def test_claude_text_alongside_thinking_signature(self):
+        event = parse_claude_line(
+            '{"type":"assistant","message":{"content":['
+            '{"type":"thinking","thinking":"pondering","signature":"EustCokBCA8opaque"},'
+            '{"type":"text","text":"final answer"}]}}'
+        )
+        self.assertIsNotNone(event)
+        self.assertEqual(event.type, "message")
+        self.assertEqual(event.text, "final answer")
+
+    def test_claude_tool_use_classifies_as_tool_call(self):
+        event = parse_claude_line(
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"a.py"}}]}}'
+        )
+        self.assertIsNotNone(event)
+        self.assertEqual(event.source, "tool")
+        self.assertEqual(event.type, "tool_call")
+        self.assertIn("Read", event.text)
+
+    def test_claude_bash_tool_use_classifies_as_command(self):
+        event = parse_claude_line(
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"ls"}}]}}'
+        )
+        self.assertIsNotNone(event)
+        self.assertEqual(event.source, "tool")
+        self.assertEqual(event.type, "command")
+
     def test_claude_system_event_hidden_without_verbose(self):
         event = parse_claude_line('{"type":"system","subtype":"init","model":"claude-sonnet-4-6"}')
         self.assertIsNone(event)
