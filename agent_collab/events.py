@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, Iterable, Optional
 
 
-VALID_SOURCES = {"human", "referee", "claude", "codex", "tool", "error"}
+VALID_SOURCES = {"human", "referee", "claude", "codex", "antigravity", "tool", "error"}
 VALID_TYPES = {"message", "tool_call", "command", "file_change", "status", "error"}
 
 

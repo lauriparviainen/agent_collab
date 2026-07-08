@@ -27,9 +27,17 @@ CLAUDE_OPTION_FIELDS = {
     "thinking_budget_tokens": {"type": "integer", "min": 0},
 }
 
+# `agy --mode` accepts these; `default` is the interactive request-review posture.
+ANTIGRAVITY_MODES = ["default", "accept-edits", "plan"]
+ANTIGRAVITY_OPTION_FIELDS = {
+    "model": {"type": "string"},
+    "mode": {"type": "string", "allowed": ANTIGRAVITY_MODES},
+}
+
 OPTION_FIELDS = {
     "codex": CODEX_OPTION_FIELDS,
     "claude": CLAUDE_OPTION_FIELDS,
+    "antigravity": ANTIGRAVITY_OPTION_FIELDS,
 }
 
 class StartOptionsError(ValueError):
@@ -57,12 +65,14 @@ def validate_start_options(
     workflow_id: str,
     codex_options: Any = None,
     claude_options: Any = None,
+    antigravity_options: Any = None,
 ) -> Dict[str, Dict[str, Any]]:
     errors: List[Dict[str, str]] = []
     normalized: Dict[str, Dict[str, Any]] = {}
     option_payloads = {
         "codex": _expect_mapping(codex_options, "codex_options", errors),
         "claude": _expect_mapping(claude_options, "claude_options", errors),
+        "antigravity": _expect_mapping(antigravity_options, "antigravity_options", errors),
     }
     if errors:
         raise StartOptionsError(errors)
@@ -103,6 +113,160 @@ def validate_start_options(
     if errors:
         raise StartOptionsError(errors)
     return {f"{agent_type}_options": dict(normalized.get(agent_type, {})) for agent_type in option_payloads}
+
+
+def validate_start_backends(
+    config: CollaborationConfig,
+    workflow_id: str,
+    request_backend: Optional[str] = None,
+    antigravity_options: Optional[Mapping[str, Any]] = None,
+    *,
+    health: Any = None,
+) -> "BackendSelection":
+    """Resolve and validate the effective backend for each workflow agent.
+
+    Resolution is *most specific wins* (request > agent config > default ``cli``)
+    and is computed exactly once here so execution uses the same selection the
+    start response advertises. A session-level ``request_backend`` applies
+    uniformly to every non-``mock`` selected agent; if any such agent's type does
+    not register it, the whole start is rejected before any session state exists.
+    ``mock`` agents ignore backend selection and are excluded from the map.
+
+    ``health`` (a ``callable(agent_type, backend_id) -> BackendHealth``) enables
+    fresh availability gating; it is wired in a later step and defaults to off.
+    """
+
+    from . import backends as backend_registry
+
+    errors: List[Dict[str, str]] = []
+    warnings: List[Dict[str, str]] = []
+    resolved: Dict[str, str] = {}
+    validate_workflow(config, workflow_id)
+    workflow = config.workflows[workflow_id]
+
+    for agent_id in workflow.sequence:
+        if agent_id in resolved:
+            continue
+        agent = config.agents[agent_id]
+        if agent.type == "mock":
+            continue
+        backend_id = backend_registry.resolve_backend_id(agent, request_backend)
+        if not backend_registry.is_registered(agent.type, backend_id):
+            available = backend_registry.registered_backends(agent.type)
+            errors.append(
+                {
+                    "path": "backend",
+                    "message": (
+                        f"backend {backend_id!r} is not available for agent {agent_id!r} "
+                        f"(type {agent.type!r}); available: {', '.join(available) or '(none)'}"
+                    ),
+                }
+            )
+            continue
+        resolved[agent_id] = backend_id
+    if errors:
+        raise StartOptionsError(errors)
+
+    _reject_unsupported_antigravity_mode(config, resolved, antigravity_options, errors)
+    if errors:
+        raise StartOptionsError(errors)
+
+    if health is not None:
+        _gate_backend_health(config, resolved, health, errors, warnings)
+        if errors:
+            raise StartOptionsError(errors)
+
+    return BackendSelection(agent_backends=resolved, warnings=warnings)
+
+
+class BackendSelection:
+    """Resolved per-agent backend map plus any non-fatal start warnings."""
+
+    def __init__(self, agent_backends: Dict[str, str], warnings: Optional[List[Dict[str, str]]] = None):
+        self.agent_backends = dict(agent_backends)
+        self.warnings = list(warnings or [])
+
+
+def _reject_unsupported_antigravity_mode(
+    config: CollaborationConfig,
+    resolved: Mapping[str, str],
+    antigravity_options: Optional[Mapping[str, Any]],
+    errors: List[Dict[str, str]],
+) -> None:
+    # `mode` maps to `agy --mode` on the cli backend; the sdk backend has no
+    # confirmed LocalAgentConfig equivalent yet, so reject rather than drop it.
+    if not antigravity_options or "mode" not in antigravity_options:
+        return
+    for agent_id, backend_id in resolved.items():
+        if config.agents[agent_id].type == "antigravity" and backend_id == "sdk":
+            errors.append(
+                {
+                    "path": "antigravity_options.mode",
+                    "message": "is not supported on the 'sdk' backend",
+                }
+            )
+            return
+
+
+def _gate_backend_health(
+    config: CollaborationConfig,
+    resolved: Mapping[str, str],
+    health: Any,
+    errors: List[Dict[str, str]],
+    warnings: List[Dict[str, str]],
+) -> None:
+    from . import backends as backend_registry
+    from .backends.base import (
+        CREDENTIALS_MISSING,
+        CREDENTIALS_UNKNOWN,
+        HEALTH_UNAVAILABLE,
+    )
+
+    checked: Dict[tuple, Any] = {}
+    for agent_id, backend_id in resolved.items():
+        agent_type = config.agents[agent_id].type
+        backend = backend_registry.get_backend(agent_type, backend_id)
+        block = getattr(backend, "block_on_unavailable", False)
+        checks_credentials = getattr(backend, "checks_credentials", False)
+        # Default providers (claude/codex on cli) keep their legacy per-turn-error
+        # contract: nothing to gate or warn about, so never probe them on start.
+        if not block and not checks_credentials:
+            continue
+        key = (agent_type, backend_id)
+        status = checked.get(key)
+        if status is None:
+            status = health(agent_type, backend_id)
+            checked[key] = status
+        if status.status == HEALTH_UNAVAILABLE:
+            if block:
+                errors.append({"path": "backend", "message": _health_reject_message(agent_id, backend_id, status)})
+            continue
+        if status.credentials == CREDENTIALS_MISSING and block:
+            errors.append(
+                {
+                    "path": "backend",
+                    "message": (
+                        f"backend {backend_id!r} for agent {agent_id!r} has missing credentials"
+                        + (f": {status.reason}" if status.reason else "")
+                        + "; run the provider CLI and sign in"
+                    ),
+                }
+            )
+        elif status.credentials == CREDENTIALS_UNKNOWN and checks_credentials:
+            warnings.append(
+                {
+                    "path": "backend",
+                    "message": (
+                        f"backend {backend_id!r} for agent {agent_id!r} could not verify credentials; "
+                        "the first turn's real error remains the authority"
+                    ),
+                }
+            )
+
+
+def _health_reject_message(agent_id: str, backend_id: str, status: Any) -> str:
+    detail = f": {status.reason}" if getattr(status, "reason", None) else ""
+    return f"backend {backend_id!r} for agent {agent_id!r} is unavailable{detail}"
 
 
 def describe_options(config: CollaborationConfig, workdir: Optional[Path] = None) -> Dict[str, Any]:

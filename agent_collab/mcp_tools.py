@@ -34,6 +34,8 @@ TOOLS = [
                 "interactive_idle_timeout": {"type": "number"},
                 "codex_options": {"type": "object", "additionalProperties": True},
                 "claude_options": {"type": "object", "additionalProperties": True},
+                "antigravity_options": {"type": "object", "additionalProperties": True},
+                "backend": {"type": "string"},
             },
             "required": ["task"],
         },
@@ -173,6 +175,8 @@ class SessionManagerToolBackend:
                 interactive_idle_timeout=_float_arg(payload, "interactive_idle_timeout", 600.0),
                 codex_options=_optional_payload(payload, "codex_options"),
                 claude_options=_optional_payload(payload, "claude_options"),
+                antigravity_options=_optional_payload(payload, "antigravity_options"),
+                backend=str(payload["backend"]) if payload.get("backend") is not None else None,
             )
         )
         return state.to_dict()
@@ -452,11 +456,15 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
             "interactive_idle_timeout",
             "codex_options",
             "claude_options",
+            "antigravity_options",
+            "backend",
         )
         if key in args
     }
     if not isinstance(payload.get("task"), str) or not payload["task"]:
         raise ValueError("task is required")
+    if "backend" in payload and not isinstance(payload["backend"], str):
+        raise ValueError("backend must be a string")
     return payload
 
 

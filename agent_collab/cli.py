@@ -67,8 +67,14 @@ def build_start_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--backend",
+        help="Execution backend for every selected agent (e.g. 'cli', 'sdk'). "
+        "Overrides per-agent config; valid only when every selected agent's type registers it.",
+    )
     parser.add_argument("--codex-options", help="JSON object for typed Codex start options.")
     parser.add_argument("--claude-options", help="JSON object for typed Claude start options.")
+    parser.add_argument("--antigravity-options", help="JSON object for typed Antigravity start options.")
     parser.add_argument("--watch", action="store_true", help="Start the session and immediately watch its transcript.")
     parser.add_argument("--watch-wait-ms", type=int, default=30000, help="Long-poll timeout while watching.")
     parser.add_argument("--no-color", action="store_true")
@@ -250,19 +256,22 @@ def _main_start(argv) -> int:
     try:
         codex_options = _json_object_arg(args.codex_options, "--codex-options")
         claude_options = _json_object_arg(args.claude_options, "--claude-options")
-        result = _client(args.server_url).start_session(
-            {
-                "task": args.task,
-                "workflow": args.workflow,
-                "workdir": str(args.workdir.expanduser().resolve()),
-                "max_turns": args.max_turns,
-                "timeout": args.timeout,
-                "mock": args.mock,
-                "dry_run": args.dry_run,
-                "codex_options": codex_options,
-                "claude_options": claude_options,
-            }
-        )
+        antigravity_options = _json_object_arg(args.antigravity_options, "--antigravity-options")
+        payload = {
+            "task": args.task,
+            "workflow": args.workflow,
+            "workdir": str(args.workdir.expanduser().resolve()),
+            "max_turns": args.max_turns,
+            "timeout": args.timeout,
+            "mock": args.mock,
+            "dry_run": args.dry_run,
+            "codex_options": codex_options,
+            "claude_options": claude_options,
+            "antigravity_options": antigravity_options,
+        }
+        if args.backend:
+            payload["backend"] = args.backend
+        result = _client(args.server_url).start_session(payload)
         _print_session(result)
         if args.watch:
             print("")

@@ -142,6 +142,8 @@ class AgentCollabHttpServer:
                     interactive_idle_timeout=float(data.get("interactive_idle_timeout", 600.0)),
                     codex_options=_optional_payload(data, "codex_options"),
                     claude_options=_optional_payload(data, "claude_options"),
+                    antigravity_options=_optional_payload(data, "antigravity_options"),
+                    backend=str(data["backend"]) if data.get("backend") is not None else None,
                 )
             )
             return state.to_dict()

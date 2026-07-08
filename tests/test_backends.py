@@ -1,9 +1,16 @@
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from agent_collab import backends
 from agent_collab.backends.base import BackendCapabilities
-from agent_collab.config import AgentConfig
+from agent_collab.config import AgentConfig, builtin_config
+from agent_collab.options import StartOptionsError, validate_start_backends, validate_start_options
+from agent_collab.referee import Referee, RefereeConfig
+from agent_collab.runners import AgentRunner, SubprocessRunner
 
 
 class RegistryResolutionTests(unittest.TestCase):
@@ -85,6 +92,87 @@ class CapabilityReducerTests(unittest.TestCase):
         for agent_type in ("claude", "codex"):
             caps = backends.capabilities_for(agent_type, "cli")
             self.assertEqual(caps.to_dict(), {"resume": False, "interrupt": False, "tool_gate": False})
+
+
+class _SentinelRunner(AgentRunner):
+    name = "sentinel"
+
+
+class _FakeBackend:
+    def __init__(self, agent_type, backend_id):
+        self.agent_type = agent_type
+        self.id = backend_id
+        self.capabilities = BackendCapabilities()
+
+    def probe(self):  # pragma: no cover - not exercised here
+        from agent_collab.backends.base import BackendHealth
+
+        return BackendHealth()
+
+    def create_runner(self, agent, verbose, options):
+        return _SentinelRunner()
+
+
+class StartBackendValidationTests(unittest.TestCase):
+    def test_request_backend_unavailable_for_type_is_rejected(self):
+        config = builtin_config()
+        with self.assertRaises(StartOptionsError) as ctx:
+            validate_start_backends(config, "single-claude", request_backend="sdk")
+        detail = ctx.exception.to_dict()["details"][0]
+        self.assertEqual(detail["path"], "backend")
+        self.assertIn("claude", detail["message"])
+        self.assertIn("cli", detail["message"])  # available backends listed
+
+    def test_valid_request_backend_resolves_map_for_workflow_agents(self):
+        config = builtin_config()
+        backends.register(_FakeBackend("claude", "special"))
+        try:
+            selection = validate_start_backends(config, "single-claude", request_backend="special")
+        finally:
+            backends.unregister("claude", "special")
+        self.assertEqual(selection.agent_backends, {"claude": "special"})
+
+    def test_default_resolution_uses_cli(self):
+        config = builtin_config()
+        selection = validate_start_backends(config, "cross-review")
+        self.assertEqual(selection.agent_backends, {"claude": "cli", "codex": "cli"})
+
+    def test_antigravity_options_rejected_when_no_antigravity_agent(self):
+        config = builtin_config()
+        with self.assertRaises(StartOptionsError) as ctx:
+            validate_start_options(config, "cross-review", antigravity_options={"model": "gemini"})
+        detail = ctx.exception.to_dict()["details"][0]
+        self.assertEqual(detail["path"], "antigravity_options")
+        self.assertIn("does not apply", detail["message"])
+
+
+class OverrideReachesExecutionTests(unittest.TestCase):
+    def test_resolved_backend_map_selects_the_runner_not_agent_config(self):
+        # The resolved map (from a start override) must drive execution, not a
+        # re-resolution of agents.<id>.backend. Agent config says "cli"; the map
+        # says "special"; the runner must come from "special".
+        config = builtin_config()
+        self.assertEqual(config.agents["claude"].backend, None)
+        backends.register(_FakeBackend("claude", "special"))
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(Path(tmp) / "home")}):
+                    referee = Referee(
+                        RefereeConfig(
+                            workflow="cross-review",
+                            workdir=Path(tmp),
+                            collab_config=config,
+                            agent_backends={"claude": "special"},
+                            color=False,
+                        ),
+                        printer=lambda event: None,
+                    )
+                    runners = referee._runners()
+        finally:
+            backends.unregister("claude", "special")
+        self.assertIsInstance(runners["claude"], _SentinelRunner)
+        # codex was not in the map -> falls back to its cli subprocess runner.
+        self.assertIsInstance(runners["codex"], SubprocessRunner)
 
 
 if __name__ == "__main__":

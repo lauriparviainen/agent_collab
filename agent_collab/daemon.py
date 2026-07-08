@@ -11,7 +11,12 @@ import uuid
 
 from .config import DEFAULT_WORKFLOW, load_config
 from .events import Event, utc_timestamp
-from .options import build_session_settings, describe_options, validate_start_options
+from .options import (
+    build_session_settings,
+    describe_options,
+    validate_start_backends,
+    validate_start_options,
+)
 from .paths import GlobalDataPaths
 from .referee import EventAppender, Referee, RefereeConfig, RefereeInput
 from .session_index import SessionIndex
@@ -42,8 +47,13 @@ class StartSessionRequest:
     session_id: Optional[str] = None
     codex_options: Optional[Dict[str, Any]] = None
     claude_options: Optional[Dict[str, Any]] = None
+    antigravity_options: Optional[Dict[str, Any]] = None
+    backend: Optional[str] = None
     interactive: bool = False
     interactive_idle_timeout: float = 600.0
+    # Resolved {agent_id: backend_id}, computed once during start validation and
+    # carried into execution; not a user input.
+    resolved_backends: Optional[Dict[str, str]] = None
 
 
 @dataclass
@@ -168,9 +178,19 @@ class SessionManager:
             request.workflow,
             request.codex_options,
             request.claude_options,
+            request.antigravity_options,
         )
         request.codex_options = normalized_options["codex_options"]
         request.claude_options = normalized_options["claude_options"]
+        request.antigravity_options = normalized_options["antigravity_options"]
+        selection = validate_start_backends(
+            collab_config,
+            request.workflow,
+            request.backend,
+            request.antigravity_options,
+            health=None if (request.mock or request.dry_run) else self._backend_health,
+        )
+        request.resolved_backends = dict(selection.agent_backends)
         request.interactive = bool(request.interactive)
         request.interactive_idle_timeout = self._normalize_idle_timeout(request.interactive_idle_timeout)
         settings = build_session_settings(
@@ -216,6 +236,15 @@ class SessionManager:
             f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
         )
         return self._copy_state(state)
+
+    def _backend_health(self, agent_type: str, backend_id: str) -> Any:
+        # Start requests always re-probe fresh (bypass the TTL cache) so gating
+        # never acts on stale state: install the CLI / sign in, then start works
+        # with no daemon restart.
+        from . import backends as backend_registry
+
+        backend = backend_registry.get_backend(agent_type, backend_id)
+        return backend_registry.HEALTH.health(backend, fresh=True)
 
     def describe_options(self, workdir: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
         root = Path(workdir).expanduser().resolve() if workdir else self.default_workdir
@@ -324,6 +353,8 @@ class SessionManager:
             collab_config=load_config(workdir),
             codex_options=dict(request.codex_options or {}),
             claude_options=dict(request.claude_options or {}),
+            antigravity_options=dict(request.antigravity_options or {}),
+            agent_backends=dict(request.resolved_backends or {}),
             interactive=bool(request.interactive),
             interactive_idle_timeout=float(request.interactive_idle_timeout),
             input_queue=managed.input_queue,

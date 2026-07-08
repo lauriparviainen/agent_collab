@@ -46,6 +46,10 @@ class RefereeConfig:
     collab_config: Optional[CollaborationConfig] = None
     codex_options: Optional[Dict[str, Any]] = None
     claude_options: Optional[Dict[str, Any]] = None
+    antigravity_options: Optional[Dict[str, Any]] = None
+    # Resolved {agent_id: backend_id} carried from start validation so execution
+    # uses exactly the selection the start response advertised (no re-resolution).
+    agent_backends: Optional[Dict[str, str]] = None
     interactive: bool = False
     interactive_idle_timeout: float = 600.0
     input_queue: Optional[asyncio.Queue[RefereeInput]] = None
@@ -82,14 +86,29 @@ class Referee:
                     cwd=agent.cwd,
                 )
             else:
-                runners[agent_id] = configured_runner(agent, self.config.verbose, self._options_for(agent.type))
+                runners[agent_id] = configured_runner(
+                    agent,
+                    self.config.verbose,
+                    self._options_for(agent.type),
+                    self._backend_for(agent_id),
+                )
         return runners
+
+    def _backend_for(self, agent_id: str) -> Optional[str]:
+        # Use the backend resolved once at start validation; falling back to
+        # None lets configured_runner resolve from agent config for the direct
+        # CLI path that never populated the map.
+        if self.config.agent_backends:
+            return self.config.agent_backends.get(agent_id)
+        return None
 
     def _options_for(self, agent_type: str) -> Dict[str, Any]:
         if agent_type == "codex":
             return dict(self.config.codex_options or {})
         if agent_type == "claude":
             return dict(self.config.claude_options or {})
+        if agent_type == "antigravity":
+            return dict(self.config.antigravity_options or {})
         return {}
 
     def _sequence(self) -> List[str]:
