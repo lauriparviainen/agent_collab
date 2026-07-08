@@ -69,7 +69,19 @@ BUILTIN_CONFIG: Dict[str, Any] = {
 }
 
 
-SUBPROCESS_AGENT_TYPES = {"claude", "codex"}
+# Antigravity ships disabled by default: it is opt-in (requires `agy` installed
+# and a Google sign-in) and no built-in workflow references it, so default
+# behavior is unchanged. Print mode needs a non-blocking `--mode` so `-p` does
+# not stall on the interactive request-review approval prompt.
+BUILTIN_CONFIG["agents"]["antigravity"] = {
+    "type": "antigravity",
+    "command": "agy",
+    "args": ["-p", "--mode", "accept-edits"],
+    "enabled": False,
+}
+
+
+SUBPROCESS_AGENT_TYPES = {"claude", "codex", "antigravity"}
 AGENT_TYPES = SUBPROCESS_AGENT_TYPES | {"mock"}
 
 

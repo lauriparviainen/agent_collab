@@ -220,6 +220,7 @@ def _gate_backend_health(
         CREDENTIALS_MISSING,
         CREDENTIALS_UNKNOWN,
         HEALTH_UNAVAILABLE,
+        HEALTH_UNKNOWN,
     )
 
     checked: Dict[tuple, Any] = {}
@@ -240,6 +241,20 @@ def _gate_backend_health(
         if status.status == HEALTH_UNAVAILABLE:
             if block:
                 errors.append({"path": "backend", "message": _health_reject_message(agent_id, backend_id, status)})
+            continue
+        if status.status == HEALTH_UNKNOWN:
+            # Block only on certainty: an indeterminate probe warns, never blocks.
+            if block:
+                warnings.append(
+                    {
+                        "path": "backend",
+                        "message": (
+                            f"backend {backend_id!r} for agent {agent_id!r} availability is unknown"
+                            + (f": {status.reason}" if status.reason else "")
+                            + "; the first turn's real error remains the authority"
+                        ),
+                    }
+                )
             continue
         if status.credentials == CREDENTIALS_MISSING and block:
             errors.append(
@@ -461,7 +476,18 @@ def apply_agent_options(command: List[str], agent: AgentConfig, options: Mapping
         return _apply_codex_options(command, effective_options)
     if agent.type == "claude":
         return _apply_claude_options(command, effective_options)
+    if agent.type == "antigravity":
+        return _apply_antigravity_options(command, effective_options)
     return list(command)
+
+
+def _apply_antigravity_options(command: List[str], options: Mapping[str, Any]) -> List[str]:
+    result = list(command)
+    if "model" in options:
+        result = _set_flag_value(result, "--model", str(options["model"]))
+    if "mode" in options:
+        result = _set_flag_value(result, "--mode", str(options["mode"]))
+    return result
 
 
 def _apply_codex_options(command: List[str], options: Mapping[str, Any]) -> List[str]:
@@ -716,6 +742,8 @@ def _infer_default(agent: AgentConfig, field: str) -> Optional[Any]:
         return _config_value(args, "model_reasoning_effort") or _flag_value(args, "--reasoning-effort")
     if field == "permission_mode":
         return _flag_value(args, "--permission-mode")
+    if field == "mode":
+        return _flag_value(args, "--mode")
     if field == "thinking_budget_tokens":
         value = _flag_value(args, "--thinking-budget-tokens")
         return int(value) if value is not None and value.isdigit() else value

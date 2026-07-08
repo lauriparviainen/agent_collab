@@ -216,6 +216,14 @@ class StartHealthGatingTests(unittest.TestCase):
         self.assertTrue(selection.warnings)
         self.assertIn("credentials", selection.warnings[0]["message"])
 
+    def test_unknown_status_warns_but_does_not_block(self):
+        config = _antigravity_config()
+        health = lambda at, bid: BackendHealth(status="unknown", reason="probe indeterminate")
+        selection = validate_start_backends(config, "solo", health=health)
+        self.assertEqual(selection.agent_backends, {"ag": "cli"})
+        self.assertTrue(selection.warnings)
+        self.assertIn("availability is unknown", selection.warnings[0]["message"])
+
     def test_available_backend_with_ok_credentials_is_clean(self):
         config = _antigravity_config()
         health = lambda at, bid: BackendHealth(status=HEALTH_OK, credentials=CREDENTIALS_OK)

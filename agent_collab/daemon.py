@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 import uuid
 
-from .config import DEFAULT_WORKFLOW, load_config
+from .config import DEFAULT_WORKFLOW, CollaborationConfig, load_config
 from .events import Event, utc_timestamp
 from .options import (
     build_session_settings,
@@ -54,6 +54,10 @@ class StartSessionRequest:
     # Resolved {agent_id: backend_id}, computed once during start validation and
     # carried into execution; not a user input.
     resolved_backends: Optional[Dict[str, str]] = None
+    # The exact validated config snapshot from start, carried into execution so
+    # the runner uses the same agents/types/backends the start response
+    # advertised — never a possibly-divergent reload. Not a user input.
+    collab_config: Optional[CollaborationConfig] = None
 
 
 @dataclass
@@ -194,6 +198,7 @@ class SessionManager:
             health=None if (request.mock or request.dry_run) else self._backend_health,
         )
         request.resolved_backends = dict(selection.agent_backends)
+        request.collab_config = collab_config
         request.interactive = bool(request.interactive)
         request.interactive_idle_timeout = self._normalize_idle_timeout(request.interactive_idle_timeout)
         settings = build_session_settings(
@@ -366,7 +371,9 @@ class SessionManager:
             workdir=workdir,
             log_dir=log_dir,
             session_id=state.session_id,
-            collab_config=load_config(workdir),
+            # Reuse the config validated at start; only reload if it was lost
+            # (e.g. an index-restored request, which never runs anyway).
+            collab_config=request.collab_config or load_config(workdir),
             codex_options=dict(request.codex_options or {}),
             claude_options=dict(request.claude_options or {}),
             antigravity_options=dict(request.antigravity_options or {}),

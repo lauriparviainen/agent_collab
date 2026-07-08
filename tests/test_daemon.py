@@ -77,6 +77,34 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 for part in agent.get("command_preview", []):
                     self.assertNotIn("daemon mock task", part)
 
+    async def test_config_is_loaded_once_and_snapshot_carried_into_execution(self):
+        # Guards the start/run divergence: start_session validates a config
+        # snapshot and _run_session must reuse it, not reload (which could resolve
+        # a different agent type/backend than the start response advertised).
+        import agent_collab.daemon as daemon_module
+
+        calls = []
+        real_load_config = daemon_module.load_config
+
+        def counting_load_config(*args, **kwargs):
+            calls.append(1)
+            return real_load_config(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(daemon_module, "load_config", counting_load_config):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="snapshot task", mock=True, max_turns=1, timeout=5, workdir=root
+                        )
+                    )
+                    await self._wait_for_terminal(manager, state.session_id)
+
+            # Exactly one load at start; execution reused the carried snapshot.
+            self.assertEqual(sum(calls), 1)
+
     async def test_interactive_session_awaits_input_and_post_message_appends_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

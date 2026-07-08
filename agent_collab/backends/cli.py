@@ -13,11 +13,11 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 from ..config import AgentConfig, ConfigError
-from ..events import Event, parse_claude_line, parse_codex_line
+from ..events import Event, parse_antigravity_line, parse_claude_line, parse_codex_line
 from ..options import apply_agent_options
 from ..runners import AgentRunner, SubprocessRunner
 from .base import BackendCapabilities, BackendHealth
-from .health import default_version_runner, probe_cli_backend
+from .health import antigravity_credentials, default_version_runner, probe_cli_backend
 
 Parser = Callable[[str, bool], Optional[Event]]
 
@@ -84,4 +84,13 @@ def build_cli_backends() -> List[CliBackend]:
     return [
         CliBackend("claude", parse_claude_line, probe_binary="claude"),
         CliBackend("codex", parse_codex_line, probe_binary="codex"),
+        # Antigravity opts into start-time gating: a missing `agy` or a definite
+        # sign-out fails the start fast rather than burning the first turn.
+        CliBackend(
+            "antigravity",
+            parse_antigravity_line,
+            probe_binary="agy",
+            credentials=antigravity_credentials,
+            block_on_unavailable=True,
+        ),
     ]

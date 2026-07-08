@@ -248,6 +248,22 @@ def parse_claude_line(line: str, verbose: bool = False) -> Optional[Event]:
     return Event.create("claude", "status", compact_json(raw), raw) if verbose else None
 
 
+def parse_antigravity_line(line: str, verbose: bool = False) -> Optional[Event]:
+    """Parse one line of `agy -p` plain-text output into an event.
+
+    The Antigravity CLI print mode emits free-form plain text / Markdown prose:
+    no JSON, no NDJSON, and no stable per-line event marker (confirmed against
+    tests/fixtures/antigravity/agy-print-sample.stdout.txt, agy 1.1.0). There is
+    therefore no tool/command/file-change structure to recover, so each non-empty
+    line becomes an `antigravity` `message` event (message-only, low fidelity).
+    """
+
+    text = line.strip()
+    if not text:
+        return None
+    return Event.create("antigravity", "message", text, {"line": line})
+
+
 def parse_codex_line(line: str, verbose: bool = False) -> Optional[Event]:
     raw = parse_json_line(line)
     if raw is None:
