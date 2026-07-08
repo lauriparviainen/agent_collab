@@ -105,6 +105,43 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             # Exactly one load at start; execution reused the carried snapshot.
             self.assertEqual(sum(calls), 1)
 
+    async def test_sdk_backend_selection_is_not_blocked_by_inferred_cli_mode(self):
+        # Regression: the built-in antigravity agent carries `--mode accept-edits`
+        # (cli posture); selecting backend="sdk" must reach runner construction
+        # rather than being rejected by the inferred mode. mock skips health so
+        # this exercises the validation path end to end.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / ".agent-collab" / "config.toml"
+            cfg.parent.mkdir(parents=True)
+            cfg.write_text(
+                """
+[agents.antigravity]
+enabled = true
+backend = "sdk"
+
+[workflows.antigravity-solo]
+sequence = ["antigravity"]
+""",
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="sdk mode task",
+                        workflow="antigravity-solo",
+                        mock=True,
+                        max_turns=1,
+                        timeout=5,
+                        workdir=root,
+                    )
+                )
+                final = await self._wait_for_terminal(manager, state.session_id)
+
+            self.assertEqual(final.status, "done")
+            self.assertEqual(final.settings["agents"]["antigravity"]["backend"], "sdk")
+
     async def test_interactive_session_awaits_input_and_post_message_appends_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

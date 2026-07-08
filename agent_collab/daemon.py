@@ -180,6 +180,11 @@ class SessionManager:
             else self.default_log_dir or GlobalDataPaths.resolve().session_dir
         )
         collab_config = load_config(workdir)
+        # The mode-on-sdk rejection keys off what the user *explicitly* requested,
+        # not defaults inferred from an agent's cli args (the built-in antigravity
+        # agent carries `--mode accept-edits` for the cli path, which must not
+        # block selecting the sdk backend).
+        requested_antigravity_options = request.antigravity_options
         normalized_options = validate_start_options(
             collab_config,
             request.workflow,
@@ -194,7 +199,7 @@ class SessionManager:
             collab_config,
             request.workflow,
             request.backend,
-            request.antigravity_options,
+            requested_antigravity_options,
             health=None if (request.mock or request.dry_run) else self._backend_health,
         )
         request.resolved_backends = dict(selection.agent_backends)

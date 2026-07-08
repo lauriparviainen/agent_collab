@@ -23,7 +23,12 @@ from agent_collab.backends.antigravity_sdk import (
 from agent_collab.backends.base import BackendUnavailable
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.daemon import SessionState
-from agent_collab.options import StartOptionsError, build_session_settings, validate_start_backends
+from agent_collab.options import (
+    StartOptionsError,
+    build_session_settings,
+    validate_start_backends,
+    validate_start_options,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "antigravity"
 AGENT = AgentConfig(id="antigravity", type="antigravity", backend="sdk")
@@ -157,12 +162,51 @@ class SdkSelectionTests(unittest.TestCase):
         selection = validate_start_backends(self._config(), "solo")
         self.assertEqual(selection.agent_backends, {"ag": "sdk"})
 
-    def test_mode_option_is_rejected_on_sdk_backend(self):
+    def test_explicit_mode_option_is_rejected_on_sdk_backend(self):
         with self.assertRaises(StartOptionsError) as ctx:
             validate_start_backends(self._config(), "solo", antigravity_options={"mode": "plan"})
         detail = ctx.exception.to_dict()["details"][0]
         self.assertEqual(detail["path"], "antigravity_options.mode")
         self.assertIn("sdk", detail["message"])
+
+    def test_inferred_cli_mode_does_not_block_sdk_selection(self):
+        # The built-in antigravity agent carries `-p --mode accept-edits` (cli
+        # posture). Selecting the sdk backend must NOT be blocked by that inferred
+        # mode — only an *explicit* antigravity_options.mode is rejected on sdk.
+        config = CollaborationConfig(
+            agents={
+                "ag": AgentConfig(
+                    id="ag",
+                    type="antigravity",
+                    command="agy",
+                    args=["-p", "--mode", "accept-edits"],
+                    backend="sdk",
+                )
+            },
+            workflows={"solo": WorkflowConfig(id="solo", sequence=["ag"])},
+        )
+        # validate_start_options infers mode from the cli args...
+        normalized = validate_start_options(config, "solo")
+        self.assertEqual(normalized["antigravity_options"].get("mode"), "accept-edits")
+        # ...but the backend validator keys off the explicit request (none here),
+        # so sdk selection is not blocked.
+        selection = validate_start_backends(config, "solo", request_backend=None, antigravity_options={})
+        self.assertEqual(selection.agent_backends, {"ag": "sdk"})
+
+    def test_sdk_settings_do_not_advertise_inferred_cli_mode(self):
+        config = CollaborationConfig(
+            agents={
+                "ag": AgentConfig(
+                    id="ag", type="antigravity", command="agy", args=["-p", "--mode", "accept-edits"], backend="sdk"
+                )
+            },
+            workflows={"solo": WorkflowConfig(id="solo", sequence=["ag"])},
+        )
+        normalized = validate_start_options(config, "solo")
+        settings = build_session_settings(config, "solo", normalized, agent_backends={"ag": "sdk"})
+        entry = settings["agents"]["ag"]
+        self.assertEqual(entry["backend"], "sdk")
+        self.assertNotIn("mode", entry)  # mode is cli-only; not shown for sdk
 
     def test_settings_summary_replaces_command_preview_for_sdk(self):
         config = self._config()

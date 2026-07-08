@@ -195,6 +195,9 @@ def _reject_unsupported_antigravity_mode(
 ) -> None:
     # `mode` maps to `agy --mode` on the cli backend; the sdk backend has no
     # confirmed LocalAgentConfig equivalent yet, so reject rather than drop it.
+    # `antigravity_options` here is what the caller *explicitly* requested — never
+    # a default inferred from an agent's cli args — so selecting the sdk backend
+    # on the built-in antigravity agent (whose args carry `--mode`) is not blocked.
     if not antigravity_options or "mode" not in antigravity_options:
         return
     for agent_id, backend_id in resolved.items():
@@ -419,17 +422,23 @@ def build_session_settings(
             continue
         agent = config.agents[agent_id]
         entry: Dict[str, Any] = {"type": agent.type}
+        backend_id = None if agent.type == "mock" else (
+            resolved.get(agent_id) or backend_registry.resolve_backend_id(agent)
+        )
         options: Dict[str, Any] = {}
         if agent.type in OPTION_FIELDS:
             options = dict(normalized_options.get(f"{agent.type}_options") or {})
             effective = _effective_options_for_agent(agent, options)
             for field in SETTINGS_DISPLAY_FIELDS.get(agent.type, ()):
+                # `mode` only applies to the cli backend; do not advertise a
+                # cli-arg-inferred mode for a non-cli backend that ignores it.
+                if field == "mode" and backend_id != "cli":
+                    continue
                 if field in effective:
                     entry[field] = effective[field]
             if "thinking_level" not in entry and "reasoning_effort" in effective:
                 entry["thinking_level"] = effective["reasoning_effort"]
-        if agent.type != "mock":
-            backend_id = resolved.get(agent_id) or backend_registry.resolve_backend_id(agent)
+        if backend_id is not None:
             entry["backend"] = backend_id
             entry["capabilities"] = backend_registry.capabilities_for(agent.type, backend_id).to_dict()
             if backend_id == "cli":
