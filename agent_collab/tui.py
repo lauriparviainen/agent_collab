@@ -15,24 +15,30 @@ from .tui_core import (
     ParsedInput,
     ScrollState,
     SessionPickerState,
+    accept_slash_completion,
     advance_cursor_state,
     build_new_session_payload,
     clamp_scroll,
-    filter_slash_commands,
+    format_activity_indicator,
     follow_scroll,
     format_session_details,
     format_session_picker_lines,
+    format_slash_completion_lines,
     format_transcript_events,
+    make_slash_completion,
     make_session_picker,
     move_session_picker,
+    move_slash_completion,
     parse_input,
     reset_cursor_state,
     scroll_by,
     select_latest_session_id,
     selected_picker_session_id,
+    selected_slash_command,
     session_is_terminal,
     session_workflow_name,
     should_start_poller,
+    slash_completion_matches_input,
     visible_scroll_top,
     workflow_ids_from_options,
     wrap_plain_lines,
@@ -61,6 +67,24 @@ HELP_LINES = (
     "q/Ctrl-C quit  arrows/page keys scroll  End follow  Esc closes overlays",
 )
 
+SOURCE_LABEL_WIDTH = 8
+SLASH_MENU_MAX_ROWS = 8
+
+SOURCE_STYLE_DEFS = (
+    ("human", curses.COLOR_CYAN, -1, 0),
+    ("referee", curses.COLOR_MAGENTA, -1, 0),
+    ("claude", curses.COLOR_WHITE, -1, curses.A_BOLD),
+    ("codex", curses.COLOR_GREEN, -1, curses.A_BOLD),
+    ("tool", curses.COLOR_YELLOW, -1, 0),
+    ("error", curses.COLOR_RED, -1, curses.A_BOLD),
+)
+
+UI_STYLE_DEFS = (
+    ("chrome", curses.COLOR_WHITE, -1, curses.A_DIM),
+    ("menu", curses.COLOR_WHITE, -1, 0),
+    ("selection", curses.COLOR_CYAN, -1, curses.A_REVERSE | curses.A_BOLD),
+)
+
 
 class TuiApp:
     def __init__(
@@ -87,7 +111,9 @@ class TuiApp:
         self.poll_stop: Optional[threading.Event] = None
         self.poll_thread: Optional[threading.Thread] = None
         self.new_wizard: Optional[dict[str, Any]] = None
-        self.color_pairs: dict[str, int] = {}
+        self.styles: dict[str, int] = {}
+        self.slash_completion_index = 0
+        self.slash_completion_dismissed_for: Optional[str] = None
         self._last_status_refresh = 0.0
         self._initial_session_id = initial_session_id
 
@@ -130,6 +156,7 @@ class TuiApp:
         self.scroll = follow_scroll(len(self.transcript_lines), self._body_height())
         self.overlay_lines = None
         self.picker = None
+        self.slash_completion_dismissed_for = None
         if session_is_terminal(session):
             self.message = f"session is read-only ({session.get('status')})"
         else:
@@ -145,25 +172,18 @@ class TuiApp:
             curses.curs_set(1)
         except curses.error:
             pass
+        style_defs = SOURCE_STYLE_DEFS + UI_STYLE_DEFS
+        for name, _, _, attrs in style_defs:
+            self.styles[name] = attrs
         if curses.has_colors():
             try:
                 curses.use_default_colors()
             except curses.error:
                 pass
-            for index, (source, color) in enumerate(
-                (
-                    ("human", curses.COLOR_CYAN),
-                    ("referee", curses.COLOR_MAGENTA),
-                    ("claude", curses.COLOR_BLUE),
-                    ("codex", curses.COLOR_GREEN),
-                    ("tool", curses.COLOR_YELLOW),
-                    ("error", curses.COLOR_RED),
-                ),
-                start=1,
-            ):
+            for index, (name, foreground, background, attrs) in enumerate(style_defs, start=1):
                 try:
-                    curses.init_pair(index, color, -1)
-                    self.color_pairs[source] = index
+                    curses.init_pair(index, foreground, background)
+                    self.styles[name] = curses.color_pair(index) | attrs
                 except curses.error:
                     pass
 
@@ -285,6 +305,9 @@ class TuiApp:
             self.done = True
             return
         if key == 27:
+            if self._current_slash_completion() is not None:
+                self.slash_completion_dismissed_for = self.input_text
+                return
             self.overlay_lines = None
             self.picker = None
             if self.new_wizard:
@@ -313,6 +336,21 @@ class TuiApp:
                         self.message = str(exc)
                 return
 
+        completion = self._current_slash_completion()
+        if completion is not None and completion.matches:
+            if key in (curses.KEY_UP,):
+                self._set_slash_completion(move_slash_completion(completion, -1))
+                return
+            if key in (curses.KEY_DOWN,):
+                self._set_slash_completion(move_slash_completion(completion, 1))
+                return
+            if key in (10, 13) and slash_completion_matches_input(self.input_text, completion):
+                self._submit_input()
+                return
+            if key in (9, 10, 13):
+                self._accept_slash_completion(completion)
+                return
+
         if key == ord("q") and not self.input_text and not self.new_wizard:
             self.done = True
             return
@@ -335,24 +373,50 @@ class TuiApp:
             self._submit_input()
             return
         if key in (curses.KEY_BACKSPACE, 127, 8):
-            self.input_text = self.input_text[:-1]
+            self._set_input_text(self.input_text[:-1])
             return
         if key == 21:
-            self.input_text = ""
+            self._set_input_text("")
             return
         if 0 <= key <= 255:
             char = chr(key)
             if char.isprintable():
-                self.input_text += char
+                self._set_input_text(self.input_text + char)
 
     def _submit_input(self) -> None:
         raw = self.input_text
-        self.input_text = ""
+        self._set_input_text("")
         if self.new_wizard:
             self._advance_new_wizard(raw)
             return
         parsed = parse_input(raw)
         self._dispatch(parsed)
+
+    def _set_input_text(self, value: str) -> None:
+        if value == self.input_text:
+            return
+        self.input_text = value
+        self.slash_completion_dismissed_for = None
+        if not value.startswith("/"):
+            self.slash_completion_index = 0
+
+    def _current_slash_completion(self):
+        if self.new_wizard or self.picker is not None:
+            return None
+        if self.input_text and self.input_text == self.slash_completion_dismissed_for:
+            return None
+        return make_slash_completion(self.input_text, self.slash_completion_index)
+
+    def _set_slash_completion(self, completion) -> None:
+        self.slash_completion_index = completion.index
+
+    def _accept_slash_completion(self, completion) -> None:
+        selected = selected_slash_command(completion)
+        if not selected:
+            return
+        self._set_input_text(accept_slash_completion(self.input_text, completion))
+        self.slash_completion_index = 0
+        self.message = f"inserted {selected}"
 
     def _dispatch(self, parsed: ParsedInput) -> None:
         if parsed.kind == "empty":
@@ -467,7 +531,7 @@ class TuiApp:
 
     def _start_new_wizard(self) -> None:
         self.new_wizard = {"step": "task", "task": "", "workflow": "", "workdir": ""}
-        self.input_text = ""
+        self._set_input_text("")
         self.overlay_lines = ("new session", "enter task")
         self.picker = None
         self.message = "new session task"
@@ -561,7 +625,7 @@ class TuiApp:
         details_width = self._details_width(width)
         transcript_width = width - details_width - (1 if details_width else 0)
         self._render_header(width)
-        self._add(1, 0, "-" * width, width)
+        self._add(1, 0, "-" * width, width, self._style("chrome"))
 
         body_top = 2
         body_height = self._body_height()
@@ -569,22 +633,52 @@ class TuiApp:
         self.scroll = clamp_scroll(self.scroll, len(body_lines), body_height)
         start = visible_scroll_top(self.scroll, len(body_lines), body_height)
         for row, line in enumerate(body_lines[start : start + body_height], start=body_top):
-            attr = self._attr_for_source(line.source)
-            self._add(row, 0, line.text, transcript_width, attr)
+            self._render_body_line(row, line, transcript_width)
 
         if details_width:
             separator_x = transcript_width
             for row in range(body_top, body_top + body_height):
-                self._add(row, separator_x, "|", 1)
+                self._add(row, separator_x, "|", 1, self._style("chrome"))
             detail_lines = wrap_plain_lines(format_session_details(self.session or {}), details_width - 2)
             for index, line in enumerate(detail_lines[:body_height]):
                 self._add(body_top + index, separator_x + 1, line, details_width - 2)
 
+        self._render_slash_completion(body_top, body_height, transcript_width)
         footer_y = height - 3
-        self._add(footer_y, 0, "-" * width, width)
+        self._add(footer_y, 0, "-" * width, width, self._style("chrome"))
         self._render_input_line(height - 2, width)
         self._render_status_line(height - 1, width)
         self.stdscr.refresh()
+
+    def _render_body_line(self, row: int, line, width: int) -> None:
+        if line.source == "ui":
+            self._add(row, 0, line.text, width, self._style("menu"))
+            return
+        if line.continuation:
+            self._add(row, 0, line.text, width)
+            return
+        attr = self._attr_for_source(line.source)
+        if not attr or len(line.text) <= SOURCE_LABEL_WIDTH:
+            self._add(row, 0, line.text, width, attr)
+            return
+        label_width = min(width, SOURCE_LABEL_WIDTH)
+        self._add(row, 0, line.text[:label_width], label_width, attr)
+        if width > SOURCE_LABEL_WIDTH:
+            self._add(row, SOURCE_LABEL_WIDTH, line.text[SOURCE_LABEL_WIDTH:], width - SOURCE_LABEL_WIDTH)
+
+    def _render_slash_completion(self, body_top: int, body_height: int, width: int) -> None:
+        completion = self._current_slash_completion()
+        if completion is None:
+            return
+        max_rows = max(1, min(SLASH_MENU_MAX_ROWS, body_height))
+        max_items = max(1, max_rows - 1)
+        lines = format_slash_completion_lines(completion, max_items=max_items)[:max_rows]
+        start_y = body_top + body_height - len(lines)
+        for offset, line in enumerate(lines):
+            y = start_y + offset
+            attr = self._style("selection") if line.startswith(">") else self._style("menu")
+            self._add(y, 0, " " * width, width, self._style("menu"))
+            self._add(y, 0, line, width, attr)
 
     def _render_header(self, width: int) -> None:
         if self.session:
@@ -616,11 +710,14 @@ class TuiApp:
             pass
 
     def _render_status_line(self, y: int, width: int) -> None:
-        mode = "following" if self.scroll.follow else "scrollback"
+        scroll_mode = "following" if self.scroll.follow else "scrollback"
+        activity = format_activity_indicator(self.session, int(time.monotonic() * 4))
         if not self.session:
-            mode = "no session"
+            mode = activity
         elif session_is_terminal(self.session):
-            mode = f"read-only {self.session.get('status')}"
+            mode = activity
+        else:
+            mode = f"{activity} | {scroll_mode}"
         message = self.message or "q/Ctrl-C quit  arrows/page keys scroll  End follow"
         line = f"{message:<{max(1, width - len(mode) - 1)}} {mode}"
         self._add(y, 0, line, width)
@@ -629,21 +726,10 @@ class TuiApp:
         if width is None:
             width = self._transcript_width()
         if self.picker is not None:
-            return tuple(_referee_line(line) for line in wrap_plain_lines(format_session_picker_lines(self.picker), width))
+            return tuple(_ui_line(line) for line in wrap_plain_lines(format_session_picker_lines(self.picker), width))
         if self.overlay_lines is not None:
-            return tuple(_referee_line(line) for line in wrap_plain_lines(self.overlay_lines, width))
-        completion_lines = self._slash_completion_lines()
-        if completion_lines:
-            return tuple(_referee_line(line) for line in wrap_plain_lines(completion_lines, width))
+            return tuple(_ui_line(line) for line in wrap_plain_lines(self.overlay_lines, width))
         return wrap_transcript_lines(self.transcript_lines, width)
-
-    def _slash_completion_lines(self) -> Sequence[str]:
-        if self.new_wizard or not self.input_text.startswith("/"):
-            return ()
-        matches = filter_slash_commands(self.input_text)
-        if not matches:
-            return ("commands", "no matches")
-        return ("commands",) + tuple(f"{match.name:<14} {match.description}" for match in matches)
 
     def _input_prompt(self) -> str:
         if self.new_wizard:
@@ -666,10 +752,10 @@ class TuiApp:
         return min(48, max(32, width // 3))
 
     def _attr_for_source(self, source: str) -> int:
-        pair = self.color_pairs.get(source)
-        if pair:
-            return curses.color_pair(pair)
-        return 0
+        return self.styles.get(source, 0)
+
+    def _style(self, name: str) -> int:
+        return self.styles.get(name, 0)
 
     def _add(self, y: int, x: int, text: str, width: int, attr: int = 0) -> None:
         if width <= 0:
@@ -680,10 +766,10 @@ class TuiApp:
             pass
 
 
-def _referee_line(text: str):
+def _ui_line(text: str):
     from .tui_core import TranscriptLine
 
-    return TranscriptLine(source="referee", text=text)
+    return TranscriptLine(source="ui", text=text)
 
 
 def _session_accepts_input(session: Mapping[str, Any]) -> bool:

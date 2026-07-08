@@ -91,12 +91,13 @@ Commands are entered in the bottom input line.
 /stop                    stop the active daemon session
 /quit                    exit the TUI
 
-#AGENT message           reserved for Stage 4.6 directed agent questions
-plain text               reserved for Stage 4.6 referee notes
+#AGENT message           handled by Stage 4.6 directed agent questions
+plain text               handled by Stage 4.6 referee notes
 ```
 
-Stage 4.5 should parse plain text and `#AGENT` input, but if Stage 4.6 is not
-implemented yet it should show a clear inline message such as:
+Stage 4.5 parsed plain text and `#AGENT` input while Stage 4.6 was still
+pending. Before Stage 4.6 landed, those paths showed a clear inline message
+such as:
 
 ```text
 referee input requires stage 4.6; this session is currently read-only
@@ -224,5 +225,5 @@ Add tests for:
   settings from the daemon response.
 - `/new` starts a daemon-owned session and switches to it.
 - Existing `watch` command behavior remains unchanged.
-- Referee input commands are visibly reserved or disabled until Stage 4.6 is
-  implemented.
+- Referee input commands were visibly reserved or disabled before Stage 4.6
+  made them active.

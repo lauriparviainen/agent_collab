@@ -225,7 +225,7 @@ session remains in `awaiting_input`.
 
 ## TUI Integration
 
-Once this stage lands, Stage 4.5 reserved input becomes active:
+This stage made the Stage 4.5 reserved input active:
 
 - plain text calls `post_message(..., target=None)`,
 - `#AGENT text` and `/ask AGENT text` call `post_message(..., target=AGENT)`,

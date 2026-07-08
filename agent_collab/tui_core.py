@@ -79,6 +79,12 @@ class SlashCommandMatch:
     description: str
 
 
+@dataclass(frozen=True)
+class SlashCompletionState:
+    matches: Tuple[SlashCommandMatch, ...]
+    index: int = 0
+
+
 def parse_input(raw: str) -> ParsedInput:
     value = raw.strip()
     if not value:
@@ -119,6 +125,76 @@ def filter_slash_commands(prefix: str) -> Tuple[SlashCommandMatch, ...]:
         for name, description in SLASH_COMMANDS.items()
         if name.startswith(value)
     )
+
+
+def make_slash_completion(prefix: str, index: int = 0) -> Optional[SlashCompletionState]:
+    value = str(prefix or "")
+    if not value.startswith("/"):
+        return None
+    body = value[1:]
+    if any(char.isspace() for char in body):
+        return None
+    matches = filter_slash_commands(value)
+    if not matches:
+        return SlashCompletionState(matches=(), index=0)
+    return SlashCompletionState(matches=matches, index=max(0, min(len(matches) - 1, int(index))))
+
+
+def move_slash_completion(state: SlashCompletionState, delta: int) -> SlashCompletionState:
+    if not state.matches:
+        return SlashCompletionState(matches=state.matches, index=0)
+    index = max(0, min(len(state.matches) - 1, state.index + int(delta)))
+    return SlashCompletionState(matches=state.matches, index=index)
+
+
+def selected_slash_command(state: SlashCompletionState) -> Optional[str]:
+    if not state.matches:
+        return None
+    return state.matches[state.index].name
+
+
+def slash_completion_matches_input(prefix: str, state: SlashCompletionState) -> bool:
+    selected = selected_slash_command(state)
+    return bool(selected) and str(prefix or "").strip().lower() == selected.lower()
+
+
+def accept_slash_completion(prefix: str, state: SlashCompletionState) -> str:
+    selected = selected_slash_command(state)
+    if not selected:
+        return str(prefix or "")
+    return f"{selected} "
+
+
+def format_slash_completion_lines(state: SlashCompletionState, max_items: int = 6) -> Tuple[str, ...]:
+    header = "commands  Tab/Enter accepts  Esc closes"
+    if not state.matches:
+        return (header, "  no matches")
+
+    item_count = max(1, int(max_items))
+    start = max(0, min(state.index - item_count // 2, len(state.matches) - item_count))
+    end = min(len(state.matches), start + item_count)
+    lines = [header]
+    for index, match in enumerate(state.matches[start:end], start=start):
+        marker = ">" if index == state.index else " "
+        lines.append(f"{marker} {match.name:<14} {match.description}")
+    return tuple(lines)
+
+
+ACTIVITY_FRAMES = ("-", "\\", "|", "/")
+
+
+def format_activity_indicator(session: Optional[Mapping[str, Any]], tick: int = 0) -> str:
+    if not session:
+        return "no session"
+    status = str(session.get("status") or "")
+    if status_is_terminal(status):
+        return f"read-only {status}"
+    if status == "awaiting_input":
+        return "awaiting input"
+    if status == "running":
+        frame = ACTIVITY_FRAMES[int(tick) % len(ACTIVITY_FRAMES)]
+        return f"{frame} running"
+    return status or "live"
 
 
 def format_transcript_event(event: Any) -> Tuple[TranscriptLine, ...]:

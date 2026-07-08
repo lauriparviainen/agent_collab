@@ -16,4 +16,4 @@ Task folders:
 - [Open tasks](tasks_open/)
 - [Closed tasks](tasks_closed/)
 
-The current implementation already has the core event model, runners, referee loop, log writing, foreground server, global daemon lifecycle with per-session workdirs, a persistent session index, workflow-based orchestration, centralized config migrations, effective session settings confirmations, CLI client commands, stdio MCP adapter, Streamable HTTP MCP endpoint, typed validated start options, and MCP usage guidance. Open architecture work is tracked in the open task folder.
+The current implementation already has the core event model, runners, referee loop, log writing, foreground server, global daemon lifecycle with per-session workdirs, a persistent session index, workflow-based orchestration, centralized config migrations, effective session settings confirmations, CLI client commands, interactive TUI, live referee input, stdio MCP adapter, Streamable HTTP MCP endpoint, typed validated start options, and MCP usage guidance. Remaining architecture work is tracked in the open task folder.

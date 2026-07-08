@@ -12,19 +12,24 @@ from agent_collab.tui_core import (
     AgentRef,
     CursorState,
     ScrollState,
+    accept_slash_completion,
     advance_cursor_state,
     agents_from_options,
     agents_from_session,
     build_new_session_payload,
     clamp_scroll,
     filter_slash_commands,
+    format_activity_indicator,
     follow_scroll,
     format_session_picker_lines,
     format_session_details,
+    format_slash_completion_lines,
     format_transcript_event,
     format_transcript_events,
+    make_slash_completion,
     make_session_picker,
     move_session_picker,
+    move_slash_completion,
     parse_input,
     render_transcript_lines,
     reset_cursor_state,
@@ -32,8 +37,10 @@ from agent_collab.tui_core import (
     scroll_by,
     select_latest_session_id,
     selected_picker_session_id,
+    selected_slash_command,
     session_is_terminal,
     should_start_poller,
+    slash_completion_matches_input,
     sort_sessions_latest_first,
     visible_scroll_top,
     wrap_transcript_lines,
@@ -135,6 +142,44 @@ class TuiCoreTests(unittest.TestCase):
         self.assertIn("/ask", [match.name for match in all_matches])
         self.assertEqual([match.name for match in s_matches], ["/sessions", "/session", "/stop"])
         self.assertEqual(filter_slash_commands("/ask claude"), ())
+
+    def test_slash_completion_state_moves_and_accepts_selected_command(self):
+        state = make_slash_completion("/s")
+        self.assertIsNotNone(state)
+        assert state is not None
+        self.assertEqual([match.name for match in state.matches], ["/sessions", "/session", "/stop"])
+        self.assertEqual(selected_slash_command(state), "/sessions")
+
+        state = move_slash_completion(state, 1)
+
+        self.assertEqual(selected_slash_command(state), "/session")
+        self.assertFalse(slash_completion_matches_input("/se", state))
+        self.assertTrue(slash_completion_matches_input("/session", state))
+        self.assertTrue(slash_completion_matches_input("/SESSION", state))
+        self.assertEqual(accept_slash_completion("/se", state), "/session ")
+        self.assertIn("> /session", "\n".join(format_slash_completion_lines(state, max_items=2)))
+        self.assertEqual(move_slash_completion(state, 99).index, len(state.matches) - 1)
+        self.assertEqual(move_slash_completion(state, -99).index, 0)
+
+    def test_slash_completion_hides_for_arguments_and_keeps_no_match_state(self):
+        self.assertIsNone(make_slash_completion("plain text"))
+        self.assertIsNone(make_slash_completion("/ask claude"))
+        self.assertIsNone(make_slash_completion("/session "))
+
+        state = make_slash_completion("/zz")
+        self.assertIsNotNone(state)
+        assert state is not None
+        self.assertEqual(state.matches, ())
+        self.assertEqual(selected_slash_command(state), None)
+        self.assertEqual(accept_slash_completion("/zz", state), "/zz")
+        self.assertIn("no matches", "\n".join(format_slash_completion_lines(state)))
+
+    def test_activity_indicator_changes_for_running_waiting_and_terminal_sessions(self):
+        self.assertEqual(format_activity_indicator(None), "no session")
+        self.assertEqual(format_activity_indicator({"status": "running"}, tick=0), "- running")
+        self.assertEqual(format_activity_indicator({"status": "running"}, tick=1), "\\ running")
+        self.assertEqual(format_activity_indicator({"status": "awaiting_input"}, tick=2), "awaiting input")
+        self.assertEqual(format_activity_indicator({"status": "done"}, tick=3), "read-only done")
 
     def test_agent_resolution_uses_active_session_settings(self):
         session = {
