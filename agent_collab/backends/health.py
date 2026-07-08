@@ -14,11 +14,12 @@ filesystem without touching real CLIs, the SDK, or ``~/.gemini``.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from ..events import utc_timestamp
 from .base import (
@@ -154,6 +155,22 @@ def antigravity_credentials(gemini_home: Optional[Path] = None) -> str:
             return CREDENTIALS_OK
         return CREDENTIALS_MISSING
     return CREDENTIALS_MISSING
+
+
+def gemini_api_key_credentials(env: Optional[Mapping[str, str]] = None) -> str:
+    """Credential check for the Antigravity **sdk** backend.
+
+    The SDK authenticates with a Gemini API key (``GEMINI_API_KEY`` env or
+    ``LocalAgentConfig(api_key=...)``) — **not** the ``~/.gemini`` OAuth that the
+    ``agy`` CLI uses. ``GEMINI_API_KEY`` present is a definite ``ok``; its absence
+    is only ``unknown`` (never ``missing``), because the key can also come from
+    config or Vertex/ADC — so this never blocks a working setup, only warns.
+    """
+
+    environ = os.environ if env is None else env
+    if environ.get("GEMINI_API_KEY"):
+        return CREDENTIALS_OK
+    return CREDENTIALS_UNKNOWN
 
 
 class HealthCache:

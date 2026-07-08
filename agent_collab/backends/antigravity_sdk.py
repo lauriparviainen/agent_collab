@@ -38,7 +38,7 @@ from ..config import AgentConfig
 from ..events import Event, compact_json
 from ..runners import AgentRunner
 from .base import BackendCapabilities, BackendHealth, BackendUnavailable
-from .health import antigravity_credentials, probe_sdk_backend
+from .health import gemini_api_key_credentials, probe_sdk_backend
 
 MODULE_NAME = "google.antigravity"
 PACKAGE_NAME = "google-antigravity"
@@ -68,10 +68,12 @@ class AntigravitySdkBackend:
         self._agent_factory = agent_factory
 
     def probe(self) -> BackendHealth:
+        # The SDK authenticates with a Gemini API key, not the ~/.gemini OAuth the
+        # agy CLI uses; check the right thing (absence -> unknown, never missing).
         return probe_sdk_backend(
             MODULE_NAME,
             package_version=self._package_version,
-            credentials=antigravity_credentials,
+            credentials=gemini_api_key_credentials,
             extra_hint=EXTRA_HINT,
         )
 

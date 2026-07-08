@@ -12,6 +12,7 @@ fully real.
 import asyncio
 import dataclasses
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -24,6 +25,7 @@ from agent_collab.backends.antigravity_sdk import (
     map_antigravity_turn,
 )
 from agent_collab.backends.base import BackendUnavailable
+from agent_collab.backends.health import gemini_api_key_credentials
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.daemon import SessionState
 from agent_collab.options import (
@@ -183,6 +185,29 @@ class SdkMissingExtraTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"google.antigravity": None}):
             events = asyncio.run(_collect(runner))
         self.assertTrue(any(e.type == "error" and "antigravity-sdk" in e.text for e in events))
+
+
+class SdkCredentialsTests(unittest.TestCase):
+    """The sdk backend authenticates with GEMINI_API_KEY, not ~/.gemini OAuth.
+    Absence must be `unknown` (warn), never `missing` (block) — other auth paths
+    exist (config api_key, Vertex/ADC), so we must never block a working setup."""
+
+    def test_gemini_api_key_present_is_ok(self):
+        self.assertEqual(gemini_api_key_credentials({"GEMINI_API_KEY": "abc"}), "ok")
+
+    def test_gemini_api_key_absent_is_unknown_not_missing(self):
+        self.assertEqual(gemini_api_key_credentials({}), "unknown")
+
+    def test_probe_credentials_track_the_env_and_never_report_missing(self):
+        present = object()
+        with mock.patch("importlib.util.find_spec", return_value=present):
+            with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "abc"}):
+                self.assertEqual(AntigravitySdkBackend().probe().credentials, "ok")
+            env_no_key = {k: v for k, v in os.environ.items() if k != "GEMINI_API_KEY"}
+            with mock.patch.dict(os.environ, env_no_key, clear=True):
+                health = AntigravitySdkBackend().probe()
+        self.assertEqual(health.status, "ok")
+        self.assertEqual(health.credentials, "unknown")  # never "missing" -> never blocks
 
 
 class SdkSelectionTests(unittest.TestCase):

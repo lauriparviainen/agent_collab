@@ -249,21 +249,25 @@ codex exec --json "prompt"
 
 ### `antigravity`
 
-Google Antigravity, available on both backends. Disabled by default and opt-in:
-it requires either the `agy` CLI installed and a Google sign-in (`cli`) or the
-`antigravity-sdk` extra installed (`sdk`).
+Google Antigravity, available on both backends. Disabled by default and opt-in.
 
-- `cli` runs `agy -p` in print mode. Print mode emits **plain text only** (no
-  JSON, no per-event markers), so its transcript fidelity is intentionally
-  **message-only** — each non-empty output line is one `antigravity` message
-  event; there is no tool/command/file-change structure. The default `args`
-  include `--mode accept-edits` so `-p` does not stall on the interactive
-  request-review approval prompt. Choose `sdk` for structured events.
-- `sdk` runs the `google-antigravity` SDK in-process. Its event fidelity is
-  whatever the SDK actually exposes (typed tool events, or message-only if not).
+- `cli` runs `agy -p` in print mode. Requires the `agy` CLI installed and a
+  Google **OAuth sign-in cached under `~/.gemini/`**. Print mode emits **plain
+  text only** (no JSON, no per-event markers), so its transcript fidelity is
+  intentionally **message-only** — each non-empty output line is one
+  `antigravity` message event; there is no tool/command/file-change structure.
+  The default `args` include `--mode accept-edits` so `-p` does not stall on the
+  interactive request-review approval prompt. Choose `sdk` for structured events.
+- `sdk` runs the `google-antigravity` SDK in-process. Requires the
+  `antigravity-sdk` extra (Python ≥ 3.10) and a **Gemini API key**
+  (`GEMINI_API_KEY` env, or `LocalAgentConfig(api_key=...)`, or Vertex/ADC) — the
+  SDK does **not** use the `~/.gemini` OAuth. It maps typed SDK events to
+  `tool_call`/`command`/`file_change`, degrading to message-only if a turn has no
+  tool calls.
 
-Auth is the provider's own concern (Google OAuth cached under `~/.gemini/`);
-agent-collab only passes the environment through and never logs credentials.
+The two backends authenticate differently (OAuth for `cli`, an API key for
+`sdk`). Auth is the provider's own concern: agent-collab only passes the
+environment through and never manages or logs credentials.
 
 ```toml
 [agents.antigravity]
