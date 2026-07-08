@@ -4,10 +4,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from agent_collab import cli
-from agent_collab.config import ConfigError, _parse_toml_subset, load_config
+from agent_collab import backends
+from agent_collab.config import AgentConfig, ConfigError, _parse_toml_subset, load_config, validate_agent
 
 
 def _write_config(root: Path, text: str) -> None:
@@ -268,6 +270,61 @@ sequence = ["disabled_codex"]
 
             with self.assertRaisesRegex(ConfigError, "disabled agent"):
                 load_config(root, env=_env(home))
+
+
+class AgentBackendConfigTests(unittest.TestCase):
+    def test_unregistered_backend_for_type_is_rejected_with_registered_ids(self):
+        agent = AgentConfig(id="claude", type="claude", command="claude", backend="sdk")
+        with self.assertRaises(ConfigError) as ctx:
+            validate_agent(agent)
+        message = str(ctx.exception)
+        self.assertIn("sdk", message)
+        self.assertIn("cli", message)  # registered ids for claude are listed
+
+    def test_mock_agent_rejects_backend_field(self):
+        agent = AgentConfig(id="m", type="mock", backend="cli")
+        with self.assertRaisesRegex(ConfigError, "backend is not supported for type 'mock'"):
+            validate_agent(agent)
+
+    def test_command_required_for_cli_backend(self):
+        agent = AgentConfig(id="claude", type="claude", backend="cli")
+        with self.assertRaisesRegex(ConfigError, "command is required for backend 'cli'"):
+            validate_agent(agent)
+
+    def test_command_optional_for_non_cli_backend(self):
+        # Registering a non-cli backend for claude relaxes the command requirement:
+        # only the cli backend runs a subprocess and needs a command.
+        fake = SimpleNamespace(agent_type="claude", id="fake")
+        backends.register(fake)
+        try:
+            agent = AgentConfig(id="claude", type="claude", backend="fake")
+            validate_agent(agent)  # must not raise despite no command
+        finally:
+            backends.unregister("claude", "fake")
+
+    def test_backend_default_cli_still_requires_command(self):
+        # No explicit backend -> effective cli -> command required (unchanged).
+        agent = AgentConfig(id="codex", type="codex")
+        with self.assertRaisesRegex(ConfigError, "command is required for backend 'cli'"):
+            validate_agent(agent)
+
+    def test_backend_field_parses_from_toml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            home.mkdir()
+            _write_config(
+                root,
+                """
+[agents.codex]
+backend = "cli"
+""",
+            )
+
+            config = load_config(root, env=_env(home))
+
+            self.assertEqual(config.agents["codex"].backend, "cli")
 
 
 if __name__ == "__main__":

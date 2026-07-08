@@ -25,6 +25,7 @@ class AgentConfig:
     cwd: Optional[str] = None
     timeout: Optional[int] = None
     options: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    backend: Optional[str] = None
 
 
 @dataclass
@@ -157,6 +158,7 @@ def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping
         cwd=existing.cwd,
         timeout=existing.timeout,
         options={key: dict(value) for key, value in existing.options.items()},
+        backend=existing.backend,
     )
     for key, value in values.items():
         if key == "type":
@@ -177,6 +179,8 @@ def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping
             agent.timeout = _expect_int(value, f"agents.{agent_id}.timeout")
         elif key == "options":
             agent.options = _expect_option_config(value, f"agents.{agent_id}.options")
+        elif key == "backend":
+            agent.backend = _expect_str(value, f"agents.{agent_id}.backend")
         else:
             raise ConfigError(f"unknown field agents.{agent_id}.{key}")
     return agent
@@ -208,8 +212,25 @@ def validate_agent(agent: AgentConfig) -> None:
         raise ConfigError(f"agents.{agent.id}.type is required")
     if agent.type not in AGENT_TYPES:
         raise ConfigError(f"agents.{agent.id}.type must be one of {sorted(AGENT_TYPES)}")
-    if agent.enabled and agent.type in SUBPROCESS_AGENT_TYPES and not agent.command:
-        raise ConfigError(f"agents.{agent.id}.command is required for type {agent.type!r}")
+
+    if agent.type == "mock":
+        if agent.backend is not None:
+            raise ConfigError(f"agents.{agent.id}.backend is not supported for type 'mock'")
+        return
+
+    # A backend must be registered for the agent's type; the command requirement
+    # keys off the effective backend (only `cli` runs a subprocess), not the type.
+    from .backends import DEFAULT_BACKEND, registered_backends
+
+    registered = registered_backends(agent.type)
+    if agent.backend is not None and agent.backend not in registered:
+        raise ConfigError(
+            f"agents.{agent.id}.backend {agent.backend!r} is not registered for type "
+            f"{agent.type!r}; registered backends: {registered}"
+        )
+    backend_id = agent.backend or DEFAULT_BACKEND
+    if agent.enabled and backend_id == "cli" and not agent.command:
+        raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
 
 
 def validate_workflow(config: CollaborationConfig, workflow_id: str) -> None:
