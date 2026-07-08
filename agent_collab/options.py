@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set
 
-from .config import AgentConfig, CollaborationConfig, load_config, validate_workflow
+from .config import SUBPROCESS_AGENT_TYPES, AgentConfig, CollaborationConfig, load_config, validate_workflow
 
 
 CODEX_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"]
@@ -150,13 +150,62 @@ def describe_options_for_workdir(workdir: Path) -> Dict[str, Any]:
     return describe_options(load_config(root), root)
 
 
-def apply_agent_options(command: List[str], agent: AgentConfig, options: Mapping[str, Any]) -> List[str]:
+def _effective_options_for_agent(agent: AgentConfig, options: Mapping[str, Any]) -> Dict[str, Any]:
     effective_options = _default_options_for_agent(agent)
     if agent.type == "codex" and "thinking_level" in options and "reasoning_effort" not in options:
         effective_options.pop("reasoning_effort", None)
     if agent.type == "claude" and "thinking_budget_tokens" in options and "thinking_level" not in options:
         effective_options.pop("thinking_level", None)
     effective_options.update(options)
+    return effective_options
+
+
+SETTINGS_DISPLAY_FIELDS = {
+    "claude": ("model", "thinking_level", "thinking_budget_tokens", "permission_mode"),
+    "codex": ("model", "profile", "thinking_level", "sandbox", "approval_policy", "search"),
+}
+
+
+def build_session_settings(
+    config: CollaborationConfig,
+    workflow_id: str,
+    normalized_options: Mapping[str, Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Build the effective session settings confirmation for start responses.
+
+    Reflects effective config plus validated start options; fields that are
+    unavailable for an agent are omitted rather than invented. Command
+    previews never include the task prompt (runners append it separately).
+    """
+
+    workflow = config.workflows[workflow_id]
+    agents: Dict[str, Dict[str, Any]] = {}
+    for agent_id in workflow.sequence:
+        if agent_id in agents:
+            continue
+        agent = config.agents[agent_id]
+        entry: Dict[str, Any] = {"type": agent.type}
+        if agent.type in OPTION_FIELDS:
+            options = dict(normalized_options.get(f"{agent.type}_options") or {})
+            effective = _effective_options_for_agent(agent, options)
+            for field in SETTINGS_DISPLAY_FIELDS.get(agent.type, ()):
+                if field in effective:
+                    entry[field] = effective[field]
+            if "thinking_level" not in entry and "reasoning_effort" in effective:
+                entry["thinking_level"] = effective["reasoning_effort"]
+            if agent.type in SUBPROCESS_AGENT_TYPES and agent.command:
+                entry["command_preview"] = apply_agent_options(
+                    [agent.command] + list(agent.args), agent, options
+                )
+        agents[agent_id] = entry
+    return {
+        "workflow": {"name": workflow_id, "sequence": list(workflow.sequence)},
+        "agents": agents,
+    }
+
+
+def apply_agent_options(command: List[str], agent: AgentConfig, options: Mapping[str, Any]) -> List[str]:
+    effective_options = _effective_options_for_agent(agent, options)
     if not effective_options:
         return list(command)
     if agent.type == "codex":

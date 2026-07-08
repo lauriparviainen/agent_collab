@@ -10,7 +10,7 @@ import uuid
 
 from .config import DEFAULT_WORKFLOW, load_config
 from .events import Event, utc_timestamp
-from .options import describe_options, validate_start_options
+from .options import build_session_settings, describe_options, validate_start_options
 from .paths import GlobalDataPaths
 from .referee import Referee, RefereeConfig
 
@@ -56,6 +56,7 @@ class SessionState:
     dry_run: bool = False
     ended_at: Optional[str] = None
     error: Optional[str] = None
+    settings: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -111,6 +112,7 @@ class SessionManager:
         )
         request.codex_options = normalized_options["codex_options"]
         request.claude_options = normalized_options["claude_options"]
+        settings = build_session_settings(collab_config, request.workflow, normalized_options)
         session_id = request.session_id or self._new_session_id()
         self._validate_new_session_id(session_id)
 
@@ -129,6 +131,7 @@ class SessionManager:
             timeout=int(request.timeout),
             mock=bool(request.mock),
             dry_run=bool(request.dry_run),
+            settings=settings,
         )
         managed = _ManagedSession(
             request=request,

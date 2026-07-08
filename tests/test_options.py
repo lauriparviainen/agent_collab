@@ -3,7 +3,13 @@ import unittest
 from pathlib import Path
 
 from agent_collab.config import AgentConfig, builtin_config, load_config
-from agent_collab.options import StartOptionsError, apply_agent_options, describe_options, validate_start_options
+from agent_collab.options import (
+    StartOptionsError,
+    apply_agent_options,
+    build_session_settings,
+    describe_options,
+    validate_start_options,
+)
 
 
 def _write_config(root: Path, text: str) -> None:
@@ -111,6 +117,67 @@ thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
 
         self.assertEqual(validated["claude_options"]["model"], "opus")
         self.assertEqual(validated["claude_options"]["thinking_level"], "high")
+
+    def test_build_session_settings_reflects_effective_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            _write_config(
+                root,
+                """
+[agents.claude.options]
+model.default = "opus"
+thinking_level.default = "high"
+
+[agents.codex.options]
+thinking_level.default = "high"
+""",
+            )
+            config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
+            normalized = validate_start_options(config, "cross-review", claude_options={"model": "sonnet"})
+
+            settings = build_session_settings(config, "cross-review", normalized)
+
+        self.assertEqual(settings["workflow"], {"name": "cross-review", "sequence": ["claude", "codex", "claude"]})
+        claude = settings["agents"]["claude"]
+        codex = settings["agents"]["codex"]
+        self.assertEqual(claude["type"], "claude")
+        self.assertEqual(claude["model"], "sonnet")
+        self.assertEqual(claude["thinking_level"], "high")
+        self.assertEqual(codex["thinking_level"], "high")
+        self.assertIn("--model", claude["command_preview"])
+        self.assertIn("sonnet", claude["command_preview"])
+        self.assertEqual(
+            claude["command_preview"],
+            apply_agent_options(
+                [config.agents["claude"].command] + list(config.agents["claude"].args),
+                config.agents["claude"],
+                normalized["claude_options"],
+            ),
+        )
+
+    def test_build_session_settings_omits_unavailable_fields(self):
+        config = builtin_config()
+        normalized = validate_start_options(config, "single-claude")
+
+        settings = build_session_settings(config, "single-claude", normalized)
+
+        claude = settings["agents"]["claude"]
+        self.assertEqual(set(settings["agents"]), {"claude"})
+        self.assertNotIn("model", claude)
+        self.assertNotIn("sandbox", claude)
+        self.assertEqual(claude["command_preview"][0], "claude")
+
+    def test_build_session_settings_command_preview_has_no_prompt(self):
+        config = builtin_config()
+        normalized = validate_start_options(config, "cross-review")
+
+        settings = build_session_settings(config, "cross-review", normalized)
+
+        for agent in settings["agents"].values():
+            for part in agent.get("command_preview", []):
+                self.assertNotIn("TASK", part)
 
     def test_describe_options_returns_workflows_agents_and_schemas(self):
         config = builtin_config()

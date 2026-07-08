@@ -310,9 +310,13 @@ def _main_list(argv) -> int:
     args = parser.parse_args(argv)
     try:
         sessions = _client(args.server_url).list_sessions().get("sessions", [])
-        print(f"{'SESSION_ID':<32} {'STATUS':<8} WORKDIR")
+        print(f"{'SESSION_ID':<24} {'STATUS':<11} {'WORKFLOW':<14} {'WORKDIR':<40} AGENTS")
         for session in sessions:
-            print(f"{session.get('session_id', ''):<32} {session.get('status', ''):<8} {session.get('workdir', '')}")
+            print(
+                f"{session.get('session_id', ''):<24} {session.get('status', ''):<11} "
+                f"{session.get('workflow', ''):<14} {session.get('workdir', ''):<40} "
+                f"{_format_agents_summary(session.get('settings'))}"
+            )
     except Exception as exc:
         print(f"ERROR   {exc}", file=sys.stderr)
         return 1
@@ -367,9 +371,31 @@ def _main_stop(argv) -> int:
 
 
 def _print_session(session) -> None:
-    for key in ("session_id", "status", "workdir", "jsonl_path", "markdown_path"):
+    for key in ("session_id", "status", "workflow", "workdir", "jsonl_path", "markdown_path"):
         if key in session:
             print(f"{key}: {session[key]}")
+    settings = session.get("settings") if isinstance(session, dict) else None
+    if not settings:
+        return
+    sequence = (settings.get("workflow") or {}).get("sequence")
+    if sequence:
+        print(f"sequence: {' -> '.join(sequence)}")
+    for agent_id, agent in (settings.get("agents") or {}).items():
+        details = [f"{key}={value}" for key, value in agent.items() if key not in {"command_preview"}]
+        print(f"agent {agent_id}: {' '.join(details)}")
+        preview = agent.get("command_preview")
+        if preview:
+            print(f"  command_preview: {' '.join(str(part) for part in preview)}")
+
+
+def _format_agents_summary(settings) -> str:
+    if not isinstance(settings, dict):
+        return ""
+    parts = []
+    for agent_id, agent in (settings.get("agents") or {}).items():
+        details = [str(agent[key]) for key in ("model", "thinking_level") if key in agent]
+        parts.append(f"{agent_id}({'/'.join(details)})" if details else agent_id)
+    return ", ".join(parts)
 
 
 def _json_object_arg(value: str, label: str) -> Dict[str, Any]:

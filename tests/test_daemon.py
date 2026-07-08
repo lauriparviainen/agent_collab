@@ -55,6 +55,14 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(batch.events[0]["source"], "human")
             self.assertIn("daemon mock task", batch.events[0]["text"])
 
+            self.assertEqual(state.workflow, "cross-review")
+            self.assertEqual(state.settings["workflow"]["name"], "cross-review")
+            self.assertEqual(state.settings["workflow"]["sequence"], ["claude", "codex", "claude"])
+            self.assertEqual(final.settings, state.settings)
+            for agent in state.settings["agents"].values():
+                for part in agent.get("command_preview", []):
+                    self.assertNotIn("daemon mock task", part)
+
     async def test_read_events_uses_cursor(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
