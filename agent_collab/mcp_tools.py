@@ -86,6 +86,19 @@ TOOLS = [
         "description": "Request cancellation of a running daemon-owned session.",
         "inputSchema": {"type": "object", "properties": {"session_id": {"type": "string"}}, "required": ["session_id"]},
     },
+    {
+        "name": "agent_collab_guidance",
+        "description": "Return Markdown guidance for using agent-collab MCP tools safely and effectively.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "enum": ["overview", "start", "watch", "options", "errors", "workflows"],
+                }
+            },
+        },
+    },
 ]
 TOOL_NAMES = {str(tool["name"]) for tool in TOOLS}
 
@@ -216,6 +229,46 @@ def text_content(text: str, is_error: bool = False) -> Dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
+GUIDANCE_TOPICS = ("overview", "start", "watch", "options", "errors", "workflows")
+_GUIDANCE_PATH = Path(__file__).resolve().parent.parent / "doc" / "mcp-guidance.md"
+_GUIDANCE_HEADINGS = {
+    "start": "## Start",
+    "watch": "## Watch",
+    "options": "## Options",
+    "errors": "## Errors",
+    "workflows": "## Workflows",
+    "overview": "## Overview",
+}
+
+
+def guidance_text(topic: Optional[str] = None) -> str:
+    if topic is not None and topic not in GUIDANCE_TOPICS:
+        raise ValueError(f"unknown guidance topic {topic!r}; expected one of: {', '.join(GUIDANCE_TOPICS)}")
+    try:
+        text = _GUIDANCE_PATH.read_text(encoding="utf-8")
+    except OSError:
+        raise ValueError(f"guidance document is unavailable at {_GUIDANCE_PATH}")
+    if topic is None or topic == "overview":
+        return text
+    return _guidance_section(text, _GUIDANCE_HEADINGS[topic], topic)
+
+
+def _guidance_section(text: str, heading: str, topic: str) -> str:
+    lines = text.splitlines()
+    start = None
+    end = len(lines)
+    for index, line in enumerate(lines):
+        if start is None:
+            if line.strip() == heading:
+                start = index
+        elif line.startswith("## "):
+            end = index
+            break
+    if start is None:
+        raise ValueError(f"guidance topic {topic!r} section not found")
+    return "\n".join(lines[start:end]).strip() + "\n"
+
+
 async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> Dict[str, Any]:
     if not isinstance(name, str) or name not in TOOL_NAMES:
         raise McpProtocolError(-32602, f"Unknown tool: {name}")
@@ -223,6 +276,11 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
         raise McpProtocolError(-32602, "arguments must be an object")
 
     try:
+        if name == "agent_collab_guidance":
+            topic = args.get("topic")
+            if topic is not None and not isinstance(topic, str):
+                raise ValueError("topic must be a string")
+            return text_content(guidance_text(topic))
         if name == "agent_collab_start":
             return content(await backend.start_session(_start_payload(args)))
         if name == "agent_collab_describe_options":
@@ -278,11 +336,11 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {"tools": {}},
                     "instructions": (
-                        "Call agent_collab_describe_options before starting a session when you need non-default model, reasoning, sandbox, or permission settings. "
-                        "Use agent_collab_start with task, workflow, workdir, max_turns, timeout, and typed codex_options or claude_options. "
-                        "Use agent_collab_wait_events with a cursor for long-running watches; do not make one blocking call. "
-                        "If agent_collab_start returns isError, fix the invalid option and retry instead of guessing. "
-                        "The foreground agent-collab server owns sessions and exposes this MCP endpoint at /mcp."
+                        "Call agent_collab_guidance for full usage guidance. "
+                        "Call agent_collab_describe_options before passing non-default options. "
+                        "Use agent_collab_start with task, workdir, and workflow. "
+                        "Use agent_collab_wait_events with a cursor; do not make one blocking call. "
+                        "On validation errors, fix the named field paths instead of guessing."
                     ),
                     "serverInfo": {"name": "agent-collab", "version": "0.1.0"},
                 },

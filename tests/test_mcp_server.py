@@ -28,6 +28,39 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_wait_events", names)
         self.assertIn("agent_collab_read_transcript", names)
         self.assertIn("agent_collab_stop", names)
+        self.assertIn("agent_collab_guidance", names)
+
+    def test_guidance_without_topic_returns_full_markdown(self):
+        result = handle_tool("agent_collab_guidance", {})
+
+        text = result["content"][0]["text"]
+        self.assertFalse(result.get("isError"))
+        self.assertIn("# agent-collab MCP guidance", text)
+        self.assertIn("## Start", text)
+        self.assertIn("## Errors", text)
+
+    def test_guidance_topic_returns_single_section(self):
+        result = handle_tool("agent_collab_guidance", {"topic": "errors"})
+
+        text = result["content"][0]["text"]
+        self.assertFalse(result.get("isError"))
+        self.assertTrue(text.startswith("## Errors"))
+        self.assertNotIn("## Watch", text)
+        self.assertIn("invalid_start_options", text)
+
+    def test_guidance_unknown_topic_is_an_error(self):
+        result = handle_tool("agent_collab_guidance", {"topic": "bogus"})
+
+        self.assertTrue(result.get("isError"))
+        self.assertIn("unknown guidance topic", _payload(result)["error"])
+
+    def test_initialize_instructions_mention_guidance_and_workflow(self):
+        response = handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+
+        instructions = response["result"]["instructions"]
+        self.assertIn("agent_collab_guidance", instructions)
+        self.assertIn("workflow", instructions)
+        self.assertIn("agent_collab_describe_options", instructions)
 
     def test_start_maps_to_client_start_session(self):
         args = {
