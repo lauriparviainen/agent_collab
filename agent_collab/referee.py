@@ -16,7 +16,7 @@ from .config import (
 from .events import Event
 from .logging import SessionLogger
 from .paths import GlobalDataPaths
-from .runners import AgentRunner, DryRunRunner, MockRunner, configured_runner
+from .runners import AgentRunner, DryRunRunner, MockRunner, _mock_source, configured_runner
 from .terminal import print_event
 
 
@@ -71,7 +71,8 @@ class Referee:
             if not agent.enabled:
                 continue
             if self.config.mock:
-                runners[agent_id] = MockRunner(agent.name or agent.id)
+                name = agent.name or agent.id
+                runners[agent_id] = MockRunner(name, source=_mock_source(agent.type, name))
             elif self.config.dry_run and agent.type != "mock":
                 from .options import apply_agent_options
 

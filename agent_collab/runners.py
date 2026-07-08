@@ -6,8 +6,7 @@ from pathlib import Path
 from typing import AsyncIterator, Callable, Dict, List, Optional
 
 from .config import AgentConfig, ConfigError
-from .events import Event, parse_claude_line, parse_codex_line
-from .options import apply_agent_options
+from .events import Event
 
 
 Parser = Callable[[str, bool], Optional[Event]]
@@ -38,11 +37,14 @@ class DryRunRunner(AgentRunner):
 
 
 class MockRunner(AgentRunner):
-    def __init__(self, name: str):
+    def __init__(self, name: str, source: Optional[str] = None):
         self.name = name
+        # Message/status events are attributed to the simulated provider so an
+        # antigravity mock emits antigravity-sourced events, not a codex fallback.
+        self.source = source or _mock_source("", name)
 
     async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
-        source = "claude" if self.name == "claude" else "codex"
+        source = self.source
         yield Event.create(source, "status", f"mock {self.name} received prompt in {workdir}")
         await asyncio.sleep(0.03)
         yield Event.create("tool", "tool_call", f"mock {self.name} inspects repository state")
@@ -135,26 +137,34 @@ class SubprocessRunner(AgentRunner):
                 process.terminate()
 
 
-def configured_runner(agent: AgentConfig, verbose: bool = False, options: Optional[Dict[str, object]] = None) -> AgentRunner:
+def configured_runner(
+    agent: AgentConfig,
+    verbose: bool = False,
+    options: Optional[Dict[str, object]] = None,
+    backend_id: Optional[str] = None,
+) -> AgentRunner:
+    """Build the runner for an agent by delegating to its resolved backend.
+
+    ``backend_id`` is the effective backend resolved once at start validation and
+    carried through execution; when omitted (e.g. the direct CLI path), it is
+    resolved from ``agents.<id>.backend`` or the built-in default. ``mock`` agents
+    keep their runner-level handling and ignore backend selection.
+    """
+
     if agent.type == "mock":
-        return MockRunner(agent.name or agent.id)
-    if agent.type == "claude":
-        parser = parse_claude_line
-    elif agent.type == "codex":
-        parser = parse_codex_line
-    else:
-        raise ConfigError(f"unsupported agent type for {agent.id!r}: {agent.type!r}")
-    if not agent.command:
-        raise ConfigError(f"agents.{agent.id}.command is required")
-    command = apply_agent_options([agent.command] + list(agent.args), agent, options or {})
-    return SubprocessRunner(
-        agent.id,
-        command,
-        parser,
-        verbose,
-        env=dict(agent.env),
-        cwd=agent.cwd,
-    )
+        name = agent.name or agent.id
+        return MockRunner(name, source=_mock_source(agent.type, name))
+
+    from .backends import get_backend, resolve_backend_id
+
+    resolved = backend_id or resolve_backend_id(agent)
+    try:
+        backend = get_backend(agent.type, resolved)
+    except KeyError as exc:
+        raise ConfigError(
+            f"agents.{agent.id}.backend {resolved!r} is not registered for type {agent.type!r}"
+        ) from exc
+    return backend.create_runner(agent, verbose, dict(options or {}))
 
 
 def _resolve_run_dir(workdir: Path, configured_cwd: Optional[str]) -> Path:
@@ -174,5 +184,21 @@ def _is_noisy_stderr(line: str) -> bool:
     )
 
 
+PROVIDER_SOURCES = {"claude", "codex", "antigravity"}
+
+
 def _event_source(agent_name: str) -> str:
-    return agent_name if agent_name in {"claude", "codex"} else "tool"
+    return agent_name if agent_name in PROVIDER_SOURCES else "tool"
+
+
+def _mock_source(agent_type: str, agent_name: str) -> str:
+    """Attribute mock events to the simulated provider.
+
+    Prefers the agent's type, falls back to its name, and keeps the historical
+    ``codex`` default so a plain ``mock`` agent is unchanged.
+    """
+
+    for candidate in (agent_type, agent_name):
+        if candidate in PROVIDER_SOURCES:
+            return candidate
+    return "codex"
