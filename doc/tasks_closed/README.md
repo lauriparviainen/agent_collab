@@ -13,3 +13,5 @@ Completed task docs move here when their implementation is done and verified.
 - [Stage 4.75: Daemonize server and typed session options](stage-4.75-daemonize-and-session-options.md)
 - [Stage 4.8: Global runtime and config migrations](stage-4.8-global-runtime-and-config-migrations.md)
 - [Stage 4.9: Pluggable agent backends (CLI subprocess vs SDK)](stage-4.9-pluggable-agent-backends.md)
+- [Stage 5.1: First-class SDK backends](stage-5.1-first-class-sdk-backends.md)
+- [Stage 5.1 remediation: Verify and repair SDK backends](stage-5.1-first-class-sdk-backends-remediation.md)

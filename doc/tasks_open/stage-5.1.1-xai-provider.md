@@ -7,7 +7,7 @@ Add `xai` as a fourth real provider `type`, with two backends:
 - a `cli` backend for the installed `grok` command (Grok Build), and
 - an `sdk` backend for the xAI Python SDK (`xai-sdk`).
 
-This is split out of [Stage 5.1](stage-5.1-first-class-sdk-backends.md) on
+This is split out of [Stage 5.1](../tasks_closed/stage-5.1-first-class-sdk-backends.md) on
 purpose. Stage 5.1 only adds a *second backend* (`sdk`) to providers that already
 exist (`claude`, `codex`, `antigravity`). xAI is different in kind: it adds a new
 provider request bucket and provider source, which still fan out across several

@@ -1,5 +1,7 @@
 # Stage 5.1: First-class SDK backends
 
+**Status: Complete — closed 2026-07-10.**
+
 ## Purpose
 
 Make `sdk` a first-class, installed backend for all supported real providers:
@@ -15,7 +17,8 @@ with the project, adding real SDK runners for Claude and Codex, and refreshing
 Antigravity SDK support.
 
 Adding `xai` as a fourth real provider is split into its own focused sub-task,
-[Stage 5.1.1](stage-5.1.1-xai-provider.md), and should land after this stage.
+[Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md), and should land after
+this stage.
 xAI adds a new provider `type` — a wider, riskier fan-out than adding a second
 backend to an existing type — so it is kept separate to keep this stage focused.
 
@@ -25,9 +28,9 @@ makes SDK support part of the project install. CLI backends remain supported, bu
 the default installed project should have the SDK modules available without
 extra install commands.
 
-## Current state
+## Completed state
 
-Implemented on the remediation branch:
+Implemented and verified:
 
 - `cli` and installed-by-default `sdk` backends for `claude`, `codex`, and
   `antigravity`, with lazy SDK imports,
@@ -40,11 +43,14 @@ Implemented on the remediation branch:
 - real-wheel constructor checks plus credentialed Claude and Codex turns in
   disposable workspaces.
 
-Remaining release evidence:
+Known external follow-up evidence:
 
 - re-run the requested `gpt-5.6-sol` Codex default after a sufficiently new
   standalone Codex release asset is downloadable,
-- run the Antigravity tool-call smoke when `GEMINI_API_KEY` is available.
+- run the Antigravity tool-call smoke on a glibc 2.36+ host or after Google
+  publishes an EL9-compatible `localharness`. ADC and Vertex configuration are
+  already valid; Oracle Linux 9's glibc 2.34 blocks the bundled binary before a
+  turn begins.
 
 See the [remediation verification records](stage-5.1-first-class-sdk-backends-remediation.md)
 for installed API shapes and exact blocked/live evidence. They supersede any
@@ -77,7 +83,7 @@ are young and may change:
   - https://github.com/google-antigravity/antigravity-sdk-python
   - https://antigravity.google/product/antigravity-sdk
 - xAI (CLI `grok` + `xai-sdk`): out of scope here; see
-  [Stage 5.1.1](stage-5.1.1-xai-provider.md) for the verified `grok 0.2.93`
+  [Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md) for the verified `grok 0.2.93`
   flags, `streaming-json` event shapes, and SDK usage.
 
 ## Packaging plan
@@ -366,7 +372,7 @@ CLI/MCP start validation must reject:
     development machine before closing the task.
 
 Adding the `xai` provider is tracked separately in
-[Stage 5.1.1](stage-5.1.1-xai-provider.md).
+[Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md).
 
 ## Tests
 
@@ -429,6 +435,6 @@ Live tests must not run by default in CI or normal local unit test runs.
   summaries.
 - Resume, interrupt, and tool-gating are separate runtime features. Do not make
   them implicit side effects of adding SDK execution.
-- xAI is added separately in [Stage 5.1.1](stage-5.1.1-xai-provider.md); see that
+- xAI is added separately in [Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md); see that
   task for its provider-specific risks (new `type` fan-out with two silent-fail
   lists, Grok-CLI-vs-SDK asymmetry, unobserved tool-event shapes, ACP follow-up).

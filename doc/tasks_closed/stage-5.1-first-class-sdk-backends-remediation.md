@@ -1,5 +1,49 @@
 # Stage 5.1 remediation: verify and repair the SDK backends
 
+**Status: Complete — closed 2026-07-10.**
+
+## Post-implementation note (2026-07-10)
+
+Stage 5.1 and both remediation slices are complete. The final implementation
+landed the following:
+
+- Six standalone backend packages under
+  `agent_collab/backends/<provider>_<backend>/`, each with backend-owned option
+  declarations, normalization, settings summaries, health, runner construction,
+  documentation, and hermetic tests.
+- Installed and import-verified SDKs in the default Python 3.12 environment:
+  `claude-agent-sdk==0.2.114`, `openai-codex==0.1.0b3`, and
+  `google-antigravity==0.1.6`. The source wrapper prefers
+  `~/.agent-collab/venv`, enforces Python 3.10+, and falls back through Python
+  3.12, 3.11, and 3.10.
+- Backend-qualified MCP/session options such as `claude_sdk` and `codex_cli`.
+  Static, non-MCP Antigravity SDK settings (`vertex`, `project`, `location`) are
+  declared by its colocated `config.toml`; MCP-overridable values such as
+  `model` remain in `options.toml` and `[agents.<backend-agent>.options]`.
+- Config schema 3 and backend-specific agent sections, allowing `claude_cli`,
+  `claude_sdk`, `codex_cli`, `codex_sdk`, `antigravity_cli`, and
+  `antigravity_sdk` to be configured simultaneously without option leakage.
+- Separate hermetic and credentialed suites. Live tests use canonical selectors
+  (`claude_sdk`, `codex_cli`, and so on), economical model/reasoning defaults,
+  disposable workspaces, and never run as part of the normal unit suite.
+- Wheel verification for backend `README.md`, `options.toml`, and the
+  Antigravity SDK static `config.toml`. The final hermetic suite passes all 356
+  tests.
+
+Claude and Codex SDK paths have passed real credentialed turns during the
+remediation work. Antigravity SDK configuration and ADC are valid, but its
+bundled `localharness` cannot start on this Oracle Linux 9 host: the binary
+requires `GLIBC_ABI_DT_RELR` (glibc 2.36+) while the host provides glibc 2.34.
+That external native-binary limitation is prominently documented in
+`integration_tests/README.md`; it does not leave an unimplemented Stage 5.1
+code path. Resolution requires a newer host runtime or an EL9-compatible binary
+from Google. The SDK remains installed, discoverable, configured, and covered
+by constructor/event-mapping tests.
+
+Relevant follow-up commits include `ed5abac` for canonical integration backend
+names and `170c877` for the Antigravity glibc blocker note. xAI remains the
+separate open [Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md).
+
 ## Purpose
 
 Repair the Stage 5.1 SDK implementation without replacing unverified API guesses
@@ -13,7 +57,7 @@ not delay the immediate packaging and runtime correctness fixes.
 
 This is a remediation plan for
 [Stage 5.1](stage-5.1-first-class-sdk-backends.md), not a new provider stage.
-xAI remains in [Stage 5.1.1](stage-5.1.1-xai-provider.md).
+xAI remains in [Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md).
 
 ## Evidence levels
 
