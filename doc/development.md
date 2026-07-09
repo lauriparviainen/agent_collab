@@ -13,7 +13,7 @@ Source checkout helper:
 ```bash
 ./agent_collab.sh help
 ./agent_collab.sh test
-./agent_collab.sh integration-test [claude|codex|antigravity] [cli|sdk] [--strict]
+./agent_collab.sh integration-test [claude_cli|claude_sdk|codex_cli|codex_sdk|antigravity_cli|antigravity_sdk] [--strict]
 ./agent_collab.sh smoke
 ```
 

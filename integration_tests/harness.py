@@ -15,9 +15,9 @@ from agent_collab.config import AgentConfig, builtin_config
 
 PROVIDERS = {"claude", "codex", "antigravity"}
 BACKENDS = {"cli", "sdk"}
-_selected_providers: Set[str] = set(PROVIDERS)
-_selected_backends: Set[str] = set(BACKENDS)
-_explicit_providers: Set[str] = set()
+BACKEND_NAMES = {f"{provider}_{backend}" for provider in PROVIDERS for backend in BACKENDS}
+_selected_backend_names: Set[str] = set(BACKEND_NAMES)
+_explicit_backend_names: Set[str] = set()
 STRICT = False
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,26 +31,25 @@ DEFAULT_LIVE_OPTIONS: Dict[str, Dict[str, Any]] = {
 
 
 def configure(
-    providers: Optional[Iterable[str]] = None,
-    backend_ids: Optional[Iterable[str]] = None,
+    backend_names: Optional[Iterable[str]] = None,
     *,
     strict: bool = False,
-    explicit_providers: Optional[Iterable[str]] = None,
 ) -> None:
-    global _selected_providers, _selected_backends, _explicit_providers, STRICT
-    _selected_providers = set(providers or PROVIDERS)
-    _selected_backends = set(backend_ids or BACKENDS)
-    _explicit_providers = set(explicit_providers or ())
+    global _selected_backend_names, _explicit_backend_names, STRICT
+    selected_names = set(backend_names or BACKEND_NAMES)
+    _selected_backend_names = selected_names
+    _explicit_backend_names = set(backend_names or ())
     STRICT = strict
 
 
 def selected(provider: str, backend_id: str) -> bool:
-    return provider in _selected_providers and backend_id in _selected_backends
+    return f"{provider}_{backend_id}" in _selected_backend_names
 
 
 def missing_reason(provider: str, backend_id: str, reason: str) -> str:
-    strict = STRICT and provider in _explicit_providers
-    return f"[strict-missing] {provider}_{backend_id}: {reason}" if strict else f"[missing] {provider}_{backend_id}: {reason}"
+    name = f"{provider}_{backend_id}"
+    strict = STRICT and name in _explicit_backend_names
+    return f"[strict-missing] {name}: {reason}" if strict else f"[missing] {name}: {reason}"
 
 
 async def _collect(runner: Any, prompt: str, workdir: Path) -> list:

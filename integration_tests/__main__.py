@@ -18,18 +18,20 @@ def _csv(value: str) -> List[str]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m integration_tests")
-    parser.add_argument("provider", nargs="?", choices=sorted(harness.PROVIDERS))
-    parser.add_argument("backend", nargs="?", choices=sorted(harness.BACKENDS))
+    parser.add_argument("backend", nargs="?", choices=sorted(harness.BACKEND_NAMES))
     parser.add_argument("--strict", action="store_true")
     args = parser.parse_args(argv)
 
-    env_providers = _csv(os.environ.get("AGENT_COLLAB_IT_PROVIDERS", ""))
     env_backends = _csv(os.environ.get("AGENT_COLLAB_IT_BACKENDS", ""))
-    providers = [args.provider] if args.provider else env_providers or None
-    backend_ids = [args.backend] if args.backend else env_backends or None
-    explicit = providers or []
+    invalid = sorted(set(env_backends) - harness.BACKEND_NAMES)
+    if invalid:
+        parser.error(
+            f"AGENT_COLLAB_IT_BACKENDS contains unknown backend {invalid[0]!r}; "
+            f"expected one of: {', '.join(sorted(harness.BACKEND_NAMES))}"
+        )
+    backend_names = [args.backend] if args.backend else env_backends or None
     strict = args.strict or os.environ.get("AGENT_COLLAB_IT_STRICT") == "1"
-    harness.configure(providers, backend_ids, strict=strict, explicit_providers=explicit)
+    harness.configure(backend_names, strict=strict)
 
     suite = unittest.defaultTestLoader.discover(
         str(Path(__file__).parent / "backends"),

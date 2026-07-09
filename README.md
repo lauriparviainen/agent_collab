@@ -276,7 +276,7 @@ Run tests:
 
 ```bash
 ./agent_collab.sh test
-./agent_collab.sh integration-test claude sdk  # live, credentialed, opt-in
+./agent_collab.sh integration-test claude_sdk  # live, credentialed, opt-in
 ```
 
 Important implementation files:

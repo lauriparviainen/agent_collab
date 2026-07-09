@@ -2,10 +2,14 @@ import os
 import unittest
 from unittest import mock
 
+from integration_tests import harness
 from integration_tests.harness import LiveBackendTestCase
 
 
 class IntegrationHarnessOptionTests(unittest.TestCase):
+    def tearDown(self):
+        harness.configure()
+
     def _options(self, provider):
         case = LiveBackendTestCase(methodName="runTest")
         case.provider = provider
@@ -37,6 +41,15 @@ class IntegrationHarnessOptionTests(unittest.TestCase):
                 self._options("codex"),
                 {"model": "custom-codex", "thinking_level": "medium"},
             )
+
+    def test_selection_uses_canonical_backend_names(self):
+        harness.configure(["claude_sdk", "codex_cli"], strict=True)
+        self.assertTrue(harness.selected("claude", "sdk"))
+        self.assertTrue(harness.selected("codex", "cli"))
+        self.assertFalse(harness.selected("claude", "cli"))
+        self.assertTrue(
+            harness.missing_reason("claude", "sdk", "missing").startswith("[strict-missing]")
+        )
 
 
 if __name__ == "__main__":

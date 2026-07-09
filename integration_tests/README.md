@@ -10,11 +10,15 @@ This suite is credentialed and may make paid model calls. It is structurally sep
 
 ```bash
 ./agent_collab.sh integration-test
-./agent_collab.sh integration-test claude sdk
-./agent_collab.sh integration-test codex cli --strict
+./agent_collab.sh integration-test claude_sdk
+./agent_collab.sh integration-test codex_cli --strict
 ```
 
-Selection can also use comma-separated `AGENT_COLLAB_IT_PROVIDERS` and `AGENT_COLLAB_IT_BACKENDS`. `AGENT_COLLAB_IT_STRICT=1` makes missing dependencies/credentials for explicitly selected providers exit `2`. Behavioral failures exit `1`; passes and ordinary skips exit `0`.
+Selection can also use comma-separated canonical names in
+`AGENT_COLLAB_IT_BACKENDS`, such as `claude_sdk,codex_cli`.
+`AGENT_COLLAB_IT_STRICT=1` makes missing dependencies/credentials for explicitly
+selected backends exit `2`. Behavioral failures exit `1`; passes and ordinary
+skips exit `0`.
 
 The paid calls default to economical, low-latency settings: Claude `sonnet` with
 low effort, Codex `gpt-5.6-luna` with low reasoning, and Antigravity
