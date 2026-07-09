@@ -39,7 +39,7 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_file_parses_with_fallback_toml_parser(self):
         data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(data["schema_version"], 2)
+        self.assertEqual(data["schema_version"], 3)
         self.assertNotIn("options", data["agents"]["claude"])
         self.assertNotIn("options", data["agents"]["codex"])
         self.assertNotIn("options", data["agents"]["antigravity"])
@@ -218,17 +218,20 @@ sequence = ["codex_readonly", "claude", "codex_readonly"]
         self.assertEqual(data["agents"]["codex_readonly"]["env"], {"CODEX_HOME": "/tmp/codex"})
         self.assertEqual(data["workflows"]["readonly-review"]["sequence"], ["codex_readonly", "claude", "codex_readonly"])
 
-    def test_toml_subset_parser_supports_dotted_option_keys(self):
+    def test_toml_subset_parser_supports_backend_agent_options(self):
         data = _parse_toml_subset(
             """
-[agents.codex.options]
-model.allowed = ["gpt-5-codex", "gpt-5"]
-search.allowed = [true, false]
+[agents.antigravity_sdk]
+type = "antigravity"
+backend = "sdk"
+vertex = true
+project = "test-project"
 """
         )
 
-        self.assertEqual(data["agents"]["codex"]["options"]["model"]["allowed"], ["gpt-5-codex", "gpt-5"])
-        self.assertEqual(data["agents"]["codex"]["options"]["search"]["allowed"], [True, False])
+        agent = data["agents"]["antigravity_sdk"]
+        self.assertTrue(agent["vertex"])
+        self.assertEqual(agent["project"], "test-project")
 
     def test_agent_options_config_loads(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -239,20 +242,52 @@ search.allowed = [true, false]
             _write_config(
                 root,
                 """
-[agents.claude.options]
-model.default = "opus"
-model.allowed = ["sonnet", "opus"]
-thinking_level.default = "high"
-thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
+[agents.claude_sdk]
+type = "claude"
+backend = "sdk"
+
+[agents.claude_sdk.options]
+model = "opus"
+thinking_level = "high"
 """,
             )
 
             config = load_config(root, env=_env(home))
 
-            self.assertEqual(config.agents["claude"].options["model"]["allowed"], ["sonnet", "opus"])
-            self.assertEqual(config.agents["claude"].options["model"]["default"], "opus")
-            self.assertEqual(config.agents["claude"].options["thinking_level"]["default"], "high")
-            self.assertEqual(config.agents["claude"].options["thinking_level"]["allowed"], ["low", "medium", "high", "xhigh", "max"])
+            options = config.agents["claude_sdk"].options_for("sdk")
+            self.assertEqual(options["model"], "opus")
+            self.assertEqual(options["thinking_level"], "high")
+
+    def test_unknown_static_backend_config_is_rejected_by_backend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            home.mkdir()
+            _write_config(root, '[agents.claude]\nbogus = true\n')
+
+            with self.assertRaisesRegex(ConfigError, "agents.claude.bogus"):
+                load_config(root, env=_env(home))
+
+    def test_antigravity_static_config_is_validated_by_sdk_backend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            home.mkdir()
+            _write_config(
+                root,
+                '''
+[agents.antigravity_sdk]
+type = "antigravity"
+backend = "sdk"
+vertex = true
+location = "us-central1"
+''',
+            )
+
+            with self.assertRaisesRegex(ConfigError, "agents.antigravity_sdk.project"):
+                load_config(root, env=_env(home))
 
     def test_workflow_sequence_rejects_unknown_agent(self):
         with tempfile.TemporaryDirectory() as tmp:

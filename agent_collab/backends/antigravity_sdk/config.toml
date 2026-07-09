@@ -1,0 +1,11 @@
+schema_version = 1
+
+[options.vertex]
+type = "boolean"
+default = false
+
+[options.project]
+type = "string"
+
+[options.location]
+type = "string"

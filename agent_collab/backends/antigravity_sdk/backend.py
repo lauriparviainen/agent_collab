@@ -22,15 +22,15 @@ rejection) rather than an import crash.
   ``ToolResult(name, id, result, error, exception)`` carry correlated tool data.
 - ``response.usage_metadata`` exposes optional per-turn token counts after the
   response is resolved.
-- ``LocalAgentConfig`` takes ``workspaces=[...]`` (the working dirs) and ``model``;
-  the working directory is a workspace, not a ``working_directory`` kwarg.
+- ``LocalAgentConfig`` takes ``workspaces=[...]`` (the working dirs), ``model``,
+  and the Vertex shorthands ``vertex``, ``project``, and ``location``; the
+  working directory is a workspace, not a ``working_directory`` kwarg.
 - ``Agent.conversation_id`` exposes a stable, resume-capable id.
 
-Only the live *call* is blocked here: the SDK requires a Gemini API key
-(``GEMINI_API_KEY`` env or ``LocalAgentConfig(api_key=...)``); agent-collab never
-manages credentials, so it passes the environment through and the first turn's
-real error is the authority. The event mapper is exercised by fake-module tests
-built to the confirmed shapes (``tests/backends/antigravity_sdk/test_backend.py``).
+Live calls use either a Gemini API key (``GEMINI_API_KEY``) or Vertex AI with
+Google Application Default Credentials. Agent-collab never stores credential
+material. The event mapper is exercised by fake-module tests built to the
+confirmed shapes (``tests/backends/antigravity_sdk/test_backend.py``).
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ from ...runners import AgentRunner
 from ..base import (
     BackendCapabilities,
     BackendHealth,
+    BackendOptionError,
     BackendUnavailable,
     OptionSpec,
     load_option_schema,
@@ -59,6 +60,7 @@ PACKAGE_NAME = "google-antigravity"
 INSTALL_HINT = "install the Antigravity SDK: pip install google-antigravity"
 
 ANTIGRAVITY_SDK_OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
+ANTIGRAVITY_SDK_CONFIG_SCHEMA = load_option_schema(Path(__file__).with_name("config.toml"))
 
 # A factory builds the SDK agent context manager for one turn. Injectable so
 # tests drive the runner with a fake without installing the SDK or calling a model.
@@ -96,7 +98,15 @@ class AntigravitySdkBackend:
         agent: AgentConfig,
         requested: Mapping[str, Any],
     ) -> Mapping[str, Any]:
-        return normalize_declared_options(agent, requested, self.option_schema(agent))
+        self.normalize_config(agent)
+        return normalize_declared_options(
+            requested,
+            self.option_schema(agent),
+            configured=agent.options_for(self.id),
+        )
+
+    def normalize_config(self, agent: AgentConfig) -> Mapping[str, Any]:
+        return _normalize_sdk_config(agent)
 
     def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
         factory = self._agent_factory or _default_agent_factory
@@ -116,6 +126,9 @@ class AntigravitySdkBackend:
         mapped = _map_sdk_options(options)
         if mapped:
             summary["options"] = mapped
+        config = self.normalize_config(agent)
+        if config:
+            summary["config"] = config
         return summary
 
 
@@ -323,19 +336,41 @@ def _usage_raw(usage_metadata: Any) -> Dict[str, int]:
 def _map_sdk_options(options: Dict[str, Any]) -> Dict[str, Any]:
     # Explicit mapping, no blind pass-through. `mode` is cli-only (the SDK has no
     # `--mode` equivalent; it uses CapabilitiesConfig/policies) and is rejected at
-    # start validation for the sdk backend, so only `model` maps here.
+    # start validation for the sdk backend.
     mapped: Dict[str, Any] = {}
     if "model" in options:
         mapped["model"] = options["model"]
     return mapped
 
 
+def _normalize_sdk_config(agent: AgentConfig) -> Dict[str, Any]:
+    config = normalize_declared_options(
+        {}, ANTIGRAVITY_SDK_CONFIG_SCHEMA, configured=agent.backend_config
+    )
+    vertex = config.get("vertex")
+    project = config.get("project")
+    location = config.get("location")
+    if vertex is True:
+        if not isinstance(project, str) or not project.strip():
+            raise BackendOptionError("project", "is required and must be non-empty when vertex is true")
+        if not isinstance(location, str) or not location.strip():
+            raise BackendOptionError("location", "is required and must be non-empty when vertex is true")
+    elif project is not None or location is not None:
+        field = "project" if project is not None else "location"
+        raise BackendOptionError(field, "requires vertex=true")
+    return config
+
+
+def _map_sdk_config(agent: AgentConfig) -> Dict[str, Any]:
+    return _normalize_sdk_config(agent)
+
+
 def _default_agent_factory(agent: AgentConfig, options: Dict[str, Any], workdir: Path) -> Any:
     """Lazily import the real SDK and build its agent context manager.
 
-    Names/kwargs confirmed against google-antigravity 0.1.5. The working dir is a
-    workspace; auth (GEMINI_API_KEY) comes from the passed-through environment,
-    never managed here.
+    Names/kwargs confirmed against google-antigravity 0.1.6. The working dir is a
+    workspace. Authentication comes from GEMINI_API_KEY or Vertex Application
+    Default Credentials and is never managed here.
     """
 
     try:
@@ -343,6 +378,6 @@ def _default_agent_factory(agent: AgentConfig, options: Dict[str, Any], workdir:
     except ImportError as exc:
         raise BackendUnavailable("antigravity", "sdk", f"{MODULE_NAME} is not importable", INSTALL_HINT) from exc
     config_kwargs: Dict[str, Any] = {"workspaces": [str(workdir)]}
-    if "model" in options:
-        config_kwargs["model"] = options["model"]
+    config_kwargs.update(_map_sdk_config(agent))
+    config_kwargs.update(_map_sdk_options(options))
     return Agent(LocalAgentConfig(**config_kwargs))

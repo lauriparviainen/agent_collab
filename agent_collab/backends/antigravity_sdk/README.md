@@ -4,11 +4,27 @@ Registered as `antigravity_sdk` (`type="antigravity"`, `backend="sdk"`). It uses
 
 ## Selection and requirements
 
-Select with `backend="sdk"`. The `google-antigravity` wheel and Gemini/Vertex credentials are required. The probe recognizes `GEMINI_API_KEY`; absence is `unknown` because ADC or explicit SDK configuration may work. Credentials are never stored by agent-collab.
+Select with `backend="sdk"`. The `google-antigravity` wheel and Gemini/Vertex credentials are required. The probe recognizes `GEMINI_API_KEY`; absence is `unknown` because ADC may work. Credentials are never stored by agent-collab. Vertex uses Google Application Default Credentials, including gcloud's standard `~/.config/gcloud/application_default_credentials.json` file.
 
 ## Options
 
-[`options.toml`](options.toml) is authoritative. `model` maps to `LocalAgentConfig`; CLI `mode` is unsupported. Nothing is inferred from CLI argv.
+[`options.toml`](options.toml) declares the MCP/session option `model`.
+[`config.toml`](config.toml) separately declares static `vertex`, `project`, and
+`location` configuration; project and location are required when Vertex is
+enabled. CLI `mode` is unsupported. Nothing is inferred from CLI argv.
+
+```toml
+[agents.antigravity_sdk]
+type = "antigravity"
+backend = "sdk"
+env = { GOOGLE_APPLICATION_CREDENTIALS = "/home/me/.config/gcloud/application_default_credentials.json" }
+vertex = true
+project = "my-gcp-project"
+location = "us-central1"
+
+[agents.antigravity_sdk.options]
+model = "Gemini 3.1 Pro (High)"
+```
 
 ## Events and identity
 

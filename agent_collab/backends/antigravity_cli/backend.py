@@ -37,7 +37,12 @@ class AntigravityCliBackend:
             value = flag_value(agent.args, flag)
             if value is not None:
                 inferred[field] = value
-        return normalize_declared_options(agent, requested, self.option_schema(agent), inferred=inferred)
+        return normalize_declared_options(
+            requested,
+            self.option_schema(agent),
+            configured=agent.options_for(self.id),
+            inferred=inferred,
+        )
 
     def build_command(
         self, agent: AgentConfig, options: Mapping[str, Any], run_dir: Optional[Path] = None

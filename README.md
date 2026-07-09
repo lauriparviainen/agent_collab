@@ -23,7 +23,7 @@ Implemented:
 - Pluggable agent backends: an agent's provider (`type`) is separate from its execution mechanism (`backend`). The default `cli` subprocess backend runs the provider CLI; a first-class `sdk` backend runs the provider SDK in-process. Claude, Codex, and Antigravity each register both `(cli)` and `(sdk)`; SDK imports are lazy so a missing wheel is an unavailable backend, not an import error. Backends, availability/health, and honest per-session capability flags are discoverable via `agent_collab_describe_options`.
 - MCP option discovery through `agent_collab_describe_options` and usage guidance through `agent_collab_guidance`.
 - Start/status/list responses include the effective session settings: workflow sequence, per-agent typed options, and a prompt-free `command_preview`.
-- Centralized config schema migrations (`schema_version`, currently 2).
+- Centralized config schema migrations (`schema_version`, currently 3).
 - JSONL and Markdown session logs under `~/.agent-collab/data/sessions/`.
 
 Current transition:
@@ -187,7 +187,7 @@ SESSION_WORKDIR/.agent-collab/config.toml
 built-in defaults
 ```
 
-The built-in defaults live in [agent_collab/default_config.toml](agent_collab/default_config.toml). Project config comes from the session `workdir`, never from the caller's shell directory. Config files carry a `schema_version` (currently 2); known old shapes are migrated in memory at load time by a centralized migration layer, and unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir /path/to/project`. See [doc/agent-configuration.md](doc/agent-configuration.md).
+The built-in defaults live in [agent_collab/default_config.toml](agent_collab/default_config.toml). Project config comes from the session `workdir`, never from the caller's shell directory. Config files carry a `schema_version` (currently 3); known old shapes are migrated in memory at load time by a centralized migration layer, and unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir /path/to/project`. See [doc/agent-configuration.md](doc/agent-configuration.md).
 
 The built-in defaults include Claude Opus with high effort and Codex high reasoning effort:
 

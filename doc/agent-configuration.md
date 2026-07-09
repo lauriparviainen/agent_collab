@@ -36,12 +36,12 @@ Agent commands should be changed in `agent-collab` config, not through dedicated
 
 Built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml), so the base agent commands, option defaults, and built-in workflows are inspectable without reading Python code.
 
-Config files declare a top-level `schema_version` (currently `2`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
+Config files declare a top-level `schema_version` (currently `3`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
 ## Example
 
 ```toml
-schema_version = 2
+schema_version = 3
 
 [agents.claude]
 type = "claude"
@@ -145,8 +145,9 @@ selected agent's type does not register that backend. Explicit options are
 rejected when their named backend is not selected or cannot honor them, with a
 `backend_options.<provider>_<backend>.<key>` field path.
 
-Each backend package declares its exact options/defaults in `options.toml` and
-normalizes only its own `backend_options` entry. CLI backends may infer values
+Each backend package declares its MCP/session options in `options.toml` and
+normalizes only its own `backend_options` entry. Static backend configuration
+stays directly under its backend-specific agent section. CLI backends may infer values
 from configured argv; SDK backends do not inherit CLI-only argv values. The
 start response and runner use the same per-agent normalized map.
 
@@ -179,7 +180,7 @@ before creating session state or launching a subprocess.
 ```
 
 Each backend's colocated manifest is the shipped source of accepted values and
-defaults. Per-agent config may narrow allowed values or override defaults. MCP
+defaults. A backend-specific agent section may set concrete session defaults. MCP
 exposes the effective schemas through `agent_collab_describe_options`. Unknown
 keys, wrong types, unsupported values, unselected backends, and invalid
 cross-field combinations are rejected with actionable paths.
@@ -187,29 +188,34 @@ cross-field combinations are rejected with actionable paths.
 Example option rules:
 
 ```toml
-[agents.codex.options]
-model.default = "gpt-5.6-sol"
-model.allowed = ["gpt-5.6-sol"]
-thinking_level.default = "high"
-thinking_level.allowed = ["minimal", "low", "medium", "high", "xhigh"]
-sandbox.allowed = ["read-only", "workspace-write"]
-approval_policy.allowed = ["on-request", "never"]
-search.allowed = [true, false]
+[agents.codex_cli]
+type = "codex"
+backend = "cli"
+command = "codex"
+args = ["exec", "--json"]
 
-[agents.claude.options]
-model.default = "opus"
-model.allowed = ["sonnet", "opus"]
-permission_mode.default = "default"
-permission_mode.allowed = ["default", "acceptEdits"]
-thinking_level.default = "high"
-thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
-thinking_budget_tokens.min = 0
-thinking_budget_tokens.max = 32768
+[agents.codex_cli.options]
+model = "gpt-5.6-sol"
+thinking_level = "high"
+sandbox = "workspace-write"
+approval_policy = "on-request"
+search = true
+
+[agents.claude_sdk]
+type = "claude"
+backend = "sdk"
+
+[agents.claude_sdk.options]
+model = "opus"
+permission_mode = "default"
+thinking_level = "high"
 ```
 
 `backend_options.antigravity_cli` accepts `model` and `mode`; the SDK entry
-accepts `model` only. A backend entry is rejected when it is not selected by the
-workflow.
+accepts only `model`. Vertex, project, and location are static SDK configuration
+under `agents.antigravity_sdk`, not MCP-call options. A backend entry is rejected
+when it is not selected by the workflow. Configured session defaults live under
+`agents.<id>.options`; MCP values override them for that session.
 
 CLI callers can pass JSON option objects and select a backend:
 

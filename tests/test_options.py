@@ -148,26 +148,26 @@ class CommandMappingTests(unittest.TestCase):
         self.assertIn("--sandbox", command)
         self.assertIn("--search", command)
 
-    def test_configured_agent_options_narrow_manifest(self):
+    def test_configured_agent_options_are_session_defaults(self):
         config = CollaborationConfig(
             agents={
                 "claude": AgentConfig(
                     id="claude", type="claude", command="claude",
-                    options={"model": {"allowed": ["sonnet"], "default": "sonnet"}},
+                    options={"model": "sonnet"},
                 )
             },
             workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
         )
         self.assertEqual(validate_start_options(config, "solo")["claude_cli"]["model"], "sonnet")
-        with self.assertRaises(StartOptionsError):
-            validate_start_options(config, "solo", {"claude_cli": {"model": "opus"}})
+        overridden = validate_start_options(config, "solo", {"claude_cli": {"model": "opus"}})
+        self.assertEqual(overridden["claude_cli"]["model"], "opus")
 
     def test_configured_raw_budget_replaces_manifest_thinking_default(self):
         config = CollaborationConfig(
             agents={
                 "claude": AgentConfig(
                     id="claude", type="claude", command="claude",
-                    options={"thinking_budget_tokens": {"default": 2048}},
+                    options={"thinking_budget_tokens": 2048},
                 )
             },
             workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},

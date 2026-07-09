@@ -300,66 +300,8 @@ def _effective_backend_schema(
                 }
             )
             continue
-        configured = agent.options.get(key, {})
-        result[key] = _configured_option_spec(spec, configured, f"{path}.{key}", errors)
+        result[key] = spec
     return result
-
-
-def _configured_option_spec(
-    spec: OptionSpec,
-    configured: Any,
-    path: str,
-    errors: List[Dict[str, str]],
-) -> OptionSpec:
-    if not isinstance(configured, Mapping):
-        return spec
-
-    allowed = spec.allowed
-    if "allowed" in configured:
-        candidate = configured["allowed"]
-        if not isinstance(candidate, list):
-            errors.append({"path": path, "message": "configured allowed must be a list"})
-        else:
-            candidate_values = tuple(candidate)
-            if allowed is not None and not set(candidate_values).issubset(set(allowed)):
-                errors.append(
-                    {
-                        "path": path,
-                        "message": "configured allowed values may narrow but not expand the backend schema",
-                    }
-                )
-            else:
-                allowed = candidate_values
-
-    minimum = spec.minimum
-    if "min" in configured:
-        candidate_min = configured["min"]
-        if not isinstance(candidate_min, (int, float)) or isinstance(candidate_min, bool):
-            errors.append({"path": path, "message": "configured min must be a number"})
-        elif minimum is not None and candidate_min < minimum:
-            errors.append({"path": path, "message": "configured min may not lower the backend minimum"})
-        else:
-            minimum = candidate_min
-
-    maximum = spec.maximum
-    if "max" in configured:
-        candidate_max = configured["max"]
-        if not isinstance(candidate_max, (int, float)) or isinstance(candidate_max, bool):
-            errors.append({"path": path, "message": "configured max must be a number"})
-        elif maximum is not None and candidate_max > maximum:
-            errors.append({"path": path, "message": "configured max may not raise the backend maximum"})
-        else:
-            maximum = candidate_max
-
-    default = deepcopy(configured["default"]) if "default" in configured else spec.default
-    return OptionSpec(
-        spec.type,
-        allowed=allowed,
-        minimum=minimum,
-        maximum=maximum,
-        default=default,
-        inferred=spec.inferred,
-    )
 
 
 def _validate_backend_values(

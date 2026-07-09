@@ -359,7 +359,7 @@ def _main_config(argv) -> int:
             print(f"agent {agent_id}: type={agent.type} command={command!r}{enabled}")
             for option, schema in sorted(agent.options.items()):
                 details = " ".join(f"{key}={value}" for key, value in sorted(schema.items()))
-                print(f"  option {option}: {details}")
+                print(f"  backend {agent.backend or 'cli'} option {option}: {details}")
         for workflow_id, workflow in sorted(config.workflows.items()):
             print(f"workflow {workflow_id}: {' -> '.join(workflow.sequence)}")
     except Exception as exc:

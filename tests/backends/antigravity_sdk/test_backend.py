@@ -25,7 +25,7 @@ from agent_collab.backends.antigravity_sdk.backend import (
     _default_agent_factory,
     map_antigravity_turn,
 )
-from agent_collab.backends.base import BackendUnavailable
+from agent_collab.backends.base import BackendOptionError, BackendUnavailable
 from agent_collab.backends.common.health import gemini_api_key_credentials
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.daemon import SessionState
@@ -38,6 +38,12 @@ from agent_collab.options import (
 
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "antigravity"
 AGENT = AgentConfig(id="antigravity", type="antigravity", backend="sdk")
+VERTEX_AGENT = AgentConfig(
+    id="antigravity",
+    type="antigravity",
+    backend="sdk",
+    backend_config={"vertex": True, "project": "test-project", "location": "us-central1"},
+)
 
 
 def _sample():
@@ -340,7 +346,7 @@ class SdkMissingExtraTests(unittest.TestCase):
         fake_module.Agent = Agent
         with mock.patch.dict(sys.modules, {"google.antigravity": fake_module}):
             result = _default_agent_factory(
-                AGENT,
+                VERTEX_AGENT,
                 {"model": "gemini-test"},
                 Path("/tmp/antigravity-workspace"),
             )
@@ -348,7 +354,13 @@ class SdkMissingExtraTests(unittest.TestCase):
         self.assertIsInstance(result, Agent)
         self.assertEqual(
             captured["config"],
-            {"workspaces": ["/tmp/antigravity-workspace"], "model": "gemini-test"},
+            {
+                "workspaces": ["/tmp/antigravity-workspace"],
+                "model": "gemini-test",
+                "vertex": True,
+                "project": "test-project",
+                "location": "us-central1",
+            },
         )
 
     def test_runner_with_default_factory_emits_actionable_error_event(self):
@@ -401,6 +413,51 @@ class SdkSelectionTests(unittest.TestCase):
         self.assertEqual(detail["path"], "backend_options.antigravity_sdk.mode")
         self.assertIn("sdk", detail["message"])
 
+    def test_vertex_configuration_is_separate_from_mcp_options(self):
+        backend = AntigravitySdkBackend()
+        schema = backend.option_schema(AGENT)
+        self.assertEqual(set(schema), {"model"})
+        self.assertEqual(
+            backend.normalize_config(VERTEX_AGENT),
+            {
+                "vertex": True,
+                "project": "test-project",
+                "location": "us-central1",
+            },
+        )
+        with self.assertRaises(BackendOptionError) as ctx:
+            backend.normalize_options(AGENT, {"vertex": True})
+        self.assertEqual(ctx.exception.field, "vertex")
+
+    def test_vertex_requires_project_and_location(self):
+        backend = AntigravitySdkBackend()
+        with self.assertRaises(BackendOptionError) as missing_project:
+            backend.normalize_config(
+                AgentConfig(
+                    id="ag", type="antigravity", backend="sdk",
+                    backend_config={"vertex": True, "location": "us-central1"},
+                )
+            )
+        self.assertEqual(missing_project.exception.field, "project")
+        with self.assertRaises(BackendOptionError) as missing_location:
+            backend.normalize_config(
+                AgentConfig(
+                    id="ag", type="antigravity", backend="sdk",
+                    backend_config={"vertex": True, "project": "test-project"},
+                )
+            )
+        self.assertEqual(missing_location.exception.field, "location")
+
+    def test_vertex_fields_are_rejected_when_vertex_is_not_enabled(self):
+        with self.assertRaises(BackendOptionError) as ctx:
+            AntigravitySdkBackend().normalize_config(
+                AgentConfig(
+                    id="ag", type="antigravity", backend="sdk",
+                    backend_config={"project": "test-project"},
+                )
+            )
+        self.assertEqual(ctx.exception.field, "project")
+
     def test_inferred_cli_mode_does_not_block_sdk_selection(self):
         # The built-in antigravity agent carries `--mode accept-edits -p` (cli
         # posture). Selecting the sdk backend must NOT be blocked by that inferred
@@ -441,13 +498,18 @@ class SdkSelectionTests(unittest.TestCase):
     def test_settings_summary_replaces_command_preview_for_sdk(self):
         config = self._config()
         settings = build_session_settings(
-            config, "solo", {"antigravity_sdk": {"model": "gemini-x"}}, agent_backends={"ag": "sdk"}
+            config,
+            "solo",
+            {"antigravity_sdk": {"model": "Gemini 3.1 Pro (High)"}},
+            agent_backends={"ag": "sdk"},
         )
         entry = settings["agents"]["ag"]
         self.assertEqual(entry["backend"], "sdk")
         self.assertNotIn("command_preview", entry)
         self.assertEqual(entry["backend_summary"]["package"], "google-antigravity")
-        self.assertEqual(entry["backend_summary"]["options"], {"model": "gemini-x"})
+        self.assertEqual(
+            entry["backend_summary"]["options"], {"model": "Gemini 3.1 Pro (High)"}
+        )
 
 
 if __name__ == "__main__":

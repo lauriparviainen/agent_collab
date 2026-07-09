@@ -36,4 +36,5 @@ agent_collab = [
     "default_config.toml",
     "backends/*/README.md",
     "backends/*/options.toml",
+    "backends/*/config.toml",
 ]

@@ -41,8 +41,11 @@ class ClaudeCliBackend:
             value = flag_value(agent.args, flag)
             if value is not None:
                 inferred[field] = int(value) if field == "thinking_budget_tokens" and value.isdigit() else value
-        normalized = normalize_declared_options(agent, requested, self.option_schema(agent), inferred=inferred)
-        return resolve_claude_thinking(normalized, configured_choices(agent, requested))
+        configured = agent.options_for(self.id)
+        normalized = normalize_declared_options(
+            requested, self.option_schema(agent), configured=configured, inferred=inferred
+        )
+        return resolve_claude_thinking(normalized, configured_choices(configured, requested))
 
     def build_command(self, agent: AgentConfig, options: Mapping[str, Any]) -> list[str]:
         command = [agent.command or agent.id, *agent.args]

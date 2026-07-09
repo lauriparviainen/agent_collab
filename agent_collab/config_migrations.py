@@ -15,7 +15,7 @@ import copy
 import logging
 from typing import Any, Callable, Dict, Mapping
 
-CURRENT_CONFIG_SCHEMA = 2
+CURRENT_CONFIG_SCHEMA = 3
 
 _logger = logging.getLogger("agent_collab.config")
 
@@ -63,6 +63,13 @@ def _migrate_v1_to_v2(data: Dict[str, Any], source: str) -> Dict[str, Any]:
     return data
 
 
+def _migrate_v2_to_v3(data: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """v3 binds each agent's option policy to its configured backend."""
+
+    return data
+
+
 MIGRATIONS: Dict[int, Callable[[Dict[str, Any], str], Dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
+    2: _migrate_v2_to_v3,
 }

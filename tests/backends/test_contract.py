@@ -14,7 +14,12 @@ from agent_collab.backends.base import (
     OptionSpec,
     normalize_declared_options,
 )
-from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig, builtin_config
+from agent_collab.config import (
+    AgentConfig,
+    CollaborationConfig,
+    WorkflowConfig,
+    builtin_config,
+)
 from agent_collab.backend_contract import load_option_schema
 from agent_collab.config import ConfigError
 from agent_collab.events import Event
@@ -62,7 +67,11 @@ class _ContractBackend:
         }
 
     def normalize_options(self, agent, requested):
-        return normalize_declared_options(agent, requested, self.option_schema(agent))
+        return normalize_declared_options(
+            requested,
+            self.option_schema(agent),
+            configured=agent.options_for(self.id),
+        )
 
     def settings_summary(self, agent, options):
         return {"backend": self.id, "options": dict(options), "contract": True}
@@ -159,17 +168,16 @@ class BackendContractExtensionTests(unittest.TestCase):
                 )
             self.assertEqual(ctx.exception.to_dict()["details"][0]["path"], expected)
 
-    def test_config_may_narrow_but_not_expand_backend_schema(self):
-        narrowed = _contract_config(
-            {"contract_mode": {"allowed": ["careful"], "default": "careful"}}
-        )
-        normalized = normalize_start_options(narrowed, "solo")
+    def test_config_supplies_session_default_but_request_can_override(self):
+        configured = _contract_config({"contract_mode": "careful"})
+        normalized = normalize_start_options(configured, "solo")
         self.assertEqual(normalized.agent_options["claude"], {"contract_mode": "careful"})
-        with self.assertRaises(StartOptionsError):
-            normalize_start_options(
-                _contract_config({"contract_mode": {"allowed": ["careful", "reckless"]}}),
-                "solo",
-            )
+        overridden = normalize_start_options(
+            configured,
+            "solo",
+            backend_options={"claude_contract-test": {"contract_mode": "fast"}},
+        )
+        self.assertEqual(overridden.agent_options["claude"], {"contract_mode": "fast"})
 
     def test_backend_qualified_request_applies_only_to_matching_backend(self):
         config = CollaborationConfig(

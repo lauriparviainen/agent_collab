@@ -44,8 +44,11 @@ class CodexCliBackend:
             inferred.update({"thinking_level": effort, "reasoning_effort": effort})
         if "--search" in agent.args:
             inferred["search"] = True
-        normalized = normalize_declared_options(agent, requested, self.option_schema(agent), inferred=inferred)
-        return resolve_codex_effort(normalized, configured_choices(agent, requested))
+        configured = agent.options_for(self.id)
+        normalized = normalize_declared_options(
+            requested, self.option_schema(agent), configured=configured, inferred=inferred
+        )
+        return resolve_codex_effort(normalized, configured_choices(configured, requested))
 
     def build_command(self, agent: AgentConfig, options: Mapping[str, Any]) -> list[str]:
         command = [agent.command or agent.id, *agent.args]

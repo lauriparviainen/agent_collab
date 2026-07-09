@@ -5,10 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple
-
-if TYPE_CHECKING:  # pragma: no cover
-    from .config import AgentConfig
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 
 OPTION_UNSET = object()
@@ -128,23 +125,50 @@ def _validate_manifest_value(value: Any, spec: OptionSpec, label: str, error_typ
 
 
 def normalize_declared_options(
-    agent: "AgentConfig",
     requested: Mapping[str, Any],
     schema: Mapping[str, OptionSpec],
     *,
+    configured: Optional[Mapping[str, Any]] = None,
     inferred: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Apply backend inference, declared/configured defaults, then request data."""
 
     result = {key: deepcopy(value) for key, value in (inferred or {}).items() if key in schema}
-    configured_options = getattr(agent, "options", {})
+    configured_options = configured or {}
+    _validate_values(configured_options, schema)
+    _validate_values(requested, schema)
     for key, spec in schema.items():
         if spec.default is not OPTION_UNSET:
             result[key] = deepcopy(spec.default)
-        configured = configured_options.get(key, {}) if isinstance(configured_options, Mapping) else {}
-        if isinstance(configured, Mapping) and "default" in configured:
-            result[key] = deepcopy(configured["default"])
+        if key in configured_options:
+            result[key] = deepcopy(configured_options[key])
     for key, value in requested.items():
         if key in schema:
             result[key] = deepcopy(value)
     return result
+
+
+def _validate_values(values: Mapping[str, Any], schema: Mapping[str, OptionSpec]) -> None:
+    unknown = sorted(set(values) - set(schema))
+    if unknown:
+        expected = ", ".join(sorted(schema)) or "(none)"
+        raise BackendOptionError(
+            unknown[0], f"is not declared by this backend; expected one of: {expected}"
+        )
+    for field, value in values.items():
+        spec = schema[field]
+        valid_type = (
+            (spec.type == "string" and isinstance(value, str))
+            or (spec.type == "integer" and isinstance(value, int) and not isinstance(value, bool))
+            or (spec.type == "boolean" and isinstance(value, bool))
+        )
+        if not valid_type:
+            raise BackendOptionError(field, f"must be a {spec.type}")
+        if spec.allowed is not None and value not in spec.allowed:
+            raise BackendOptionError(
+                field, f"unsupported value {value!r}; expected one of: {', '.join(map(str, spec.allowed))}"
+            )
+        if spec.minimum is not None and value < spec.minimum:
+            raise BackendOptionError(field, f"must be >= {spec.minimum:g}")
+        if spec.maximum is not None and value > spec.maximum:
+            raise BackendOptionError(field, f"must be <= {spec.maximum:g}")

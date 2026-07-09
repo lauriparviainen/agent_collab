@@ -93,8 +93,11 @@ class ClaudeSdkBackend:
         agent: AgentConfig,
         requested: Mapping[str, Any],
     ) -> Mapping[str, Any]:
-        normalized = normalize_declared_options(agent, requested, self.option_schema(agent))
-        return resolve_claude_thinking(normalized, configured_choices(agent, requested))
+        configured = agent.options_for(self.id)
+        normalized = normalize_declared_options(
+            requested, self.option_schema(agent), configured=configured
+        )
+        return resolve_claude_thinking(normalized, configured_choices(configured, requested))
 
     def command_preview(
         self, agent: AgentConfig, options: Mapping[str, Any], workdir: Optional[Path] = None

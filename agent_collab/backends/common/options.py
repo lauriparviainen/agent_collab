@@ -7,15 +7,13 @@ from typing import Any, Dict, Mapping
 from ...backend_contract import BackendOptionError
 
 
-def configured_choices(agent: Any, requested: Mapping[str, Any]) -> Dict[str, Any]:
+def configured_choices(
+    configured: Mapping[str, Any], requested: Mapping[str, Any]
+) -> Dict[str, Any]:
     """Fields deliberately selected by config defaults or the current request."""
 
     result: Dict[str, Any] = {}
-    configured = getattr(agent, "options", {})
-    if isinstance(configured, Mapping):
-        for key, value in configured.items():
-            if isinstance(value, Mapping) and "default" in value:
-                result[key] = value["default"]
+    result.update(configured)
     result.update(requested)
     return result
 

@@ -24,8 +24,14 @@ class AgentConfig:
     env: Dict[str, str] = field(default_factory=dict)
     cwd: Optional[str] = None
     timeout: Optional[int] = None
-    options: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    backend_config: Dict[str, Any] = field(default_factory=dict)
+    options: Dict[str, Any] = field(default_factory=dict)
     backend: Optional[str] = None
+
+    def options_for(self, backend_id: str) -> Dict[str, Any]:
+        """Return config defaults only for the agent's configured backend."""
+
+        return self.options if (self.backend or "cli") == backend_id else {}
 
 
 @dataclass
@@ -134,7 +140,8 @@ def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping
         env=dict(existing.env),
         cwd=existing.cwd,
         timeout=existing.timeout,
-        options={key: dict(value) for key, value in existing.options.items()},
+        backend_config=dict(existing.backend_config),
+        options=dict(existing.options),
         backend=existing.backend,
     )
     for key, value in values.items():
@@ -155,11 +162,14 @@ def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping
         elif key == "timeout":
             agent.timeout = _expect_int(value, f"agents.{agent_id}.timeout")
         elif key == "options":
-            agent.options = _expect_option_config(value, f"agents.{agent_id}.options")
+            agent.options = _expect_backend_options(value, f"agents.{agent_id}.options")
         elif key == "backend":
             agent.backend = _expect_str(value, f"agents.{agent_id}.backend")
         else:
-            raise ConfigError(f"unknown field agents.{agent_id}.{key}")
+            config_name = str(key)
+            agent.backend_config[config_name] = _expect_backend_value(
+                value, f"agents.{agent_id}.{config_name}"
+            )
     return agent
 
 
@@ -197,7 +207,8 @@ def validate_agent(agent: AgentConfig) -> None:
 
     # A backend must be registered for the agent's type; the command requirement
     # keys off the effective backend (only `cli` runs a subprocess), not the type.
-    from .backends import DEFAULT_BACKEND, registered_backends
+    from .backend_contract import BackendOptionError
+    from .backends import DEFAULT_BACKEND, get_backend, registered_backends
 
     registered = registered_backends(agent.type)
     if agent.backend is not None and agent.backend not in registered:
@@ -206,6 +217,21 @@ def validate_agent(agent: AgentConfig) -> None:
             f"{agent.type!r}; registered backends: {registered}"
         )
     backend_id = agent.backend or DEFAULT_BACKEND
+    backend_impl = get_backend(agent.type, backend_id)
+    config_normalizer = getattr(backend_impl, "normalize_config", None)
+    if agent.backend_config and not callable(config_normalizer):
+        field = sorted(agent.backend_config)[0]
+        raise ConfigError(
+            f"agents.{agent.id}.{field} is not a configuration field declared by backend {backend_id!r}"
+        )
+    try:
+        if callable(config_normalizer):
+            config_normalizer(agent)
+        backend_impl.normalize_options(agent, {})
+    except BackendOptionError as exc:
+        section = "options" if exc.field in agent.options else ""
+        path = f"agents.{agent.id}.{section + '.' if section else ''}{exc.field}".rstrip(".")
+        raise ConfigError(f"{path}: {exc.message}") from exc
     if agent.enabled and backend_id == "cli" and not agent.command:
         raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
 
@@ -388,28 +414,16 @@ def _expect_str_dict(value: Any, label: str) -> Dict[str, str]:
     return dict(value)
 
 
-def _expect_option_config(value: Any, label: str) -> Dict[str, Dict[str, Any]]:
+def _expect_backend_value(value: Any, label: str) -> Any:
+    if not isinstance(value, (str, bool, int)):
+        raise ConfigError(f"{label} must be a string, boolean, or integer")
+    return value
+
+
+def _expect_backend_options(value: Any, label: str) -> Dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ConfigError(f"{label} must be a table")
-    result: Dict[str, Dict[str, Any]] = {}
-    for option_name, settings in value.items():
-        option_label = f"{label}.{option_name}"
-        if not isinstance(settings, Mapping):
-            raise ConfigError(f"{option_label} must be a table")
-        parsed: Dict[str, Any] = {}
-        for key, setting in settings.items():
-            setting_label = f"{option_label}.{key}"
-            if key == "allowed":
-                if not isinstance(setting, list) or not all(isinstance(item, (str, bool, int)) for item in setting):
-                    raise ConfigError(f"{setting_label} must be an array of strings, booleans, or integers")
-                parsed[key] = list(setting)
-            elif key in {"min", "max"}:
-                parsed[key] = _expect_int(setting, setting_label)
-            elif key == "default":
-                if not isinstance(setting, (str, bool, int)):
-                    raise ConfigError(f"{setting_label} must be a string, boolean, or integer")
-                parsed[key] = setting
-            else:
-                raise ConfigError(f"unknown field {setting_label}")
-        result[str(option_name)] = parsed
-    return result
+    return {
+        str(name): _expect_backend_value(option, f"{label}.{name}")
+        for name, option in value.items()
+    }

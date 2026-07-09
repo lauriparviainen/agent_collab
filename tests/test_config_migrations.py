@@ -62,6 +62,7 @@ class MigrateConfigDataTests(unittest.TestCase):
         config = CollaborationConfig()
         with self.assertRaisesRegex(ConfigError, "bogus_field"):
             merge_config_data(config, migrate_config_data(data))
+            validate_config(config)
 
     def test_unknown_top_level_section_still_fails_after_migration(self):
         config = CollaborationConfig()

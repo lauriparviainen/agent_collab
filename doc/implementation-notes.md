@@ -39,7 +39,7 @@ separate from its execution `backend` (`cli` or an in-process `sdk`). SDK
 packages install with the project on Python >=3.10; their imports remain lazy.
 
 Each pair lives in `agent_collab/backends/<provider>_<backend>/` with its own
-`backend.py`, `options.toml`, and `README.md`. A single registry list registers
+`backend.py`, `options.toml`, optional static `config.toml`, and `README.md`. A single registry list registers
 packages by `(agent_type, backend_id)`. Backend resolution order is:
 
 ```text
@@ -58,6 +58,11 @@ dynamic `backend_options` map keyed by canonical names such as `claude_cli` and
 `codex_sdk`; there are no provider-wide option fields or central support table.
 Only CLI backends infer values from argv. `describe_options` reports the exact
 schema for every registered backend.
+
+Static, non-MCP backend settings live directly under a backend-specific agent
+section. Antigravity SDK owns and validates `vertex`, `project`, and `location`
+through its colocated `config.toml`; its `[agents.<id>.options]` table contains
+only MCP-overridable values such as `model`.
 
 Backend capabilities (`resume`, `interrupt`, `tool_gate`) are honest runtime
 facts and are not inferred from provider brand. Live backend health gates starts
