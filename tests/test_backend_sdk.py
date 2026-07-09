@@ -132,18 +132,27 @@ class SdkEventMappingTests(unittest.TestCase):
         self.assertFalse(any(e.source == "tool" for e in events))
         self.assertTrue(any(e.type == "message" and e.source == "antigravity" for e in events))
 
-    def test_conversation_id_captured_in_verbose_transcript_only(self):
-        # The SDK exposes Agent.conversation_id (confirmed). We capture it in the
-        # transcript under verbose; nothing resumes it and there is no structured
-        # agent_sessions field this stage.
-        quiet = _run(_FakeResponse(_sample()["text_only_response"]), conversation_id="conv-123")
-        self.assertFalse(any("conversation_id" in (e.raw or {}) for e in quiet))
+    def test_conversation_id_captured_as_uniform_provider_session(self):
+        # The SDK exposes Agent.conversation_id (confirmed). Stage 5.1 captures it
+        # via a uniform provider-session status event (emitted regardless of
+        # verbosity so the daemon can persist it), keyed to the agent id, using the
+        # uniform schema (provider_session_id + provider_session_kind).
+        for verbose in (False, True):
+            events = _run(
+                _FakeResponse(_sample()["text_only_response"]),
+                verbose=verbose,
+                conversation_id="conv-123",
+            )
+            captured = [e for e in events if (e.raw or {}).get("provider_session_id") == "conv-123"]
+            self.assertEqual(len(captured), 1, f"verbose={verbose}")
+            raw = captured[0].raw
+            self.assertEqual(raw["provider_session_kind"], "conversation")
+            self.assertEqual(raw["agent_id"], AGENT.id)
+            self.assertEqual(captured[0].source, "antigravity")
 
-        loud = _run(_FakeResponse(_sample()["text_only_response"]), verbose=True, conversation_id="conv-123")
-        self.assertTrue(any((e.raw or {}).get("conversation_id") == "conv-123" for e in loud))
-
+        # SessionState now has a structured, persisted place for captured ids.
         field_names = {f.name for f in dataclasses.fields(SessionState)}
-        self.assertNotIn("agent_sessions", field_names)
+        self.assertIn("agent_sessions", field_names)
 
     def test_map_turn_is_message_only_when_no_tool_calls(self):
         events = list(map_antigravity_turn("just text", None, [], verbose=False))
@@ -172,19 +181,19 @@ class SdkMissingExtraTests(unittest.TestCase):
         with mock.patch("importlib.util.find_spec", return_value=None):
             health = AntigravitySdkBackend().probe()
         self.assertEqual(health.status, "unavailable")
-        self.assertIn("antigravity-sdk", health.reason)
+        self.assertIn("google-antigravity", health.reason)
 
     def test_default_factory_raises_backend_unavailable(self):
         with mock.patch.dict(sys.modules, {"google.antigravity": None}):
             with self.assertRaises(BackendUnavailable) as ctx:
                 _default_agent_factory(AGENT, {}, Path("."))
-        self.assertIn("antigravity-sdk", str(ctx.exception))
+        self.assertIn("google-antigravity", str(ctx.exception))
 
     def test_runner_with_default_factory_emits_actionable_error_event(self):
         runner = AntigravitySdkBackend().create_runner(AGENT, False, {})
         with mock.patch.dict(sys.modules, {"google.antigravity": None}):
             events = asyncio.run(_collect(runner))
-        self.assertTrue(any(e.type == "error" and "antigravity-sdk" in e.text for e in events))
+        self.assertTrue(any(e.type == "error" and "google-antigravity" in e.text for e in events))
 
 
 class SdkCredentialsTests(unittest.TestCase):

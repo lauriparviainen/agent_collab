@@ -119,6 +119,9 @@ class SessionStateModel:
     error: Optional[str] = None
     settings: Optional[Dict[str, Any]] = None
     capabilities: Optional[Dict[str, bool]] = None
+    # Per-agent provider session identity (backend + provider_session_id +
+    # provider_session_kind), keyed by agent id. Opaque dict like ``settings``.
+    agent_sessions: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionStateModel":
@@ -142,6 +145,7 @@ class SessionStateModel:
             error=data.get("error"),
             settings=data.get("settings"),
             capabilities=data.get("capabilities"),
+            agent_sessions=data.get("agent_sessions"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -167,6 +171,7 @@ class SessionStateModel:
             "error": self.error,
             "settings": self.settings,
             "capabilities": self.capabilities,
+            "agent_sessions": self.agent_sessions,
         }
 
 

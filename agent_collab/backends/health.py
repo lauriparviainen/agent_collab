@@ -157,6 +157,35 @@ def antigravity_credentials(gemini_home: Optional[Path] = None) -> str:
     return CREDENTIALS_MISSING
 
 
+def anthropic_api_key_credentials(env: Optional[Mapping[str, str]] = None) -> str:
+    """Credential check for the Claude **sdk** backend (never a model call).
+
+    ``ANTHROPIC_API_KEY`` present is a definite ``ok``; its absence is only
+    ``unknown`` (never ``missing``) because the Claude Agent SDK also authenticates
+    through Claude Code's local sign-in — so this warns, never blocks, a setup that
+    is signed in without an env key.
+    """
+
+    environ = os.environ if env is None else env
+    if environ.get("ANTHROPIC_API_KEY"):
+        return CREDENTIALS_OK
+    return CREDENTIALS_UNKNOWN
+
+
+def codex_api_key_credentials(env: Optional[Mapping[str, str]] = None) -> str:
+    """Credential check for the Codex **sdk** backend (never a model call).
+
+    ``OPENAI_API_KEY`` present is a definite ``ok``; its absence is only
+    ``unknown`` (never ``missing``) because the Codex SDK drives the local Codex
+    app-server, which also has its own local sign-in — so this warns, never blocks.
+    """
+
+    environ = os.environ if env is None else env
+    if environ.get("OPENAI_API_KEY"):
+        return CREDENTIALS_OK
+    return CREDENTIALS_UNKNOWN
+
+
 def gemini_api_key_credentials(env: Optional[Mapping[str, str]] = None) -> str:
     """Credential check for the Antigravity **sdk** backend.
 

@@ -25,6 +25,12 @@ WORKFLOWS = set(builtin_config().workflows)
 EventAppender = Callable[[Event], Awaitable[int]]
 
 
+def _is_provider_session_event(event: Event) -> bool:
+    """A provider-session bookkeeping event (carries a captured provider id)."""
+
+    return isinstance(event.raw, dict) and bool(event.raw.get("provider_session_id"))
+
+
 @dataclass
 class RefereeInput:
     event: Event
@@ -124,7 +130,11 @@ class Referee:
         )
 
     def _recent_transcript(self, transcript: List[Event]) -> str:
-        return "\n".join(f"{event.source.upper()}: {event.text}" for event in transcript[-12:])
+        # SDK backends emit a provider-session status event (a bookkeeping id the
+        # daemon persists); it is not conversation and must not leak into a peer
+        # agent's handoff prompt, so filter it out before taking the recent window.
+        visible = [event for event in transcript if not _is_provider_session_event(event)]
+        return "\n".join(f"{event.source.upper()}: {event.text}" for event in visible[-12:])
 
     def _prompt_for(self, task: str, agent: str, turn: int, transcript: List[Event]) -> str:
         prior = self._recent_transcript(transcript)

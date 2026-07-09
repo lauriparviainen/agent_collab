@@ -217,13 +217,15 @@ thinking_level.default = "high"
         for agent_type in ("claude", "codex"):
             section = payload["backends"][agent_type]
             self.assertEqual(section["default"], "cli")
-            self.assertEqual(section["backends"], ["cli"])
-            entry = section["entries"]["cli"]
-            self.assertTrue(entry["available"])
-            self.assertEqual(
-                entry["capabilities"], {"resume": False, "interrupt": False, "tool_gate": False}
-            )
-            self.assertEqual(entry["health"]["status"], "ok")
+            # Stage 5.1: `sdk` is first-class alongside `cli` for every provider.
+            self.assertEqual(section["backends"], ["cli", "sdk"])
+            for backend_id in ("cli", "sdk"):
+                entry = section["entries"][backend_id]
+                self.assertTrue(entry["available"])
+                self.assertEqual(
+                    entry["capabilities"], {"resume": False, "interrupt": False, "tool_gate": False}
+                )
+                self.assertEqual(entry["health"]["status"], "ok")
 
     def test_build_session_settings_records_backend_and_capabilities(self):
         config = builtin_config()

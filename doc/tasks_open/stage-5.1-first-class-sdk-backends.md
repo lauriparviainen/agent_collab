@@ -85,7 +85,7 @@ Change `pyproject.toml` so SDK packages install with the project:
 requires-python = ">=3.10"
 dependencies = [
   "claude-agent-sdk>=0.2,<1",
-  "openai-codex>=0,<1",
+  "openai-codex>=0.1,<1",   # replace 0.1 with the actual tested floor
   "google-antigravity>=0.1,<1",
   # xai-sdk is added by Stage 5.1.1 (xAI provider).
 ]
@@ -137,6 +137,23 @@ agent_collab/backends/antigravity_sdk.py
 `antigravity_sdk.py` already exists. This stage should keep it, refresh it
 against current SDK docs, and remove the extras-gated language.
 
+Backend registration must not rely on a bare per-module `build_sdk_backends`
+factory name. Today `backends/__init__.py` does
+`from .antigravity_sdk import build_sdk_backends`; the moment a second SDK module
+exports the same symbol, the imports shadow each other. Because this stage adds
+`claude_sdk.py` and `codex_sdk.py` alongside the existing
+`antigravity_sdk.py`, the collision lands **in Stage 5.1**, not later. Resolve it
+here by either:
+
+- giving each module a distinct factory name
+  (`build_claude_sdk_backends`, `build_codex_sdk_backends`,
+  `build_antigravity_sdk_backends`), or
+- importing the module namespaces (`from . import claude_sdk` and calling
+  `claude_sdk.build_sdk_backends()`).
+
+Pick one convention and apply it to all SDK modules so Stage 5.1.1 (xAI) only has
+to follow the pattern.
+
 Each SDK backend must implement:
 
 - `probe()` with no model call,
@@ -150,9 +167,9 @@ Each SDK backend must implement:
 Do not pass unknown option keys through blindly. Unknown or unsupported SDK
 options should be rejected during start validation with field paths.
 
-When `xai` lands (Stage 5.1.1) it adds `(xai, cli)` + `(xai, sdk)` and a new SDK
-module; note that registering a second SDK module requires renaming the
-per-module `build_sdk_backends` factory to avoid an import shadow.
+When `xai` lands (Stage 5.1.1) it adds `(xai, cli)` + `(xai, sdk)` and a fourth
+SDK module; it simply follows the non-shadowing factory convention established
+above, so no rename is deferred to that stage.
 
 ## Provider plans
 
@@ -173,8 +190,8 @@ Initial mapping targets:
 Event mapping should cover:
 
 - assistant text messages -> `source="claude", type="message"`,
-- tool use / tool result messages -> `tool_call`, `command`, or `file_change`
-  where the SDK exposes enough structure,
+- tool use / tool result messages -> `source="tool"` with `type` of `tool_call`,
+  `command`, or `file_change` where the SDK exposes enough structure,
 - errors -> `source="error", type="error"`,
 - usage/cost metadata as verbose `status` events if available.
 
@@ -241,20 +258,28 @@ capabilities only when the runtime behavior is implemented and tested.
 
 Add a structured place in session state for provider session identifiers:
 
+Use one uniform key, `provider_session_id`, across providers so persisted session
+state has a single stable schema. Keep the provider's own term (thread id,
+conversation id) in a sibling `provider_session_kind` field rather than encoding
+it in the key name:
+
 ```json
 {
   "agent_sessions": {
     "claude": {
       "backend": "sdk",
-      "provider_session_id": "..."
+      "provider_session_id": "...",
+      "provider_session_kind": "session"
     },
     "codex": {
       "backend": "sdk",
-      "provider_thread_id": "..."
+      "provider_session_id": "...",
+      "provider_session_kind": "thread"
     },
     "antigravity": {
       "backend": "sdk",
-      "conversation_id": "..."
+      "provider_session_id": "...",
+      "provider_session_kind": "conversation"
     }
   }
 }
@@ -292,8 +317,10 @@ backend = "sdk"
 [agents.antigravity]
 type = "antigravity"
 backend = "sdk"
-enabled = true
 ```
+
+(`enabled` defaults to true; set `enabled = false` to keep a provider defined but
+out of workflows.)
 
 `agent_collab_describe_options` must show:
 

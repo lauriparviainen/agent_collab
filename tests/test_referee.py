@@ -70,5 +70,20 @@ command = "configured-claude"
             self.assertEqual(command_events[0].raw["argv"][0], "configured-claude")
 
 
+class RecentTranscriptTests(unittest.TestCase):
+    def test_provider_session_bookkeeping_is_excluded_from_peer_prompt(self):
+        from agent_collab.events import Event
+        from agent_collab.backends.sdk_common import provider_session_event
+
+        referee = Referee(RefereeConfig(mock=True, workdir=Path("."), color=False))
+        transcript = [
+            Event.create("claude", "message", "real content"),
+            provider_session_event("claude", "claude", "sess-123", "session"),
+        ]
+        recent = referee._recent_transcript(transcript)
+        self.assertIn("real content", recent)
+        self.assertNotIn("sess-123", recent)  # bookkeeping id must not leak to peers
+
+
 if __name__ == "__main__":
     unittest.main()

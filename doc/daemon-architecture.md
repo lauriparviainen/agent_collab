@@ -31,7 +31,7 @@ The prototype has:
 
 - `agent_collab.events`: normalized event model and stream parsers.
 - `agent_collab.runners`: runner primitives (subprocess, dry-run, mock) and the registry-backed `configured_runner`.
-- `agent_collab.backends`: backend registry keyed by `(agent_type, backend_id)`, capabilities, live health probes, the `cli` subprocess backend, and the extras-gated Antigravity `sdk` backend. An agent's provider (`type`) is separate from its execution mechanism (`backend`); the resolved per-agent backend map is computed once at start validation and threaded into execution.
+- `agent_collab.backends`: backend registry keyed by `(agent_type, backend_id)`, capabilities, live health probes, the `cli` subprocess backend, and the first-class Claude/Codex/Antigravity `sdk` backends (lazy-imported). An agent's provider (`type`) is separate from its execution mechanism (`backend`); the resolved per-agent backend map is computed once at start validation and threaded into execution.
 - `agent_collab.referee`: bounded turn loop.
 - `agent_collab.logging`: JSONL and Markdown session logs.
 - `agent_collab.cli`: one-shot runner plus foreground server/client commands.
@@ -254,8 +254,8 @@ If the stdlib server becomes awkward, add one focused dependency:
 
 Avoid adding a larger stack until the API shape is proven.
 
-Backend dependencies follow the same rule. The base install and the default
-`cli` backend stay standard-library only; a provider SDK backend is an optional,
-extras-gated dependency (`antigravity-sdk = ["google-antigravity>=0.1,<1"]`) and
-all SDK imports are lazy, so the SDK is never required to import, register, or
-run the `cli` path.
+Backend dependencies follow a lazy rule. The provider SDKs (`claude-agent-sdk`,
+`openai-codex`, `google-antigravity`) install with the project (Python ≥ 3.10),
+but every SDK import is lazy — done only inside a backend's `probe()`/runner — so
+a missing wheel degrades to an *unavailable* backend rather than an import error,
+and the default `cli` path never needs any SDK to import, register, or run.

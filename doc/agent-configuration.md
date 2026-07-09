@@ -124,23 +124,27 @@ An agent's `type` (the *provider*: `claude`, `codex`, `antigravity`) is separate
 from its `backend` (the *execution mechanism*). The registry is keyed by
 `(type, backend)`:
 
-| provider (`type`) | `cli`                | `sdk`                          |
-| ----------------- | -------------------- | ------------------------------ |
-| `claude`          | ✅ (default)          | — (deferred)                   |
-| `codex`           | ✅ (default)          | — (deferred)                   |
+| provider (`type`) | `cli`                | `sdk`                           |
+| ----------------- | -------------------- | ------------------------------- |
+| `claude`          | ✅ (default)          | ✅ (`claude-agent-sdk`, typed)   |
+| `codex`           | ✅ (default)          | ✅ (`openai-codex`, message-first) |
 | `antigravity`     | ✅ (`agy`, plain text) | ✅ (`google-antigravity`, typed) |
 
 - `cli` runs the agent as a subprocess and parses its stdout. It is the default
-  and keeps the base install standard-library only.
-- `sdk` runs the provider's Python SDK in-process. It is optional and
-  extras-gated (`pip install agent-collab[antigravity-sdk]`); all SDK imports are
-  lazy.
+  backend and runs the provider CLI.
+- `sdk` runs the provider's Python SDK in-process. The SDKs install with the
+  project (Python ≥ 3.10), but every SDK import is lazy, so a missing wheel is an
+  unavailable backend rather than an import error, and the default `cli` backend
+  is unaffected. Credentials are never managed by agent-collab (provide the
+  provider's own auth in the environment).
 
 Resolution is most-specific-wins: `start-request backend > agents.<id>.backend >
 default "cli"`. A `--backend NAME` / `"backend"` start override applies uniformly
 to every selected agent and is rejected before any session state when any
-selected agent's type does not register that backend (so `--backend sdk` against
-a Claude/Codex workflow fails this stage).
+selected agent's type does not register that backend. Explicitly-requested typed
+options are also rejected before start when the resolved backend cannot honour
+them (a cli-only option on `sdk`, or an sdk-only option on `cli`), with a
+`<type>_options.<key>` field path.
 
 Every backend this stage reports `resume`, `interrupt`, and `tool_gate` as
 `false` — capabilities are honest runtime facts, never inferred from the provider
@@ -263,12 +267,12 @@ Google Antigravity, available on both backends. Disabled by default and opt-in.
   `antigravity` message event; there is no tool/command/file-change structure.
   The default `args` include `--mode accept-edits` so `-p` does not stall on the
   interactive request-review approval prompt. Choose `sdk` for structured events.
-- `sdk` runs the `google-antigravity` SDK in-process. Requires the
-  `antigravity-sdk` extra (Python ≥ 3.10) and a **Gemini API key**
-  (`GEMINI_API_KEY` env, or `LocalAgentConfig(api_key=...)`, or Vertex/ADC) — the
-  SDK does **not** use the `~/.gemini` OAuth. It maps typed SDK events to
-  `tool_call`/`command`/`file_change`, degrading to message-only if a turn has no
-  tool calls.
+- `sdk` runs the `google-antigravity` SDK in-process (installed with the project,
+  Python ≥ 3.10, lazy-imported). Needs a **Gemini API key** (`GEMINI_API_KEY` env,
+  or `LocalAgentConfig(api_key=...)`, or Vertex/ADC) — the SDK does **not** use the
+  `~/.gemini` OAuth. It maps typed SDK events to `tool_call`/`command`/`file_change`,
+  degrading to message-only if a turn has no tool calls. `antigravity_options.mode`
+  is cli-only and rejected on `sdk`.
 
 The two backends authenticate differently (OAuth for `cli`, an API key for
 `sdk`). Auth is the provider's own concern: agent-collab only passes the

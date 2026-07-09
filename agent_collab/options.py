@@ -40,6 +40,29 @@ OPTION_FIELDS = {
     "antigravity": ANTIGRAVITY_OPTION_FIELDS,
 }
 
+# Which typed options each backend actually honours, per provider. An option the
+# caller *explicitly* requests that is outside its resolved backend's set is
+# rejected at start with a field path — so a cli-only option (no SDK mapping)
+# fails on `sdk`, and any sdk-only option fails on `cli`. Values inferred from an
+# agent's cli args/defaults are never checked here (only explicit request keys),
+# so selecting `sdk` on the built-in antigravity agent (whose args carry
+# `--mode`) is not blocked. Keep this in lockstep with each backend's option
+# mapping (`_map_sdk_options` / `_apply_*_options`).
+BACKEND_OPTION_SUPPORT: Dict[str, Dict[str, Set[str]]] = {
+    "claude": {
+        "cli": {"model", "permission_mode", "thinking_level", "thinking_budget_tokens"},
+        "sdk": {"model", "permission_mode"},
+    },
+    "codex": {
+        "cli": {"model", "profile", "thinking_level", "reasoning_effort", "sandbox", "approval_policy", "search"},
+        "sdk": {"model", "sandbox"},
+    },
+    "antigravity": {
+        "cli": {"model", "mode"},
+        "sdk": {"model"},
+    },
+}
+
 class StartOptionsError(ValueError):
     code = "invalid_start_options"
 
@@ -120,6 +143,8 @@ def validate_start_backends(
     workflow_id: str,
     request_backend: Optional[str] = None,
     antigravity_options: Optional[Mapping[str, Any]] = None,
+    claude_options: Optional[Mapping[str, Any]] = None,
+    codex_options: Optional[Mapping[str, Any]] = None,
     *,
     health: Any = None,
 ) -> "BackendSelection":
@@ -167,7 +192,12 @@ def validate_start_backends(
     if errors:
         raise StartOptionsError(errors)
 
-    _reject_unsupported_antigravity_mode(config, resolved, antigravity_options, errors)
+    requested_by_type = {
+        "antigravity": antigravity_options,
+        "claude": claude_options,
+        "codex": codex_options,
+    }
+    _reject_backend_unsupported_options(config, resolved, requested_by_type, errors)
     if errors:
         raise StartOptionsError(errors)
 
@@ -187,28 +217,41 @@ class BackendSelection:
         self.warnings = list(warnings or [])
 
 
-def _reject_unsupported_antigravity_mode(
+def _reject_backend_unsupported_options(
     config: CollaborationConfig,
     resolved: Mapping[str, str],
-    antigravity_options: Optional[Mapping[str, Any]],
+    requested_by_type: Mapping[str, Optional[Mapping[str, Any]]],
     errors: List[Dict[str, str]],
+    support: Optional[Mapping[str, Mapping[str, Set[str]]]] = None,
 ) -> None:
-    # `mode` maps to `agy --mode` on the cli backend; the sdk backend has no
-    # confirmed LocalAgentConfig equivalent yet, so reject rather than drop it.
-    # `antigravity_options` here is what the caller *explicitly* requested — never
-    # a default inferred from an agent's cli args — so selecting the sdk backend
-    # on the built-in antigravity agent (whose args carry `--mode`) is not blocked.
-    if not antigravity_options or "mode" not in antigravity_options:
-        return
+    """Reject explicitly-requested options a resolved backend does not support.
+
+    Symmetric in both directions: a cli-only option (e.g. antigravity ``mode``,
+    claude ``thinking_level``, codex ``profile``) requested with the ``sdk``
+    backend is rejected, and any sdk-only option requested with a ``cli`` backend
+    is rejected — each with a ``<type>_options.<key>`` field path. Only keys the
+    caller *explicitly* passed are checked (never defaults inferred from cli args),
+    and a backend with no support entry (a custom backend) is left unchecked.
+    """
+
+    support = support if support is not None else BACKEND_OPTION_SUPPORT
+    seen: Set[str] = set()
     for agent_id, backend_id in resolved.items():
-        if config.agents[agent_id].type == "antigravity" and backend_id == "sdk":
-            errors.append(
-                {
-                    "path": "antigravity_options.mode",
-                    "message": "is not supported on the 'sdk' backend",
-                }
-            )
-            return
+        agent_type = config.agents[agent_id].type
+        requested = requested_by_type.get(agent_type)
+        if not requested:
+            continue
+        supported = support.get(agent_type, {}).get(backend_id)
+        if supported is None:
+            continue
+        for key in sorted(requested):
+            if key in supported:
+                continue
+            path = f"{agent_type}_options.{key}"
+            if path in seen:
+                continue
+            seen.add(path)
+            errors.append({"path": path, "message": f"is not supported on the {backend_id!r} backend"})
 
 
 def _gate_backend_health(
@@ -433,14 +476,21 @@ def build_session_settings(
         if agent.type in OPTION_FIELDS:
             options = dict(normalized_options.get(f"{agent.type}_options") or {})
             effective = _effective_options_for_agent(agent, options)
+            # Only advertise options the resolved backend actually honours, so
+            # settings never claim a cli-only option (e.g. an inferred `mode` or a
+            # default `thinking_level`) applied on an `sdk` backend that ignores
+            # it. A custom backend with no support entry advertises everything.
+            supported = BACKEND_OPTION_SUPPORT.get(agent.type, {}).get(backend_id) if backend_id else None
             for field in SETTINGS_DISPLAY_FIELDS.get(agent.type, ()):
-                # `mode` only applies to the cli backend; do not advertise a
-                # cli-arg-inferred mode for a non-cli backend that ignores it.
-                if field == "mode" and backend_id != "cli":
+                if supported is not None and field not in supported:
                     continue
                 if field in effective:
                     entry[field] = effective[field]
-            if "thinking_level" not in entry and "reasoning_effort" in effective:
+            if (
+                (supported is None or "thinking_level" in supported)
+                and "thinking_level" not in entry
+                and "reasoning_effort" in effective
+            ):
                 entry["thinking_level"] = effective["reasoning_effort"]
         if backend_id is not None:
             entry["backend"] = backend_id

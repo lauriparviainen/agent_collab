@@ -108,15 +108,25 @@ def health(backend: AgentBackend, *, fresh: bool = False) -> BackendHealth:
 
 
 def _register_builtins() -> None:
-    from .antigravity_sdk import build_sdk_backends
+    from .antigravity_sdk import build_antigravity_sdk_backends
+    from .claude_sdk import build_claude_sdk_backends
     from .cli import build_cli_backends
+    from .codex_sdk import build_codex_sdk_backends
 
     for backend in build_cli_backends():
         register(backend)
-    # The sdk module lazy-imports the real SDK (only in probe/factory), so
-    # registering it here costs nothing and needs no dependency.
-    for backend in build_sdk_backends():
-        register(backend)
+    # Each SDK module gets a distinct factory name (never a bare
+    # `build_sdk_backends`) so the imports cannot shadow each other as more
+    # providers are added; Stage 5.1.1 (xAI) just follows this convention. The
+    # modules lazy-import the real SDKs (only in probe/factory), so registering
+    # them here costs nothing and needs no dependency installed.
+    for build_sdk in (
+        build_claude_sdk_backends,
+        build_codex_sdk_backends,
+        build_antigravity_sdk_backends,
+    ):
+        for backend in build_sdk():
+            register(backend)
 
 
 _register_builtins()

@@ -18,13 +18,16 @@ class RegistryResolutionTests(unittest.TestCase):
         self.assertTrue(backends.is_registered("claude", "cli"))
         self.assertTrue(backends.is_registered("codex", "cli"))
 
-    def test_claude_sdk_is_not_registered_this_stage(self):
-        self.assertFalse(backends.is_registered("claude", "sdk"))
-        self.assertFalse(backends.is_registered("codex", "sdk"))
+    def test_all_six_real_provider_backend_pairs_are_registered(self):
+        # Stage 5.1 makes `sdk` first-class for every real provider.
+        for agent_type in ("claude", "codex", "antigravity"):
+            self.assertTrue(backends.is_registered(agent_type, "cli"), agent_type)
+            self.assertTrue(backends.is_registered(agent_type, "sdk"), agent_type)
 
     def test_registered_backends_lists_ids_for_type(self):
-        self.assertEqual(backends.registered_backends("claude"), ["cli"])
-        self.assertEqual(backends.registered_backends("codex"), ["cli"])
+        self.assertEqual(backends.registered_backends("claude"), ["cli", "sdk"])
+        self.assertEqual(backends.registered_backends("codex"), ["cli", "sdk"])
+        self.assertEqual(backends.registered_backends("antigravity"), ["cli", "sdk"])
         self.assertEqual(backends.registered_backends("nonesuch"), [])
 
     def test_resolution_precedence_request_over_config_over_default(self):
@@ -39,10 +42,11 @@ class RegistryResolutionTests(unittest.TestCase):
 
     def test_get_backend_unknown_lists_registered_ids(self):
         with self.assertRaises(KeyError) as ctx:
-            backends.get_backend("claude", "sdk")
+            backends.get_backend("claude", "nonesuch")
         message = str(ctx.exception)
-        self.assertIn("sdk", message)
+        self.assertIn("nonesuch", message)
         self.assertIn("cli", message)  # registered ids for the type are listed
+        self.assertIn("sdk", message)
 
     def test_get_backend_returns_the_registered_backend(self):
         backend = backends.get_backend("claude", "cli")
@@ -117,11 +121,12 @@ class StartBackendValidationTests(unittest.TestCase):
     def test_request_backend_unavailable_for_type_is_rejected(self):
         config = builtin_config()
         with self.assertRaises(StartOptionsError) as ctx:
-            validate_start_backends(config, "solo-claude", request_backend="sdk")
+            validate_start_backends(config, "solo-claude", request_backend="nonesuch")
         detail = ctx.exception.to_dict()["details"][0]
         self.assertEqual(detail["path"], "backend")
         self.assertIn("claude", detail["message"])
         self.assertIn("cli", detail["message"])  # available backends listed
+        self.assertIn("sdk", detail["message"])
 
     def test_valid_request_backend_resolves_map_for_workflow_agents(self):
         config = builtin_config()

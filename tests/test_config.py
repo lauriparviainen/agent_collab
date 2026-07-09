@@ -309,12 +309,13 @@ sequence = ["disabled_codex"]
 
 class AgentBackendConfigTests(unittest.TestCase):
     def test_unregistered_backend_for_type_is_rejected_with_registered_ids(self):
-        agent = AgentConfig(id="claude", type="claude", command="claude", backend="sdk")
+        agent = AgentConfig(id="claude", type="claude", command="claude", backend="nonesuch")
         with self.assertRaises(ConfigError) as ctx:
             validate_agent(agent)
         message = str(ctx.exception)
-        self.assertIn("sdk", message)
+        self.assertIn("nonesuch", message)
         self.assertIn("cli", message)  # registered ids for claude are listed
+        self.assertIn("sdk", message)
 
     def test_mock_agent_rejects_backend_field(self):
         agent = AgentConfig(id="m", type="mock", backend="cli")

@@ -7,16 +7,21 @@ name = "agent-collab"
 version = "0.1"
 description = "Terminal referee for Claude Code and Codex collaboration."
 readme = "README.md"
-requires-python = ">=3.9"
+# Stage 5.1 makes the `sdk` backends first-class: the SDKs install with the
+# project, so the base target is now Python 3.10+ (all three SDKs require it).
+requires-python = ">=3.10"
 authors = [{ name = "agent-collab prototype" }]
-dependencies = []
-
-[project.optional-dependencies]
-# The `sdk` backend for Antigravity. Base install + default `cli` backend stay
-# standard-library only; this extra is the only dependency and is lazy-imported.
-# Tested against google-antigravity 0.1.5 (needs Python >= 3.10, so this extra is
-# simply unavailable on the base 3.9 target — see doc/tasks_closed/stage-4.9).
-antigravity-sdk = ["google-antigravity>=0.1,<1"]
+# First-class SDK backends. These are lazy-imported (only inside probe()/runner),
+# so a missing wheel degrades to an unavailable backend rather than an import-time
+# crash; the `cli` backend keeps working with the provider CLIs regardless.
+# Ranges are bounded (these packages are pre-1.0 / recently renamed): pin the
+# tested floor per package when a live smoke confirms it.
+dependencies = [
+    "claude-agent-sdk>=0.2,<1",
+    "openai-codex>=0.1,<1",
+    "google-antigravity>=0.1,<1",
+    # xai-sdk is added by Stage 5.1.1 (xAI provider).
+]
 
 [project.scripts]
 agent-collab = "agent_collab.cli:main"

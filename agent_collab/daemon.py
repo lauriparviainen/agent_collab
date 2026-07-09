@@ -114,6 +114,12 @@ class SessionState:
     # Honest session-level capability summary derived from the backends actually
     # in use (all false this stage); persisted so it survives daemon restart.
     capabilities: Optional[Dict[str, bool]] = None
+    # Per-agent provider session identity captured from runner events, keyed by
+    # workflow agent id: {agent_id: {backend, provider_session_id,
+    # provider_session_kind}}. One uniform schema across providers (the provider's
+    # own term lives in provider_session_kind). Persisted, but nothing resumes it
+    # this stage — resume stays capability-false.
+    agent_sessions: Optional[Dict[str, Dict[str, Any]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -216,6 +222,8 @@ class SessionManager:
         # agent carries `--mode accept-edits` for the cli path, which must not
         # block selecting the sdk backend).
         requested_antigravity_options = request.antigravity_options
+        requested_claude_options = request.claude_options
+        requested_codex_options = request.codex_options
         normalized_options = validate_start_options(
             collab_config,
             request.workflow,
@@ -231,6 +239,8 @@ class SessionManager:
             request.workflow,
             request.backend,
             requested_antigravity_options,
+            requested_claude_options,
+            requested_codex_options,
             health=None if (request.mock or request.dry_run) else self._backend_health,
         )
         request.resolved_backends = dict(selection.agent_backends)
@@ -447,7 +457,37 @@ class SessionManager:
 
     def _record_event(self, managed: _ManagedSession, event: Event) -> None:
         managed.events.append(event.to_dict())
+        self._maybe_capture_provider_session(managed, event)
         self._schedule_notify(managed)
+
+    def _maybe_capture_provider_session(self, managed: _ManagedSession, event: Event) -> None:
+        # SDK runners emit a status event whose raw carries a provider session id
+        # plus the emitting agent id (see backends.sdk_common.provider_session_event).
+        # Record it into central session state under one uniform schema; this is
+        # capture only — nothing resumes it and capabilities stay honest.
+        raw = event.raw if isinstance(event.raw, dict) else None
+        if not raw:
+            return
+        session_id = raw.get("provider_session_id")
+        agent_id = raw.get("agent_id")
+        if not isinstance(session_id, str) or not session_id or not isinstance(agent_id, str) or not agent_id:
+            return
+        entry: Dict[str, Any] = {}
+        resolved = managed.request.resolved_backends if managed.request else None
+        backend_id = resolved.get(agent_id) if resolved else None
+        if backend_id:
+            entry["backend"] = backend_id
+        entry["provider_session_id"] = session_id
+        kind = raw.get("provider_session_kind")
+        if isinstance(kind, str) and kind:
+            entry["provider_session_kind"] = kind
+        sessions = dict(managed.state.agent_sessions or {})
+        if sessions.get(agent_id) == entry:
+            return
+        sessions[agent_id] = entry
+        managed.state.agent_sessions = sessions
+        managed.state.updated_at = utc_timestamp()
+        self._persist(managed.state)
 
     async def _set_event_appender(self, managed: _ManagedSession, appender: Optional[EventAppender]) -> None:
         managed.append_event = appender
