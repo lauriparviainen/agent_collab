@@ -1,20 +1,23 @@
-# Stage 5.1: First-class SDK backends and xAI provider
+# Stage 5.1: First-class SDK backends
 
 ## Purpose
 
-Make `sdk` a first-class, installed backend for all supported real providers,
-and add xAI as a real provider with both CLI and SDK execution:
+Make `sdk` a first-class, installed backend for all supported real providers:
 
 - Claude via the Claude Agent SDK,
 - Codex via the Codex Python SDK,
-- Antigravity via the Google Antigravity SDK,
-- xAI via the Grok Build CLI and the xAI Python SDK.
+- Antigravity via the Google Antigravity SDK.
 
 The current Stage 4.9 backend registry already separates provider `type`
 (`claude`, `codex`, `antigravity`, `mock`) from execution `backend` (`cli`,
 `sdk`). This stage should finish that design by making SDK dependencies install
-with the project, adding real SDK runners for Claude and Codex, refreshing
-Antigravity SDK support, and adding `xai` as a fourth real provider.
+with the project, adding real SDK runners for Claude and Codex, and refreshing
+Antigravity SDK support.
+
+Adding `xai` as a fourth real provider is split into its own focused sub-task,
+[Stage 5.1.1](stage-5.1.1-xai-provider.md), and should land after this stage.
+xAI adds a new provider `type` — a wider, riskier fan-out than adding a second
+backend to an existing type — so it is kept separate to keep this stage focused.
 
 This intentionally changes the Stage 4.9 packaging decision. Stage 4.9 kept the
 base install standard-library only and made Antigravity SDK optional. This stage
@@ -39,9 +42,6 @@ Missing:
 - installed-by-default SDK dependencies,
 - `claude` SDK backend,
 - `codex` SDK backend,
-- `xai` provider type,
-- `xai` CLI backend for the installed `grok` command,
-- `xai` SDK backend,
 - common SDK session-id capture and resume plumbing,
 - live smoke coverage for installed SDKs,
 - docs that explain SDK-vs-CLI tradeoffs now that SDKs are first-class.
@@ -72,31 +72,9 @@ are young and may change:
   References:
   - https://github.com/google-antigravity/antigravity-sdk-python
   - https://antigravity.google/product/antigravity-sdk
-- xAI CLI: use the installed `grok` command from Grok Build.
-  Local verification on this machine shows `grok 0.2.93` installed at
-  `/home/devel/.grok/bin/grok`. Official docs say Grok Build is a coding agent
-  usable as an interactive TUI, in headless scripts, or through Agent Client
-  Protocol (ACP). Headless mode supports `-p, --single <PROMPT>`, `--cwd`,
-  `--model`, `--permission-mode`, `--sandbox`, and `--output-format` with
-  `plain`, `json`, or `streaming-json`; `streaming-json` emits newline-delimited
-  events. ACP is available as `grok agent stdio` over JSON-RPC.
-  References:
-  - https://docs.x.ai/build/overview
-  - https://docs.x.ai/build/cli/headless-scripting
-- xAI SDK: use `xai-sdk`, imported as `xai_sdk`, not the unrelated `xai`
-  explainability package. Official docs say it is the xAI Python SDK, gRPC-based,
-  supports sync and async clients, requires Python 3.10+, reads `XAI_API_KEY`,
-  and can be used as:
-  `from xai_sdk import Client`; `client.chat.create(model="grok-4.5")`;
-  append `xai_sdk.chat.user(...)`; call `chat.sample().content`.
-  xAI's REST API is also OpenAI/Anthropic-compatible, but this backend should use
-  the native Python SDK first because this stage explicitly wants SDK support in
-  Python.
-  References:
-  - https://docs.x.ai/overview
-  - https://docs.x.ai/developers/model-capabilities/text/generate-text
-  - https://github.com/xai-org/xai-sdk-python
-  - https://pypi.org/project/xai-sdk/
+- xAI (CLI `grok` + `xai-sdk`): out of scope here; see
+  [Stage 5.1.1](stage-5.1.1-xai-provider.md) for the verified `grok 0.2.93`
+  flags, `streaming-json` event shapes, and SDK usage.
 
 ## Packaging plan
 
@@ -109,7 +87,7 @@ dependencies = [
   "claude-agent-sdk>=0.2,<1",
   "openai-codex>=0,<1",
   "google-antigravity>=0.1,<1",
-  "xai-sdk>=1.17,<2",
+  # xai-sdk is added by Stage 5.1.1 (xAI provider).
 ]
 ```
 
@@ -134,8 +112,6 @@ Credentials are still not installed or managed by `agent-collab`:
   API-key auth paths.
 - Antigravity SDK authentication remains external, such as `GEMINI_API_KEY` or
   Vertex/ADC configuration.
-- xAI SDK and Grok CLI authentication remains external, such as `XAI_API_KEY` or
-  the local `grok login` flow.
 
 ## Architecture plan
 
@@ -148,8 +124,6 @@ Keep the backend registry shape:
 (codex, sdk)
 (antigravity, cli)
 (antigravity, sdk)
-(xai, cli)
-(xai, sdk)
 ```
 
 Add one backend module per SDK:
@@ -158,15 +132,10 @@ Add one backend module per SDK:
 agent_collab/backends/claude_sdk.py
 agent_collab/backends/codex_sdk.py
 agent_collab/backends/antigravity_sdk.py
-agent_collab/backends/xai_sdk.py
 ```
 
 `antigravity_sdk.py` already exists. This stage should keep it, refresh it
 against current SDK docs, and remove the extras-gated language.
-
-The xAI CLI backend can live in the existing `agent_collab/backends/cli.py`
-registry, but it needs an xAI-specific event parser for Grok Build's
-`streaming-json` output.
 
 Each SDK backend must implement:
 
@@ -180,6 +149,10 @@ Each SDK backend must implement:
 
 Do not pass unknown option keys through blindly. Unknown or unsupported SDK
 options should be rejected during start validation with field paths.
+
+When `xai` lands (Stage 5.1.1) it adds `(xai, cli)` + `(xai, sdk)` and a new SDK
+module; note that registering a second SDK module requires renaming the
+per-module `build_sdk_backends` factory to avoid an import shadow.
 
 ## Provider plans
 
@@ -261,98 +234,6 @@ Update if current docs require the newer streaming shape:
 equivalent. If SDK policies/capabilities replace `mode`, add a new SDK-specific
 validated option rather than reusing `mode` loosely.
 
-### xAI / Grok
-
-Add a new provider type:
-
-```text
-xai
-```
-
-Use `xai` as the provider type, not `grok`. `grok` is the installed CLI command
-and the model family/product name; keeping provider type `xai` leaves room for
-model names like `grok-4.5` without mixing naming layers.
-
-Initial built-in agent and workflow:
-
-```toml
-[agents.xai]
-type = "xai"
-command = "grok"
-args = ["--output-format", "streaming-json", "-p"]
-enabled = false
-
-[workflows.solo-xai]
-sequence = ["xai"]
-```
-
-The provider should be disabled by default unless the implementation decides the
-installed `grok` CLI and credentials can be gated as reliably as Antigravity.
-
-#### xAI CLI backend
-
-Use the installed `grok` command.
-
-Initial mapping targets:
-
-- `xai_options.model` -> `grok --model`,
-- `xai_options.permission_mode` -> `grok --permission-mode`,
-- `xai_options.sandbox` -> `grok --sandbox`,
-- `xai_options.reasoning_effort` / `thinking_level` -> `grok --reasoning-effort`,
-- workdir -> subprocess cwd and/or `grok --cwd`,
-- output format -> `streaming-json` by default for structured parsing.
-
-Important argument-order rule:
-
-- `grok -p <prompt>` accepts the prompt as an argument. Confirm whether flags
-  after `-p` are parsed as flags or prompt text before implementing option
-  insertion. If ambiguous, keep all mapped flags before `-p`, as with the fixed
-  Antigravity CLI ordering.
-
-Event mapping should prefer `--output-format streaming-json`:
-
-- assistant text chunks/messages -> `source="xai", type="message"`,
-- tool calls / shell commands -> `source="tool", type="tool_call"` or
-  `type="command"`,
-- file edits -> `source="tool", type="file_change"`,
-- failures -> `source="error", type="error"`,
-- session IDs / completion metadata -> verbose `status` events and/or captured
-  provider session state.
-
-If `streaming-json` schemas are unstable, add fixtures captured from local
-`grok --output-format streaming-json` runs and keep the parser tolerant. Do not
-fall back to parsing human text unless `streaming-json` is unavailable.
-
-Also evaluate `grok agent stdio` (ACP) as a future richer transport. ACP returns
-JSON-RPC `session/update` chunks and may be a better fit for continuation,
-tool-gating, and IDE-style integration than one-shot headless mode. Do not make
-ACP the initial backend unless its protocol can be tested deterministically.
-
-#### xAI SDK backend
-
-Use `xai_sdk`.
-
-Initial mapping targets:
-
-- `xai_options.model` -> `client.chat.create(model=...)`,
-- `xai_options.timeout` -> `Client(..., timeout=...)` if confirmed,
-- `xai_options.reasoning_effort` / `thinking_level` -> SDK option only if
-  confirmed,
-- system prompt / base instructions -> SDK chat `system(...)` message if needed,
-- prompt -> SDK chat `user(...)` message.
-
-Event mapping starts with:
-
-- `chat.sample().content` -> `source="xai", type="message"`,
-- response id / metadata -> verbose `status` and provider session state if
-  exposed,
-- errors -> `source="error", type="error"`.
-
-The SDK is an API client, not necessarily a local coding-agent runtime like
-Grok Build CLI. Unless the SDK exposes local tools or client-side tool pause /
-resume in a way `agent-collab` can execute, the xAI SDK backend should be
-message-only at first. Do not imply file-edit parity with the `grok` CLI.
-
 ## Session identity and capabilities
 
 The current capabilities are honest all-false facts. This stage should flip
@@ -374,10 +255,6 @@ Add a structured place in session state for provider session identifiers:
     "antigravity": {
       "backend": "sdk",
       "conversation_id": "..."
-    },
-    "xai": {
-      "backend": "sdk",
-      "provider_response_id": "..."
     }
   }
 }
@@ -416,12 +293,6 @@ backend = "sdk"
 type = "antigravity"
 backend = "sdk"
 enabled = true
-
-[agents.xai]
-type = "xai"
-command = "grok"
-backend = "cli"
-enabled = true
 ```
 
 `agent_collab_describe_options` must show:
@@ -454,32 +325,27 @@ CLI/MCP start validation must reject:
 6. Add `CodexSdkBackend` with fake-module tests.
 7. Refresh `AntigravitySdkBackend` for installed-by-default packaging and
    current SDK streaming/API shapes.
-8. Add `xai` provider support:
-   - config type validation,
-   - Grok CLI backend registration and `streaming-json` parser,
-   - `XaiSdkBackend` with fake-module tests,
-   - `solo-xai` workflow and docs.
-9. Add or update option validation for backend-specific option support.
-10. Add provider session-id capture fields without claiming resume unless resume
+8. Add or update option validation for backend-specific option support.
+9. Add provider session-id capture fields without claiming resume unless resume
    is implemented end to end.
-11. Update `describe_options`, status, list, and session settings snapshots.
-12. Add live smoke commands guarded by env vars and skipped by default.
-13. Run full unit tests and at least one live smoke for each SDK on a credentialed
+10. Update `describe_options`, status, list, and session settings snapshots.
+11. Add live smoke commands guarded by env vars and skipped by default.
+12. Run full unit tests and at least one live smoke for each SDK on a credentialed
     development machine before closing the task.
+
+Adding the `xai` provider is tracked separately in
+[Stage 5.1.1](stage-5.1.1-xai-provider.md).
 
 ## Tests
 
 Unit tests:
 
-- registry registers all eight real provider/backend pairs,
+- registry registers all six real provider/backend pairs,
 - missing SDK imports are reported by `probe()` without crashing imports,
 - installed package versions appear in backend summaries when available,
 - option mapping for Claude SDK,
 - option mapping for Codex SDK,
 - refreshed option mapping for Antigravity SDK,
-- xAI Grok CLI `streaming-json` parser fixtures,
-- xAI CLI option mapping and argument order,
-- xAI SDK fake-module message mapping,
 - CLI-only and SDK-only option rejection paths,
 - fake SDK message mapping,
 - fake SDK tool/command/file-change mapping,
@@ -496,24 +362,18 @@ Integration tests:
   present,
 - live Codex SDK one-turn smoke when supported Codex auth is present,
 - live Antigravity SDK one-turn smoke when `GEMINI_API_KEY` or Vertex ADC is
-  present,
-- live xAI CLI one-turn smoke when `grok` is installed and authenticated or
-  `XAI_API_KEY` is present,
-- live xAI SDK one-turn smoke when `XAI_API_KEY` is present.
+  present.
 
 Live tests must not run by default in CI or normal local unit test runs.
 
 ## Acceptance criteria
 
-- A normal project install installs `claude-agent-sdk`, `openai-codex`,
-  `google-antigravity`, and `xai-sdk`.
+- A normal project install installs `claude-agent-sdk`, `openai-codex`, and
+  `google-antigravity`.
 - `agent_collab_describe_options` reports `sdk` for `claude`, `codex`, and
-  `antigravity`, and reports both `cli` and `sdk` for `xai`.
+  `antigravity`.
 - `agent_collab_start(..., backend="sdk")` works for `solo-claude`,
-  `solo-codex`, `solo-antigravity`, and `solo-xai` when credentials are
-  available.
-- `agent_collab_start(..., workflow="solo-xai")` works with the Grok CLI backend
-  when `grok` is installed and authenticated.
+  `solo-codex`, and `solo-antigravity` when credentials are available.
 - Mixed workflows can use SDK backends only when every selected real provider has
   an available SDK backend.
 - CLI backends still work unchanged.
@@ -530,16 +390,13 @@ Live tests must not run by default in CI or normal local unit test runs.
   library base install.
 - SDK package APIs are young and may break across minor releases; keep tests
   fake-module based and pin tested versions.
-- Claude, Codex, Antigravity, and xAI do not share the same auth model. Health
+- Claude, Codex, and Antigravity do not share the same auth model. Health
   checks should be helpful but must not require model calls.
-- xAI adds two different execution personalities: Grok Build CLI is a local
-  coding agent with tools, while `xai-sdk` is a Python API client. Treat SDK
-  message-only behavior as acceptable until local tool execution is implemented.
-- Grok CLI exposes both headless `streaming-json` and ACP. Choose one initial
-  transport deliberately and keep the other as a follow-up if it would require
-  a different session lifecycle.
 - SDK event streams may not match CLI JSON streams one-to-one. Preserve the
   `agent-collab` event contract and be honest about fidelity in backend
   summaries.
 - Resume, interrupt, and tool-gating are separate runtime features. Do not make
   them implicit side effects of adding SDK execution.
+- xAI is added separately in [Stage 5.1.1](stage-5.1.1-xai-provider.md); see that
+  task for its provider-specific risks (new `type` fan-out with two silent-fail
+  lists, Grok-CLI-vs-SDK asymmetry, unobserved tool-event shapes, ACP follow-up).
