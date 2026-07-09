@@ -120,7 +120,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
 enabled = true
 backend = "sdk"
 
-[workflows.antigravity-solo]
+[workflows.solo-antigravity]
 sequence = ["antigravity"]
 """,
                 encoding="utf-8",
@@ -130,7 +130,7 @@ sequence = ["antigravity"]
                 state = await manager.start_session(
                     StartSessionRequest(
                         task="sdk mode task",
-                        workflow="antigravity-solo",
+                        workflow="solo-antigravity",
                         mock=True,
                         max_turns=1,
                         timeout=5,

@@ -34,6 +34,8 @@ built-in defaults
 Project config wins over user config and comes from the session `workdir`, never the caller's shell directory. CLI flags win over both.
 Agent commands should be changed in `agent-collab` config, not through dedicated Claude/Codex path flags.
 
+Built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml), so the base agent commands, option defaults, and built-in workflows are inspectable without reading Python code.
+
 Config files declare a top-level `schema_version` (currently `2`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
 ## Example
@@ -69,8 +71,11 @@ type = "mock"
 name = "codex"
 enabled = false
 
-[workflows.single-claude]
+[workflows.solo-claude]
 sequence = ["claude"]
+
+[workflows.solo-codex]
+sequence = ["codex"]
 
 [workflows.cross-review]
 sequence = ["claude", "codex", "claude"]
@@ -200,7 +205,7 @@ CLI callers can pass JSON option objects and select a backend:
 
 ```bash
 agent-collab start --codex-options '{"thinking_level":"medium"}' --claude-options '{"model":"opus","thinking_level":"high"}' "Task"
-agent-collab start --workflow antigravity-solo --backend sdk --antigravity-options '{"model":"gemini-3-pro"}' "Task"
+agent-collab start --workflow solo-antigravity --backend sdk --antigravity-options '{"model":"gemini-3-pro"}' "Task"
 ```
 
 The option-to-command mapping is explicit. Unknown option keys are never appended as arbitrary shell flags.
@@ -299,7 +304,7 @@ A workflow names an orchestration pattern: the ordered agent sequence a session 
 sequence = ["agent_a", "agent_b", "agent_a"]
 ```
 
-This removes hardcoded orchestration logic from the referee. Built-in workflows (`single-claude`, `single-codex`, `cross-review`, `compare`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
+This removes hardcoded orchestration logic from the referee. Built-in workflows (`solo-claude`, `solo-codex`, `cross-review`, `compare`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
 
 ## CLI commands
 

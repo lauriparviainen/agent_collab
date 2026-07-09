@@ -6,7 +6,7 @@ All acceptance criteria below are met. Implementation notes:
 
 - `agent_collab/paths.py` provides `AgentCollabHome`/`GlobalDataPaths` with the `AGENT_COLLAB_HOME` override, resolved per call; tests always point it at a temp dir.
 - Daemon pid/state/logs and all session logs live under the global data root; `daemon status/stop/logs` take no `--workdir`, and `daemon start --workdir` only sets the session-default workdir.
-- `mode` became `workflow` everywhere with built-ins `single-claude`, `single-codex`, `cross-review` (default; same sequence as the old `claude-leads`), and `compare`. `[modes.*]` is rejected with a hint.
+- `mode` became `workflow` everywhere with built-ins `solo-claude`, `solo-codex`, `cross-review` (default; same sequence as the old `claude-leads`), and `compare`. `[modes.*]` is rejected with a hint.
 - `agent_collab/config_migrations.py` migrates each config file to `CURRENT_CONFIG_SCHEMA = 2` before merge/validation; v1 is the pre-`schema_version` era.
 - `agent_collab/options.py:build_session_settings` produces the effective settings block (workflow sequence, per-agent typed options, prompt-free `command_preview` shared with the real runner command builder); persisted on `SessionState` and returned by start/status/list on HTTP, MCP, and CLI.
 - `agent_collab/session_index.py` persists sessions to `data/session-index.json` (atomic replace); on daemon restart, formerly `running` sessions get the new terminal status `interrupted`, and their events replay from JSONL.
@@ -92,10 +92,10 @@ The project has not been deployed outside this checkout, so this stage does not 
 Target config shape:
 
 ```toml
-[workflows.single-claude]
+[workflows.solo-claude]
 sequence = ["claude"]
 
-[workflows.single-codex]
+[workflows.solo-codex]
 sequence = ["codex"]
 
 [workflows.cross-review]
@@ -119,8 +119,8 @@ The old `mode` field and `[modes.*]` config sections should be removed as part o
 
 Good workflow names should describe the orchestration, not who "leads":
 
-- `single-claude`
-- `single-codex`
+- `solo-claude`
+- `solo-codex`
 - `cross-review`
 - `compare`
 

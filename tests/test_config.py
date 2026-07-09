@@ -9,7 +9,14 @@ from unittest import mock
 
 from agent_collab import cli
 from agent_collab import backends
-from agent_collab.config import AgentConfig, ConfigError, _parse_toml_subset, load_config, validate_agent
+from agent_collab.config import (
+    DEFAULT_CONFIG_PATH,
+    AgentConfig,
+    ConfigError,
+    _parse_toml_subset,
+    load_config,
+    validate_agent,
+)
 
 
 def _write_config(root: Path, text: str) -> None:
@@ -28,6 +35,27 @@ def _env(home: Path):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_default_config_file_parses_with_fallback_toml_parser(self):
+        data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+
+        self.assertEqual(data["schema_version"], 2)
+        self.assertEqual(data["agents"]["claude"]["options"]["model"]["default"], "opus")
+        self.assertEqual(data["agents"]["codex"]["options"]["thinking_level"]["default"], "high")
+        self.assertEqual(
+            data["agents"]["antigravity"]["options"]["model"]["allowed"],
+            [
+                "Gemini 3.5 Flash (Medium)",
+                "Gemini 3.5 Flash (High)",
+                "Gemini 3.5 Flash (Low)",
+                "Gemini 3.1 Pro (Low)",
+                "Gemini 3.1 Pro (High)",
+                "Claude Sonnet 4.6 (Thinking)",
+                "Claude Opus 4.6 (Thinking)",
+                "GPT-OSS 120B (Medium)",
+            ],
+        )
+        self.assertEqual(data["workflows"]["solo-claude"]["sequence"], ["claude"])
+
     def test_builtin_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
@@ -37,13 +65,20 @@ class ConfigTests(unittest.TestCase):
 
             config = load_config(root, env=_env(home))
 
+            self.assertTrue(DEFAULT_CONFIG_PATH.exists())
             self.assertEqual(config.agents["claude"].type, "claude")
             self.assertEqual(config.agents["claude"].command, "claude")
             self.assertEqual(config.agents["claude"].args, ["-p", "--output-format", "stream-json", "--verbose"])
+            self.assertEqual(config.agents["claude"].options["model"]["default"], "opus")
+            self.assertEqual(config.agents["claude"].options["thinking_level"]["default"], "high")
             self.assertEqual(config.agents["codex"].command, "codex")
             self.assertEqual(config.agents["codex"].args, ["exec", "--json"])
-            self.assertEqual(config.workflows["single-claude"].sequence, ["claude"])
-            self.assertEqual(config.workflows["single-codex"].sequence, ["codex"])
+            self.assertEqual(config.agents["codex"].options["thinking_level"]["default"], "high")
+            self.assertEqual(config.agents["antigravity"].command, "agy")
+            self.assertFalse(config.agents["antigravity"].enabled)
+            self.assertEqual(config.agents["antigravity"].options["model"]["default"], "Gemini 3.5 Flash (High)")
+            self.assertEqual(config.workflows["solo-claude"].sequence, ["claude"])
+            self.assertEqual(config.workflows["solo-codex"].sequence, ["codex"])
             self.assertEqual(config.workflows["cross-review"].sequence, ["claude", "codex", "claude"])
             self.assertEqual(config.workflows["compare"].sequence, ["claude", "codex"])
             self.assertEqual(config.loaded_paths, [])

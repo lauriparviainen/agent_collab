@@ -42,43 +42,7 @@ class CollaborationConfig:
 
 
 DEFAULT_WORKFLOW = "cross-review"
-
-
-BUILTIN_CONFIG: Dict[str, Any] = {
-    "schema_version": 2,
-    "agents": {
-        "claude": {
-            "type": "claude",
-            "command": "claude",
-            "args": ["-p", "--output-format", "stream-json", "--verbose"],
-            "enabled": True,
-        },
-        "codex": {
-            "type": "codex",
-            "command": "codex",
-            "args": ["exec", "--json"],
-            "enabled": True,
-        },
-    },
-    "workflows": {
-        "single-claude": {"sequence": ["claude"]},
-        "single-codex": {"sequence": ["codex"]},
-        "cross-review": {"sequence": ["claude", "codex", "claude"]},
-        "compare": {"sequence": ["claude", "codex"]},
-    },
-}
-
-
-# Antigravity ships disabled by default: it is opt-in (requires `agy` installed
-# and a Google sign-in) and no built-in workflow references it, so default
-# behavior is unchanged. Print mode needs a non-blocking `--mode` so `-p` does
-# not stall on the interactive request-review approval prompt.
-BUILTIN_CONFIG["agents"]["antigravity"] = {
-    "type": "antigravity",
-    "command": "agy",
-    "args": ["-p", "--mode", "accept-edits"],
-    "enabled": False,
-}
+DEFAULT_CONFIG_PATH = Path(__file__).with_name("default_config.toml")
 
 
 SUBPROCESS_AGENT_TYPES = {"claude", "codex", "antigravity"}
@@ -87,7 +51,8 @@ AGENT_TYPES = SUBPROCESS_AGENT_TYPES | {"mock"}
 
 def builtin_config() -> CollaborationConfig:
     config = CollaborationConfig()
-    merge_config_data(config, migrate_config_data(BUILTIN_CONFIG, source="built-in defaults"))
+    data = _load_toml_file(DEFAULT_CONFIG_PATH)
+    merge_config_data(config, migrate_config_data(data, source=str(DEFAULT_CONFIG_PATH)))
     return config
 
 

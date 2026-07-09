@@ -402,6 +402,7 @@ def build_session_settings(
     warnings: Optional[Sequence[Mapping[str, str]]] = None,
     interactive: bool = False,
     interactive_idle_timeout: float = 600.0,
+    workdir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Build the effective session settings confirmation for start responses.
 
@@ -443,9 +444,7 @@ def build_session_settings(
             entry["capabilities"] = backend_registry.capabilities_for(agent.type, backend_id).to_dict()
             if backend_id == "cli":
                 if agent.command:
-                    entry["command_preview"] = apply_agent_options(
-                        [agent.command] + list(agent.args), agent, options
-                    )
+                    entry["command_preview"] = build_cli_command(agent, options, workdir=workdir)
             else:
                 summary = _backend_settings_summary(agent, backend_id, options)
                 if summary is not None:
@@ -491,12 +490,43 @@ def apply_agent_options(command: List[str], agent: AgentConfig, options: Mapping
     return list(command)
 
 
+def build_cli_command(
+    agent: AgentConfig,
+    options: Mapping[str, Any],
+    *,
+    workdir: Optional[Path] = None,
+) -> List[str]:
+    command = apply_agent_options([agent.command or agent.id] + list(agent.args), agent, options)
+    run_dir = resolve_agent_run_dir(workdir, agent.cwd) if workdir is not None else None
+    return apply_runtime_workdir_args(command, agent, run_dir)
+
+
+def resolve_agent_run_dir(workdir: Path, cwd: Optional[str]) -> Path:
+    base = workdir.expanduser().resolve()
+    if not cwd:
+        return base
+    cwd_path = Path(cwd).expanduser()
+    if cwd_path.is_absolute():
+        return cwd_path
+    return (base / cwd_path).resolve()
+
+
+def apply_runtime_workdir_args(
+    command: List[str],
+    agent: AgentConfig,
+    workdir: Optional[Path],
+) -> List[str]:
+    if agent.type != "antigravity" or workdir is None or _has_flag(command, "--add-dir"):
+        return list(command)
+    return _insert_before_print_prompt(command, ["--add-dir", str(workdir.expanduser().resolve())])
+
+
 def _apply_antigravity_options(command: List[str], options: Mapping[str, Any]) -> List[str]:
     result = list(command)
     if "model" in options:
-        result = _set_flag_value(result, "--model", str(options["model"]))
+        result = _set_flag_value_before_print_prompt(result, "--model", str(options["model"]))
     if "mode" in options:
-        result = _set_flag_value(result, "--mode", str(options["mode"]))
+        result = _set_flag_value_before_print_prompt(result, "--mode", str(options["mode"]))
     return result
 
 
@@ -538,6 +568,25 @@ def _set_flag_value(command: List[str], flag: str, value: str) -> List[str]:
     result = _remove_flag(command, flag, has_value=True)
     result.extend([flag, value])
     return result
+
+
+def _set_flag_value_before_print_prompt(command: List[str], flag: str, value: str) -> List[str]:
+    result = _remove_flag(command, flag, has_value=True)
+    return _insert_before_print_prompt(result, [flag, value])
+
+
+def _insert_before_print_prompt(command: List[str], items: Sequence[str]) -> List[str]:
+    result = list(command)
+    for index, item in enumerate(result):
+        if item in {"-p", "--print", "--prompt"}:
+            return result[:index] + list(items) + result[index:]
+    result.extend(items)
+    return result
+
+
+def _has_flag(command: Sequence[str], flag: str) -> bool:
+    prefix = f"{flag}="
+    return any(item == flag or item.startswith(prefix) for item in command)
 
 
 def _set_config_value(command: List[str], key: str, value: str) -> List[str]:

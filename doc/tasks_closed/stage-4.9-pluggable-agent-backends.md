@@ -151,10 +151,10 @@ config (TOML):
 
 CLI (the override applies to a workflow whose every selected agent
 supports that backend — see "Start request and CLI"):
-  agent-collab start --workflow antigravity-solo --backend sdk "Task"
+  agent-collab start --workflow solo-antigravity --backend sdk "Task"
 
 MCP / HTTP start payload:
-  {"task": "...", "workflow": "antigravity-solo", "backend": "sdk", ...}
+  {"task": "...", "workflow": "solo-antigravity", "backend": "sdk", ...}
 
 Resolution order (most specific wins):
   start request backend > agents.<id>.backend > built-in default "cli"
@@ -164,7 +164,7 @@ Resolution order (most specific wins):
 stage, because neither `claude` nor `codex` has `sdk` registered (see the
 matrix below). The override is only valid when *every* selected agent's type
 supports the requested backend; the example uses a user-defined
-Antigravity-only workflow (`antigravity-solo = ["antigravity"]`).
+Antigravity-only workflow (`solo-antigravity = ["antigravity"]`).
 
 Selecting a backend never changes the transcript contract: every backend
 yields the same `Event` stream (`message`, `tool_call`, `command`,
@@ -469,7 +469,7 @@ parser against. Per project practice (parsers are written against captured
 samples from a pinned version), the first Antigravity commit is a spike, not
 production code:
 
-1. **CLI samples:** run `agy -p --mode accept-edits "<fixture prompt>"` in a
+1. **CLI samples:** run `agy --mode accept-edits -p "<fixture prompt>"` in a
    throwaway repo (signed-in, low-cost prompt) and capture stdout/stderr to
    `tests/fixtures/antigravity/agy-print-*.txt`. Confirm: is it purely
    free-form prose, or are there any stable line markers? Record the pinned
@@ -492,7 +492,7 @@ facts," update this plan's mapping section before implementing.
 #### Spike outcome (2026-07-08)
 
 - **CLI (`agy`) — confirmed, matches the plan.** `agy --version` = `1.1.0`.
-  `agy -p --mode accept-edits "<prompt>"` (signed in) prints **free-form plain
+  `agy --mode accept-edits -p "<prompt>"` (signed in) prints **free-form plain
   text / Markdown prose**: multiple lines, blank lines, `###` headers, `*`
   bullets, fenced code blocks — **no JSON, no NDJSON, no stable per-line event
   marker**, empty stderr. So `parse_antigravity_line` emits one `antigravity`

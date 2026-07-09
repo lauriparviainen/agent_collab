@@ -34,8 +34,8 @@ the caller's shell directory never affect a session's config.
 A `workflow` names the orchestration pattern a session runs: the ordered
 sequence of agents that take turns on the task. Built-in workflows:
 
-- `single-claude` — one Claude turn,
-- `single-codex` — one Codex turn,
+- `solo-claude` — one Claude turn,
+- `solo-codex` — one Codex turn,
 - `cross-review` — Claude, then Codex review, then Claude revision
   (the default),
 - `compare` — Claude and Codex each answer once.

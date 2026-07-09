@@ -185,10 +185,12 @@ def _antigravity_config():
 
 class StartHealthGatingTests(unittest.TestCase):
     def setUp(self):
+        self._original_backend = backends.get_backend("antigravity", "cli")
         backends.register(_GatingBackend())
 
     def tearDown(self):
         backends.unregister("antigravity", "cli")
+        backends.register(self._original_backend)
 
     def test_unavailable_backend_rejects_start_with_reason(self):
         config = _antigravity_config()

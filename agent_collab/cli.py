@@ -336,7 +336,7 @@ def _main_daemon(argv) -> int:
 
 
 def _main_config(argv) -> int:
-    from .config import load_config
+    from .config import DEFAULT_CONFIG_PATH, load_config
     from .config_migrations import CURRENT_CONFIG_SCHEMA
     from .paths import AgentCollabHome
 
@@ -352,6 +352,7 @@ def _main_config(argv) -> int:
         config = load_config(workdir, home=home)
         print(f"schema_version: {CURRENT_CONFIG_SCHEMA}")
         print(f"workdir: {workdir}")
+        print(f"built_in_config: {DEFAULT_CONFIG_PATH}")
         print(f"user_config: {home.config_path}{'' if home.config_path.exists() else ' (missing)'}")
         loaded = [str(path) for path in config.loaded_paths]
         print(f"loaded_paths: {', '.join(loaded) if loaded else '(built-in defaults only)'}")

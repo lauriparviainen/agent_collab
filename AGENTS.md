@@ -22,8 +22,8 @@ Stage 4.8 landed the global runtime model:
 
 - one global local daemon; runtime state lives under `~/.agent-collab/data/` (override with `AGENT_COLLAB_HOME`, which tests must always set),
 - each session carries a `workdir` that selects project config and subprocess cwd,
-- config precedence: built-ins < user config < project config (from the session workdir) < explicit start options, with centralized schema migrations in `agent_collab/config_migrations.py`,
-- orchestration is a `workflow` (`single-claude`, `single-codex`, `cross-review` default, `compare`), not a `mode`,
+- config precedence: built-ins < user config < project config (from the session workdir) < explicit start options; built-ins live in `agent_collab/default_config.toml`, with centralized schema migrations in `agent_collab/config_migrations.py`,
+- orchestration is a `workflow` (`solo-claude`, `solo-codex`, `cross-review` default, `compare`), not a `mode`,
 - sessions persist in `data/session-index.json` across daemon restarts; interrupted sessions get status `interrupted`,
 - start/status/list responses carry effective `settings` with prompt-free `command_preview` per agent.
 

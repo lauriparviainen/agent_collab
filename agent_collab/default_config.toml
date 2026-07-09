@@ -1,0 +1,53 @@
+schema_version = 2
+
+[agents.claude]
+type = "claude"
+command = "claude"
+args = ["-p", "--output-format", "stream-json", "--verbose"]
+enabled = true
+
+[agents.claude.options]
+model.default = "opus"
+model.allowed = ["sonnet", "opus"]
+permission_mode.allowed = ["default", "acceptEdits"]
+thinking_level.default = "high"
+thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
+thinking_budget_tokens.min = 0
+thinking_budget_tokens.max = 32768
+
+[agents.codex]
+type = "codex"
+command = "codex"
+args = ["exec", "--json"]
+enabled = true
+
+[agents.codex.options]
+thinking_level.default = "high"
+thinking_level.allowed = ["minimal", "low", "medium", "high", "xhigh"]
+
+# Antigravity is opt-in. No built-in workflow references it while disabled, so
+# the default Claude/Codex behavior stays valid without local `agy` setup.
+[agents.antigravity]
+type = "antigravity"
+command = "agy"
+args = ["--mode", "accept-edits", "-p"]
+backend = "cli"
+enabled = false
+
+[agents.antigravity.options]
+model.default = "Gemini 3.5 Flash (High)"
+model.allowed = ["Gemini 3.5 Flash (Medium)", "Gemini 3.5 Flash (High)", "Gemini 3.5 Flash (Low)", "Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro (High)", "Claude Sonnet 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)", "GPT-OSS 120B (Medium)"]
+mode.default = "accept-edits"
+mode.allowed = ["default", "accept-edits", "plan"]
+
+[workflows.solo-claude]
+sequence = ["claude"]
+
+[workflows.solo-codex]
+sequence = ["codex"]
+
+[workflows.cross-review]
+sequence = ["claude", "codex", "claude"]
+
+[workflows.compare]
+sequence = ["claude", "codex"]

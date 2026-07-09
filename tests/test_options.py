@@ -167,17 +167,20 @@ thinking_level.default = "high"
             ),
         )
 
-    def test_build_session_settings_omits_unavailable_fields(self):
+    def test_build_session_settings_uses_builtin_defaults_and_omits_unavailable_fields(self):
         config = builtin_config()
-        normalized = validate_start_options(config, "single-claude")
+        normalized = validate_start_options(config, "solo-claude")
 
-        settings = build_session_settings(config, "single-claude", normalized)
+        settings = build_session_settings(config, "solo-claude", normalized)
 
         claude = settings["agents"]["claude"]
         self.assertEqual(set(settings["agents"]), {"claude"})
-        self.assertNotIn("model", claude)
+        self.assertEqual(claude["model"], "opus")
+        self.assertEqual(claude["thinking_level"], "high")
         self.assertNotIn("sandbox", claude)
         self.assertEqual(claude["command_preview"][0], "claude")
+        self.assertIn("opus", claude["command_preview"])
+        self.assertIn("high", claude["command_preview"])
 
     def test_build_session_settings_command_preview_has_no_prompt(self):
         config = builtin_config()
@@ -223,11 +226,11 @@ thinking_level.default = "high"
 
     def test_build_session_settings_records_backend_and_capabilities(self):
         config = builtin_config()
-        normalized = validate_start_options(config, "single-claude")
-        selection = validate_start_backends(config, "single-claude")
+        normalized = validate_start_options(config, "solo-claude")
+        selection = validate_start_backends(config, "solo-claude")
 
         settings = build_session_settings(
-            config, "single-claude", normalized, agent_backends=selection.agent_backends
+            config, "solo-claude", normalized, agent_backends=selection.agent_backends
         )
 
         claude = settings["agents"]["claude"]

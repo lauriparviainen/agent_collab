@@ -6,7 +6,7 @@ mapper. Parsers/mappers are written against these samples, not guessed.
 ## CLI (`agy`) — CONFIRMED live
 
 - Binary: `agy`, version **1.1.0** (`agy-version.txt`).
-- Command: `agy -p --mode accept-edits "<prompt>"` in a throwaway git repo,
+- Command: `agy --mode accept-edits -p "<prompt>"` in a throwaway git repo,
   signed in via the cached `~/.gemini` OAuth token.
 - `agy-print-sample.stdout.txt` — real stdout. `agy-print-sample.stderr.txt` —
   real stderr (empty).

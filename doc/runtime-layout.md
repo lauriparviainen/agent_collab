@@ -56,6 +56,8 @@ built-in defaults
 
 The caller's current shell directory does not affect project config unless it is also the session `workdir`. Config files declare a `schema_version` (currently 2, missing means 1); `agent_collab/config_migrations.py` migrates known old shapes in memory before validation. Inspect the merged result with `agent-collab config show --workdir PROJECT`.
 
+The built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml). They are still the lowest-precedence layer, but they are an inspectable TOML file rather than an embedded Python dict.
+
 ## Legacy Project-Local Layout
 
 Older checkouts wrote runtime data under the project:

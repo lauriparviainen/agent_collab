@@ -78,12 +78,13 @@ class Referee:
                 name = agent.name or agent.id
                 runners[agent_id] = MockRunner(name, source=_mock_source(agent.type, name))
             elif self.config.dry_run and agent.type != "mock":
-                from .options import apply_agent_options
+                from .options import build_cli_command
 
                 runners[agent_id] = DryRunRunner(
                     agent.id,
-                    apply_agent_options([agent.command or agent.id] + list(agent.args), agent, self._options_for(agent.type)),
+                    build_cli_command(agent, self._options_for(agent.type)),
                     cwd=agent.cwd,
+                    agent=agent,
                 )
             else:
                 runners[agent_id] = configured_runner(

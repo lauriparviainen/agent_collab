@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..config import AgentConfig, ConfigError
 from ..events import Event, parse_antigravity_line, parse_claude_line, parse_codex_line
-from ..options import apply_agent_options
+from ..options import build_cli_command
 from ..runners import AgentRunner, SubprocessRunner
 from .base import BackendCapabilities, BackendHealth
 from .health import antigravity_credentials, default_version_runner, probe_cli_backend
@@ -67,7 +67,7 @@ class CliBackend:
     ) -> AgentRunner:
         if not agent.command:
             raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
-        command = apply_agent_options([agent.command] + list(agent.args), agent, options or {})
+        command = build_cli_command(agent, options or {})
         return SubprocessRunner(
             agent.id,
             command,
@@ -75,6 +75,7 @@ class CliBackend:
             verbose,
             env=dict(agent.env),
             cwd=agent.cwd,
+            agent=agent,
         )
 
 

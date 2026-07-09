@@ -15,7 +15,7 @@ from agent_collab.options import (
     validate_start_options,
 )
 from agent_collab.referee import Referee, RefereeConfig
-from agent_collab.runners import DryRunRunner, MockRunner, _mock_source
+from agent_collab.runners import DryRunRunner, MockRunner, SubprocessRunner, _mock_source
 
 FIXTURES = Path(__file__).parent / "fixtures" / "antigravity"
 
@@ -32,6 +32,12 @@ def _env(home: Path):
 
 async def _collect(runner, prompt="do a thing"):
     return [event async for event in runner.run(prompt, Path("."))]
+
+
+async def _first_event(runner, prompt="do a thing", workdir=Path(".")):
+    async for event in runner.run(prompt, workdir):
+        return event
+    return None
 
 
 class AntigravityParserTests(unittest.TestCase):
@@ -77,13 +83,13 @@ class AntigravityConfigTests(unittest.TestCase):
 [agents.antigravity]
 enabled = true
 
-[workflows.antigravity-solo]
+[workflows.solo-antigravity]
 sequence = ["antigravity"]
 """,
             )
             config = load_config(root, env=_env(home))
             self.assertTrue(config.agents["antigravity"].enabled)
-            self.assertEqual(config.workflows["antigravity-solo"].sequence, ["antigravity"])
+            self.assertEqual(config.workflows["solo-antigravity"].sequence, ["antigravity"])
 
 
 class AntigravityOptionsTests(unittest.TestCase):
@@ -94,7 +100,7 @@ class AntigravityOptionsTests(unittest.TestCase):
 [agents.antigravity]
 enabled = true
 
-[workflows.antigravity-solo]
+[workflows.solo-antigravity]
 sequence = ["antigravity"]
 """,
         )
@@ -108,9 +114,11 @@ sequence = ["antigravity"]
             home.mkdir()
             config = self._config(root, home)
             validated = validate_start_options(
-                config, "antigravity-solo", antigravity_options={"model": "gemini-x", "mode": "plan"}
+                config,
+                "solo-antigravity",
+                antigravity_options={"model": "Gemini 3.5 Flash (Low)", "mode": "plan"},
             )
-            self.assertEqual(validated["antigravity_options"]["model"], "gemini-x")
+            self.assertEqual(validated["antigravity_options"]["model"], "Gemini 3.5 Flash (Low)")
             self.assertEqual(validated["antigravity_options"]["mode"], "plan")
 
             agent = config.agents["antigravity"]
@@ -118,10 +126,13 @@ sequence = ["antigravity"]
                 [agent.command] + list(agent.args), agent, validated["antigravity_options"]
             )
             self.assertIn("--model", command)
-            self.assertIn("gemini-x", command)
+            self.assertIn("Gemini 3.5 Flash (Low)", command)
             self.assertIn("--mode", command)
             self.assertIn("plan", command)
             self.assertEqual(command.count("--mode"), 1)  # replaced, not duplicated
+            print_index = command.index("-p")
+            self.assertLess(command.index("--model"), print_index)
+            self.assertLess(command.index("--mode"), print_index)
 
     def test_invalid_mode_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,7 +142,7 @@ sequence = ["antigravity"]
             home.mkdir()
             config = self._config(root, home)
             with self.assertRaises(StartOptionsError) as ctx:
-                validate_start_options(config, "antigravity-solo", antigravity_options={"mode": "turbo"})
+                validate_start_options(config, "solo-antigravity", antigravity_options={"mode": "turbo"})
             messages = {d["path"]: d["message"] for d in ctx.exception.to_dict()["details"]}
             self.assertIn("antigravity_options.mode", messages)
 
@@ -142,10 +153,14 @@ sequence = ["antigravity"]
             root.mkdir()
             home.mkdir()
             config = self._config(root, home)
-            normalized = validate_start_options(config, "antigravity-solo")
-            selection = validate_start_backends(config, "antigravity-solo")
+            normalized = validate_start_options(config, "solo-antigravity")
+            selection = validate_start_backends(config, "solo-antigravity")
             settings = build_session_settings(
-                config, "antigravity-solo", normalized, agent_backends=selection.agent_backends
+                config,
+                "solo-antigravity",
+                normalized,
+                agent_backends=selection.agent_backends,
+                workdir=root,
             )
             entry = settings["agents"]["antigravity"]
             self.assertEqual(entry["backend"], "cli")
@@ -153,8 +168,56 @@ sequence = ["antigravity"]
                 entry["capabilities"], {"resume": False, "interrupt": False, "tool_gate": False}
             )
             self.assertEqual(entry["command_preview"][0], "agy")
+            self.assertIn("--add-dir", entry["command_preview"])
+            self.assertIn(str(root.resolve()), entry["command_preview"])
             # mode is a displayed settings field, defaulted from the agent args.
             self.assertEqual(entry["mode"], "accept-edits")
+
+    def test_antigravity_command_preview_resolves_agent_cwd_for_add_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            home.mkdir()
+            config = self._config(root, home)
+            config.agents["antigravity"].cwd = "agent-root"
+            normalized = validate_start_options(config, "solo-antigravity")
+            selection = validate_start_backends(config, "solo-antigravity")
+
+            settings = build_session_settings(
+                config,
+                "solo-antigravity",
+                normalized,
+                agent_backends=selection.agent_backends,
+                workdir=root,
+            )
+
+            argv = settings["agents"]["antigravity"]["command_preview"]
+            add_dir_index = argv.index("--add-dir")
+            self.assertEqual(argv[add_dir_index + 1], str((root / "agent-root").resolve()))
+            self.assertLess(add_dir_index, argv.index("-p"))
+
+    def test_subprocess_runner_injects_antigravity_add_dir_from_run_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            root.mkdir()
+            agent = builtin_config().agents["antigravity"]
+            agent.cwd = "agent-root"
+            runner = SubprocessRunner(
+                "antigravity",
+                [agent.command] + list(agent.args),
+                parse_antigravity_line,
+                cwd=agent.cwd,
+                agent=agent,
+            )
+
+            event = asyncio.run(_first_event(runner, workdir=root))
+
+            self.assertIsNotNone(event)
+            argv = event.raw["argv"]
+            add_dir_index = argv.index("--add-dir")
+            self.assertEqual(argv[add_dir_index + 1], str((root / "agent-root").resolve()))
+            self.assertLess(add_dir_index, argv.index("-p"))
 
 
 class AntigravityMockSourceTests(unittest.TestCase):
@@ -174,7 +237,7 @@ class AntigravityMockSourceTests(unittest.TestCase):
 [agents.antigravity]
 enabled = true
 
-[workflows.antigravity-solo]
+[workflows.solo-antigravity]
 sequence = ["antigravity"]
 """,
             )
@@ -183,7 +246,7 @@ sequence = ["antigravity"]
                 asyncio.run(
                     Referee(
                         RefereeConfig(
-                            workflow="antigravity-solo",
+                            workflow="solo-antigravity",
                             mock=True,
                             workdir=root,
                             max_turns=1,
@@ -206,7 +269,7 @@ sequence = ["antigravity"]
 [agents.antigravity]
 enabled = true
 
-[workflows.antigravity-solo]
+[workflows.solo-antigravity]
 sequence = ["antigravity"]
 """,
             )
@@ -215,7 +278,7 @@ sequence = ["antigravity"]
                 asyncio.run(
                     Referee(
                         RefereeConfig(
-                            workflow="antigravity-solo",
+                            workflow="solo-antigravity",
                             dry_run=True,
                             workdir=root,
                             max_turns=1,

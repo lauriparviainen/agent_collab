@@ -125,7 +125,7 @@ The daemon is global: one daemon serves sessions for any number of projects, and
 
 Useful options:
 
-- `--workflow single-claude | single-codex | cross-review | compare` (default `cross-review`)
+- `--workflow solo-claude | solo-codex | cross-review | compare` (default `cross-review`)
 - `--max-turns 3`
 - `--timeout 900`
 - `--workdir /path/to/project`
@@ -186,21 +186,16 @@ SESSION_WORKDIR/.agent-collab/config.toml
 built-in defaults
 ```
 
-Project config comes from the session `workdir`, never from the caller's shell directory. Config files carry a `schema_version` (currently 2); known old shapes are migrated in memory at load time by a centralized migration layer, and unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir /path/to/project`. See [doc/agent-configuration.md](doc/agent-configuration.md).
+The built-in defaults live in [agent_collab/default_config.toml](agent_collab/default_config.toml). Project config comes from the session `workdir`, never from the caller's shell directory. Config files carry a `schema_version` (currently 2); known old shapes are migrated in memory at load time by a centralized migration layer, and unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir /path/to/project`. See [doc/agent-configuration.md](doc/agent-configuration.md).
 
-Built-in defaults are:
-
-```bash
-claude -p --output-format stream-json --verbose "prompt"
-codex exec --json "prompt"
-```
-
-This repo currently includes a project config at `.agent-collab/config.toml` that defaults Claude to Opus with high effort and Codex to high reasoning effort:
+The built-in defaults include Claude Opus with high effort and Codex high reasoning effort:
 
 ```bash
 claude -p --output-format stream-json --verbose --model opus --effort high "prompt"
 codex exec --json -c model_reasoning_effort="high" "prompt"
 ```
+
+This repo's `.agent-collab/config.toml` is intentionally small: it only opts this checkout into Antigravity and adds the local `solo-antigravity` workflow.
 
 The referee invokes agents as subprocesses. Agent prompts include guardrails telling them not to spawn Claude, Codex, `agent-collab`, or other agent subprocesses.
 

@@ -85,7 +85,7 @@ class TuiCoreTests(unittest.TestCase):
             "jsonl_path": "/logs/s1.jsonl",
             "markdown_path": "/logs/s1.md",
             "settings": {
-                "workflow": {"name": "single-codex", "sequence": ["codex"]},
+                "workflow": {"name": "solo-codex", "sequence": ["codex"]},
                 "agents": {
                     "codex": {
                         "type": "codex",
@@ -102,7 +102,7 @@ class TuiCoreTests(unittest.TestCase):
         lines = format_session_details(session)
         text = "\n".join(lines)
 
-        self.assertIn("workflow: single-codex", text)
+        self.assertIn("workflow: solo-codex", text)
         self.assertIn("sequence: codex", text)
         self.assertIn("workdir: /repo", text)
         self.assertIn("mock: false", text)
@@ -248,7 +248,7 @@ class TuiCoreTests(unittest.TestCase):
 
     def test_session_picker_helpers_sort_move_and_render(self):
         sessions = [
-            {"session_id": "old", "status": "done", "workflow": "single-codex", "updated_at": "2026-07-08T00:00:00+00:00", "workdir": "/old"},
+            {"session_id": "old", "status": "done", "workflow": "solo-codex", "updated_at": "2026-07-08T00:00:00+00:00", "workdir": "/old"},
             {"session_id": "new", "status": "running", "workflow": "cross-review", "updated_at": "2026-07-08T01:00:00+00:00", "workdir": "/new"},
         ]
 
@@ -270,20 +270,20 @@ class TuiCoreTests(unittest.TestCase):
                 {"id": "codex", "type": "codex", "enabled": False},
             ],
             "workflows": [
-                {"id": "single-claude", "sequence": ["claude"]},
+                {"id": "solo-claude", "sequence": ["claude"]},
                 {"id": "compare", "sequence": ["claude", "codex"]},
             ],
         }
 
         self.assertEqual(agents_from_options(options), (AgentRef(id="claude", type="claude", enabled=True),))
-        self.assertEqual(workflow_ids_from_options(options), ("single-claude", "compare"))
+        self.assertEqual(workflow_ids_from_options(options), ("solo-claude", "compare"))
 
     def test_new_session_payload_matches_daemon_start_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
-            payload = build_new_session_payload(task=" task ", workflow="single-codex", workdir=tmp)
+            payload = build_new_session_payload(task=" task ", workflow="solo-codex", workdir=tmp)
 
         self.assertEqual(payload["task"], "task")
-        self.assertEqual(payload["workflow"], "single-codex")
+        self.assertEqual(payload["workflow"], "solo-codex")
         self.assertEqual(payload["workdir"], str(Path(tmp).resolve()))
         self.assertEqual(payload["max_turns"], 3)
         self.assertEqual(payload["timeout"], 900)
@@ -296,7 +296,7 @@ class TuiCoreTests(unittest.TestCase):
 
         interactive_payload = build_new_session_payload(
             task="task",
-            workflow="single-codex",
+            workflow="solo-codex",
             workdir=tmp,
             interactive=True,
             interactive_idle_timeout=30,

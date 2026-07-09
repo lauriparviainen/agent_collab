@@ -214,6 +214,7 @@ class SessionManager:
             warnings=selection.warnings,
             interactive=request.interactive,
             interactive_idle_timeout=request.interactive_idle_timeout,
+            workdir=workdir,
         )
         capabilities = self._session_capabilities(collab_config, selection.agent_backends)
         session_id = request.session_id or self._new_session_id()

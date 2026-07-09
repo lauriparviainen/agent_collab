@@ -229,7 +229,7 @@ class SdkSelectionTests(unittest.TestCase):
         self.assertIn("sdk", detail["message"])
 
     def test_inferred_cli_mode_does_not_block_sdk_selection(self):
-        # The built-in antigravity agent carries `-p --mode accept-edits` (cli
+        # The built-in antigravity agent carries `--mode accept-edits -p` (cli
         # posture). Selecting the sdk backend must NOT be blocked by that inferred
         # mode — only an *explicit* antigravity_options.mode is rejected on sdk.
         config = CollaborationConfig(
