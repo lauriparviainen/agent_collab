@@ -59,6 +59,37 @@ class StartSessionRequest:
     # advertised — never a possibly-divergent reload. Not a user input.
     collab_config: Optional[CollaborationConfig] = None
 
+    @classmethod
+    def from_wire(cls, data: Dict[str, Any]) -> "StartSessionRequest":
+        """Build a request from a raw wire dict via the shared API DTO.
+
+        The single validation/normalization path for the start payload, used by
+        both the HTTP server (`POST /sessions`) and the in-daemon MCP backend
+        (`SessionManagerToolBackend.start_session`) so the start shape is defined
+        once in `api_schema.StartSessionRequestModel`. Raises `ValueError` on
+        invalid input, which callers map to a 400 / MCP tool error. Non-user
+        fields (`verbose`, `session_id`, `resolved_backends`, ...) keep their
+        defaults and are never accepted off the wire.
+        """
+        from .api_schema import StartSessionRequestModel
+
+        model = StartSessionRequestModel.from_dict(data)
+        return cls(
+            task=model.task,
+            workflow=model.workflow,
+            workdir=model.workdir,
+            max_turns=model.max_turns,
+            timeout=model.timeout,
+            mock=model.mock,
+            dry_run=model.dry_run,
+            interactive=model.interactive,
+            interactive_idle_timeout=model.interactive_idle_timeout,
+            codex_options=model.codex_options,
+            claude_options=model.claude_options,
+            antigravity_options=model.antigravity_options,
+            backend=model.backend,
+        )
+
 
 @dataclass
 class SessionState:

@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol
 
-from .config import DEFAULT_WORKFLOW
 from .daemon import SessionManager, StartSessionRequest
 from .options import StartOptionsError
 
@@ -167,23 +166,9 @@ class SessionManagerToolBackend:
         self.manager = manager
 
     async def start_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        state = await self.manager.start_session(
-            StartSessionRequest(
-                task=_required_str(payload, "task"),
-                workflow=str(payload.get("workflow", DEFAULT_WORKFLOW)),
-                workdir=Path(_required_str(payload, "workdir")),
-                max_turns=_int_arg(payload, "max_turns", 3),
-                timeout=_int_arg(payload, "timeout", 900),
-                mock=bool(payload.get("mock", False)),
-                dry_run=bool(payload.get("dry_run", False)),
-                interactive=bool(payload.get("interactive", False)),
-                interactive_idle_timeout=_float_arg(payload, "interactive_idle_timeout", 600.0),
-                codex_options=_optional_payload(payload, "codex_options"),
-                claude_options=_optional_payload(payload, "claude_options"),
-                antigravity_options=_optional_payload(payload, "antigravity_options"),
-                backend=str(payload["backend"]) if payload.get("backend") is not None else None,
-            )
-        )
+        # StartSessionRequest.from_wire is the shared start-payload definition
+        # (api_schema.StartSessionRequestModel); the HTTP server uses it too.
+        state = await self.manager.start_session(StartSessionRequest.from_wire(payload))
         return state.to_dict()
 
     async def describe_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -391,7 +376,7 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                         "Use agent_collab_wait_events with a cursor; do not make one blocking call. "
                         "On validation errors, fix the named field paths instead of guessing."
                     ),
-                    "serverInfo": {"name": "agent-collab", "version": "0.1.0"},
+                    "serverInfo": {"name": "agent-collab", "version": "0.1"},
                 },
             )
         if method == "notifications/initialized":
@@ -437,14 +422,6 @@ def _int_arg(args: Dict[str, Any], key: str, default: int) -> int:
         raise ValueError(f"{key} must be an integer") from exc
 
 
-def _float_arg(args: Dict[str, Any], key: str, default: float) -> float:
-    value = args.get(key, default)
-    try:
-        return float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{key} must be a number") from exc
-
-
 def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
         key: args[key]
@@ -469,7 +446,10 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("task is required")
     if not isinstance(payload.get("workdir"), str) or not payload["workdir"].strip():
         raise ValueError("workdir is required")
-    if "backend" in payload and not isinstance(payload["backend"], str):
+    # Match StartSessionRequestModel: an explicit null backend means "no
+    # override" (same as omitting it); only a present, non-null, non-string
+    # backend is rejected. Keeps the /mcp path consistent with REST/from_wire.
+    if payload.get("backend") is not None and not isinstance(payload["backend"], str):
         raise ValueError("backend must be a string")
     return payload
 
@@ -490,10 +470,6 @@ def _describe_payload(args: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload.get("workdir"), str) or not payload["workdir"].strip():
         raise ValueError("workdir is required")
     return payload
-
-
-def _optional_payload(args: Dict[str, Any], key: str) -> Any:
-    return {} if key not in args or args[key] is None else args[key]
 
 
 def _is_jsonrpc_notification(request: Dict[str, Any]) -> bool:

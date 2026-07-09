@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from .config import DEFAULT_WORKFLOW
+from .api_schema import (
+    API_VERSION,
+    API_VERSION_HEADER,
+    HealthModel,
+    OptionsRequestModel,
+    PostMessageRequestModel,
+)
 from .daemon import SessionManager, StartSessionRequest
 from .paths import GlobalDataPaths
 from .mcp_tools import SUPPORTED_PROTOCOL_VERSIONS, SessionManagerToolBackend, handle_request as handle_mcp_request
@@ -117,7 +123,13 @@ class AgentCollabHttpServer:
         query = parse_qs(parsed.query)
 
         if method == "GET" and path_parts == ["health"]:
-            return {"status": "ok", "sessions": len(self.manager.list_sessions())}
+            # /health carries the API version so a client can assert a compatible
+            # major on connect (the X-Agent-Collab-API header carries it too).
+            return HealthModel(
+                status="ok",
+                sessions=len(self.manager.list_sessions()),
+                api_version=API_VERSION,
+            ).to_dict()
 
         if path_parts == ["mcp"]:
             return await self._dispatch_mcp(method, headers, body)
@@ -125,30 +137,16 @@ class AgentCollabHttpServer:
         if method in {"GET", "POST"} and path_parts == ["options"]:
             if method == "POST":
                 data = _decode_json_object(body)
-                workdir = Path(_required_str(data, "workdir"))
             else:
-                workdir = Path(_query_required_str(query, "workdir"))
-            return self.manager.describe_options(workdir)
+                values = query.get("workdir")
+                data = {"workdir": values[0] if values else None}
+            options_request = _parse(OptionsRequestModel.from_dict, data)
+            return self.manager.describe_options(Path(options_request.workdir))
 
         if method == "POST" and path_parts == ["sessions"]:
             data = _decode_json_object(body)
-            state = await self.manager.start_session(
-                StartSessionRequest(
-                    task=_required_str(data, "task"),
-                    workflow=str(data.get("workflow", DEFAULT_WORKFLOW)),
-                    workdir=Path(_required_str(data, "workdir")),
-                    max_turns=int(data.get("max_turns", 3)),
-                    timeout=int(data.get("timeout", 900)),
-                    mock=bool(data.get("mock", False)),
-                    dry_run=bool(data.get("dry_run", False)),
-                    interactive=bool(data.get("interactive", False)),
-                    interactive_idle_timeout=float(data.get("interactive_idle_timeout", 600.0)),
-                    codex_options=_optional_payload(data, "codex_options"),
-                    claude_options=_optional_payload(data, "claude_options"),
-                    antigravity_options=_optional_payload(data, "antigravity_options"),
-                    backend=str(data["backend"]) if data.get("backend") is not None else None,
-                )
-            )
+            request = _parse(StartSessionRequest.from_wire, data)
+            state = await self.manager.start_session(request)
             return state.to_dict()
 
         if method == "GET" and path_parts == ["sessions"]:
@@ -167,12 +165,13 @@ class AgentCollabHttpServer:
                 return (await self.manager.wait_events(session_id, cursor, timeout_ms)).to_dict()
             if method == "POST" and len(path_parts) == 3 and path_parts[2] == "messages":
                 data = _decode_json_object(body)
+                message = _parse(PostMessageRequestModel.from_dict, data)
                 return (
                     await self.manager.post_message(
                         session_id,
-                        _required_str(data, "text"),
-                        source=str(data.get("source", "referee")) if data.get("source") is not None else "referee",
-                        target=data.get("target"),
+                        message.text,
+                        source=message.source,
+                        target=message.target,
                     )
                 ).to_dict()
             if method == "GET" and len(path_parts) == 3 and path_parts[2] == "transcript":
@@ -221,6 +220,7 @@ class AgentCollabHttpServer:
             (
                 f"HTTP/1.1 {status} {reason}\r\n"
                 "Content-Type: application/json; charset=utf-8\r\n"
+                f"{API_VERSION_HEADER}: {API_VERSION}\r\n"
                 f"Content-Length: {len(body)}\r\n"
                 "Connection: close\r\n"
                 "\r\n"
@@ -233,6 +233,7 @@ class AgentCollabHttpServer:
         writer.write(
             (
                 f"HTTP/1.1 {status} {_http_reason(status)}\r\n"
+                f"{API_VERSION_HEADER}: {API_VERSION}\r\n"
                 "Content-Length: 0\r\n"
                 "Connection: close\r\n"
                 "\r\n"
@@ -253,19 +254,15 @@ def _decode_json_object(body: bytes) -> Dict[str, Any]:
     return data
 
 
-def _required_str(data: Dict[str, Any], key: str) -> str:
-    value = data.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise HttpError(400, f"{key} is required")
-    return value
-
-
-def _query_required_str(query: Dict[str, Any], key: str) -> str:
-    values = query.get(key)
-    value = values[0] if values else None
-    if not isinstance(value, str) or not value.strip():
-        raise HttpError(400, f"{key} is required")
-    return value
+def _parse(parser: Any, data: Dict[str, Any]) -> Any:
+    """Run a DTO `from_dict`/`from_wire` parser, mapping its validation
+    `ValueError` to a 400 `HttpError` so request-shape errors keep the REST
+    error contract. `StartOptionsError` is raised later (inside
+    `start_session`), not by these parsers, so it is unaffected."""
+    try:
+        return parser(data)
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
 
 
 def _query_int(query: Dict[str, Any], key: str, default: int) -> int:
@@ -273,10 +270,6 @@ def _query_int(query: Dict[str, Any], key: str, default: int) -> int:
     if not values:
         return default
     return int(values[0])
-
-
-def _optional_payload(data: Dict[str, Any], key: str) -> Any:
-    return {} if key not in data or data[key] is None else data[key]
 
 
 def _validate_mcp_origin(origin: Optional[str]) -> None:

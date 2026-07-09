@@ -34,7 +34,8 @@ from agent_collab.api_schema import (
     StartSessionRequestModel,
     TranscriptModel,
 )
-from agent_collab.client import AgentCollabClient
+from agent_collab.api_schema import API_VERSION, API_VERSION_HEADER
+from agent_collab.client import AgentCollabClient, ClientError, _assert_compatible_api
 from agent_collab.daemon import SessionManager, StartSessionRequest
 from agent_collab.mcp_tools import TOOLS, _start_payload
 from agent_collab.options import StartOptionsError
@@ -142,6 +143,18 @@ class StartPayloadSyncTests(unittest.TestCase):
             StartSessionRequestModel.from_dict({"task": "t"})
         with self.assertRaises(ValueError):
             StartSessionRequestModel.from_dict({"task": "t", "workdir": "   "})
+
+    def test_start_payload_backend_matches_dto_null_and_type_rules(self):
+        # The /mcp _start_payload path must agree with StartSessionRequestModel on
+        # backend: an explicit null is accepted (no override), a present non-null
+        # non-string is rejected. Guards the REST/MCP consistency fix.
+        base = {"task": "t", "workdir": "/w"}
+        self.assertIsNone(StartSessionRequestModel.from_dict({**base, "backend": None}).backend)
+        self.assertIsNone(_start_payload({**base, "backend": None}).get("backend"))
+        with self.assertRaises(ValueError):
+            _start_payload({**base, "backend": 5})
+        with self.assertRaises(ValueError):
+            StartSessionRequestModel.from_dict({**base, "backend": 5})
 
 
 class ModelRoundTripTests(unittest.TestCase):
@@ -255,6 +268,57 @@ class LiveWireFidelityTests(unittest.IsolatedAsyncioTestCase):
 
                 stopped = await server._dispatch("POST", f"/sessions/{session_id}/stop", {}, b"")
                 self.assertEqual(SessionStateModel.from_dict(stopped).to_dict(), stopped)
+
+
+class _CaptureWriter:
+    def __init__(self):
+        self.buffer = bytearray()
+
+    def write(self, data):
+        self.buffer.extend(data)
+
+    async def drain(self):
+        pass
+
+
+class VersioningTests(unittest.TestCase):
+    def test_client_tolerates_missing_or_matching_or_garbage_header(self):
+        # None headers, absent header, matching major, and an unparseable value
+        # must all pass (an old daemon predates versioning; the wire is otherwise
+        # unchanged).
+        _assert_compatible_api(None)
+        _assert_compatible_api({})
+        _assert_compatible_api({API_VERSION_HEADER: str(API_VERSION)})
+        _assert_compatible_api({API_VERSION_HEADER: "not-a-number"})
+
+    def test_client_rejects_incompatible_major(self):
+        with self.assertRaises(ClientError):
+            _assert_compatible_api({API_VERSION_HEADER: str(API_VERSION + 1)})
+
+
+class VersioningWireTests(unittest.IsolatedAsyncioTestCase):
+    async def test_health_dispatch_carries_api_version(self):
+        server = AgentCollabHttpServer(manager=SessionManager())
+        health = await server._dispatch("GET", "/health", {}, b"")
+        self.assertEqual(health["api_version"], API_VERSION)
+
+    async def test_responses_carry_the_version_header(self):
+        server = AgentCollabHttpServer(manager=SessionManager())
+        writer = _CaptureWriter()
+        await server._write_json(writer, 200, {"ok": True})
+        self.assertIn(
+            f"{API_VERSION_HEADER}: {API_VERSION}".encode("ascii"),
+            bytes(writer.buffer),
+        )
+
+    async def test_empty_responses_carry_the_version_header(self):
+        server = AgentCollabHttpServer(manager=SessionManager())
+        writer = _CaptureWriter()
+        await server._write_empty(writer, 202)
+        self.assertIn(
+            f"{API_VERSION_HEADER}: {API_VERSION}".encode("ascii"),
+            bytes(writer.buffer),
+        )
 
 
 if __name__ == "__main__":

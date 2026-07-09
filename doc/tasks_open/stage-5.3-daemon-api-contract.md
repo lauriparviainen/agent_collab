@@ -191,46 +191,64 @@ shape. So the client has exactly one REST error path.
 
 ### Progress: slice 1 landed (DTOs + contract test)
 
-**Done (2026-07-09):** `agent_collab/api_schema.py` (DTOs, `API_VERSION` /
-`API_VERSION_HEADER`, `NON_USER_START_FIELDS`, `Route`/`ROUTES` full REST
-registry + `SERVER_ONLY_ROUTES`) and `tests/test_api_schema.py` (route/model +
-start-payload-quadruplication + live-wire-fidelity contract tests). One small
-additive production change: `AgentCollabClient.health()`. Full suite green (273).
-Reviewed by solo-codex (`daemon-311afbb1340349e0`, 2026-07-09); its BLOCKING
-finding (`GET /options` missing from the registry) was fixed by adding it as a
-server-only route with a `SERVER_ONLY_ROUTES` guard. **The server/client refactor
-onto the DTOs is NOT done — that is slice 2 below.**
+**Done (2026-07-09, committed `85324eb`):** `agent_collab/api_schema.py` (DTOs,
+`API_VERSION` / `API_VERSION_HEADER`, `NON_USER_START_FIELDS`, `Route`/`ROUTES`
+full REST registry + `SERVER_ONLY_ROUTES`) and `tests/test_api_schema.py`
+(route/model + start-payload-quadruplication + live-wire-fidelity contract
+tests). One small additive production change: `AgentCollabClient.health()`.
+Reviewed by solo-codex (`daemon-311afbb1340349e0`); its BLOCKING finding
+(`GET /options` missing from the registry) was fixed by adding it as a
+server-only route with a `SERVER_ONLY_ROUTES` guard.
 
-### Wiring-slice (slice 2) notes — forward risks flagged by the codex review
+### Progress: slice 2 landed (server + MCP wired onto the DTOs + versioning)
 
-The DTOs codify **REST** semantics as the canonical shape. Wiring them into
-`server_http`/`client`/`mcp_tools` must decide these deliberately (each is a
-behavior change, not a bug in slice 1):
+**Done (2026-07-09):** request validation now flows through the DTOs, not ad-hoc
+helpers. Full suite green (279) + an end-to-end socket round-trip check.
 
-- **MCP vs REST edge split.** `StartSessionRequestModel.from_dict` rejects a
-  whitespace-only `task` (REST `_required_str` semantics) whereas
-  `mcp_tools._start_payload` accepts it (`not payload["task"]` only rejects `""`);
-  and it accepts an explicit `backend: null` (→ `None`) whereas `_start_payload`
-  rejects it. Replacing `_start_payload` with the DTO unifies MCP onto REST
-  (recommended for consistency) but changes those MCP edge cases — do it on
-  purpose.
-- **PostMessage error precedence.** `PostMessageRequestModel.from_dict` validates
-  `source`/`target` up front; the server today validates only `text` before the
-  session lookup (`source`/`target` are checked inside `post_message`, *after*
-  `_get_managed` → `404` for an unknown session). Wiring the full DTO first flips
-  precedence (bad `target` on an unknown session → `400` instead of `404`).
-  Either validate `text`-only before lookup, or accept the change.
-- **`api_version` must be constructed, not defaulted.** `HealthModel.api_version`
-  defaults to `None` and `to_dict` omits it. The server must build
-  `HealthModel(..., api_version=API_VERSION)` and set the `X-Agent-Collab-API`
-  header, or the version silently stays absent.
-- **Fourth start-payload copy.** `SessionManagerToolBackend.start_session` builds
-  `StartSessionRequest` imperatively from the same wire fields and is not yet
-  guarded by the contract test; collapse it onto `StartSessionRequestModel` too.
-- **Reverse route-completeness.** The test proves `ROUTES ⊆ server dispatch`
-  (every entry is driven live) but not the reverse, because `_dispatch` is
-  imperative. Making `_dispatch` table-driven off `ROUTES` in this slice closes
-  it fully.
+- `StartSessionRequest.from_wire` ([daemon.py](../../agent_collab/daemon.py)) is
+  the single wire→request construction; the HTTP server (`POST /sessions`) and
+  the in-daemon MCP backend (`SessionManagerToolBackend.start_session`) both use
+  it (collapses the 4th start-payload copy).
+- `server_http._dispatch` validates via `OptionsRequestModel` /
+  `PostMessageRequestModel` / `from_wire` through a `_parse()` seam that maps the
+  DTO's `ValueError` → `HttpError(400)` (keeps the REST error contract; the
+  server tests call `_dispatch` directly and assert `HttpError`). The old
+  `_required_str` / `_query_required_str` / `_optional_payload` helpers are gone.
+- Versioning: `GET /health` returns `HealthModel(..., api_version=API_VERSION)`;
+  every response carries `X-Agent-Collab-API`; the client asserts a compatible
+  major per request (`_assert_compatible_api`, tolerant of a missing/garbage
+  header, rejects a mismatch).
+- Deliberate unifications (were forward-risks): whitespace-only `task` is now
+  rejected on `/mcp` (via `from_wire`); `backend: null` is accepted and a
+  non-null non-string `backend` rejected identically on REST **and** `/mcp`
+  (`_start_payload` aligned with the DTO — the review caught that `_start_payload`
+  still rejected `null` on the public `/mcp` path); `POST /messages` validates
+  `source`/`target` up front (matches the MCP path; a bad message on an unknown
+  session is now `400` before `404`). `int()/float()` replace the MCP
+  `_int_arg`/`_float_arg` custom messages. No existing test asserted those old
+  MCP-only edges.
+
+**Client return types are still dicts** (cli/tui consume dicts). Reviewed by
+solo-codex (`daemon-a147a57d9ff143cf`); verdict commit-safe, its one actionable
+non-blocking finding (`/mcp` `backend: null`) fixed + tested above.
+
+### Remaining Workstream A work (later slices)
+
+- **Typed client return values ("slice 3")** — `AgentCollabClient` methods return
+  DTOs (`get_session -> SessionStateModel`, …), the deliverable the TUI consumes,
+  plus updating `HttpClientToolBackend` to `.to_dict()` the results. **Scheduled
+  into [stage-5.2 Stage 2](stage-5.2-calm-tui-cleanup/README.md#stage-2---implementation)**
+  (it lists this as an explicit build item) so the doomed dict-based
+  `tui.py`/`cli.py` call sites are migrated once, not churned twice.
+- **Table-driven `_dispatch` off `ROUTES`** — closes reverse route-completeness
+  (server dispatch ⊆ `ROUTES`) fully; the current test only proves the forward
+  direction.
+- **Malformed numeric/null request fields → `400`, not `500`.** `_parse` maps
+  only `ValueError`; a null/ill-typed `max_turns`/`timeout` reaches `int(None)` →
+  `TypeError` → generic `500` (pre-existing behavior, not a slice-2 regression).
+  If the contract wants all malformed request fields to be `400`, have the DTO
+  `from_dict` raise `ValueError` on those conversions.
+- **`doc/http-api.md` generator** — still deferred.
 
 ## Workstream B - Loopback Auth (rotating shared-secret token)
 

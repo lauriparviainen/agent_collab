@@ -27,6 +27,8 @@ until the ANSI screenshots are approved.
 - Current TUI implementation:
   [../../../agent_collab/tui.py](../../../agent_collab/tui.py),
   [../../../agent_collab/tui_core.py](../../../agent_collab/tui_core.py)
+- Typed daemon data layer this TUI consumes (do its "slice 3" here — see Stage 2):
+  [../stage-5.3-daemon-api-contract.md](../stage-5.3-daemon-api-contract.md)
 - David AI design system:
   `/home/devel/projects/david_ai_git/doc/david_ai_design_system`
 
@@ -246,6 +248,19 @@ Store alongside the mockups. Review and approve before implementation.
 After the screenshots are approved:
 
 - Refactor TUI rendering around the approved layout.
+- **Consume the typed daemon client in the same pass — this is stage-5.3's
+  deferred "slice 3."** [stage-5.3](../stage-5.3-daemon-api-contract.md) landed
+  shared typed DTOs (`api_schema`) + a versioned client but deliberately left
+  `AgentCollabClient` methods returning raw dicts, so the doomed dict-based
+  `tui.py`/`cli.py` call sites are migrated **once here, not churned twice**. In
+  this Stage 2: swap the client return types to the DTOs (`get_session ->
+  SessionStateModel`, `list_sessions -> SessionListModel`,
+  `read_events`/`wait_events` -> `EventBatchModel`, `stop_session` /
+  `post_message`, …); migrate the `tui.py` (and `cli.py`) call sites off
+  `session["status"]` / `.get(...)` dict access to typed attributes; and update
+  `HttpClientToolBackend` ([mcp_tools.py](../../../agent_collab/mcp_tools.py)) to
+  `.to_dict()` the client results before the MCP `content()` serializer. See
+  stage-5.3 "Remaining Workstream A work".
 - Keep command/event behavior unchanged unless the approved samples require a
   specific interaction change.
 - Add focused tests for formatting helpers, command palette behavior, session
@@ -253,7 +268,10 @@ After the screenshots are approved:
   line composition (message left + hint/activity right), the spinner
   (braille frames + ASCII fallback selection), directed argument-entry mode,
   `Esc` closing `/details`, the `/details` wide-panel vs narrow-overlay
-  fallback, and narrow-terminal rendering.
+  fallback, and narrow-terminal rendering. Also cover the slice-3 client change:
+  each `AgentCollabClient` method returns its `api_schema` DTO, and
+  `HttpClientToolBackend` still serializes correctly (DTOs `.to_dict()`ed for
+  MCP `content()`).
 - Run the full test suite before closing.
 
 ## Review Notes

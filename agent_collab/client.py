@@ -7,6 +7,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .api_schema import API_VERSION, API_VERSION_HEADER
+
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8765"
 SERVER_URL_ENV = "AGENT_COLLAB_SERVER"
@@ -91,6 +93,7 @@ class AgentCollabClient:
         request = Request(url, data=data, headers=headers, method=method)
         try:
             with urlopen(request, timeout=timeout or self.timeout) as response:
+                _assert_compatible_api(response.headers)
                 body = response.read().decode("utf-8")
         except HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
@@ -110,6 +113,28 @@ class AgentCollabClient:
             return json.loads(body)
         except json.JSONDecodeError as exc:
             raise ClientError(f"invalid JSON response from daemon: {body[:200]}") from exc
+
+
+def _assert_compatible_api(headers: Any) -> None:
+    """Assert the daemon's advertised API major matches the client's.
+
+    An older daemon that predates versioning sends no header; that is tolerated
+    (the wire is otherwise unchanged). A header with an incompatible major means
+    the client and daemon disagree on the contract — fail loudly instead of
+    shape-guessing.
+    """
+    raw = headers.get(API_VERSION_HEADER) if headers is not None else None
+    if raw is None:
+        return
+    try:
+        major = int(str(raw).split(".", 1)[0])
+    except ValueError:
+        return
+    if major != API_VERSION:
+        raise ClientError(
+            f"daemon API version {raw} is incompatible with this client "
+            f"(expected major {API_VERSION}); restart the daemon"
+        )
 
 
 def _format_error_payload(payload: Dict[str, Any]) -> str:
