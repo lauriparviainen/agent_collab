@@ -112,6 +112,17 @@ one accent plus the aligned source label for identity, and let secondary agents
 read in muted/dim tones. Stage 1a mockups should state, per source, whether a
 hue is retained or flattened.
 
+### Activity spinner
+
+`format_activity_indicator` cycles ASCII `- \ | /` today (`ACTIVITY_FRAMES`),
+whose `|` frame reads as a chrome pipe beside separators. Target: a **braille
+orbit** `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` when the terminal is UTF-8 capable, with an
+**ASCII dot-pulse** fallback (`.`, `..`, `...`) otherwise — the same
+truecolor -> 256 -> ASCII graceful-degradation spirit as the color mapping.
+Render it as `<frame> running` and separate it from other context fields with
+` · `. This is an approved change to `ACTIVITY_FRAMES` /
+`format_activity_indicator` (see Approved Interaction Changes).
+
 ## Target Layout
 
 Adapted from the Grok reference, top to bottom. Regions map to the current
@@ -135,20 +146,23 @@ render in [tui.py](../../../agent_collab/tui.py) so Stage 2 has a clear delta.
 5. **Input rail.** A single focused prompt line. Right side shows the input
    **mode / target** (referee note vs `#agent` directed vs `/new` wizard step),
    the analogue of Grok's `Grok Build · auto` mode chip.
-6. **Message slot.** A dedicated line (or a left segment of the hint line) for
-   transient feedback that today lives in `_render_status_line`: `sent note`,
-   `queued for X`, errors, `refreshed`, read-only notices. This must stay
-   distinct from the static hint text — the message updates on actions, the
-   hints update on state. Messages are transient (clear on next keystroke/turn);
-   hints are ambient.
-7. **Bottom hint line (contextual).** Static key affordances for the current
-   state. Because states overlap, resolve the hint by this **precedence** (first
-   match wins): new-session wizard -> session picker open -> slash palette open
-   -> `/details` overlay -> read-only/terminal session -> scrollback (not
-   following) -> default (following). Examples:
+6. **Status/hint line (contextual).** One line directly below the rail, split:
+   the transient **message** on the left (`sent note`, `queued for X`, errors,
+   `refreshed`, read-only notices — today's `_render_status_line` message) and
+   the state **hint + activity** on the right. The message updates on actions;
+   the hint updates on state. This is **two-row bottom chrome** (rail + this
+   line) in the steady state; a third row is spent only when an overlay is open
+   (palette, picker, details) or a high-severity error needs its own line.
+   Activity is shown once here (right), not repeated in the top context line.
+
+   Resolve the hint by this **precedence** (first match wins): new-session
+   wizard -> session picker open -> slash palette open -> `/details` overlay ->
+   no active session -> read-only/terminal session -> scrollback (not following)
+   -> default (following). Examples:
    `Enter send · Tab complete · Esc close` (palette);
-   `up/down move · Enter open · Esc close` (picker);
-   `up/down scroll · End follow · q quit` (scrollback);
+   `↑↓ move · Enter open · Esc close` (picker);
+   `/new start · /help commands · q quit` (no session);
+   `↑↓ scroll · End follow · q quit` (scrollback);
    `read-only` (terminal).
 
 ### `/details` disposition
@@ -159,6 +173,27 @@ hidden below that even when `details_visible` is true ([tui.py](../../../agent_c
 threshold render details as a scrollable overlay (like the picker/help overlay)
 so the toggle is never a no-op. The narrow fallback sample must show this.
 
+## Approved Interaction Changes
+
+These are the only behavior changes in scope; everything else stays byte-for-byte
+(commands, event model, poller, dispatch). Each needs a Stage 2 test.
+
+- **Activity spinner:** braille orbit with ASCII dot-pulse fallback, replacing
+  `- \ | /` (see Activity spinner above).
+- **Directed argument-entry mode:** while the rail holds a directed command that
+  still needs its argument (`/ask ` or `#agent` with no message yet), the mode
+  chip shows the target (`-> ask AGENT`, `-> codex`) and the message slot shows
+  the usage hint; `Esc` cancels back to referee mode. Today completion simply
+  vanishes after whitespace and the error only appears on `Enter`.
+- **`Esc` closes `/details`:** `Esc` dismisses the details panel/overlay, matching
+  how `Esc` already closes the palette and picker. Today `/details` only toggles
+  via the command.
+
+Mockups must tag each divergence from current behavior as one of: **faithful**
+(matches code), **target delta** (restyle only, no behavior change — e.g.
+lowercase picker headers, `▸` marker), or **approved interaction change** (listed
+here). Do not label a behavior change "faithful".
+
 ## Current TUI -> Target Delta
 
 Grounding for Stage 2, from [tui.py](../../../agent_collab/tui.py):
@@ -167,9 +202,9 @@ Grounding for Stage 2, from [tui.py](../../../agent_collab/tui.py):
   (`agent-collab id status workflow workdir [tags]`). Split into the quiet
   context line + the session info line; add model and backend.
 - Status line (`_render_status_line`) mixes the transient message with the
-  scroll/activity mode. Split into a distinct **message slot** (transient
-  feedback) and the static **hint line** (state affordances) — see layout
-  regions 6 and 7.
+  scroll/activity mode. Restructure into one **status/hint line** below the rail
+  — message left, state hint + activity right — the two-row bottom chrome in
+  layout region 6. Activity shows here only, not in the top context line.
 - Slash completion (`_render_slash_completion`) already renders a compact
   menu near the input with a selected row — this is close to the target
   palette; restyle to David AI tokens rather than rebuild.
@@ -178,7 +213,8 @@ Grounding for Stage 2, from [tui.py](../../../agent_collab/tui.py):
 - Separators (`"-" * width` in `chrome` dim) become hairline-styled rules used
   sparingly.
 - Behavior (commands, event model, poller, input dispatch) stays unchanged
-  unless an approved sample requires a specific interaction change.
+  except for the three items under Approved Interaction Changes (spinner,
+  directed argument-entry mode, `Esc` closes `/details`).
 
 ## Stage 1a - Text Mockups For Approval
 
@@ -213,8 +249,10 @@ After the screenshots are approved:
 - Keep command/event behavior unchanged unless the approved samples require a
   specific interaction change.
 - Add focused tests for formatting helpers, command palette behavior, session
-  picker behavior, the contextual bottom-hint precedence selection, the
-  message-slot vs hint split, the `/details` wide-panel vs narrow-overlay
+  picker behavior, the contextual hint precedence selection, the status/hint
+  line composition (message left + hint/activity right), the spinner
+  (braille frames + ASCII fallback selection), directed argument-entry mode,
+  `Esc` closing `/details`, the `/details` wide-panel vs narrow-overlay
   fallback, and narrow-terminal rendering.
 - Run the full test suite before closing.
 

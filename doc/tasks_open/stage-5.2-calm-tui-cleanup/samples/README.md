@@ -38,15 +38,19 @@ Each file must contain these five sections:
    width×height, follow vs scrollback, and which overlay is active
    (none / palette / picker / details / new wizard).
 2. **Mockup** — the terminal frame in a fenced code block, box-drawn, at the
-   stated width. Include the context line, session info line, body, the input
-   rail, the message slot, and the contextual bottom hint for this state.
+   stated width. Two-row bottom chrome: the input rail, then one status/hint
+   line (transient message left, hint + activity right). A third row appears
+   only for an open overlay or a high-severity error.
 3. **Color-token intent** — which David AI token each region uses (see the
    terminal mapping in the parent README), including per-source label treatment.
-4. **Keyboard behavior** — keys active in this state, and the exact strings for
-   both the transient message slot and the static bottom hint (name which
-   precedence rule selected the hint).
+4. **Keyboard behavior** — keys active in this state, and the exact strings on
+   the status/hint line (left message + right hint), naming which precedence
+   rule selected the hint.
 5. **Removed / simplified** — what this drops or calms versus the current TUI
-   (reference the region in `tui.py`).
+   (reference the region in `tui.py`). Tag every divergence from current
+   behavior as **faithful**, **target delta** (restyle only), or **approved
+   interaction change** (per the parent README's Approved Interaction Changes) —
+   never call a behavior change "faithful".
 
 ## Anchor mockup (main session, ~80 col)
 
@@ -54,8 +58,8 @@ Reference frame the other samples should stay consistent with. Illustrative
 only — not approved.
 
 ```
- main ~/projects/agent_collab                    running · 13K/512K
- test the poller · claude:opus-4.8 · codex:gpt-5 · pair-review
+ main ~/projects/agent_collab
+ test the poller · claude:opus-4.8 · codex:gpt-5 · cross-review
 ────────────────────────────────────────────────────────────────────
  codex     Reworked the poller so wait_events drives the cursor.
  referee   note: check the terminal-state early return          9:22
@@ -64,13 +68,15 @@ only — not approved.
            ◆ thinking…
 ────────────────────────────────────────────────────────────────────
  [referee] ▏                                           referee note
- Enter send · #agent direct · / commands · ↑↓ scroll · q quit
+ sent note                        ⠹ running · Enter send · / cmds · q
 ```
 
 Regions: line 1 context (`dim`), line 2 session info
 (task · per-agent `name:model` · workflow, `muted` with `accent` on the agent
 names), body with source gutter, hairline rules, input rail with mode chip
-(`referee note`) on the right, contextual bottom hint (`dim`). Backend (`.type`)
-is appended inline per agent only when it differs from that agent's default; the
-full per-agent block stays behind `/details`. (The bottom row here doubles as
-message + hint; real samples should show the message slot and hint separately.)
+(`referee note`) on the right, then the two-row bottom chrome's status/hint line
+— transient message left (`sent note`), spinner + hint right
+(`⠹ running · …`). Backend (`.type`) is appended inline per agent only when it
+differs from that agent's default; the full per-agent block stays behind
+`/details`. The spinner is the braille orbit (ASCII dot-pulse fallback), and
+activity appears here only — not in the top context line.
