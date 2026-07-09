@@ -13,10 +13,18 @@ if [[ -n "${AGENT_COLLAB_PYTHON:-}" ]]; then
   python_bin="$AGENT_COLLAB_PYTHON"
 elif [[ -x "$default_venv/bin/python" ]]; then
   python_bin="$default_venv/bin/python"
-elif command -v python3.12 >/dev/null 2>&1; then
-  python_bin="$(command -v python3.12)"
 else
-  python_bin="$(command -v python3)"
+  python_bin=""
+  for candidate in python3.12 python3.11 python3.10 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      python_bin="$(command -v "$candidate")"
+      break
+    fi
+  done
+  if [[ -z "$python_bin" ]]; then
+    printf 'agent-collab requires Python >= 3.10; no Python interpreter found\n' >&2
+    exit 2
+  fi
 fi
 
 if ! "$python_bin" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
