@@ -27,6 +27,9 @@ class AgentCollabClient:
         self.server_url = (server_url or default_server_url()).rstrip("/")
         self.timeout = timeout
 
+    def health(self) -> Dict[str, Any]:
+        return self._request("GET", "/health")
+
     def start_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request("POST", "/sessions", payload)
 

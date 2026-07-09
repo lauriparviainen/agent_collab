@@ -1,6 +1,9 @@
 # Stage 5.3 - Daemon HTTP API Contract + Loopback Auth
 
-Status: draft, not approved for implementation.
+Status: **Approved for implementation** (2026-07-09). Ships as **two PRs, A
+first** (both live in this doc). Grounding verified against the code on
+2026-07-09 — all references accurate. All prior open questions are resolved; see
+[Resolved Decisions](#resolved-decisions).
 
 ## Goal
 
@@ -37,11 +40,14 @@ objects. Workstream B is orthogonal to 5.2 but shares the client/server files.
   existing routes and JSON shapes stay compatible. (This is *wire-only*: swapping
   `AgentCollabClient` methods from raw dicts to typed DTOs **is** a Python-API
   change for in-process callers — the TUI, CLI, and `HttpClientToolBackend` —
-  and must be updated together.)
+  and must be updated together. In particular `HttpClientToolBackend`
+  ([mcp_tools.py](../../agent_collab/mcp_tools.py)) feeds client return values
+  straight into the MCP `content()` JSON serializer, so it must convert DTOs back
+  to dicts (`.to_dict()`) or MCP-over-HTTP responses break.)
 
 ## Current State (grounding)
 
-The API contract is triplicated with no schema:
+The API contract has no schema and is redefined in several places:
 
 - **Transport:** bespoke HTTP/1.1 + JSON over `127.0.0.1:8765`; client is
   `urllib` ([client.py](../../agent_collab/client.py)), server hand-parses on
@@ -54,12 +60,19 @@ The API contract is triplicated with no schema:
   `GET /sessions/{id}/events`, `GET /sessions/{id}/events/wait`,
   `POST /sessions/{id}/messages`, `GET /sessions/{id}/transcript`,
   `POST /sessions/{id}/stop`, and `POST /mcp`.
-- **Where shapes are defined today** (three places, no single source):
+- **Where shapes are defined today** (no single source; the *start* payload alone
+  lives in four places):
   1. server request validation — `_required_str` / `_query_int` /
-     `_decode_json_object` + the `StartSessionRequest` dataclass;
+     `_decode_json_object` + the `StartSessionRequest` dataclass
+     ([server_http.py](../../agent_collab/server_http.py) `_dispatch`);
   2. server responses — `.to_dict()` on session-state / event-batch objects
      (no declared schema);
-  3. client — `AgentCollabClient` methods re-encode the same routes.
+  3. client — `AgentCollabClient` methods re-encode the same routes;
+  4. **MCP** — [mcp_tools.py](../../agent_collab/mcp_tools.py) re-encodes the
+     *start* payload again (`_start_payload` +
+     `SessionManagerToolBackend.start_session`), on top of the
+     `agent_collab_start` `inputSchema` in `TOOLS`. So the start shape is
+     effectively quadruplicated, not triplicated.
 - **What already has a real schema:** the MCP tool `inputSchema`s
   ([mcp_tools.py](../../agent_collab/mcp_tools.py) `TOOLS`) and the typed,
   validated, runtime-discoverable start-options
@@ -85,9 +98,9 @@ demoted to a *documentation output*, and only for the parts that model cleanly.
   response models (`SessionStateModel`, `EventBatchModel`, `ErrorModel`, …) with
   explicit fields and `from_dict` / `to_dict`. Note `SessionState.to_dict()` is
   `asdict()` today (nested `settings`/`capabilities`), and `StartSessionRequest`
-  carries **non-user** fields (`resolved_backends`, `collab_config`, `verbose`,
-  `log_dir`, `session_id`) — the API request DTO must expose only the wire
-  fields, not those.
+  carries **non-user** fields (`verbose`, `color`, `log_dir`, `session_id`,
+  `resolved_backends`, `collab_config` — [daemon.py](../../agent_collab/daemon.py)
+  ~L44) — the API request DTO must expose only the wire fields, not those.
 - Server: `_dispatch` builds/returns these DTOs; the ad-hoc `_required_str` etc.
   become DTO `from_dict` validation.
 - Client: methods return typed DTOs, not raw dicts — **this is the deliverable
@@ -100,50 +113,124 @@ demoted to a *documentation output*, and only for the parts that model cleanly.
   configured agents, workflow agent types, backend health, and CLI-arg-inferred
   defaults per workdir ([options.py](../../agent_collab/options.py)
   `describe_options` / `_schema_for_agent_type`). A static contract may only say
-  `codex_options` is an object; allowed fields/defaults come from `/options` at
-  runtime. The TUI must call `/options`, not bake the option schema in.
+  the option blocks (`codex_options` / `claude_options` / `antigravity_options`)
+  are objects; their allowed fields/defaults — plus `agents`, `workflows`,
+  `workflow_agent_types`, and `backends` — all come from `/options` at runtime.
+  The TUI must call `/options`, not bake the option schema in.
 - **`wait_events`** is a normal `GET` returning `EventBatch`; its long-poll
   timing (`timeout_ms`) is prose, not something OpenAPI captures usefully.
 - **`/mcp`** is JSON-RPC-in-HTTP, not a REST resource; document it as an opaque
   authenticated endpoint, separate from the CLI daemon API. Its tool inputs
   already have `inputSchema` in `mcp_tools.py`.
 
-Optional (only if cheap): generate `doc/http-api.md` (and maybe `openapi.json`)
-from the DTOs + a small route registry for the REST-shaped routes. If the
-generator grows complex, drop it — the DTOs + a contract test are the real win.
+**Decision — deferred, not in this task.** The stdlib generator for
+`doc/http-api.md` (+ `openapi.json`) from the DTOs + a route registry is *not*
+built here; the DTOs + contract test are the real win and ship first. It can be
+added later if it turns out cheap. Until then, `daemon-architecture.md` points at
+the DTOs as the source of truth (see Deliverables A).
 
 ### Versioning
 
 Add an explicit API version so the TUI detects mismatch cleanly instead of via
-defensive `if`s. Options for approval: a `/v1` path prefix, or an
-`X-Agent-Collab-API: 1` response header + a version field in `GET /health`.
-Recommend the health/version field + header (no route churn) with the client
-asserting a compatible major on connect.
+defensive `if`s. **Decision:** a version field in `GET /health` **plus** an
+`X-Agent-Collab-API: 1` response header on every REST response (no route churn,
+no `/v1` prefix). The client asserts a compatible **major** on connect and
+surfaces a clear error on mismatch rather than shape-guessing.
 
 ### Error envelope
 
 Formalize the existing `{ "error": ..., "details": [...] }` shape
 ([client.py](../../agent_collab/client.py) `_format_error_payload`,
 [options.py](../../agent_collab/options.py) `StartOptionsError.to_dict`) as one
-`ErrorModel` used by every non-2xx response, so the client has exactly one error
-path.
+`ErrorModel` used by every non-2xx **REST** response — including the
+transport-level HTTP errors `/mcp` raises for a bad `Origin`/method/protocol
+version, which already render through the same `{ "error": ... }` envelope
+([server_http.py](../../agent_collab/server_http.py) `_handle_connection`).
+`ErrorModel`'s `details` field is **optional**: `StartOptionsError.to_dict`
+emits `{ "error", "details" }`, but the `/mcp` transport errors emit
+`{ "error" }` only (no `details`, verified 2026-07-09) — so `from_dict` must
+tolerate a missing `details` and `to_dict` must omit it when empty. Scope it
+explicitly: `ErrorModel` does **not** cover the JSON-RPC error objects that
+live inside a `200`/`202` `/mcp` body (`jsonrpc_error`,
+[mcp_tools.py](../../agent_collab/mcp_tools.py)) — those keep their JSON-RPC
+shape. So the client has exactly one REST error path.
 
 ### Deliverables A
 
 - `agent_collab/api_schema.py` — shared typed request/response DTOs (the single
   source; primary deliverable).
-- `server_http.py` and `client.py` refactored to use them (kill the triplication);
-  client methods return typed DTOs.
+- `server_http.py` and `client.py` refactored to use them (kill the duplication);
+  client methods return typed DTOs. **Decision — wrap ALL REST routes** (the full
+  list in Current State: `health`, `options`, sessions CRUD, `events`,
+  `events/wait`, `messages`, `transcript`, `stop`), not just the ones the TUI/CLI
+  use today, so the client is uniformly typed with no dict/DTO split. The DTO
+  `from_dict` validation must subsume **all** the ad-hoc server helpers:
+  `_required_str`, `_query_int`, `_query_required_str`, `_optional_payload`, and
+  `_decode_json_object` ([server_http.py](../../agent_collab/server_http.py)
+  `:256`/`:271`/`:263`/`:278`/`:244`). Update `HttpClientToolBackend`
+  ([mcp_tools.py](../../agent_collab/mcp_tools.py)) to convert those DTOs back to
+  dicts (`.to_dict()`) before they reach the MCP `content()` serializer.
+- Make the `/options` **request** DTO require a non-blank `workdir` (the server
+  already requires it for both `POST` and `GET /options`). This also closes
+  `client.describe_options()`'s current no-payload path, which sends `{}` and the
+  server `400`s.
 - **Contract test** (the real safety net): every route has a server handler and a
   client method; example payloads round-trip through the DTOs; the start payload
   DTO stays in sync with the MCP `agent_collab_start` `inputSchema`.
-- Reconcile the *start payload* definition so HTTP and MCP validation reference
-  one place (options details still resolved via `/options`).
-- **Optional/secondary:** generated `doc/http-api.md` (+ `openapi.json`) for the
-  REST-shaped routes, with a regen-and-diff CI check; drop if the generator gets
-  heavy.
+- Reconcile the *start payload* definition so HTTP **and MCP** validation
+  reference one place — this explicitly includes `mcp_tools.py` `_start_payload`,
+  `SessionManagerToolBackend.start_session`, and the `TOOLS` `inputSchema`, not
+  just `server_http.py` (options details still resolved via `/options`).
+- **Deferred (not this task):** the generated `doc/http-api.md` (+ `openapi.json`)
+  for the REST-shaped routes and its regen-and-diff CI check. Revisit only if
+  cheap.
 - Update [daemon-architecture.md](daemon-architecture.md): replace the
-  "Suggested endpoints" prose with a pointer to the DTOs / generated doc.
+  "Suggested endpoints" prose (verified stale on 2026-07-09 — it omits
+  `POST /sessions/{id}/messages`; [daemon-architecture.md](daemon-architecture.md)
+  ~L122) with a pointer to the DTOs as the source of truth.
+
+### Progress: slice 1 landed (DTOs + contract test)
+
+**Done (2026-07-09):** `agent_collab/api_schema.py` (DTOs, `API_VERSION` /
+`API_VERSION_HEADER`, `NON_USER_START_FIELDS`, `Route`/`ROUTES` full REST
+registry + `SERVER_ONLY_ROUTES`) and `tests/test_api_schema.py` (route/model +
+start-payload-quadruplication + live-wire-fidelity contract tests). One small
+additive production change: `AgentCollabClient.health()`. Full suite green (273).
+Reviewed by solo-codex (`daemon-311afbb1340349e0`, 2026-07-09); its BLOCKING
+finding (`GET /options` missing from the registry) was fixed by adding it as a
+server-only route with a `SERVER_ONLY_ROUTES` guard. **The server/client refactor
+onto the DTOs is NOT done — that is slice 2 below.**
+
+### Wiring-slice (slice 2) notes — forward risks flagged by the codex review
+
+The DTOs codify **REST** semantics as the canonical shape. Wiring them into
+`server_http`/`client`/`mcp_tools` must decide these deliberately (each is a
+behavior change, not a bug in slice 1):
+
+- **MCP vs REST edge split.** `StartSessionRequestModel.from_dict` rejects a
+  whitespace-only `task` (REST `_required_str` semantics) whereas
+  `mcp_tools._start_payload` accepts it (`not payload["task"]` only rejects `""`);
+  and it accepts an explicit `backend: null` (→ `None`) whereas `_start_payload`
+  rejects it. Replacing `_start_payload` with the DTO unifies MCP onto REST
+  (recommended for consistency) but changes those MCP edge cases — do it on
+  purpose.
+- **PostMessage error precedence.** `PostMessageRequestModel.from_dict` validates
+  `source`/`target` up front; the server today validates only `text` before the
+  session lookup (`source`/`target` are checked inside `post_message`, *after*
+  `_get_managed` → `404` for an unknown session). Wiring the full DTO first flips
+  precedence (bad `target` on an unknown session → `400` instead of `404`).
+  Either validate `text`-only before lookup, or accept the change.
+- **`api_version` must be constructed, not defaulted.** `HealthModel.api_version`
+  defaults to `None` and `to_dict` omits it. The server must build
+  `HealthModel(..., api_version=API_VERSION)` and set the `X-Agent-Collab-API`
+  header, or the version silently stays absent.
+- **Fourth start-payload copy.** `SessionManagerToolBackend.start_session` builds
+  `StartSessionRequest` imperatively from the same wire fields and is not yet
+  guarded by the contract test; collapse it onto `StartSessionRequestModel` too.
+- **Reverse route-completeness.** The test proves `ROUTES ⊆ server dispatch`
+  (every entry is driven live) but not the reverse, because `_dispatch` is
+  imperative. Making `_dispatch` table-driven off `ROUTES` in this slice closes
+  it fully.
 
 ## Workstream B - Loopback Auth (rotating shared-secret token)
 
@@ -154,27 +241,47 @@ path.
   [run_server](../../agent_collab/server_http.py) / `serve` so direct
   `agent-collab serve` and the supervisor-spawned daemon behave identically and
   do not drift.
-- **Share (atomically, before serving):** write the token to
-  `~/.agent-collab/data/daemon/token` via a perms-safe helper — create at `0600`
-  (write to a temp file, `chmod 0600`, `os.replace`) **before** the server
-  starts accepting protected traffic. Ensure the daemon dir is `0700`. A stale
-  token file must never be trusted (see readiness).
+- **Share (atomically, before serving):** add a `token_path` to `GlobalDataPaths`
+  ([paths.py](../../agent_collab/paths.py)) alongside `pid_path` / `state_path`,
+  so the path is not reconstructed ad hoc. Write the token there via a perms-safe
+  helper — create at `0600` (write to a temp file, `chmod 0600`, `os.replace`)
+  **before** the server starts accepting protected traffic. Ensure the daemon dir
+  is `0700` — note `ensure_dirs`' `mkdir(parents=True, exist_ok=True)` will **not**
+  tighten an already-loose dir, so `chmod` it explicitly. Also, the serving
+  process does not create the daemon dir today (only the supervisor's
+  `ensure_dirs` does — direct `agent-collab serve` → `run_server` never makes it),
+  so the mint path must `ensure_dirs` + `chmod` itself to behave identically in
+  both launch modes. A stale token file must never be trusted (see readiness).
 - **Send:** client reads the token file and sends `Authorization: Bearer
   <token>`; `AGENT_COLLAB_TOKEN` env var overrides (for manual/remote clients).
+  Reading the local token file only makes sense for the loopback default; when
+  `AGENT_COLLAB_SERVER` points at a non-local daemon, the env override is the
+  intended source (a local file would not match that daemon's token).
 - **Enforce:** daemon rejects requests without a valid token with `401` +
   `ErrorModel` (also add `401` to `_http_reason`, which omits it today). `GET
   /health` stays **open** and unauthenticated for probes — document that it
   exposes only status + session count. `/mcp` token is **mandatory**, on top of
   its existing (currently optional) `Origin` / protocol-version checks.
 - **Readiness (tighten the handshake):** `_wait_for_ready` today only opens a TCP
-  socket. With auth it must prove the server accepts **this lifetime's fresh
-  token** — e.g. an authenticated `GET /health` round-trip — not merely that the
-  token file exists (a leftover file from a prior daemon would satisfy mere
-  existence). Fail startup if the fresh token is not accepted.
-- **Rotate:** baseline = one token per daemon lifetime (each start mints a new
-  one, atomically superseding the old file). Optional enhancement: periodic
-  rotation on a timer with the daemon rewriting the file and the client
-  re-reading on `401` and retrying once.
+  socket ([daemon_supervisor.py](../../agent_collab/daemon_supervisor.py)
+  `_wait_for_ready`). With auth it must prove the server accepts **this lifetime's
+  fresh token** — not merely that the token file exists (a leftover file from a
+  prior daemon would satisfy mere existence). **Contradiction to avoid:** because
+  `GET /health` stays open (see Enforce, above), an authenticated `/health`
+  round-trip would
+  succeed with *any* token — or none — and prove nothing about token acceptance.
+  Readiness must therefore either hit a **protected** route (e.g. `GET /sessions`)
+  with the freshly-read token and require `200`, or `/health` must *optionally*
+  validate a presented token (`401` on mismatch) while still answering tokenless
+  probes. **Decision:** the protected-route probe (`GET /sessions` with the fresh
+  token, require `200`) — keeps `/health` a pure, tokenless liveness check. Fail
+  startup if the fresh token is not accepted.
+- **Rotate:** **Decision — per-daemon-lifetime only.** Each start mints a new
+  token, atomically superseding the old file; no rotation timer in this task. The
+  client's `401` re-read-and-retry-once path (below) still applies — it covers the
+  restart-while-client-lives case. Periodic timer-based rotation is explicitly
+  **deferred** (out of scope here); if added later it reuses the same client
+  re-read path.
 - **UX:** on `401` the client re-reads the token file once and retries; if still
   `401`, error `daemon token mismatch; restart the daemon`.
 
@@ -188,8 +295,10 @@ tools, not a stronger claim.
 
 ### Deliverables B
 
-- Perms-safe write helper (temp file + `chmod 0600` + `os.replace`); daemon dir
-  `0700`; apply it to the token, and give `state.json` / `pid` the same treatment
+- Add `token_path` to `GlobalDataPaths`. Perms-safe write helper (temp file +
+  `chmod 0600` + `os.replace`); daemon dir `0700` (`chmod` even when it already
+  exists, and have the serving process ensure/chmod it since direct `serve` does
+  not); apply it to the token, and give `state.json` / `pid` the same treatment
   (both are default-perms today via `write_text` / `ensure_dirs`).
 - Token mint (atomic, pre-serve) + Bearer enforcement in
   [server_http.py](../../agent_collab/server_http.py); explicit token-path arg
@@ -197,9 +306,10 @@ tools, not a stronger claim.
 - `/health` stays open (documented); `/mcp` token mandatory.
 - Client reads/attaches the token, honors `AGENT_COLLAB_TOKEN`, and does the
   `401` re-read-and-retry-once.
-- Supervisor readiness (`_wait_for_ready`) upgraded to an **authenticated
-  `/health` round-trip proving the fresh token is accepted**, not just socket
-  accept or file existence.
+- Supervisor readiness (`_wait_for_ready`) upgraded to a **protected-route probe
+  (e.g. authenticated `GET /sessions`) proving the fresh token is accepted** — not
+  a bare socket accept, file existence, or an open-`/health` hit (see the
+  readiness contradiction above).
 - Tests: authorized request ok; missing/wrong token -> `401`; `/health` open;
   stale token file rejected at readiness; token-file re-read after rotation; env
   override; token/state/dir perms are `0600`/`0700`.
@@ -258,23 +368,67 @@ stopped after it hung on a broad repo grep). Folded in: demote the hand-rolled
 OpenAPI generator to optional generated docs and make **shared typed DTOs** the
 core of A; keep `/options` the runtime authority (dynamic schema); document
 `wait_events`/`/mcp` out of the REST model; tighten B's token handshake (atomic
-`0600` pre-serve write, authenticated-`/health` readiness that rejects a stale
-token, dir `0700`, `run_server` token-path arg, mandatory `/mcp` token, `401`
+`0600` pre-serve write, readiness that rejects a stale token — then specified as
+an authenticated `/health` round-trip, **superseded by the third pass below**
+which replaced it with a protected-route probe — dir `0700`, `run_server`
+token-path arg, mandatory `/mcp` token, `401`
 reason); note `GET`-vs-`POST /options` and that the typed-client swap is a
 Python-API change; and split A and B into separate PRs.
 
-## Open Questions (for approval)
+Third pass (`daemon-7f5d3418265d4157`, 2026-07-09, solo-codex read-only). Folded
+in: resolved the readiness contradiction (an authenticated **open**-`/health`
+round-trip proves nothing about the token — readiness now probes a **protected**
+route, e.g. `GET /sessions`, with the fresh token); flagged that
+`HttpClientToolBackend` must convert DTOs back to dicts for MCP `content()`;
+called out the *start* payload as **quadruplicated** (adds `mcp_tools.py`
+`_start_payload` / `SessionManagerToolBackend.start_session` / `TOOLS`) and named
+`mcp_tools.py` explicitly in scope; scoped `ErrorModel` to REST + `/mcp`
+transport errors only (not JSON-RPC error bodies); added `token_path` to
+`GlobalDataPaths`; noted `0700` must `chmod` an already-loose dir and that direct
+`serve` never creates the daemon dir; added `color` to the non-user field list;
+required `workdir` in the `/options` request DTO (fixing
+`client.describe_options()`'s no-payload `400`); generalized the `/options`
+runtime-authority wording beyond `codex_options`; and noted the local token file
+only applies to the loopback default.
 
-- **A scope:** typed DTOs + contract test only, or also ship the generated
-  `doc/http-api.md` (+ `openapi.json`) for the REST routes? (Recommend DTOs +
-  test first; docs generator optional.)
-- **Versioning:** `/v1` path prefix, or a `health` version field + response
-  header (recommended)?
-- **Auth transport:** `Authorization: Bearer` (recommended) or a custom header?
-  Confirm `/health` stays open and `/mcp` requires the token.
-- **Rotation:** per-daemon-lifetime only (recommended baseline), or add periodic
-  rotation now?
-- **Scope of the typed client:** wrap every route, or only the ones the TUI +
-  CLI use today (defer the rest)?
-- **Task split:** keep A and B in this one doc (as now), or spin B into its own
-  `stage-5.x` task when it's picked up?
+Fourth pass (finalization, 2026-07-09). Grounding re-verified against the code —
+all references confirmed accurate (routes, `daemon.py` fields, option-block
+names, `_wait_for_ready` socket-only, `paths.py` lacking `token_path`, stale
+"Suggested endpoints" prose, no token file in `runtime-layout.md`). Folded in two
+implementer notes: the DTO `from_dict` must also subsume `_query_required_str`
+and `_optional_payload` (not just `_required_str`/`_query_int`/
+`_decode_json_object`), and `ErrorModel.details` is **optional** (the `/mcp`
+transport errors emit `{ "error" }` with no `details`). All Open Questions
+resolved into [Resolved Decisions](#resolved-decisions): A = DTOs + test only
+(generator deferred); wrap **all** REST routes; version via health field +
+header; `Bearer` with open `/health` + mandatory `/mcp`; per-lifetime rotation;
+protected-route readiness probe; keep A+B in one doc as two PRs. Status flipped to
+**approved for implementation**.
+
+## Resolved Decisions
+
+All open questions were resolved on 2026-07-09; the doc body above reflects them.
+Recorded here for traceability:
+
+- **A scope:** typed DTOs + contract test **only**. The generated
+  `doc/http-api.md` (+ `openapi.json`) and its CI regen-diff are **deferred** (not
+  this task) — revisit only if cheap. See [Approach](#what-does-not-go-into-a-static-schema)
+  / Deliverables A.
+- **Scope of the typed client:** wrap **all** REST routes with typed DTOs (no
+  dict/DTO split), not just the TUI/CLI-used subset. See Deliverables A.
+- **Versioning:** `GET /health` version field **+** `X-Agent-Collab-API: 1`
+  response header; **no `/v1` prefix**. Client asserts a compatible major on
+  connect. See Versioning.
+- **Auth transport:** `Authorization: Bearer <token>`. `/health` stays **open**
+  and tokenless; `/mcp` token is **mandatory**. See Enforce.
+- **Rotation:** **per-daemon-lifetime only** (new token each start, atomic
+  supersede). Periodic timer rotation is deferred. The client's
+  `401`-re-read-and-retry-once still applies. See Rotate / UX.
+- **Readiness probe:** **protected-route probe** — `GET /sessions` with the fresh
+  token, require `200`; keeps `/health` a pure liveness check. Fail startup if the
+  fresh token is not accepted. See Readiness.
+- **Task split:** **keep A and B in this one doc**, ship as **two PRs, A first**.
+  Spin B into its own `stage-5.x` doc only if it grows during implementation.
+
+The **R1 research items** (liveness/heartbeat signal, stuck-vs-slow diagnosis)
+remain a separate, non-blocking findings-note deliverable — not a gate on A or B.
