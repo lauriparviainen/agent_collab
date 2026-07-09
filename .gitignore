@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+*.egg-info/
 .agents/
 .codex/
 .agent-collab/data/

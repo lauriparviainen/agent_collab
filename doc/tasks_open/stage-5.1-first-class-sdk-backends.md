@@ -84,17 +84,17 @@ Change `pyproject.toml` so SDK packages install with the project:
 [project]
 requires-python = ">=3.10"
 dependencies = [
-  "claude-agent-sdk>=0.2,<1",
-  "openai-codex>=0.1,<1",   # replace 0.1 with the actual tested floor
-  "google-antigravity>=0.1,<1",
+  "claude-agent-sdk>=0.2.114,<0.3.0",
+  "openai-codex>=0.1.0b3,<0.2.0",
+  "google-antigravity>=0.1.5,<0.2.0",
   # xai-sdk is added by Stage 5.1.1 (xAI provider).
 ]
 ```
 
-Implementation should confirm current compatible version ranges before landing.
-Do not leave the dependency set as unbounded latest-only imports. Some of these
-packages are pre-1.0 or recently renamed, so use constraints based on the
-versions tested in this stage.
+These ranges were resolved together in a clean Python 3.12.13 environment on
+2026-07-09. The Codex wheel installs its pinned
+`openai-codex-cli-bin==0.137.0a4` runtime dependency. See the
+[remediation verification record](stage-5.1-first-class-sdk-backends-remediation.md#a1-verification-record-2026-07-09).
 
 Remove or repurpose `[project.optional-dependencies].antigravity-sdk`; after this
 stage it should not be required for normal project installs. If a future

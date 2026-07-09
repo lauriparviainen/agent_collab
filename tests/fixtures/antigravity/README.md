@@ -32,11 +32,18 @@ Confirmed shapes (used by `agent_collab/backends/antigravity_sdk.py`):
 - `from google.antigravity import Agent, LocalAgentConfig` — `Agent` is an async
   context manager; `response = await agent.chat(prompt)` returns a
   `types.ChatResponse`.
-- `await response.text()` (**async method**) for the final text;
-  `response.thoughts` and `response.tool_calls` are **sync properties**.
-- `types.ToolCall` has `.name` (a `BuiltinTools` enum — e.g. `CREATE_FILE`,
+- `await response.resolve()` drains the response once into a list containing
+  typed `Text`, `Thought`, `ToolCall`, and `ToolResult` values. `text()` is also
+  async, while `thoughts` and `tool_calls` are properties that each return an
+  independent **async cursor** over the shared response buffer.
+- `Text(step_index, text)` and `Thought(step_index, text, signature)` carry
+  streamed deltas. Thought signatures are opaque and must never be emitted.
+- `ToolCall` has `.name` (a `BuiltinTools` enum — e.g. `CREATE_FILE`,
   `EDIT_FILE`, `RUN_COMMAND`, `VIEW_FILE` — or a `str`), `.args` (dict, **not
-  `input`**), `.canonical_path`, `.id`.
+  `input`**), `.id`, and `.canonical_path`. `ToolResult` has the correlating
+  `.id` plus `.name`, `.result`, `.error`, and `.exception`.
+- `response.usage_metadata` exposes optional prompt/cache/candidate/thought/total
+  token counts after the response is resolved.
 - `LocalAgentConfig(workspaces=[<workdir>], model=...)` — the working directory
   is a workspace, **not** a `working_directory` kwarg.
 - **`Agent.conversation_id` exists** — a stable, resume-capable id (resolves the
@@ -44,7 +51,7 @@ Confirmed shapes (used by `agent_collab/backends/antigravity_sdk.py`):
 - There is no `--mode` equivalent; execution posture is `CapabilitiesConfig` /
   `policies`, so `antigravity_options.mode` stays cli-only (open question 4).
 
-`sdk-response-sample.json` holds a ChatResponse/ToolCall sample in the confirmed
+`sdk-response-sample.json` holds a resolved typed-buffer sample in the confirmed
 shape (illustrative values) that drives the fake-module tests in
 `tests/test_backend_sdk.py`.
 

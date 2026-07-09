@@ -51,11 +51,11 @@ OPTION_FIELDS = {
 BACKEND_OPTION_SUPPORT: Dict[str, Dict[str, Set[str]]] = {
     "claude": {
         "cli": {"model", "permission_mode", "thinking_level", "thinking_budget_tokens"},
-        "sdk": {"model", "permission_mode"},
+        "sdk": {"model", "permission_mode", "thinking_level", "thinking_budget_tokens"},
     },
     "codex": {
         "cli": {"model", "profile", "thinking_level", "reasoning_effort", "sandbox", "approval_policy", "search"},
-        "sdk": {"model", "sandbox"},
+        "sdk": {"model", "thinking_level", "reasoning_effort", "sandbox"},
     },
     "antigravity": {
         "cli": {"model", "mode"},

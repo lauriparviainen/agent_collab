@@ -7,15 +7,21 @@ a missing wheel degrades to an *unavailable* backend (a fast, hinted start
 rejection) rather than an import crash.
 
 **API shapes CONFIRMED live** against ``google-antigravity`` 0.1.5 (Python 3.12)
-during the stage 4.9 spike — see ``tests/fixtures/antigravity/sdk-introspection.json``:
+— see ``tests/fixtures/antigravity/sdk-introspection.json``:
 
 - ``from google.antigravity import Agent, LocalAgentConfig``; ``Agent`` is an
   async context manager; ``response = await agent.chat(prompt)`` returns a
   ``types.ChatResponse``.
-- ``await response.text()`` (async) for the final text; ``response.thoughts`` and
-  ``response.tool_calls`` are sync properties; each ``types.ToolCall`` has
-  ``.name`` (a ``BuiltinTools`` enum or ``str``), ``.args`` (dict),
-  ``.canonical_path``, ``.id``.
+- ``await response.resolve()`` drains the response once into a typed list of
+  ``Text``, ``Thought``, ``ToolCall``, and ``ToolResult`` values. ``text()`` is
+  also async, while ``thoughts`` and ``tool_calls`` are independent async cursor
+  properties and therefore must not be passed to synchronous iteration.
+- ``Text(step_index, text)`` and ``Thought(step_index, text, signature)`` carry
+  response deltas. Signatures are opaque and never enter the event stream.
+- ``ToolCall(name, args, id, canonical_path)`` and
+  ``ToolResult(name, id, result, error, exception)`` carry correlated tool data.
+- ``response.usage_metadata`` exposes optional per-turn token counts after the
+  response is resolved.
 - ``LocalAgentConfig`` takes ``workspaces=[...]`` (the working dirs) and ``model``;
   the working directory is a workspace, not a ``working_directory`` kwarg.
 - ``Agent.conversation_id`` exposes a stable, resume-capable id.
@@ -114,10 +120,11 @@ class AntigravitySdkRunner(AgentRunner):
         try:
             async with agent_cm as sdk_agent:
                 response = await sdk_agent.chat(prompt)
-                text = await _resolve_text(response)
-                thoughts = getattr(response, "thoughts", None)
-                tool_calls = getattr(response, "tool_calls", None) or []
-                for event in map_antigravity_turn(text, thoughts, tool_calls, self.verbose):
+                # Resolve the SDK's shared response stream exactly once. Its
+                # thoughts/tool_calls properties are async cursors, not lists.
+                chunks = await _resolve_chunks(response)
+                usage_metadata = getattr(response, "usage_metadata", None)
+                for event in map_antigravity_turn(chunks, self.verbose, usage_metadata):
                     yield event
                 conversation_id = getattr(sdk_agent, "conversation_id", None)
                 if conversation_id:
@@ -138,39 +145,86 @@ class AntigravitySdkRunner(AgentRunner):
 
 
 def map_antigravity_turn(
-    text: Optional[str],
-    thoughts: Optional[str],
-    tool_calls: Iterable[Any],
+    chunks: Iterable[Any],
     verbose: bool,
+    usage_metadata: Any = None,
 ) -> Iterator[Event]:
-    """Map one resolved ``ChatResponse`` onto the standard Event stream.
+    """Map one resolved, typed ``ChatResponse`` buffer onto standard events.
 
-    text -> ``antigravity`` message; each ``ToolCall`` -> tool_call/command/
-    file_change (classified from its ``BuiltinTools`` name); thoughts -> a
-    ``verbose`` status (reasoning text only, never an opaque signature). An empty
-    ``tool_calls`` degrades honestly to message-only — the same fidelity as cli.
+    Text deltas become one assistant message; ToolCall values become
+    tool_call/command/file_change events; ToolResult values become correlated
+    tool statuses or error events; Thought deltas become one verbose reasoning
+    status. ``Thought.signature`` is deliberately never read into raw data.
     """
 
-    if verbose and isinstance(thoughts, str) and thoughts.strip():
-        yield Event.create("antigravity", "status", thoughts.strip(), {"reasoning": True})
+    text_parts: List[str] = []
+    thought_parts: List[str] = []
+    tool_events: List[Event] = []
+    for chunk in chunks:
+        kind = _chunk_kind(chunk)
+        if kind == "Text":
+            text = getattr(chunk, "text", None)
+            if isinstance(text, str):
+                text_parts.append(text)
+        elif kind == "Thought":
+            thought = getattr(chunk, "text", None)
+            if isinstance(thought, str):
+                thought_parts.append(thought)
+        elif kind == "ToolCall":
+            tool_events.append(_map_tool_call(chunk))
+        elif kind == "ToolResult":
+            tool_events.append(_map_tool_result(chunk))
 
-    for tool_call in tool_calls or []:
-        yield _map_tool_call(tool_call)
+    thoughts = "".join(thought_parts).strip()
+    if verbose and thoughts:
+        yield Event.create("antigravity", "status", thoughts, {"reasoning": True})
 
-    if isinstance(text, str) and text.strip():
-        yield Event.create("antigravity", "message", text.strip(), {"text": text.strip()})
+    yield from tool_events
+
+    text = "".join(text_parts).strip()
+    if text:
+        yield Event.create("antigravity", "message", text, {"text": text})
+
+    usage = _usage_raw(usage_metadata)
+    if verbose and usage:
+        yield Event.create(
+            "antigravity",
+            "status",
+            f"antigravity sdk usage {compact_json(usage)}",
+            {"usage": usage},
+        )
 
 
-async def _resolve_text(response: Any) -> str:
-    """``ChatResponse.text`` is an async method; tolerate a str/sync attr too."""
+async def _resolve_chunks(response: Any) -> List[Any]:
+    """Drain ``ChatResponse`` through its confirmed async ``resolve`` method."""
 
-    text_attr = getattr(response, "text", None)
-    if callable(text_attr):
-        result = text_attr()
-        if inspect.isawaitable(result):
-            result = await result
-        return result if isinstance(result, str) else ""
-    return text_attr if isinstance(text_attr, str) else ""
+    resolve = getattr(response, "resolve", None)
+    if not callable(resolve):
+        raise TypeError("google-antigravity ChatResponse.resolve is unavailable")
+    result = resolve()
+    if not inspect.isawaitable(result):
+        raise TypeError("google-antigravity ChatResponse.resolve must be async")
+    chunks = await result
+    if not isinstance(chunks, list):
+        raise TypeError("google-antigravity ChatResponse.resolve did not return a list")
+    return chunks
+
+
+def _chunk_kind(chunk: Any) -> str:
+    """Recognize installed SDK types without importing the optional wheel."""
+
+    class_name = type(chunk).__name__
+    if class_name in {"Text", "Thought", "ToolCall", "ToolResult"}:
+        return class_name
+    # Structural fallbacks keep dependency-free fakes useful while matching only
+    # the four verified public shapes.
+    if hasattr(chunk, "args") and hasattr(chunk, "canonical_path"):
+        return "ToolCall"
+    if hasattr(chunk, "result") and hasattr(chunk, "error"):
+        return "ToolResult"
+    if hasattr(chunk, "step_index") and isinstance(getattr(chunk, "text", None), str):
+        return "Thought" if hasattr(chunk, "signature") else "Text"
+    return ""
 
 
 def _map_tool_call(tool_call: Any) -> Event:
@@ -189,8 +243,57 @@ def _map_tool_call(tool_call: Any) -> Event:
         "tool",
         kind,
         text,
-        {"name": name_str, "args": args, "canonical_path": canonical_path},
+        {
+            "name": name_str,
+            "args": args,
+            "id": getattr(tool_call, "id", None),
+            "canonical_path": canonical_path,
+        },
     )
+
+
+def _map_tool_result(tool_result: Any) -> Event:
+    name = getattr(tool_result, "name", None)
+    name_str = name.name if isinstance(name, enum.Enum) else (str(name) if name is not None else "")
+    result = getattr(tool_result, "result", None)
+    error = getattr(tool_result, "error", None)
+    exception = getattr(tool_result, "exception", None)
+    error_text = error.strip() if isinstance(error, str) else ""
+    if not error_text and isinstance(exception, BaseException):
+        error_text = str(exception).strip() or exception.__class__.__name__
+
+    raw: Dict[str, Any] = {
+        "name": name_str,
+        "id": getattr(tool_result, "id", None),
+        "result": result,
+    }
+    if error_text:
+        raw["error"] = error_text
+    if isinstance(exception, BaseException):
+        raw["exception"] = exception.__class__.__name__
+
+    label = name_str or "tool"
+    if error_text:
+        return Event.create("error", "error", f"{label} failed: {error_text}", raw)
+    text = f"{label} result"
+    if result is not None:
+        text += f" {compact_json(result)}"
+    return Event.create("tool", "status", text, raw)
+
+
+def _usage_raw(usage_metadata: Any) -> Dict[str, int]:
+    raw: Dict[str, int] = {}
+    for field in (
+        "prompt_token_count",
+        "cached_content_token_count",
+        "candidates_token_count",
+        "thoughts_token_count",
+        "total_token_count",
+    ):
+        value = getattr(usage_metadata, field, None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            raw[field] = value
+    return raw
 
 
 def _map_sdk_options(options: Dict[str, Any]) -> Dict[str, Any]:

@@ -2,11 +2,11 @@
 
 The SDK's API shapes were CONFIRMED live against google-antigravity 0.1.5 (see
 tests/fixtures/antigravity/sdk-introspection.json); only a live *chat* is blocked
-(it needs a Gemini API key agent-collab does not manage). So the event mapper is
-driven by a FAKE agent factory built to the confirmed shapes (async
-`response.text()`, `response.thoughts`/`response.tool_calls` properties,
-`ToolCall.name`/`.args`, `Agent.conversation_id`), and the missing-extra path is
-fully real.
+(it needs a Gemini API key agent-collab does not manage). The event mapper is
+driven by a fake agent built to the confirmed protocol: async ``resolve()``
+returns typed Text/Thought/ToolCall/ToolResult values, thoughts/tool_calls are
+independent async cursor properties, and usage/conversation ids are available
+after resolution. No test calls a model.
 """
 
 import asyncio
@@ -14,6 +14,7 @@ import dataclasses
 import json
 import os
 import sys
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -43,25 +44,104 @@ def _sample():
     return json.loads((FIXTURES / "sdk-response-sample.json").read_text(encoding="utf-8"))
 
 
-class _FakeToolCall:
-    """Shaped like google.antigravity.types.ToolCall (name/args/canonical_path)."""
+class Text:
+    def __init__(self, step_index, text):
+        self.step_index = step_index
+        self.text = text
 
-    def __init__(self, name, args, canonical_path=None):
+
+class Thought:
+    def __init__(self, step_index, text, signature=None):
+        self.step_index = step_index
+        self.text = text
+        self.signature = signature
+
+
+class ToolCall:
+    """Same public fields as google.antigravity.types.ToolCall."""
+
+    def __init__(self, name, args=None, id=None, canonical_path=None):
         self.name = name
-        self.args = args
+        self.args = args or {}
+        self.id = id
         self.canonical_path = canonical_path
 
 
+class ToolResult:
+    """Same public fields as google.antigravity.types.ToolResult."""
+
+    def __init__(self, name, id=None, result=None, error=None, exception=None):
+        self.name = name
+        self.id = id
+        self.result = result
+        self.error = error
+        self.exception = exception
+
+
+class UsageMetadata:
+    def __init__(self, **values):
+        for field in (
+            "prompt_token_count",
+            "cached_content_token_count",
+            "candidates_token_count",
+            "thoughts_token_count",
+            "total_token_count",
+        ):
+            setattr(self, field, values.get(field))
+
+
+def _typed_chunk(blob):
+    chunk_type = blob["type"]
+    values = {key: value for key, value in blob.items() if key != "type"}
+    if chunk_type == "Text":
+        return Text(**values)
+    if chunk_type == "Thought":
+        signature = values.get("signature")
+        if isinstance(signature, str):
+            values["signature"] = signature.encode("utf-8")
+        return Thought(**values)
+    if chunk_type == "ToolCall":
+        return ToolCall(**values)
+    if chunk_type == "ToolResult":
+        return ToolResult(**values)
+    raise AssertionError(f"unknown fake chunk type: {chunk_type}")
+
+
 class _FakeResponse:
-    """Shaped like ChatResponse: async text(), sync thoughts/tool_calls props."""
+    """ChatResponse protocol with async cursors that must not be sync-iterated."""
 
     def __init__(self, blob):
-        self._text = blob.get("text")
-        self.thoughts = blob.get("thoughts")
-        self.tool_calls = [_FakeToolCall(**tc) for tc in blob.get("tool_calls", [])]
+        self._chunks = [_typed_chunk(chunk) for chunk in blob.get("chunks", [])]
+        usage = blob.get("usage_metadata")
+        self.usage_metadata = UsageMetadata(**usage) if usage else None
+        self.resolve_calls = 0
+        self.cursor_accesses = 0
 
-    async def text(self):
-        return self._text
+    async def resolve(self):
+        self.resolve_calls += 1
+        return list(self._chunks)
+
+    @property
+    def thoughts(self):
+        self.cursor_accesses += 1
+
+        async def cursor():
+            for chunk in self._chunks:
+                if isinstance(chunk, Thought):
+                    yield chunk.text
+
+        return cursor()
+
+    @property
+    def tool_calls(self):
+        self.cursor_accesses += 1
+
+        async def cursor():
+            for chunk in self._chunks:
+                if isinstance(chunk, ToolCall):
+                    yield chunk
+
+        return cursor()
 
 
 class _FakeAgent:
@@ -98,8 +178,9 @@ def _run(response, *, verbose=False, options=None, conversation_id=None):
 
 
 class SdkEventMappingTests(unittest.TestCase):
-    def test_text_and_typed_tool_calls_map_to_standard_events(self):
-        events = _run(_FakeResponse(_sample()["chat_response"]))
+    def test_typed_buffer_maps_text_calls_results_and_errors(self):
+        response = _FakeResponse(_sample()["chat_response"])
+        events = _run(response)
         by_type = {}
         for event in events:
             by_type.setdefault(event.type, []).append(event)
@@ -115,7 +196,26 @@ class SdkEventMappingTests(unittest.TestCase):
         # tool call text/raw carry the real BuiltinTools name + args (not `input`).
         file_change = by_type["file_change"][0]
         self.assertEqual(file_change.raw["name"], "CREATE_FILE")
+        self.assertEqual(file_change.raw["id"], "call-create")
         self.assertIn("path", file_change.raw["args"])
+        # Successful and failed ToolResult values retain the ToolCall id.
+        successful_result = next(
+            event for event in by_type["status"] if (event.raw or {}).get("id") == "call-create"
+        )
+        self.assertEqual(successful_result.source, "tool")
+        self.assertEqual(successful_result.raw["result"], {"path": "hello.py"})
+        failed_result = next(
+            event for event in by_type["error"] if (event.raw or {}).get("id") == "call-view"
+        )
+        self.assertEqual(failed_result.raw["error"], "README.md was unavailable")
+
+    def test_resolves_once_without_iterating_async_generator_properties(self):
+        response = _FakeResponse(_sample()["chat_response"])
+        events = _run(response)
+        self.assertEqual(response.resolve_calls, 1)
+        self.assertEqual(response.cursor_accesses, 0)
+        self.assertTrue(any(event.type == "message" for event in events))
+        self.assertFalse(any("async_generator" in event.text for event in events))
 
     def test_reasoning_hidden_unless_verbose_and_never_leaks_signature(self):
         quiet = _run(_FakeResponse(_sample()["chat_response"]), verbose=False)
@@ -123,9 +223,40 @@ class SdkEventMappingTests(unittest.TestCase):
 
         loud = _run(_FakeResponse(_sample()["chat_response"]), verbose=True)
         self.assertTrue(any(e.type == "status" and "create the file" in (e.text or "") for e in loud))
-        # thoughts carry reasoning text only, never an opaque signature.
+        # Thoughts carry reasoning text only, never their opaque bytes.
         for event in loud:
             self.assertNotIn("signature", event.raw or {})
+            self.assertNotIn("never-emit-this-signature", event.to_json())
+
+    def test_usage_is_a_verbose_status_when_available(self):
+        quiet = _run(_FakeResponse(_sample()["chat_response"]), verbose=False)
+        self.assertFalse(any((event.raw or {}).get("usage") for event in quiet))
+
+        loud = _run(_FakeResponse(_sample()["chat_response"]), verbose=True)
+        usage_events = [event for event in loud if (event.raw or {}).get("usage")]
+        self.assertEqual(len(usage_events), 1)
+        self.assertEqual(usage_events[0].source, "antigravity")
+        self.assertEqual(usage_events[0].raw["usage"]["total_token_count"], 19)
+
+    def test_tool_result_exception_maps_to_correlated_error(self):
+        events = list(
+            map_antigravity_turn(
+                [
+                    ToolResult(
+                        name="RUN_COMMAND",
+                        id="call-exception",
+                        exception=RuntimeError("process disappeared"),
+                    )
+                ],
+                verbose=False,
+            )
+        )
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].source, "error")
+        self.assertEqual(events[0].type, "error")
+        self.assertEqual(events[0].raw["id"], "call-exception")
+        self.assertEqual(events[0].raw["error"], "process disappeared")
+        self.assertEqual(events[0].raw["exception"], "RuntimeError")
 
     def test_degrades_to_message_only_without_tool_calls(self):
         events = _run(_FakeResponse(_sample()["text_only_response"]))
@@ -155,7 +286,7 @@ class SdkEventMappingTests(unittest.TestCase):
         self.assertIn("agent_sessions", field_names)
 
     def test_map_turn_is_message_only_when_no_tool_calls(self):
-        events = list(map_antigravity_turn("just text", None, [], verbose=False))
+        events = list(map_antigravity_turn([Text(step_index=0, text="just text")], verbose=False))
         self.assertEqual([e.type for e in events], ["message"])
 
     def test_builtin_tool_enum_name_is_classified(self):
@@ -166,10 +297,14 @@ class SdkEventMappingTests(unittest.TestCase):
             EDIT_FILE = "edit_file"
 
         events = list(
-            map_antigravity_turn("", None, [_FakeToolCall(BuiltinTools.EDIT_FILE, {"path": "x"})], verbose=False)
+            map_antigravity_turn(
+                [ToolCall(BuiltinTools.EDIT_FILE, {"path": "x"}, id="edit-1")],
+                verbose=False,
+            )
         )
         self.assertEqual(events[0].type, "file_change")
         self.assertEqual(events[0].raw["name"], "EDIT_FILE")
+        self.assertEqual(events[0].raw["id"], "edit-1")
 
 
 class SdkMissingExtraTests(unittest.TestCase):
@@ -188,6 +323,33 @@ class SdkMissingExtraTests(unittest.TestCase):
             with self.assertRaises(BackendUnavailable) as ctx:
                 _default_agent_factory(AGENT, {}, Path("."))
         self.assertIn("google-antigravity", str(ctx.exception))
+
+    def test_default_factory_constructs_confirmed_config_shape(self):
+        captured = {}
+        fake_module = types.ModuleType("google.antigravity")
+
+        class LocalAgentConfig:
+            def __init__(self, **kwargs):
+                captured["config"] = kwargs
+
+        class Agent:
+            def __init__(self, config):
+                captured["agent_config"] = config
+
+        fake_module.LocalAgentConfig = LocalAgentConfig
+        fake_module.Agent = Agent
+        with mock.patch.dict(sys.modules, {"google.antigravity": fake_module}):
+            result = _default_agent_factory(
+                AGENT,
+                {"model": "gemini-test"},
+                Path("/tmp/antigravity-workspace"),
+            )
+
+        self.assertIsInstance(result, Agent)
+        self.assertEqual(
+            captured["config"],
+            {"workspaces": ["/tmp/antigravity-workspace"], "model": "gemini-test"},
+        )
 
     def test_runner_with_default_factory_emits_actionable_error_event(self):
         runner = AntigravitySdkBackend().create_runner(AGENT, False, {})

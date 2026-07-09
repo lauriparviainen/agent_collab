@@ -35,14 +35,7 @@ def _config(agent_type, backend="sdk"):
     )
 
 
-class CliOnlyOptionRejectionTests(unittest.TestCase):
-    def test_claude_thinking_level_rejected_on_sdk_backend(self):
-        with self.assertRaises(StartOptionsError) as ctx:
-            validate_start_backends(_config("claude"), "solo", claude_options={"thinking_level": "high"})
-        detail = ctx.exception.to_dict()["details"][0]
-        self.assertEqual(detail["path"], "claude_options.thinking_level")
-        self.assertIn("sdk", detail["message"])
-
+class BackendOptionSupportTests(unittest.TestCase):
     def test_codex_profile_rejected_on_sdk_backend(self):
         with self.assertRaises(StartOptionsError) as ctx:
             validate_start_backends(_config("codex"), "solo", codex_options={"profile": "fast"})
@@ -50,11 +43,32 @@ class CliOnlyOptionRejectionTests(unittest.TestCase):
         self.assertEqual(detail["path"], "codex_options.profile")
         self.assertIn("sdk", detail["message"])
 
-    def test_supported_sdk_options_are_accepted(self):
+    def test_supported_codex_sdk_options_are_accepted(self):
         selection = validate_start_backends(
-            _config("codex"), "solo", codex_options={"model": "gpt-5-codex", "sandbox": "read-only"}
+            _config("codex"),
+            "solo",
+            codex_options={
+                "model": "gpt-5-codex",
+                "sandbox": "read-only",
+                "reasoning_effort": "high",
+            },
         )
         self.assertEqual(selection.agent_backends, {"codex": "sdk"})
+
+    def test_supported_claude_sdk_options_are_accepted(self):
+        selection = validate_start_backends(
+            _config("claude"),
+            "solo",
+            claude_options={"thinking_level": "high", "permission_mode": "acceptEdits"},
+        )
+        self.assertEqual(selection.agent_backends, {"claude": "sdk"})
+
+    def test_antigravity_mode_rejected_on_sdk_backend(self):
+        with self.assertRaises(StartOptionsError) as ctx:
+            validate_start_backends(_config("antigravity"), "solo", antigravity_options={"mode": "plan"})
+        detail = ctx.exception.to_dict()["details"][0]
+        self.assertEqual(detail["path"], "antigravity_options.mode")
+        self.assertIn("sdk", detail["message"])
 
     def test_cli_backend_accepts_cli_only_option(self):
         # thinking_level is cli-supported, so selecting cli must not reject it.
@@ -113,15 +127,15 @@ class SdkSettingsDisplayTests(unittest.TestCase):
         settings = build_session_settings(config, "solo", normalized, agent_backends={agent_type: "sdk"})
         return settings["agents"][agent_type]
 
-    def test_claude_sdk_settings_hide_cli_only_thinking_level(self):
+    def test_claude_sdk_settings_show_supported_thinking_level(self):
         entry = self._settings("claude", ["--effort", "high"])
         self.assertEqual(entry["backend"], "sdk")
-        self.assertNotIn("thinking_level", entry)  # cli-only; not honoured by the SDK
+        self.assertEqual(entry["thinking_level"], "high")
 
-    def test_codex_sdk_settings_hide_cli_only_reasoning_and_profile(self):
+    def test_codex_sdk_settings_show_reasoning_but_hide_profile(self):
         entry = self._settings("codex", ["--profile", "fast", "-c", 'model_reasoning_effort="high"'])
         self.assertEqual(entry["backend"], "sdk")
-        self.assertNotIn("thinking_level", entry)
+        self.assertEqual(entry["thinking_level"], "high")
         self.assertNotIn("profile", entry)
 
 

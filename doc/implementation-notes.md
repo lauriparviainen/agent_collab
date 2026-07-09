@@ -35,8 +35,8 @@ prompt-free `command_preview` per agent.
 ## Backend Model
 
 An agent's provider `type` (`claude`, `codex`, `antigravity`, `mock`) is
-separate from its execution `backend` (`cli`, or an extras-gated in-process
-`sdk` where implemented).
+separate from its execution `backend` (`cli` or an in-process `sdk`). SDK
+packages install with the project on Python >=3.10; their imports remain lazy.
 
 Backends live in `agent_collab/backends/` and are registered by
 `(agent_type, backend_id)`. Backend resolution order is:
@@ -45,8 +45,7 @@ Backends live in `agent_collab/backends/` and are registered by
 start request > agents.<id>.backend > cli
 ```
 
-The base install and default `cli` backend stay standard-library only. SDK
-imports must be lazy and gated behind extras.
+The default remains `cli`. Credentials stay external and provider-managed.
 
 The resolved per-agent backend map is computed once at start validation and
 threaded through `RefereeConfig` to the runner construction path. It must reach
@@ -56,19 +55,34 @@ Backend capabilities (`resume`, `interrupt`, `tool_gate`) are honest runtime
 facts and are not inferred from provider brand. Live backend health gates starts
 on certainty and is reported by `describe_options`, not by daemon status.
 
+Stage 5.1 A1 resolved all SDKs together under Python 3.12.13:
+
+- `claude-agent-sdk==0.2.114`,
+- `openai-codex==0.1.0b3` with
+  `openai-codex-cli-bin==0.137.0a4`,
+- `google-antigravity==0.1.5`.
+
+Codex's installed `AsyncCodex` initialized its bundled app-server and created
+and read an ephemeral thread without a model call. Antigravity's installed
+`ChatResponse` confirmed async `resolve()` plus independent buffered async
+cursors for thoughts/tool calls. Claude's installed options and typed message
+blocks confirmed the coding presets, effort/budget fields, tool results, and
+result metadata used by the backend.
+
 Antigravity is opt-in. Its `cli` path uses `agy` print mode as message-only
-plain text. Its `sdk` path is implemented against the live-confirmed
-`google-antigravity` 0.1.5 shapes:
+plain text. Its `sdk` path targets the installed `google-antigravity` 0.1.5
+shapes:
 
 - `Agent`
 - `LocalAgentConfig(workspaces=...)`
-- `ChatResponse`
+- `ChatResponse.resolve()` and typed `Text`/`Thought` chunks
 - `ToolCall.args`
+- `ToolResult`
 - `BuiltinTools`
 
-Only a live SDK chat remains unexercised because it needs `GEMINI_API_KEY`,
-which agent-collab does not manage. The mapper is tested with a fake module
-built to the confirmed shapes.
+Credentialed turns remain separate live-smoke evidence. The local environment
+currently has no `GEMINI_API_KEY`, so Antigravity's no-model API verification
+does not claim a successful chat.
 
 ## Agent Safety Notes
 

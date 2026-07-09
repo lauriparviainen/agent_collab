@@ -1,31 +1,28 @@
 """The Codex ``sdk`` backend (``openai-codex``), lazy + first-class.
 
-The real ``openai_codex`` module is imported **lazily** — only inside the probe's
-``find_spec`` check and the default item-stream factory — never at import time,
-so importing this module (which the registry does at startup) costs nothing and a
-missing wheel degrades to an *unavailable* backend rather than an import crash.
+The real ``openai_codex`` module is imported lazily by the production turn
+factory.  The verified ``openai-codex==0.1.0b3`` async surface is:
 
-**API mapping** targets the Codex Python SDK (Python 3.10+), which drives the
-local Codex app-server over JSON-RPC. A turn surfaces as a stream of *thread
-items*; this backend maps the item types it can recover and degrades to
-message-only for anything else (it does **not** fake `codex exec --json` parity):
+``async with AsyncCodex() -> await thread_start(...) -> await thread.run(...)``.
 
-- an agent-message item (``.text``) -> ``codex`` message,
-- a command-execution item (``.command``) -> ``tool`` ``command``,
-- a file-change / patch item (``.changes``) -> ``tool`` ``file_change``,
-- a reasoning item -> a verbose status,
-- an error item -> ``error``.
+``run`` returns one collected ``TurnResult``.  Its ``final_response`` is the
+stable, message-first surface; its ``items`` are ``ThreadItem`` root models.
+Only the installed public item roots are mapped here: agent messages, reasoning,
+command execution, and file changes.  Unknown roots remain verbose status data
+instead of being treated like guessed ``codex exec --json`` events.
 
-The thread id (``.thread_id``) is captured as the provider session id
-(``kind="thread"``). agent-collab never manages credentials: auth
-(``OPENAI_API_KEY`` or Codex's local sign-in) comes from the passed-through
-environment. The mapper is exercised by fake-module tests
-(``tests/test_backend_codex_sdk.py``) — no live call.
+The async generator used for the production path deliberately yields the
+collected result *inside* the ``AsyncCodex`` context.  Consequently the SDK
+client and app-server connection stay alive until the runner has mapped every
+event.  No SDK import, client construction, or model call happens at module
+import time.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+import shutil
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
 from ..config import AgentConfig
@@ -39,16 +36,28 @@ MODULE_NAME = "openai_codex"
 PACKAGE_NAME = "openai-codex"
 INSTALL_HINT = "install the Codex SDK: pip install openai-codex"
 
-# `codex_options.sandbox` string -> the Codex SDK `Sandbox` enum member name.
+# ``codex_options.sandbox`` -> the verified Codex SDK ``Sandbox`` member.
 _SANDBOX_MEMBERS = {
     "read-only": "read_only",
     "workspace-write": "workspace_write",
     "danger-full-access": "full_access",
 }
 
-# A factory opens the SDK item stream for one turn. Injectable so tests drive the
-# runner with a fake item iterator without installing the SDK or calling a model.
-ItemStreamFactory = Callable[[AgentConfig, Dict[str, Any], Path, str], AsyncIterator[Any]]
+
+@dataclass(frozen=True)
+class CodexTurnOutcome:
+    """One collected SDK turn and the public id of its owning thread."""
+
+    thread_id: str
+    result: Any
+
+
+# A factory owns the SDK resources for one turn and yields its collected result
+# while those resources are still open.  It is injectable so unit tests use
+# real-shape fakes without importing the SDK or making a live model call.
+ItemStreamFactory = Callable[
+    [AgentConfig, Dict[str, Any], Path, str], AsyncIterator[CodexTurnOutcome]
+]
 
 
 class CodexSdkBackend:
@@ -83,6 +92,10 @@ class CodexSdkBackend:
         mapped = _map_sdk_options(options)
         if mapped:
             summary["options"] = mapped
+        codex_bin = _configured_codex_bin(agent)
+        summary["runtime"] = "configured_cli" if codex_bin else "sdk_pinned"
+        if codex_bin:
+            summary["codex_bin"] = codex_bin
         return summary
 
 
@@ -103,138 +116,329 @@ class CodexSdkRunner(AgentRunner):
     async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
         if self.verbose:
             yield Event.create("codex", "status", f"codex sdk starting in {workdir}")
-        try:
-            stream = self._item_stream(self.agent, self.options, workdir, prompt)
-        except BackendUnavailable as exc:
-            yield Event.create("error", "error", str(exc), {"error": str(exc)})
-            return
+
+        stream: Optional[AsyncIterator[CodexTurnOutcome]] = None
         thread_id: Optional[str] = None
         try:
-            async for item in stream:
-                tid = _item_thread_id(item)
-                if tid and tid != thread_id:
-                    thread_id = tid
-                    yield provider_session_event("codex", self.name, tid, "thread")
-                for event in iter_codex_events(item, self.verbose):
+            stream = self._item_stream(self.agent, self.options, workdir, prompt)
+            async for outcome in stream:
+                if outcome.thread_id and outcome.thread_id != thread_id:
+                    thread_id = outcome.thread_id
+                    yield provider_session_event("codex", self.name, thread_id, "thread")
+                for event in iter_codex_turn_events(outcome.result, self.verbose):
                     yield event
         except BackendUnavailable as exc:
             yield Event.create("error", "error", str(exc), {"error": str(exc)})
             return
-        except Exception as exc:  # surface SDK errors as transcript errors
+        except Exception as exc:  # startup, auth, and turn errors reach the transcript
             yield sdk_error_event("codex", exc)
             return
+        finally:
+            # Explicitly close an injected/production async generator if the
+            # consumer cancels before exhausting the transcript.  This unwinds
+            # the production AsyncCodex context promptly.
+            close = getattr(stream, "aclose", None)
+            if callable(close):
+                await close()
+
         if self.verbose:
             yield Event.create("codex", "status", "codex sdk turn complete")
 
 
+def iter_codex_turn_events(result: Any, verbose: bool) -> Iterator[Event]:
+    """Map one verified ``TurnResult`` onto standard transcript events.
+
+    The final response is emitted first because it is the SDK's stable collected
+    message surface.  The corresponding final ``AgentMessageThreadItem`` is
+    suppressed to avoid duplicating that response; other captured item roots are
+    still mapped afterward.
+    """
+
+    turn_id = stringify(getattr(result, "id", None))
+    status = _enum_value(getattr(result, "status", None))
+    final_response = stringify(getattr(result, "final_response", None))
+
+    if final_response:
+        yield Event.create(
+            "codex",
+            "message",
+            final_response,
+            {"text": final_response, "turn_id": turn_id or None, "status": status},
+        )
+
+    items = getattr(result, "items", None)
+    if isinstance(items, list):
+        for wrapped_item in items:
+            item = _item_root(wrapped_item)
+            if _is_collected_final_message(item, final_response):
+                continue
+            yield from iter_codex_events(item, verbose)
+
+    error = getattr(result, "error", None)
+    if error is not None:
+        text = stringify(getattr(error, "message", None)) or "codex sdk turn failed"
+        raw: Dict[str, Any] = {"turn_id": turn_id or None, "status": status}
+        details = stringify(getattr(error, "additional_details", None))
+        if details:
+            raw["additional_details"] = details
+        yield Event.create("error", "error", text, raw)
+    elif status == "failed":
+        yield Event.create(
+            "error",
+            "error",
+            "codex sdk turn failed",
+            {"turn_id": turn_id or None, "status": status},
+        )
+
+
 def iter_codex_events(item: Any, verbose: bool) -> Iterator[Event]:
-    """Map one Codex thread item onto the standard Event stream."""
+    """Map one installed-SDK ``ThreadItem`` root onto standard events."""
 
-    item_type = str(getattr(item, "type", "") or "").lower()
+    item = _item_root(item)
+    item_type = stringify(getattr(item, "type", None))
+    item_id = stringify(getattr(item, "id", None))
 
-    # Classify by item type FIRST. `is_error` is only the fallback trigger for an
-    # otherwise-unclassified item, so a `command_execution`/`apply_patch` item that
-    # merely *failed* (carries is_error) still surfaces as its real command/file
-    # event with the command string intact, not a bare "codex sdk error".
-    if item_type == "error":
-        text = stringify(getattr(item, "message", None)) or stringify(getattr(item, "text", None))
-        yield Event.create("error", "error", text or "codex sdk error", _item_raw(item))
+    if item_type == "agentMessage":
+        text = stringify(getattr(item, "text", None))
+        if text:
+            yield Event.create(
+                "codex",
+                "message",
+                text,
+                {
+                    "text": text,
+                    "item_id": item_id or None,
+                    "phase": _enum_value(getattr(item, "phase", None)),
+                },
+            )
         return
 
-    if item_type in {"command_execution", "command", "exec_command", "local_shell_call"}:
-        command = getattr(item, "command", None)
-        text = command if isinstance(command, str) else compact_json(command)
-        yield Event.create("tool", "command", text, {"command": command, "type": item_type})
-        return
-
-    if item_type in {"file_change", "patch", "apply_patch", "file_update"}:
-        changes = getattr(item, "changes", None)
-        path = getattr(item, "path", None)
-        text = str(path) if isinstance(path, str) and path else compact_json(changes)
-        yield Event.create("tool", "file_change", text, {"changes": changes, "path": path, "type": item_type})
-        return
-
-    if item_type in {"reasoning", "agent_reasoning", "thinking"}:
+    if item_type == "reasoning":
         if verbose:
-            reasoning = stringify(getattr(item, "text", None))
+            summary = _string_list(getattr(item, "summary", None))
+            content = _string_list(getattr(item, "content", None))
+            reasoning = summary or content
             if reasoning:
-                yield Event.create("codex", "status", reasoning, {"reasoning": True})
+                yield Event.create(
+                    "codex",
+                    "status",
+                    "\n".join(reasoning),
+                    {
+                        "reasoning": True,
+                        "item_id": item_id or None,
+                        "summary": summary,
+                        "content": content,
+                    },
+                )
         return
 
-    # agent_message / assistant_message / message, or an unclassified item that
-    # still carries prose: degrade to a codex message (message-only fidelity).
-    text = stringify(getattr(item, "text", None))
-    if text:
-        yield Event.create("codex", "message", text, {"text": text})
+    if item_type == "commandExecution":
+        command = stringify(getattr(item, "command", None))
+        if command:
+            yield Event.create(
+                "tool",
+                "command",
+                command,
+                {
+                    "item_id": item_id or None,
+                    "command": command,
+                    "cwd": _scalar_value(getattr(item, "cwd", None)),
+                    "status": _enum_value(getattr(item, "status", None)),
+                    "exit_code": getattr(item, "exit_code", None),
+                    "aggregated_output": getattr(item, "aggregated_output", None),
+                    "duration_ms": getattr(item, "duration_ms", None),
+                },
+            )
         return
 
-    # An unclassified item flagged as an error is the last resort -> error event.
-    if getattr(item, "is_error", False):
-        yield Event.create("error", "error", "codex sdk error", _item_raw(item))
+    if item_type == "fileChange":
+        changes = _file_changes(getattr(item, "changes", None))
+        paths = [change["path"] for change in changes if change.get("path")]
+        text = ", ".join(paths) or compact_json(changes)
+        yield Event.create(
+            "tool",
+            "file_change",
+            text,
+            {
+                "item_id": item_id or None,
+                "changes": changes,
+                "status": _enum_value(getattr(item, "status", None)),
+            },
+        )
+        return
+
+    if verbose and item_type:
+        yield Event.create(
+            "codex",
+            "status",
+            f"codex sdk item {item_type}",
+            {"item_type": item_type, "item_id": item_id or None},
+        )
 
 
-def _item_thread_id(item: Any) -> Optional[str]:
-    tid = getattr(item, "thread_id", None)
-    if isinstance(tid, str) and tid:
-        return tid
-    return None
+def _item_root(item: Any) -> Any:
+    """Unwrap the SDK's ``ThreadItem(RootModel[...])`` object."""
+
+    root = getattr(item, "root", None)
+    return root if root is not None else item
 
 
-def _item_raw(item: Any) -> Dict[str, Any]:
-    raw: Dict[str, Any] = {}
-    item_type = getattr(item, "type", None)
-    if item_type is not None:
-        raw["type"] = item_type
-    return raw
+def _is_collected_final_message(item: Any, final_response: str) -> bool:
+    if not final_response or stringify(getattr(item, "type", None)) != "agentMessage":
+        return False
+    if stringify(getattr(item, "text", None)) != final_response:
+        return False
+    phase = _enum_value(getattr(item, "phase", None))
+    # TurnResult derives final_response from final_answer, falling back to an
+    # agent message whose phase is absent.
+    return phase in (None, "final_answer")
+
+
+def _enum_value(value: Any) -> Optional[str]:
+    # Most generated statuses are Enum values. PatchChangeKind is instead a
+    # RootModel whose root has a literal ``type`` discriminator.
+    root = getattr(value, "root", value)
+    raw = getattr(root, "value", root)
+    if not isinstance(raw, str):
+        raw = getattr(root, "type", None)
+    return raw if isinstance(raw, str) and raw else None
+
+
+def _scalar_value(value: Any) -> Any:
+    root = getattr(value, "root", value)
+    enum_value = getattr(root, "value", root)
+    if enum_value is None or isinstance(enum_value, (str, int, float, bool)):
+        return enum_value
+    return str(enum_value)
+
+
+def _string_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    return [part.strip() for part in value if isinstance(part, str) and part.strip()]
+
+
+def _file_changes(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    changes: List[Dict[str, Any]] = []
+    for change in value:
+        path = stringify(getattr(change, "path", None))
+        diff = stringify(getattr(change, "diff", None))
+        entry: Dict[str, Any] = {
+            "path": path or None,
+            "kind": _enum_value(getattr(change, "kind", None)),
+            "diff": diff or None,
+        }
+        changes.append(entry)
+    return changes
 
 
 def _map_sdk_options(options: Dict[str, Any]) -> Dict[str, Any]:
-    # Explicit mapping, no blind pass-through. Only options with a confirmed SDK
-    # equivalent map (model -> thread model, sandbox -> Sandbox enum); the rest
-    # (profile, approval_policy, thinking_level/reasoning_effort, search) are
-    # cli-only and rejected at start validation for the sdk backend.
+    """Keep only options with a verified SDK equivalent."""
+
     mapped: Dict[str, Any] = {}
     if "model" in options:
         mapped["model"] = options["model"]
     if "sandbox" in options:
         mapped["sandbox"] = options["sandbox"]
+    effort = options.get("reasoning_effort", options.get("thinking_level"))
+    if effort is not None:
+        mapped["reasoning_effort"] = effort
     return mapped
 
 
 def sandbox_member_name(value: Any) -> Optional[str]:
-    """Map a ``codex_options.sandbox`` value to the SDK ``Sandbox`` member name."""
+    """Map a ``codex_options.sandbox`` value to the SDK enum member name."""
 
     return _SANDBOX_MEMBERS.get(str(value))
 
 
-def _default_item_stream(
-    agent: AgentConfig, options: Dict[str, Any], workdir: Path, prompt: str
-) -> AsyncIterator[Any]:
-    """Lazily import the real SDK and open the async item stream for one turn.
+def _backend_unavailable(reason: str) -> BackendUnavailable:
+    return BackendUnavailable("codex", "sdk", reason, INSTALL_HINT)
 
-    Best-effort against a young SDK: any import/attribute drift becomes a
-    BackendUnavailable the runner surfaces as an actionable error event rather
-    than crashing. Confirm and pin the exact call shape with a live smoke.
+
+def _configured_codex_bin(agent: AgentConfig) -> Optional[str]:
+    """Resolve the agent's configured Codex CLI for an intentional SDK override.
+
+    The latest Python beta can lag newly selected Codex models because it pins a
+    CLI runtime. Reusing the explicitly configured local executable keeps the
+    SDK transport/API while honoring the project's normal Codex runtime. The
+    SDK-pinned runtime remains the fallback when no executable is configured or
+    resolvable.
     """
+
+    command = agent.command
+    if not isinstance(command, str) or not command.strip():
+        return None
+    return shutil.which(command.strip())
+
+
+async def _default_item_stream(
+    agent: AgentConfig, options: Dict[str, Any], workdir: Path, prompt: str
+) -> AsyncIterator[CodexTurnOutcome]:
+    """Run one turn through the verified async SDK while owning its resources."""
 
     try:
         import openai_codex  # type: ignore
     except ImportError as exc:
-        raise BackendUnavailable("codex", "sdk", f"{MODULE_NAME} is not importable", INSTALL_HINT) from exc
-    try:
-        codex = openai_codex.Codex()
-        start_kwargs: Dict[str, Any] = {}
-        if "model" in options:
-            start_kwargs["model"] = options["model"]
-        member = sandbox_member_name(options.get("sandbox")) if "sandbox" in options else None
-        if member is not None:
-            start_kwargs["sandbox"] = getattr(openai_codex.Sandbox, member)
-        thread = codex.start_thread(working_directory=str(workdir), **start_kwargs)
-        return thread.run_streamed(prompt)
-    except Exception as exc:  # pragma: no cover - live-only path
-        raise BackendUnavailable(
-            "codex", "sdk", f"could not start a Codex SDK thread: {exc}", INSTALL_HINT
-        ) from exc
+        raise _backend_unavailable(f"{MODULE_NAME} is not importable") from exc
+
+    async_codex = getattr(openai_codex, "AsyncCodex", None)
+    if async_codex is None or not hasattr(async_codex, "thread_start"):
+        raise _backend_unavailable("openai_codex has no compatible AsyncCodex.thread_start API")
+
+    client_config = None
+    codex_bin = _configured_codex_bin(agent)
+    if codex_bin:
+        config_cls = getattr(openai_codex, "CodexConfig", None)
+        if config_cls is None:
+            raise _backend_unavailable("openai_codex has no compatible CodexConfig API")
+        try:
+            client_config = config_cls(codex_bin=codex_bin)
+        except Exception as exc:
+            raise _backend_unavailable(f"could not configure Codex executable {codex_bin!r}: {exc}") from exc
+
+    mapped = _map_sdk_options(options)
+    start_kwargs: Dict[str, Any] = {"cwd": str(workdir)}
+    if "model" in mapped:
+        start_kwargs["model"] = mapped["model"]
+
+    if "sandbox" in mapped:
+        member = sandbox_member_name(mapped["sandbox"])
+        sandbox = getattr(openai_codex, "Sandbox", None)
+        if member is None or sandbox is None or not hasattr(sandbox, member):
+            raise _backend_unavailable(
+                f"openai_codex has no compatible Sandbox value for {mapped['sandbox']!r}"
+            )
+        start_kwargs["sandbox"] = getattr(sandbox, member)
+
+    run_kwargs: Dict[str, Any] = {}
+    if "reasoning_effort" in mapped:
+        generated = getattr(openai_codex, "generated", None)
+        v2_all = getattr(generated, "v2_all", None)
+        effort_cls = getattr(v2_all, "ReasoningEffort", None)
+        effort_name = str(mapped["reasoning_effort"])
+        if effort_cls is None or not hasattr(effort_cls, effort_name):
+            raise _backend_unavailable(
+                f"openai_codex has no compatible ReasoningEffort value for {effort_name!r}"
+            )
+        run_kwargs["effort"] = getattr(effort_cls, effort_name)
+
+    # Yield from inside the context: the runner maps the provider session and
+    # every TurnResult item before asking this generator for its next value,
+    # which is when __aexit__ finally closes the SDK client.
+    client = async_codex(client_config) if client_config is not None else async_codex()
+    async with client as codex:
+        thread = await codex.thread_start(**start_kwargs)
+        thread_id = stringify(getattr(thread, "id", None))
+        run = getattr(thread, "run", None)
+        if not thread_id or not callable(run):
+            raise _backend_unavailable("openai_codex returned an incompatible AsyncThread")
+        result = await run(prompt, **run_kwargs)
+        if not hasattr(result, "final_response") or not hasattr(result, "items"):
+            raise _backend_unavailable("openai_codex returned an incompatible TurnResult")
+        yield CodexTurnOutcome(thread_id=thread_id, result=result)
 
 
 def build_codex_sdk_backends() -> List[CodexSdkBackend]:

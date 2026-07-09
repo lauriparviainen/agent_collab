@@ -14,12 +14,13 @@ authors = [{ name = "agent-collab prototype" }]
 # First-class SDK backends. These are lazy-imported (only inside probe()/runner),
 # so a missing wheel degrades to an unavailable backend rather than an import-time
 # crash; the `cli` backend keeps working with the provider CLIs regardless.
-# Ranges are bounded (these packages are pre-1.0 / recently renamed): pin the
-# tested floor per package when a live smoke confirms it.
+# Ranges are bounded to the minor line verified during Stage 5.1 A1 on Python
+# 3.12.13. Codex needs an explicit prerelease floor; 0.1.0b3 installs the pinned
+# openai-codex-cli-bin 0.137.0a4 runtime dependency.
 dependencies = [
-    "claude-agent-sdk>=0.2,<1",
-    "openai-codex>=0.1,<1",
-    "google-antigravity>=0.1,<1",
+    "claude-agent-sdk>=0.2.114,<0.3.0",
+    "openai-codex>=0.1.0b3,<0.2.0",
+    "google-antigravity>=0.1.5,<0.2.0",
     # xai-sdk is added by Stage 5.1.1 (xAI provider).
 ]
 

@@ -164,6 +164,31 @@ name or documentation page exists.
 Apply the same honesty to Claude or Antigravity if their candidate wheel cannot
 install/import on a platform the project intends to support.
 
+#### A1 verification record (2026-07-09)
+
+Completed in `/tmp/agent-collab-sdk-venv` with Python 3.12.13 on Linux x86-64:
+
+- `claude-agent-sdk==0.2.114` installs and imports as `claude_agent_sdk`.
+  `ClaudeAgentOptions` accepts `cwd`, `setting_sources`, the Claude Code
+  `system_prompt`/`tools` presets, `model`, `permission_mode`, `effort`, and
+  `max_thinking_tokens`. The installed typed message/block constructors match
+  the fields used by A5.
+- `openai-codex==0.1.0b3` installs and imports as `openai_codex`, and declares
+  `openai-codex-cli-bin==0.137.0a4`. Outside the restricted filesystem sandbox,
+  `AsyncCodex` initialized the bundled app-server, created an ephemeral
+  read-only thread, exposed `AsyncThread.id`, and returned the same ID from
+  `thread.read()`. No model call was made.
+- `google-antigravity==0.1.5` installs and imports as
+  `google.antigravity`. The installed `ChatResponse.resolve()` is async;
+  `thoughts`, `tool_calls`, and `chunks` are async-iterator properties over an
+  independent shared buffer. A constructed response resolved typed `Text`,
+  `Thought`, `ToolCall`, and `ToolResult` objects, then allowed sequential text,
+  thought, and tool-call cursor reads. No model call was made.
+- `python -m pip check` reports no broken requirements.
+
+This clears the package/import/no-model API gate for all three providers.
+Credentialed turn shapes and authentication remain A6/live-smoke evidence.
+
 ### A2. Lock packaging to the versions that pass A1
 
 Only after A1 passes, update `pyproject.toml` to ranges based on the installed
@@ -293,6 +318,38 @@ Before starting Slice B:
 
 Slice A must be reviewable and revertible without Slice B. Do not mix backend
 contract refactoring into the same commits as the provider runner repairs.
+
+#### A6 verification record (2026-07-09)
+
+- The full hermetic suite passed under both the system Python 3.9 interpreter
+  and `/tmp/agent-collab-sdk-venv` Python 3.12: 337 tests, with only the four
+  explicitly gated live-smoke tests skipped.
+- The mock smoke passed with `AGENT_COLLAB_HOME` isolated under `/tmp`.
+- `pip check`, all three imports, the real Claude and Antigravity constructors,
+  and a real ephemeral read-only Codex thread passed without a model call.
+- A credentialed Claude turn passed in a fresh empty temporary workspace and
+  emitted both an assistant message and a provider session ID.
+- A credentialed Codex turn passed in a fresh empty temporary workspace with
+  `gpt-5.4`, proving the repaired Python runner's real thread ID and final
+  response mapping. The SDK context currently emits upstream `ResourceWarning`
+  messages for two subprocess pipe handles during shutdown.
+- The project default is now `gpt-5.6-sol`. The latest Python beta
+  (`openai-codex==0.1.0b3`) pins Codex `0.137.0-alpha.4`, which is too old for
+  that model. The backend therefore intentionally uses the configured local
+  Codex executable through the documented `CodexConfig(codex_bin=...)` override
+  when it is resolvable. The installed standalone Codex `0.141.0` is also too
+  old for `gpt-5.6-sol`; `codex update` discovered version `0.144.0` but failed
+  because no matching standalone or npm release assets were available. Re-run
+  the Codex live gate after that upstream runtime is downloadable.
+- The Antigravity live smoke reached the installed SDK but was blocked before a
+  turn because no `GEMINI_API_KEY` is available. Its required tool-call smoke
+  remains a credentialed release item.
+
+All live smokes use disposable empty workspaces so they do not expose the
+checkout to provider tools. The current official Codex SDK documentation is
+<https://developers.openai.com/codex/sdk>; it confirms the Python beta package,
+pinned runtime behavior, and the intentional `CodexConfig(codex_bin=...)`
+override.
 
 ## Slice B: self-describing, swappable backend contract
 

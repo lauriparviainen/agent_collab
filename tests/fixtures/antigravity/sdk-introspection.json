@@ -85,8 +85,26 @@
     ],
     "text_is_async_method": true,
     "thoughts_is_property": true,
+    "thoughts_property_value": "collections.abc.AsyncIterator[str]",
     "tool_calls_is_property": true,
-    "resolve_signature": "(self) -> 'list[StreamChunk | ToolCall | ToolResult]'"
+    "tool_calls_property_value": "collections.abc.AsyncIterator[google.antigravity.types.ToolCall]",
+    "cursor_behavior": "chunks, thoughts, and tool_calls return independent async cursors over a shared buffer",
+    "resolve_is_async_method": true,
+    "resolve_signature": "(self) -> 'list[StreamChunk | ToolCall | ToolResult]'",
+    "resolved_types": ["Text", "Thought", "ToolCall", "ToolResult"]
+  },
+  "Text": {
+    "pydantic_fields": {
+      "step_index": "<class 'int'>",
+      "text": "<class 'str'>"
+    }
+  },
+  "Thought": {
+    "pydantic_fields": {
+      "step_index": "<class 'int'>",
+      "text": "<class 'str'>",
+      "signature": "bytes | None"
+    }
   },
   "ToolCall": {
     "pydantic_fields": {
@@ -94,6 +112,24 @@
       "args": "dict[str, typing.Any]",
       "id": "str | None",
       "canonical_path": "str | None"
+    }
+  },
+  "ToolResult": {
+    "pydantic_fields": {
+      "name": "google.antigravity.types.BuiltinTools | str",
+      "id": "str | None",
+      "result": "typing.Any",
+      "error": "str | None",
+      "exception": "Exception | None"
+    }
+  },
+  "UsageMetadata": {
+    "pydantic_fields": {
+      "prompt_token_count": "int | None",
+      "cached_content_token_count": "int | None",
+      "candidates_token_count": "int | None",
+      "thoughts_token_count": "int | None",
+      "total_token_count": "int | None"
     }
   },
   "Step": {
