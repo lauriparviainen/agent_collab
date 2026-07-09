@@ -21,6 +21,14 @@ _explicit_providers: Set[str] = set()
 STRICT = False
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# Live tests verify transport/event fidelity, not frontier-model quality. Keep
+# their paid calls on each provider's fast, economical tier by default.
+DEFAULT_LIVE_OPTIONS: Dict[str, Dict[str, Any]] = {
+    "claude": {"model": "sonnet", "thinking_level": "low"},
+    "codex": {"model": "gpt-5.6-luna", "thinking_level": "low"},
+    "antigravity": {"model": "Gemini 3.5 Flash (Low)"},
+}
+
 
 def configure(
     providers: Optional[Iterable[str]] = None,
@@ -65,8 +73,13 @@ class LiveBackendTestCase(unittest.TestCase):
             self.skipTest(missing_reason(self.provider, self.backend_id, health.reason or "credentials missing"))
 
     def requested_options(self) -> Dict[str, Any]:
-        key = f"AGENT_COLLAB_IT_{self.provider.upper()}_MODEL"
-        return {"model": os.environ[key]} if os.environ.get(key) else {}
+        options = dict(DEFAULT_LIVE_OPTIONS[self.provider])
+        prefix = f"AGENT_COLLAB_IT_{self.provider.upper()}"
+        if os.environ.get(f"{prefix}_MODEL"):
+            options["model"] = os.environ[f"{prefix}_MODEL"]
+        if "thinking_level" in options and os.environ.get(f"{prefix}_THINKING_LEVEL"):
+            options["thinking_level"] = os.environ[f"{prefix}_THINKING_LEVEL"]
+        return options
 
     def run_live(self, prompt: Optional[str] = None) -> list:
         config = builtin_config()

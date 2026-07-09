@@ -29,6 +29,11 @@ credentials. Missing dependencies/credentials skip by default; `--strict`
 returns exit `2` when an explicitly selected provider cannot run. Behavioral
 failures return `1`.
 
+Live tests use cheap, fast defaults because they verify backend transport and
+event fidelity rather than model quality: Claude `sonnet`/low, Codex
+`gpt-5.6-luna`/low, and Antigravity `Gemini 3.5 Flash (Low)`. See
+`integration_tests/README.md` for environment overrides.
+
 Run a one-shot mock session:
 
 ```bash
