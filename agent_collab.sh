@@ -8,8 +8,26 @@ if [[ -d "$repo_root/agent_collab" ]]; then
   export PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}"
 fi
 
+default_venv="${AGENT_COLLAB_VENV:-$HOME/.agent-collab/venv}"
+if [[ -n "${AGENT_COLLAB_PYTHON:-}" ]]; then
+  python_bin="$AGENT_COLLAB_PYTHON"
+elif [[ -x "$default_venv/bin/python" ]]; then
+  python_bin="$default_venv/bin/python"
+elif command -v python3.12 >/dev/null 2>&1; then
+  python_bin="$(command -v python3.12)"
+else
+  python_bin="$(command -v python3)"
+fi
+
+if ! "$python_bin" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+  detected_version="$("$python_bin" --version 2>&1 || true)"
+  printf 'agent-collab requires Python >= 3.10; selected %s (%s)\n' \
+    "$python_bin" "${detected_version:-version unavailable}" >&2
+  exit 2
+fi
+
 run_cli() {
-  exec python3 -m agent_collab.cli "$@"
+  exec "$python_bin" -m agent_collab.cli "$@"
 }
 
 print_help() {
@@ -40,7 +58,10 @@ Examples:
   ./agent_collab.sh watch
 
 Most commands pass through to:
-  python3 -m agent_collab.cli
+  ~/.agent-collab/venv/bin/python -m agent_collab.cli
+
+Override the interpreter with AGENT_COLLAB_PYTHON or the environment location
+with AGENT_COLLAB_VENV.
 
 The daemon is global: runtime state lives under ~/.agent-collab/data
 (override with AGENT_COLLAB_HOME). "daemon start --workdir DIR" only sets
@@ -55,12 +76,12 @@ case "${1:-help}" in
   test)
     shift
     cd "$repo_root"
-    exec python3 -m unittest discover -s tests -t . "$@"
+    exec "$python_bin" -m unittest discover -s tests -t . "$@"
     ;;
   integration-test)
     shift
     cd "$repo_root"
-    exec python3 -m integration_tests "$@"
+    exec "$python_bin" -m integration_tests "$@"
     ;;
   smoke)
     shift

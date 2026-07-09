@@ -23,7 +23,37 @@ class ShellWrapperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("./agent_collab.sh smoke", result.stdout)
         self.assertIn("./agent_collab.sh daemon start", result.stdout)
-        self.assertIn("python3 -m agent_collab.cli", result.stdout)
+        self.assertIn("-m agent_collab.cli", result.stdout)
+
+    def test_rejects_selected_python_older_than_310(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_python = Path(tmp) / "python"
+            fake_python.write_text(
+                """#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  echo "Python 3.9.25"
+  exit 0
+fi
+exit 1
+""",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            env = os.environ.copy()
+            env["AGENT_COLLAB_PYTHON"] = str(fake_python)
+            result = subprocess.run(
+                [str(SCRIPT), "help"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("requires Python >= 3.10", result.stderr)
+        self.assertIn("Python 3.9.25", result.stderr)
 
     def test_unknown_args_pass_through_exactly(self):
         result, captured = self._run_with_fake_python(
@@ -125,6 +155,7 @@ exit 0
             env = os.environ.copy()
             env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
             env["AGENT_COLLAB_CAPTURE"] = str(capture_path)
+            env["AGENT_COLLAB_PYTHON"] = str(fake_python)
             result = subprocess.run(
                 [str(SCRIPT), *args],
                 cwd=cwd,

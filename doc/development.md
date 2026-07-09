@@ -17,6 +17,11 @@ Source checkout helper:
 ./agent_collab.sh smoke
 ```
 
+The source helper prefers the persistent Python 3.12 environment at
+`~/.agent-collab/venv`. Override its interpreter with `AGENT_COLLAB_PYTHON` or
+its environment directory with `AGENT_COLLAB_VENV`. Startup rejects any selected
+interpreter older than Python 3.10.
+
 `test` is hermetic and discovers only `tests/`. `integration-test` discovers
 only `integration_tests/`, may make paid model calls, and uses native provider
 credentials. Missing dependencies/credentials skip by default; `--strict`
