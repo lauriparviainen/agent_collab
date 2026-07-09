@@ -80,9 +80,21 @@ class LiveBackendTestCase(unittest.TestCase):
             options["thinking_level"] = os.environ[f"{prefix}_THINKING_LEVEL"]
         return options
 
+    def agent_backend_config(self) -> Dict[str, Any]:
+        """Return live-test-only static backend configuration."""
+
+        return {}
+
+    def environment_overrides(self) -> Dict[str, str]:
+        """Return live-test-only environment values without logging them."""
+
+        return {}
+
     def run_live(self, prompt: Optional[str] = None) -> list:
         config = builtin_config()
         source = config.agents[self.provider]
+        backend_config = dict(source.backend_config)
+        backend_config.update(self.agent_backend_config())
         agent = AgentConfig(
             id=source.id,
             type=source.type,
@@ -92,6 +104,7 @@ class LiveBackendTestCase(unittest.TestCase):
             env=dict(source.env),
             cwd=source.cwd,
             backend=self.backend_id,
+            backend_config=backend_config,
         )
         backend = backends.get_backend(self.provider, self.backend_id)
         options = backend.normalize_options(agent, self.requested_options())
@@ -102,15 +115,18 @@ class LiveBackendTestCase(unittest.TestCase):
             workdir = Path(tmp).resolve()
             self.assertNotEqual(workdir, REPO_ROOT)
             self.assertNotIn(REPO_ROOT, workdir.parents)
-            previous = os.environ.get("AGENT_COLLAB_HOME")
-            os.environ["AGENT_COLLAB_HOME"] = home
+            overrides = dict(self.environment_overrides())
+            overrides["AGENT_COLLAB_HOME"] = home
+            previous = {key: os.environ.get(key) for key in overrides}
+            os.environ.update(overrides)
             try:
                 return asyncio.run(_collect(runner, prompt or self.prompt, workdir))
             finally:
-                if previous is None:
-                    os.environ.pop("AGENT_COLLAB_HOME", None)
-                else:
-                    os.environ["AGENT_COLLAB_HOME"] = previous
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
 
     def assert_message(self, events: list) -> None:
         errors = [event.text for event in events if event.type == "error"]

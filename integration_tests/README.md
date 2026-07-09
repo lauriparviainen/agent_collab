@@ -29,3 +29,11 @@ corresponding `AGENT_COLLAB_IT_<PROVIDER>_THINKING_LEVEL`. Native provider
 authentication is used. Each turn runs in a fresh temporary workspace with an
 isolated `AGENT_COLLAB_HOME`; assertions log event kinds rather than raw SDK
 responses or transcripts.
+
+The Antigravity SDK test uses Vertex when Google Application Default
+Credentials are available. It reads the credential path from
+`GOOGLE_APPLICATION_CREDENTIALS`, defaulting to gcloud's standard
+`~/.config/gcloud/application_default_credentials.json`. Set
+`AGENT_COLLAB_IT_ANTIGRAVITY_PROJECT` to override the active gcloud project and
+`AGENT_COLLAB_IT_ANTIGRAVITY_LOCATION` to override the default `us-central1`
+location. Credential contents and project values are never logged.
