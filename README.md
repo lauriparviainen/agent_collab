@@ -267,7 +267,7 @@ Exposed tools:
 - `agent_collab_read_transcript`
 - `agent_collab_stop`
 
-Agents can call `agent_collab_guidance` for full Markdown usage guidance (source: [doc/mcp-guidance.md](doc/mcp-guidance.md)), and should call `agent_collab_describe_options` before passing non-default model, reasoning, sandbox, or permission settings. Prefer `thinking_level` over provider-specific raw fields: Codex accepts `minimal`, `low`, `medium`, `high`, or `xhigh`; Claude accepts `low`, `medium`, `high`, `xhigh`, or `max`. `agent_collab_start` rejects unknown keys, wrong types, unsupported values, and options that do not apply to the selected workflow before any subprocess is launched, and its response confirms the effective settings including prompt-free command previews.
+Agents can call `agent_collab_guidance` for full Markdown usage guidance (source: [doc/mcp-guidance.md](doc/mcp-guidance.md)), and should call `agent_collab_describe_options` with the required `workdir` before passing non-default model, reasoning, sandbox, or permission settings. Prefer `thinking_level` over provider-specific raw fields: Codex accepts `minimal`, `low`, `medium`, `high`, or `xhigh`; Claude accepts `low`, `medium`, `high`, `xhigh`, or `max`. `agent_collab_start` requires `workdir`, rejects unknown keys, wrong types, unsupported values, and options that do not apply to the selected workflow before any subprocess is launched, and its response confirms the effective settings including prompt-free command previews.
 
 ## Development
 

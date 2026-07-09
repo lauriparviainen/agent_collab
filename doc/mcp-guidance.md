@@ -26,8 +26,9 @@ The session `workdir` matters twice:
   layered over the user config and built-in defaults,
 - agent subprocesses run with `workdir` as their working directory.
 
-Always pass an explicit absolute `workdir`. The daemon's own location and
-the caller's shell directory never affect a session's config.
+Always pass an explicit absolute `workdir`; MCP start and describe-options calls
+require it. The daemon's own location and the caller's shell directory never
+affect a session's config.
 
 ## Workflows
 
@@ -46,7 +47,7 @@ given `workdir`, including each workflow's sequence and agent types.
 
 ## Options
 
-Call `agent_collab_describe_options` (with the session's `workdir`) before
+Call `agent_collab_describe_options` (with the session's required `workdir`) before
 passing non-default `codex_options` or `claude_options`. It returns:
 
 - available workflows and their agent types,

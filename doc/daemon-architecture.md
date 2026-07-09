@@ -124,6 +124,7 @@ Suggested endpoints:
 ```text
 POST /sessions
 POST /options
+GET  /options?workdir=/path/to/project
 GET  /sessions
 GET  /sessions/{session_id}
 GET  /sessions/{session_id}/events?cursor=N
@@ -131,6 +132,9 @@ GET  /sessions/{session_id}/events/wait?cursor=N&timeout_ms=30000
 GET  /sessions/{session_id}/transcript
 POST /sessions/{session_id}/stop
 ```
+
+`POST /sessions` and `/options` require an explicit non-blank `workdir`; the
+`workdir` selects project config and the session subprocess cwd.
 
 MCP endpoint:
 

@@ -18,6 +18,7 @@ TOOLS = [
         "name": "agent_collab_start",
         "description": (
             "Start a supervised Claude/Codex collaboration session and return a session id. "
+            "workdir is required because it selects project config and subprocess cwd. "
             "Call agent_collab_describe_options first before passing non-default codex_options or claude_options."
         ),
         "inputSchema": {
@@ -37,15 +38,19 @@ TOOLS = [
                 "antigravity_options": {"type": "object", "additionalProperties": True},
                 "backend": {"type": "string"},
             },
-            "required": ["task"],
+            "required": ["task", "workdir"],
         },
     },
     {
         "name": "agent_collab_describe_options",
-        "description": "Describe workflows, configured agents, and accepted codex_options and claude_options for starts.",
+        "description": (
+            "Describe workflows, configured agents, and accepted codex_options and claude_options for starts. "
+            "workdir is required so options are resolved from the same project config a start will use."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"workdir": {"type": "string"}},
+            "required": ["workdir"],
         },
     },
     {
@@ -166,7 +171,7 @@ class SessionManagerToolBackend:
             StartSessionRequest(
                 task=_required_str(payload, "task"),
                 workflow=str(payload.get("workflow", DEFAULT_WORKFLOW)),
-                workdir=Path(str(payload.get("workdir", "."))),
+                workdir=Path(_required_str(payload, "workdir")),
                 max_turns=_int_arg(payload, "max_turns", 3),
                 timeout=_int_arg(payload, "timeout", 900),
                 mock=bool(payload.get("mock", False)),
@@ -182,8 +187,7 @@ class SessionManagerToolBackend:
         return state.to_dict()
 
     async def describe_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        workdir = payload.get("workdir")
-        return self.manager.describe_options(Path(str(workdir)) if workdir else None)
+        return self.manager.describe_options(Path(_required_str(payload, "workdir")))
 
     async def list_sessions(self) -> Dict[str, Any]:
         return {"sessions": [state.to_dict() for state in self.manager.list_sessions()]}
@@ -420,7 +424,7 @@ def handle_request_sync(request: Dict[str, Any], backend: ToolBackend) -> Option
 
 def _required_str(args: Dict[str, Any], key: str) -> str:
     value = args.get(key)
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{key} is required")
     return value
 
@@ -463,6 +467,8 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
     }
     if not isinstance(payload.get("task"), str) or not payload["task"]:
         raise ValueError("task is required")
+    if not isinstance(payload.get("workdir"), str) or not payload["workdir"].strip():
+        raise ValueError("workdir is required")
     if "backend" in payload and not isinstance(payload["backend"], str):
         raise ValueError("backend must be a string")
     return payload
@@ -481,8 +487,8 @@ def _post_message_payload(args: Dict[str, Any]) -> Dict[str, Any]:
 
 def _describe_payload(args: Dict[str, Any]) -> Dict[str, Any]:
     payload = {key: args[key] for key in ("workdir",) if key in args}
-    if "workdir" in payload and not isinstance(payload["workdir"], str):
-        raise ValueError("workdir must be a string")
+    if not isinstance(payload.get("workdir"), str) or not payload["workdir"].strip():
+        raise ValueError("workdir is required")
     return payload
 
 

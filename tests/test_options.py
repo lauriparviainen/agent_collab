@@ -205,6 +205,7 @@ thinking_level.default = "high"
         self.assertIn("thinking_level", payload["codex_options"]["properties"])
         self.assertIn("thinking_level", payload["claude_options"]["properties"])
         self.assertIn("thinking_budget_tokens", payload["claude_options"]["properties"])
+        self.assertTrue(all(example.get("workdir") for example in payload["examples"]))
 
     def test_describe_options_includes_backends_section(self):
         config = builtin_config()

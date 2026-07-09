@@ -123,8 +123,11 @@ class AgentCollabHttpServer:
             return await self._dispatch_mcp(method, headers, body)
 
         if method in {"GET", "POST"} and path_parts == ["options"]:
-            data = _decode_json_object(body) if method == "POST" else {}
-            workdir = Path(str(data.get("workdir", "."))) if data.get("workdir") else None
+            if method == "POST":
+                data = _decode_json_object(body)
+                workdir = Path(_required_str(data, "workdir"))
+            else:
+                workdir = Path(_query_required_str(query, "workdir"))
             return self.manager.describe_options(workdir)
 
         if method == "POST" and path_parts == ["sessions"]:
@@ -133,7 +136,7 @@ class AgentCollabHttpServer:
                 StartSessionRequest(
                     task=_required_str(data, "task"),
                     workflow=str(data.get("workflow", DEFAULT_WORKFLOW)),
-                    workdir=Path(str(data.get("workdir", "."))),
+                    workdir=Path(_required_str(data, "workdir")),
                     max_turns=int(data.get("max_turns", 3)),
                     timeout=int(data.get("timeout", 900)),
                     mock=bool(data.get("mock", False)),
@@ -252,7 +255,15 @@ def _decode_json_object(body: bytes) -> Dict[str, Any]:
 
 def _required_str(data: Dict[str, Any], key: str) -> str:
     value = data.get(key)
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value.strip():
+        raise HttpError(400, f"{key} is required")
+    return value
+
+
+def _query_required_str(query: Dict[str, Any], key: str) -> str:
+    values = query.get(key)
+    value = values[0] if values else None
+    if not isinstance(value, str) or not value.strip():
         raise HttpError(400, f"{key} is required")
     return value
 

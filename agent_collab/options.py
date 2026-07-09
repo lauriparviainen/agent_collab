@@ -293,6 +293,7 @@ def describe_options(
     *,
     health: Any = None,
 ) -> Dict[str, Any]:
+    resolved_workdir = str(workdir.expanduser().resolve()) if workdir else "."
     agents = [
         {
             "id": agent.id,
@@ -311,7 +312,7 @@ def describe_options(
         workflows.append({"id": workflow_id, "sequence": list(workflow.sequence), "agent_types": types})
 
     return {
-        "workdir": str(workdir.expanduser().resolve()) if workdir else None,
+        "workdir": resolved_workdir if workdir else None,
         "agents": agents,
         "workflows": workflows,
         "workflow_agent_types": workflow_agent_types,
@@ -322,12 +323,14 @@ def describe_options(
         "examples": [
             {
                 "task": "Review this repository",
+                "workdir": resolved_workdir,
                 "workflow": "compare",
                 "codex_options": {"thinking_level": "medium", "sandbox": "workspace-write"},
                 "claude_options": {"model": "opus", "thinking_level": "high"},
             },
             {
                 "task": "Run a mock smoke test",
+                "workdir": resolved_workdir,
                 "mock": True,
                 "max_turns": 1,
             },

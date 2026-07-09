@@ -31,6 +31,13 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_stop", names)
         self.assertIn("agent_collab_guidance", names)
 
+    def test_start_and_describe_options_require_workdir_in_schema(self):
+        response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+
+        self.assertEqual(tools["agent_collab_start"]["inputSchema"]["required"], ["task", "workdir"])
+        self.assertEqual(tools["agent_collab_describe_options"]["inputSchema"]["required"], ["workdir"])
+
     def test_guidance_without_topic_returns_full_markdown(self):
         result = handle_tool("agent_collab_guidance", {})
 
@@ -100,6 +107,18 @@ class McpServerTests(unittest.TestCase):
         client.start_session.assert_called_once_with(args)
         _assert_tool_result(self, result, {"session_id": "s1", "status": "running"})
 
+    def test_start_rejects_missing_workdir(self):
+        result = handle_tool("agent_collab_start", {"task": "mcp test"})
+
+        self.assertTrue(result.get("isError"))
+        self.assertEqual(_payload(result), {"error": "workdir is required"})
+
+    def test_start_rejects_blank_workdir(self):
+        result = handle_tool("agent_collab_start", {"task": "mcp test", "workdir": "   "})
+
+        self.assertTrue(result.get("isError"))
+        self.assertEqual(_payload(result), {"error": "workdir is required"})
+
     def test_describe_options_maps_to_client_describe_options(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
@@ -109,6 +128,18 @@ class McpServerTests(unittest.TestCase):
 
         client.describe_options.assert_called_once_with({"workdir": "/repo"})
         _assert_tool_result(self, result, {"workflows": [], "codex_options": {}, "claude_options": {}})
+
+    def test_describe_options_rejects_missing_workdir(self):
+        result = handle_tool("agent_collab_describe_options", {})
+
+        self.assertTrue(result.get("isError"))
+        self.assertEqual(_payload(result), {"error": "workdir is required"})
+
+    def test_describe_options_rejects_blank_workdir(self):
+        result = handle_tool("agent_collab_describe_options", {"workdir": "   "})
+
+        self.assertTrue(result.get("isError"))
+        self.assertEqual(_payload(result), {"error": "workdir is required"})
 
     def test_list_maps_to_client_list_sessions(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:

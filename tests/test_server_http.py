@@ -76,6 +76,34 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("codex_options", response)
         self.assertIn("claude_options", response)
 
+    async def test_options_get_route_accepts_workdir_query(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = AgentCollabHttpServer(manager=SessionManager(default_workdir=root))
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                response = await server._dispatch("GET", f"/options?workdir={root}", {}, b"")
+
+        self.assertIn("workflows", response)
+        self.assertIn("codex_options", response)
+        self.assertIn("claude_options", response)
+
+    async def test_options_route_requires_workdir(self):
+        server = AgentCollabHttpServer(manager=SessionManager())
+
+        for method, target, body in (
+            ("GET", "/options", b""),
+            ("GET", "/options?workdir=%20%20%20", b""),
+            ("POST", "/options", json.dumps({}).encode("utf-8")),
+            ("POST", "/options", json.dumps({"workdir": "   "}).encode("utf-8")),
+        ):
+            with self.subTest(method=method, target=target, body=body):
+                with self.assertRaises(HttpError) as ctx:
+                    await server._dispatch(method, target, {}, body)
+
+                self.assertEqual(ctx.exception.status, 400)
+                self.assertEqual(ctx.exception.message, "workdir is required")
+
     async def test_post_message_route_returns_event_batch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -163,6 +191,17 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(manager.list_sessions(), [])
         self.assertEqual(ctx.exception.to_dict()["error"], "invalid_start_options")
+
+    async def test_sessions_route_requires_workdir(self):
+        server = AgentCollabHttpServer(manager=SessionManager())
+
+        for payload in ({"task": "missing workdir"}, {"task": "blank workdir", "workdir": "   "}):
+            with self.subTest(payload=payload):
+                with self.assertRaises(HttpError) as ctx:
+                    await server._dispatch("POST", "/sessions", {}, json.dumps(payload).encode("utf-8"))
+
+                self.assertEqual(ctx.exception.status, 400)
+                self.assertEqual(ctx.exception.message, "workdir is required")
 
     async def test_mcp_rejects_non_local_origin(self):
         server = AgentCollabHttpServer(manager=SessionManager())
@@ -265,6 +304,38 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         result = response["result"]
         self.assertTrue(result["isError"])
         self.assertEqual(json.loads(result["content"][0]["text"]), {"error": "task is required"})
+
+    async def test_mcp_start_requires_workdir_even_with_task(self):
+        server = AgentCollabHttpServer(manager=SessionManager())
+
+        response = await server._dispatch(
+            "POST",
+            "/mcp",
+            {},
+            _mcp_body(
+                10,
+                "tools/call",
+                {"name": "agent_collab_start", "arguments": {"task": "missing workdir"}},
+            ),
+        )
+
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(json.loads(result["content"][0]["text"]), {"error": "workdir is required"})
+
+    async def test_mcp_describe_options_requires_workdir(self):
+        server = AgentCollabHttpServer(manager=SessionManager())
+
+        response = await server._dispatch(
+            "POST",
+            "/mcp",
+            {},
+            _mcp_body(10, "tools/call", {"name": "agent_collab_describe_options", "arguments": {}}),
+        )
+
+        result = response["result"]
+        self.assertTrue(result["isError"])
+        self.assertEqual(json.loads(result["content"][0]["text"]), {"error": "workdir is required"})
 
     async def test_mcp_start_option_validation_error_sets_is_error_with_details(self):
         with tempfile.TemporaryDirectory() as tmp:
