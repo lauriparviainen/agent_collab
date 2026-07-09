@@ -1,5 +1,11 @@
 # Live integration tests
 
+> **Antigravity SDK blocker on Oracle Linux 9:** the `google-antigravity`
+> package's bundled `localharness` requires `GLIBC_ABI_DT_RELR` (glibc 2.36+),
+> while Oracle Linux 9 provides glibc 2.34. The `antigravity sdk` live test
+> cannot run on this host until it uses a newer host runtime or Google ships an
+> EL9-compatible binary. Do not replace the system glibc manually.
+
 This suite is credentialed and may make paid model calls. It is structurally separate from `tests/` and is never discovered by `./agent_collab.sh test`.
 
 ```bash
