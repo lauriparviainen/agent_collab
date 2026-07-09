@@ -295,4 +295,5 @@ Important implementation files:
 - `agent_collab/mcp_server.py`: current stdio MCP adapter.
 - `agent_collab/mcp_tools.py`: shared MCP tool schemas, guidance tool, and dispatch.
 
-For agent handoff notes, read [AGENTS.md](AGENTS.md).
+For coding-agent handoff, start with [AGENTS.md](AGENTS.md); detailed current
+implementation notes live in [doc/implementation-notes.md](doc/implementation-notes.md).

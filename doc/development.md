@@ -70,13 +70,24 @@ codex exec --json -c model_reasoning_effort="high"
 
 ## Coding Constraints
 
-- Keep dependencies minimal.
-- Prefer Python standard library.
+- Prefer the Python standard library and keep dependencies minimal.
 - Keep `agent-collab serve` foreground-only; daemon lifecycle commands are separate.
 - Keep localhost as the default security boundary.
 - Preserve cursor-based event reads and long-polling.
 - Do not let agents recursively spawn Claude, Codex, `agent-collab`, or other agent processes.
 - Keep `watch` plain and pipe-friendly.
+- Keep daemon logs from dumping full transcript events by default.
+- MCP agents should call `agent_collab_guidance` for usage guidance and
+  `agent_collab_describe_options` with the required workdir before passing
+  non-default model, reasoning, sandbox, permission, backend, or provider
+  settings.
+- Invalid `agent_collab_start` options should be fixed from returned field-path
+  details, not retried by guessing.
+- Tests must isolate `AGENT_COLLAB_HOME` by pointing it at a temp dir, so
+  nothing writes to the real `~/.agent-collab`.
+- All config shape compatibility handling belongs in
+  `agent_collab/config_migrations.py`; runtime code should consume the latest
+  schema.
 - Add focused tests with each behavior change.
 - For server and MCP changes, cover the affected route or tool behavior plus one shared-session path when relevant.
 

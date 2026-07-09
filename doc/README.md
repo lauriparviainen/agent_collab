@@ -4,7 +4,8 @@ This folder tracks the planned move from the current one-shot CLI/MCP prototype 
 
 Start here:
 
-- [Agent handoff notes](../AGENTS.md)
+- [Agent entrypoint](../AGENTS.md)
+- [Implementation notes](implementation-notes.md)
 - [Daemon architecture](daemon-architecture.md)
 - [Agent configuration](agent-configuration.md)
 - [Runtime layout](runtime-layout.md)
