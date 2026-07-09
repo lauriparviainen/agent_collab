@@ -415,11 +415,9 @@ class SdkSelectionTests(unittest.TestCase):
             },
             workflows={"solo": WorkflowConfig(id="solo", sequence=["ag"])},
         )
-        # validate_start_options infers mode from the cli args...
+        # SDK normalization never imports the CLI posture from argv.
         normalized = validate_start_options(config, "solo")
-        self.assertEqual(normalized["antigravity_options"].get("mode"), "accept-edits")
-        # ...but the backend validator keys off the explicit request (none here),
-        # so sdk selection is not blocked.
+        self.assertNotIn("mode", normalized["antigravity_options"])
         selection = validate_start_backends(config, "solo", request_backend=None, antigravity_options={})
         self.assertEqual(selection.agent_backends, {"ag": "sdk"})
 

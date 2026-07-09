@@ -10,8 +10,10 @@ Add `xai` as a fourth real provider `type`, with two backends:
 This is split out of [Stage 5.1](stage-5.1-first-class-sdk-backends.md) on
 purpose. Stage 5.1 only adds a *second backend* (`sdk`) to providers that already
 exist (`claude`, `codex`, `antigravity`). xAI is different in kind: it adds a new
-`type`, which fans out across ~a dozen central lists and files, and two of those
-edits fail **silently** if missed (see "Central lists and files to touch"). Doing
+provider request bucket and provider source, which still fan out across several
+API/config/event files even though backend option schemas are now self-owned.
+Two source-attribution edits fail **silently** if missed (see "Central lists and
+files to touch"). Doing
 it separately keeps 5.1 focused and low-risk, and lets the xAI CLI parser wait on
 a captured tool-using fixture without blocking the three SDK backends.
 
@@ -280,11 +282,12 @@ first.
    + the mock-source fallback to `codex`).
 3. `config.py` — `SUBPROCESS_AGENT_TYPES` (drives `AGENT_TYPES`, config type
    validation).
-4. `options.py` — `XAI_OPTION_FIELDS` + `OPTION_FIELDS`; `SETTINGS_DISPLAY_FIELDS`;
-   `apply_agent_options` + `_apply_xai_options`; `_infer_default` cases;
-   `_insert_before_print_prompt` sentinel (`--single`); `describe_options`
-   (`xai_options` key); `validate_start_options` signature; a
-   `_reject_unsupported_xai_options` for the CLI-only fields on the sdk backend.
+4. Backend option declarations — add the xAI CLI schema/normalizer with its CLI
+   backend and the SDK schema/normalizer with `xai_sdk.py`. `options.py` needs
+   the new public `xai_options` compatibility bucket and any xAI CLI argv
+   rendering that has not yet moved into the CLI backend, but must not recreate
+   a central provider/backend support table. Extend the print-prompt sentinel
+   with `--single`.
 5. `backends/cli.py` — register `CliBackend("xai", parse_xai_line,
    probe_binary="grok", credentials=xai_credentials, block_on_unavailable=...)`.
 6. `backends/xai_sdk.py` — new module; register in `backends/__init__`. **Rename
@@ -330,8 +333,9 @@ Start validation must reject:
 1. Add `"xai"` to `VALID_SOURCES` and `PROVIDER_SOURCES` **first** (the two
    silent-fail lists), with a test that asserts their membership.
 2. Add `"xai"` to `SUBPROCESS_AGENT_TYPES`; confirm config type validation.
-3. Add `XAI_OPTION_FIELDS` + wire `OPTION_FIELDS`, `SETTINGS_DISPLAY_FIELDS`,
-   `_apply_xai_options`, `_infer_default`, and `describe_options`.
+3. Add backend-owned xAI `OptionSpec` declarations and normalization, the public
+   `xai_options` bucket, and explicit xAI CLI argv rendering. Discovery must
+   come automatically from the registered backend schemas.
 4. Thread `xai_options` end to end (api_schema `WIRE_FIELDS`, MCP inputSchema,
    daemon dataclass, referee, cli) in **one commit** so the contract test passes.
 5. Add `parse_xai_line` (tolerant NDJSON) + capture streaming-json fixtures
@@ -339,7 +343,8 @@ Start validation must reject:
 6. Register the Grok `CliBackend` + `xai_credentials()` health probe.
 7. Add `XaiSdkBackend` (message-only) with fake-module tests; rename the SDK
    factory functions to avoid the import shadow.
-8. Add the CLI-only-option rejection path for the xai sdk backend.
+8. Declare CLI-only options only on the xAI CLI backend; generic validation must
+   reject them automatically when the SDK backend is selected.
 9. Add `xai` to `pyproject.toml` dependencies.
 10. Add `solo-xai` to the repo project config with `enabled = true`.
 11. Update `describe_options`, status, list, and session settings snapshots.

@@ -183,7 +183,8 @@ def configured_runner(
         raise ConfigError(
             f"agents.{agent.id}.backend {resolved!r} is not registered for type {agent.type!r}"
         ) from exc
-    return backend.create_runner(agent, verbose, dict(options or {}))
+    normalized = dict(backend.normalize_options(agent, dict(options or {})))
+    return backend.create_runner(agent, verbose, normalized)
 
 
 def _resolve_run_dir(workdir: Path, configured_cwd: Optional[str]) -> Path:

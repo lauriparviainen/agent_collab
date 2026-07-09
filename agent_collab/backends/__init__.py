@@ -25,9 +25,11 @@ from .base import (
     HEALTH_UNAVAILABLE,
     HEALTH_UNKNOWN,
     AgentBackend,
+    BackendOptionError,
     BackendCapabilities,
     BackendHealth,
     BackendUnavailable,
+    OptionSpec,
 )
 from .health import HealthCache
 
@@ -40,7 +42,28 @@ HEALTH = HealthCache()
 
 
 def register(backend: AgentBackend) -> None:
+    _validate_backend_contract(backend)
     _REGISTRY[(backend.agent_type, backend.id)] = backend
+
+
+def _validate_backend_contract(backend: AgentBackend) -> None:
+    agent_type = getattr(backend, "agent_type", None)
+    backend_id = getattr(backend, "id", None)
+    if not isinstance(agent_type, str) or not agent_type:
+        raise TypeError("backend.agent_type must be a non-empty string")
+    if not isinstance(backend_id, str) or not backend_id:
+        raise TypeError("backend.id must be a non-empty string")
+    if not isinstance(getattr(backend, "capabilities", None), BackendCapabilities):
+        raise TypeError(f"backend ({agent_type}, {backend_id}) must declare BackendCapabilities")
+    for method in (
+        "probe",
+        "option_schema",
+        "normalize_options",
+        "settings_summary",
+        "create_runner",
+    ):
+        if not callable(getattr(backend, method, None)):
+            raise TypeError(f"backend ({agent_type}, {backend_id}) is missing required method {method}()")
 
 
 def unregister(agent_type: str, backend_id: str) -> None:

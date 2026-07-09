@@ -172,6 +172,15 @@ class _GatingBackend:
     def probe(self):  # pragma: no cover - health is injected in gating tests
         return BackendHealth()
 
+    def option_schema(self, agent):
+        return {}
+
+    def normalize_options(self, agent, requested):
+        return dict(requested)
+
+    def settings_summary(self, agent, options):
+        return {"backend": self.id, "options": dict(options)}
+
     def create_runner(self, agent, verbose, options):  # pragma: no cover
         raise NotImplementedError
 

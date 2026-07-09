@@ -14,8 +14,8 @@ from .events import Event, utc_timestamp
 from .options import (
     build_session_settings,
     describe_options,
+    normalize_start_options,
     validate_start_backends,
-    validate_start_options,
 )
 from .paths import GlobalDataPaths
 from .referee import EventAppender, Referee, RefereeConfig, RefereeInput
@@ -54,6 +54,9 @@ class StartSessionRequest:
     # Resolved {agent_id: backend_id}, computed once during start validation and
     # carried into execution; not a user input.
     resolved_backends: Optional[Dict[str, str]] = None
+    # Exact backend-normalized options by agent id. Provider buckets remain on
+    # the request for wire compatibility; runners consume this derived map.
+    agent_options: Optional[Dict[str, Dict[str, Any]]] = None
     # The exact validated config snapshot from start, carried into execution so
     # the runner uses the same agents/types/backends the start response
     # advertised — never a possibly-divergent reload. Not a user input.
@@ -217,23 +220,9 @@ class SessionManager:
             else self.default_log_dir or GlobalDataPaths.resolve().session_dir
         )
         collab_config = load_config(workdir)
-        # The mode-on-sdk rejection keys off what the user *explicitly* requested,
-        # not defaults inferred from an agent's cli args (the built-in antigravity
-        # agent carries `--mode accept-edits` for the cli path, which must not
-        # block selecting the sdk backend).
         requested_antigravity_options = request.antigravity_options
         requested_claude_options = request.claude_options
         requested_codex_options = request.codex_options
-        normalized_options = validate_start_options(
-            collab_config,
-            request.workflow,
-            request.codex_options,
-            request.claude_options,
-            request.antigravity_options,
-        )
-        request.codex_options = normalized_options["codex_options"]
-        request.claude_options = normalized_options["claude_options"]
-        request.antigravity_options = normalized_options["antigravity_options"]
         selection = validate_start_backends(
             collab_config,
             request.workflow,
@@ -243,6 +232,19 @@ class SessionManager:
             requested_codex_options,
             health=None if (request.mock or request.dry_run) else self._backend_health,
         )
+        normalized = normalize_start_options(
+            collab_config,
+            request.workflow,
+            requested_codex_options,
+            requested_claude_options,
+            requested_antigravity_options,
+            agent_backends=selection.agent_backends,
+        )
+        normalized_options = normalized.provider_options
+        request.codex_options = normalized_options["codex_options"]
+        request.claude_options = normalized_options["claude_options"]
+        request.antigravity_options = normalized_options["antigravity_options"]
+        request.agent_options = dict(normalized.agent_options)
         request.resolved_backends = dict(selection.agent_backends)
         request.collab_config = collab_config
         request.interactive = bool(request.interactive)
@@ -252,6 +254,7 @@ class SessionManager:
             request.workflow,
             normalized_options,
             agent_backends=selection.agent_backends,
+            agent_options=normalized.agent_options,
             warnings=selection.warnings,
             interactive=request.interactive,
             interactive_idle_timeout=request.interactive_idle_timeout,
@@ -424,6 +427,7 @@ class SessionManager:
             codex_options=dict(request.codex_options or {}),
             claude_options=dict(request.claude_options or {}),
             antigravity_options=dict(request.antigravity_options or {}),
+            agent_options={key: dict(value) for key, value in (request.agent_options or {}).items()},
             agent_backends=dict(request.resolved_backends or {}),
             interactive=bool(request.interactive),
             interactive_idle_timeout=float(request.interactive_idle_timeout),
@@ -472,11 +476,17 @@ class SessionManager:
         agent_id = raw.get("agent_id")
         if not isinstance(session_id, str) or not session_id or not isinstance(agent_id, str) or not agent_id:
             return
-        entry: Dict[str, Any] = {}
-        resolved = managed.request.resolved_backends if managed.request else None
+        request = managed.request
+        resolved = request.resolved_backends if request else None
+        collab_config = request.collab_config if request else None
         backend_id = resolved.get(agent_id) if resolved else None
-        if backend_id:
-            entry["backend"] = backend_id
+        agent = collab_config.agents.get(agent_id) if collab_config else None
+        # Session identity is accepted only from a selected agent and its
+        # configured provider source. Never let a malformed backend event create
+        # arbitrary state entries or impersonate another provider.
+        if not backend_id or agent is None or event.source != agent.type:
+            return
+        entry: Dict[str, Any] = {"backend": backend_id}
         entry["provider_session_id"] = session_id
         kind = raw.get("provider_session_kind")
         if isinstance(kind, str) and kind:

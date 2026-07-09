@@ -28,12 +28,19 @@ turn's real error is the authority. The mapper is exercised by fake-module tests
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Mapping, Optional
 
 from ..config import AgentConfig
 from ..events import Event, compact_json
 from ..runners import AgentRunner
-from .base import BackendCapabilities, BackendHealth, BackendUnavailable
+from .base import (
+    BackendCapabilities,
+    BackendHealth,
+    BackendOptionError,
+    BackendUnavailable,
+    OptionSpec,
+    normalize_declared_options,
+)
 from .health import anthropic_api_key_credentials, probe_sdk_backend
 from .sdk_common import (
     classify_tool_kind,
@@ -46,6 +53,19 @@ from .sdk_common import (
 MODULE_NAME = "claude_agent_sdk"
 PACKAGE_NAME = "claude-agent-sdk"
 INSTALL_HINT = "install the Claude Agent SDK: pip install claude-agent-sdk"
+
+CLAUDE_SDK_OPTION_SCHEMA = {
+    "model": OptionSpec("string"),
+    "permission_mode": OptionSpec(
+        "string",
+        allowed=("default", "acceptEdits", "bypassPermissions"),
+    ),
+    "thinking_level": OptionSpec(
+        "string",
+        allowed=("low", "medium", "high", "xhigh", "max"),
+    ),
+    "thinking_budget_tokens": OptionSpec("integer", minimum=0),
+}
 
 # A factory opens the SDK message stream for one turn. Injectable so tests drive
 # the runner with a fake message iterator without installing the SDK or calling a
@@ -75,11 +95,32 @@ class ClaudeSdkBackend:
             extra_hint=INSTALL_HINT,
         )
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Dict[str, Any]) -> AgentRunner:
+    def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
+        return dict(CLAUDE_SDK_OPTION_SCHEMA)
+
+    def normalize_options(
+        self,
+        agent: AgentConfig,
+        requested: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        explicit = set(requested)
+        if {"thinking_level", "thinking_budget_tokens"}.issubset(explicit):
+            raise BackendOptionError(
+                "thinking_level",
+                "conflicts with thinking_budget_tokens; use thinking_level or a raw token budget, not both",
+            )
+        normalized = normalize_declared_options(agent, requested, self.option_schema(agent))
+        if "thinking_budget_tokens" in explicit:
+            normalized.pop("thinking_level", None)
+        elif "thinking_level" in explicit:
+            normalized.pop("thinking_budget_tokens", None)
+        return normalized
+
+    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
         factory = self._message_stream or _default_message_stream
         return ClaudeSdkRunner(agent, verbose, dict(options or {}), message_stream=factory)
 
-    def settings_summary(self, agent: AgentConfig, options: Dict[str, Any]) -> Dict[str, Any]:
+    def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
         summary: Dict[str, Any] = {"backend": "sdk", "package": PACKAGE_NAME}
         version = package_version(PACKAGE_NAME)
         if version:

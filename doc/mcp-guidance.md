@@ -51,13 +51,16 @@ Call `agent_collab_describe_options` (with the session's required `workdir`) bef
 passing non-default `codex_options` or `claude_options`. It returns:
 
 - available workflows and their agent types,
-- the accepted option fields per agent type, with allowed values and
+- registered execution backends with health, capabilities, and an effective
+  `option_schema` for each backend,
+- the union of accepted option fields per agent type, with allowed values and
   configured defaults (for example `claude_options.model`,
   `claude_options.thinking_level`, `codex_options.sandbox`,
   `codex_options.approval_policy`).
 
-Only pass options for agent types that the chosen workflow actually uses;
-anything else is rejected. Omit options you do not need — configured
+Only pass options for agent types that the chosen workflow actually uses and
+choose fields declared by every selected backend of that provider; anything
+else is rejected. Omit options you do not need — backend-specific configured
 defaults are applied automatically and echoed back in the start response.
 
 ## Start
@@ -81,6 +84,8 @@ it before watching:
 - `workflow` and `settings.workflow.sequence` — the effective turn order,
 - `settings.agents.<id>` — the effective typed options per agent (model,
   thinking level, permission/sandbox settings where applicable),
+- `settings.agents.<id>.backend_summary` — the selected backend's own summary
+  of the exact normalized options passed to its runner,
 - `settings.agents.<id>.command_preview` — the exact subprocess command
   prefix, without the task prompt,
 - `jsonl_path` / `markdown_path` — where logs are written.

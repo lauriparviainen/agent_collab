@@ -10,16 +10,63 @@ key them independently.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from ..config import AgentConfig, ConfigError
 from ..events import Event, parse_antigravity_line, parse_claude_line, parse_codex_line
 from ..options import build_cli_command
 from ..runners import AgentRunner, SubprocessRunner
-from .base import BackendCapabilities, BackendHealth
+from .base import (
+    BackendCapabilities,
+    BackendHealth,
+    BackendOptionError,
+    OptionSpec,
+    normalize_declared_options,
+)
 from .health import antigravity_credentials, default_version_runner, probe_cli_backend
 
 Parser = Callable[[str, bool], Optional[Event]]
+
+_CODEX_LEVELS = ("minimal", "low", "medium", "high", "xhigh")
+_CLAUDE_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+CLI_OPTION_SCHEMAS: Dict[str, Dict[str, OptionSpec]] = {
+    "claude": {
+        "model": OptionSpec("string", inferred=True),
+        "permission_mode": OptionSpec(
+            "string",
+            allowed=("default", "acceptEdits", "bypassPermissions"),
+            inferred=True,
+        ),
+        "thinking_level": OptionSpec("string", allowed=_CLAUDE_LEVELS, inferred=True),
+        "thinking_budget_tokens": OptionSpec("integer", minimum=0, inferred=True),
+    },
+    "codex": {
+        "model": OptionSpec("string", inferred=True),
+        "profile": OptionSpec("string", inferred=True),
+        "thinking_level": OptionSpec("string", allowed=_CODEX_LEVELS, inferred=True),
+        "reasoning_effort": OptionSpec("string", allowed=_CODEX_LEVELS, inferred=True),
+        "sandbox": OptionSpec(
+            "string",
+            allowed=("read-only", "workspace-write", "danger-full-access"),
+            inferred=True,
+        ),
+        "approval_policy": OptionSpec(
+            "string",
+            allowed=("untrusted", "on-failure", "on-request", "never"),
+            inferred=True,
+        ),
+        "search": OptionSpec("boolean", allowed=(True, False), inferred=True),
+    },
+    "antigravity": {
+        "model": OptionSpec("string", inferred=True),
+        "mode": OptionSpec(
+            "string",
+            allowed=("default", "accept-edits", "plan"),
+            inferred=True,
+        ),
+    },
+}
 
 
 class CliBackend:
@@ -59,11 +106,36 @@ class CliBackend:
             credentials=self._credentials,
         )
 
+    def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
+        return dict(CLI_OPTION_SCHEMAS[self.agent_type])
+
+    def normalize_options(
+        self,
+        agent: AgentConfig,
+        requested: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        schema = self.option_schema(agent)
+        inferred = {
+            field: value
+            for field in schema
+            for value in [_infer_cli_option(agent, field)]
+            if value is not None
+        }
+        normalized = normalize_declared_options(agent, requested, schema, inferred=inferred)
+        return _normalize_provider_aliases(self.agent_type, normalized, set(requested))
+
+    def settings_summary(
+        self,
+        agent: AgentConfig,
+        options: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        return {"backend": "cli", "options": dict(options)}
+
     def create_runner(
         self,
         agent: AgentConfig,
         verbose: bool,
-        options: Dict[str, Any],
+        options: Mapping[str, Any],
     ) -> AgentRunner:
         if not agent.command:
             raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
@@ -77,6 +149,90 @@ class CliBackend:
             cwd=agent.cwd,
             agent=agent,
         )
+
+
+def _normalize_provider_aliases(
+    agent_type: str,
+    options: Dict[str, Any],
+    explicit: set,
+) -> Dict[str, Any]:
+    if agent_type == "codex":
+        if {"thinking_level", "reasoning_effort"}.issubset(explicit):
+            if options.get("thinking_level") != options.get("reasoning_effort"):
+                raise BackendOptionError(
+                    "thinking_level",
+                    "conflicts with reasoning_effort; use one thinking level field or provide matching values",
+                )
+        if "thinking_level" in explicit:
+            options["reasoning_effort"] = options["thinking_level"]
+        elif "reasoning_effort" in explicit:
+            options["thinking_level"] = options["reasoning_effort"]
+        elif "reasoning_effort" in options:
+            options["thinking_level"] = options["reasoning_effort"]
+        elif "thinking_level" in options:
+            options["reasoning_effort"] = options["thinking_level"]
+    elif agent_type == "claude":
+        if {"thinking_level", "thinking_budget_tokens"}.issubset(explicit):
+            raise BackendOptionError(
+                "thinking_level",
+                "conflicts with thinking_budget_tokens; use thinking_level or a raw token budget, not both",
+            )
+        if "thinking_budget_tokens" in explicit:
+            options.pop("thinking_level", None)
+        elif "thinking_level" in explicit:
+            options.pop("thinking_budget_tokens", None)
+    return options
+
+
+def _infer_cli_option(agent: AgentConfig, field: str) -> Optional[Any]:
+    args = list(agent.args)
+    if field == "model":
+        return _flag_value(args, "--model")
+    if field == "profile":
+        return _flag_value(args, "--profile")
+    if field == "sandbox":
+        return _flag_value(args, "--sandbox")
+    if field == "approval_policy":
+        return _flag_value(args, "--approval-policy")
+    if field == "thinking_level":
+        if agent.type == "codex":
+            return _config_value(args, "model_reasoning_effort") or _flag_value(args, "--reasoning-effort")
+        if agent.type == "claude":
+            return _flag_value(args, "--effort")
+    if field == "reasoning_effort":
+        return _config_value(args, "model_reasoning_effort") or _flag_value(args, "--reasoning-effort")
+    if field == "permission_mode":
+        return _flag_value(args, "--permission-mode")
+    if field == "mode":
+        return _flag_value(args, "--mode")
+    if field == "thinking_budget_tokens":
+        value = _flag_value(args, "--thinking-budget-tokens")
+        return int(value) if value is not None and value.isdigit() else value
+    if field == "search":
+        return True if "--search" in args else None
+    return None
+
+
+def _flag_value(args: Sequence[str], flag: str) -> Optional[str]:
+    prefix = f"{flag}="
+    for index, item in enumerate(args):
+        if item == flag and index + 1 < len(args):
+            return args[index + 1]
+        if item.startswith(prefix):
+            return item[len(prefix) :]
+    return None
+
+
+def _config_value(args: Sequence[str], key: str) -> Optional[str]:
+    for index, item in enumerate(args):
+        value: Optional[str] = None
+        if item in {"-c", "--config"} and index + 1 < len(args):
+            value = args[index + 1]
+        elif item.startswith("--config="):
+            value = item[len("--config=") :]
+        if value is not None and value.split("=", 1)[0].strip() == key and "=" in value:
+            return value.split("=", 1)[1].strip("\"'")
+    return None
 
 
 def build_cli_backends() -> List[CliBackend]:

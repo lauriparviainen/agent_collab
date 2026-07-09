@@ -38,18 +38,28 @@ from __future__ import annotations
 import enum
 import inspect
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Iterable, Iterator, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
 
 from ..config import AgentConfig
 from ..events import Event, compact_json
 from ..runners import AgentRunner
-from .base import BackendCapabilities, BackendHealth, BackendUnavailable
+from .base import (
+    BackendCapabilities,
+    BackendHealth,
+    BackendUnavailable,
+    OptionSpec,
+    normalize_declared_options,
+)
 from .health import gemini_api_key_credentials, probe_sdk_backend
 from .sdk_common import classify_tool_kind, package_version, provider_session_event, sdk_error_event
 
 MODULE_NAME = "google.antigravity"
 PACKAGE_NAME = "google-antigravity"
 INSTALL_HINT = "install the Antigravity SDK: pip install google-antigravity"
+
+ANTIGRAVITY_SDK_OPTION_SCHEMA = {
+    "model": OptionSpec("string"),
+}
 
 # A factory builds the SDK agent context manager for one turn. Injectable so
 # tests drive the runner with a fake without installing the SDK or calling a model.
@@ -79,11 +89,21 @@ class AntigravitySdkBackend:
             extra_hint=INSTALL_HINT,
         )
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Dict[str, Any]) -> AgentRunner:
+    def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
+        return dict(ANTIGRAVITY_SDK_OPTION_SCHEMA)
+
+    def normalize_options(
+        self,
+        agent: AgentConfig,
+        requested: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        return normalize_declared_options(agent, requested, self.option_schema(agent))
+
+    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
         factory = self._agent_factory or _default_agent_factory
         return AntigravitySdkRunner(agent, verbose, dict(options or {}), agent_factory=factory)
 
-    def settings_summary(self, agent: AgentConfig, options: Dict[str, Any]) -> Dict[str, Any]:
+    def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
         # The sdk backend has no command_preview; it summarises itself instead.
         summary: Dict[str, Any] = {"backend": "sdk", "package": PACKAGE_NAME}
         version = package_version(PACKAGE_NAME)

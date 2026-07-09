@@ -299,6 +299,7 @@ NON_USER_START_FIELDS: Tuple[str, ...] = (
     "log_dir",
     "session_id",
     "resolved_backends",
+    "agent_options",
     "collab_config",
 )
 

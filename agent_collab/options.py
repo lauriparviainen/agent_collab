@@ -1,67 +1,23 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from .config import AgentConfig, CollaborationConfig, load_config, validate_workflow
+from .backend_contract import BackendOptionError, OPTION_UNSET, OptionSpec
 
 
-CODEX_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"]
-CLAUDE_THINKING_LEVELS = ["low", "medium", "high", "xhigh", "max"]
+PROVIDER_OPTION_TYPES = ("codex", "claude", "antigravity")
 
-CODEX_OPTION_FIELDS = {
-    "model": {"type": "string"},
-    "profile": {"type": "string"},
-    "thinking_level": {"type": "string", "allowed": CODEX_THINKING_LEVELS},
-    "reasoning_effort": {"type": "string", "allowed": CODEX_THINKING_LEVELS},
-    "sandbox": {"type": "string", "allowed": ["read-only", "workspace-write", "danger-full-access"]},
-    "approval_policy": {"type": "string", "allowed": ["untrusted", "on-failure", "on-request", "never"]},
-    "search": {"type": "boolean", "allowed": [True, False]},
-}
 
-CLAUDE_OPTION_FIELDS = {
-    "model": {"type": "string"},
-    "permission_mode": {"type": "string", "allowed": ["default", "acceptEdits", "bypassPermissions"]},
-    "thinking_level": {"type": "string", "allowed": CLAUDE_THINKING_LEVELS},
-    "thinking_budget_tokens": {"type": "integer", "min": 0},
-}
+@dataclass(frozen=True)
+class NormalizedStartOptions:
+    """Provider-compatible buckets plus exact backend-normalized agent values."""
 
-# `agy --mode` accepts these; `default` is the interactive request-review posture.
-ANTIGRAVITY_MODES = ["default", "accept-edits", "plan"]
-ANTIGRAVITY_OPTION_FIELDS = {
-    "model": {"type": "string"},
-    "mode": {"type": "string", "allowed": ANTIGRAVITY_MODES},
-}
-
-OPTION_FIELDS = {
-    "codex": CODEX_OPTION_FIELDS,
-    "claude": CLAUDE_OPTION_FIELDS,
-    "antigravity": ANTIGRAVITY_OPTION_FIELDS,
-}
-
-# Which typed options each backend actually honours, per provider. An option the
-# caller *explicitly* requests that is outside its resolved backend's set is
-# rejected at start with a field path — so a cli-only option (no SDK mapping)
-# fails on `sdk`, and any sdk-only option fails on `cli`. Values inferred from an
-# agent's cli args/defaults are never checked here (only explicit request keys),
-# so selecting `sdk` on the built-in antigravity agent (whose args carry
-# `--mode`) is not blocked. Keep this in lockstep with each backend's option
-# mapping (`_map_sdk_options` / `_apply_*_options`).
-BACKEND_OPTION_SUPPORT: Dict[str, Dict[str, Set[str]]] = {
-    "claude": {
-        "cli": {"model", "permission_mode", "thinking_level", "thinking_budget_tokens"},
-        "sdk": {"model", "permission_mode", "thinking_level", "thinking_budget_tokens"},
-    },
-    "codex": {
-        "cli": {"model", "profile", "thinking_level", "reasoning_effort", "sandbox", "approval_policy", "search"},
-        "sdk": {"model", "thinking_level", "reasoning_effort", "sandbox"},
-    },
-    "antigravity": {
-        "cli": {"model", "mode"},
-        "sdk": {"model"},
-    },
-}
+    provider_options: Dict[str, Dict[str, Any]]
+    agent_options: Dict[str, Dict[str, Any]]
 
 class StartOptionsError(ValueError):
     code = "invalid_start_options"
@@ -89,9 +45,40 @@ def validate_start_options(
     codex_options: Any = None,
     claude_options: Any = None,
     antigravity_options: Any = None,
+    *,
+    agent_backends: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
+    """Compatibility wrapper returning the normalized provider-wide buckets."""
+
+    return normalize_start_options(
+        config,
+        workflow_id,
+        codex_options,
+        claude_options,
+        antigravity_options,
+        agent_backends=agent_backends,
+    ).provider_options
+
+
+def normalize_start_options(
+    config: CollaborationConfig,
+    workflow_id: str,
+    codex_options: Any = None,
+    claude_options: Any = None,
+    antigravity_options: Any = None,
+    *,
+    agent_backends: Optional[Mapping[str, str]] = None,
+) -> NormalizedStartOptions:
+    """Validate provider buckets through selected backend-owned contracts.
+
+    Requests remain provider-wide for API compatibility. Each selected agent is
+    validated and normalized independently so CLI inference never leaks into an
+    SDK agent and two agents of one provider may safely use different backends.
+    """
+
+    from . import backends as backend_registry
+
     errors: List[Dict[str, str]] = []
-    normalized: Dict[str, Dict[str, Any]] = {}
     option_payloads = {
         "codex": _expect_mapping(codex_options, "codex_options", errors),
         "claude": _expect_mapping(claude_options, "claude_options", errors),
@@ -105,37 +92,100 @@ def validate_start_options(
     workflow_types = _workflow_agent_types(config, workflow.sequence)
 
     for agent_type, payload in option_payloads.items():
-        path = f"{agent_type}_options"
         if payload and agent_type not in workflow_types:
             errors.append(
                 {
-                    "path": path,
+                    "path": f"{agent_type}_options",
                     "message": (
                         f"does not apply to workflow {workflow_id!r}; "
                         f"workflow uses: {', '.join(sorted(workflow_types))}"
                     ),
                 }
             )
-            continue
-        if agent_type in workflow_types:
-            agent_ids = [agent_id for agent_id in workflow.sequence if config.agents[agent_id].type == agent_type]
-            merged_payload = _default_options_for_agent_type(config, agent_type, agent_ids)
-            explicit_keys = set(payload)
-            merged_payload.update(payload)
-            _resolve_thinking_level(agent_type, merged_payload, explicit_keys, path, errors)
-            _validate_type_options(config, agent_type, agent_ids, merged_payload, path, errors)
-            normalized[agent_type] = merged_payload
-        elif payload:
-            merged_payload = dict(payload)
-            _resolve_thinking_level(agent_type, merged_payload, set(payload), path, errors)
-            _validate_type_options(config, agent_type, [], merged_payload, path, errors)
-            normalized[agent_type] = merged_payload
-        else:
-            normalized[agent_type] = {}
-
     if errors:
         raise StartOptionsError(errors)
-    return {f"{agent_type}_options": dict(normalized.get(agent_type, {})) for agent_type in option_payloads}
+
+    resolved = dict(agent_backends or {})
+    agent_options: Dict[str, Dict[str, Any]] = {}
+    seen_agents: Set[str] = set()
+    for agent_id in workflow.sequence:
+        if agent_id in seen_agents:
+            continue
+        seen_agents.add(agent_id)
+        agent = config.agents[agent_id]
+        if agent.type == "mock":
+            continue
+        backend_id = resolved.get(agent_id) or backend_registry.resolve_backend_id(agent)
+        if not backend_registry.is_registered(agent.type, backend_id):
+            errors.append(
+                {
+                    "path": "backend",
+                    "message": f"backend {backend_id!r} is not registered for agent {agent_id!r}",
+                }
+            )
+            continue
+        backend = backend_registry.get_backend(agent.type, backend_id)
+        path = f"{agent.type}_options"
+        schema = _effective_backend_schema(backend, agent, path, errors)
+        requested = dict(option_payloads.get(agent.type) or {})
+        before = len(errors)
+        _validate_backend_values(
+            requested,
+            schema,
+            path,
+            errors,
+            agent_id=agent_id,
+            backend_id=backend_id,
+            explicit=True,
+        )
+        if len(errors) != before:
+            continue
+        try:
+            normalized = dict(backend.normalize_options(agent, requested))
+        except BackendOptionError as exc:
+            errors.append({"path": f"{path}.{exc.field}" if exc.field else path, "message": exc.message})
+            continue
+        except Exception as exc:
+            errors.append(
+                {
+                    "path": path,
+                    "message": f"backend {backend_id!r} for agent {agent_id!r} could not normalize options: {exc}",
+                }
+            )
+            continue
+        undeclared = sorted(set(normalized) - set(schema))
+        for key in undeclared:
+            errors.append(
+                {
+                    "path": f"{path}.{key}",
+                    "message": (
+                        f"backend {backend_id!r} for agent {agent_id!r} returned an undeclared option"
+                    ),
+                }
+            )
+        _validate_backend_values(
+            normalized,
+            schema,
+            path,
+            errors,
+            agent_id=agent_id,
+            backend_id=backend_id,
+            explicit=False,
+        )
+        agent_options[agent_id] = normalized
+
+    if errors:
+        raise StartOptionsError(_dedupe_details(errors))
+
+    provider_options: Dict[str, Dict[str, Any]] = {}
+    for agent_type in PROVIDER_OPTION_TYPES:
+        values = [
+            agent_options[agent_id]
+            for agent_id in seen_agents
+            if agent_id in agent_options and config.agents[agent_id].type == agent_type
+        ]
+        provider_options[f"{agent_type}_options"] = _common_options(values)
+    return NormalizedStartOptions(provider_options=provider_options, agent_options=agent_options)
 
 
 def validate_start_backends(
@@ -192,14 +242,14 @@ def validate_start_backends(
     if errors:
         raise StartOptionsError(errors)
 
-    requested_by_type = {
-        "antigravity": antigravity_options,
-        "claude": claude_options,
-        "codex": codex_options,
-    }
-    _reject_backend_unsupported_options(config, resolved, requested_by_type, errors)
-    if errors:
-        raise StartOptionsError(errors)
+    normalize_start_options(
+        config,
+        workflow_id,
+        codex_options=codex_options,
+        claude_options=claude_options,
+        antigravity_options=antigravity_options,
+        agent_backends=resolved,
+    )
 
     if health is not None:
         _gate_backend_health(config, resolved, health, errors, warnings)
@@ -217,41 +267,141 @@ class BackendSelection:
         self.warnings = list(warnings or [])
 
 
-def _reject_backend_unsupported_options(
-    config: CollaborationConfig,
-    resolved: Mapping[str, str],
-    requested_by_type: Mapping[str, Optional[Mapping[str, Any]]],
+def _effective_backend_schema(
+    backend: Any,
+    agent: AgentConfig,
+    path: str,
     errors: List[Dict[str, str]],
-    support: Optional[Mapping[str, Mapping[str, Set[str]]]] = None,
+) -> Dict[str, OptionSpec]:
+    try:
+        declared = backend.option_schema(agent)
+    except Exception as exc:
+        errors.append({"path": path, "message": f"backend option schema failed: {exc}"})
+        return {}
+    if not isinstance(declared, Mapping):
+        errors.append({"path": path, "message": "backend option schema must be an object"})
+        return {}
+
+    result: Dict[str, OptionSpec] = {}
+    for key, spec in declared.items():
+        if not isinstance(key, str) or not key or not isinstance(spec, OptionSpec):
+            errors.append(
+                {
+                    "path": path,
+                    "message": "backend option schema entries must be non-empty strings mapped to OptionSpec",
+                }
+            )
+            continue
+        configured = agent.options.get(key, {})
+        result[key] = _configured_option_spec(spec, configured, f"{path}.{key}", errors)
+    return result
+
+
+def _configured_option_spec(
+    spec: OptionSpec,
+    configured: Any,
+    path: str,
+    errors: List[Dict[str, str]],
+) -> OptionSpec:
+    if not isinstance(configured, Mapping):
+        return spec
+
+    allowed = spec.allowed
+    if "allowed" in configured:
+        candidate = configured["allowed"]
+        if not isinstance(candidate, list):
+            errors.append({"path": path, "message": "configured allowed must be a list"})
+        else:
+            candidate_values = tuple(candidate)
+            if allowed is not None and not set(candidate_values).issubset(set(allowed)):
+                errors.append(
+                    {
+                        "path": path,
+                        "message": "configured allowed values may narrow but not expand the backend schema",
+                    }
+                )
+            else:
+                allowed = candidate_values
+
+    minimum = spec.minimum
+    if "min" in configured:
+        candidate_min = configured["min"]
+        if not isinstance(candidate_min, (int, float)) or isinstance(candidate_min, bool):
+            errors.append({"path": path, "message": "configured min must be a number"})
+        elif minimum is not None and candidate_min < minimum:
+            errors.append({"path": path, "message": "configured min may not lower the backend minimum"})
+        else:
+            minimum = candidate_min
+
+    maximum = spec.maximum
+    if "max" in configured:
+        candidate_max = configured["max"]
+        if not isinstance(candidate_max, (int, float)) or isinstance(candidate_max, bool):
+            errors.append({"path": path, "message": "configured max must be a number"})
+        elif maximum is not None and candidate_max > maximum:
+            errors.append({"path": path, "message": "configured max may not raise the backend maximum"})
+        else:
+            maximum = candidate_max
+
+    default = deepcopy(configured["default"]) if "default" in configured else spec.default
+    return OptionSpec(
+        spec.type,
+        allowed=allowed,
+        minimum=minimum,
+        maximum=maximum,
+        default=default,
+        inferred=spec.inferred,
+    )
+
+
+def _validate_backend_values(
+    values: Mapping[str, Any],
+    schema: Mapping[str, OptionSpec],
+    path: str,
+    errors: List[Dict[str, str]],
+    *,
+    agent_id: str,
+    backend_id: str,
+    explicit: bool,
 ) -> None:
-    """Reject explicitly-requested options a resolved backend does not support.
-
-    Symmetric in both directions: a cli-only option (e.g. antigravity ``mode``,
-    claude ``thinking_level``, codex ``profile``) requested with the ``sdk``
-    backend is rejected, and any sdk-only option requested with a ``cli`` backend
-    is rejected — each with a ``<type>_options.<key>`` field path. Only keys the
-    caller *explicitly* passed are checked (never defaults inferred from cli args),
-    and a backend with no support entry (a custom backend) is left unchecked.
-    """
-
-    support = support if support is not None else BACKEND_OPTION_SUPPORT
-    seen: Set[str] = set()
-    for agent_id, backend_id in resolved.items():
-        agent_type = config.agents[agent_id].type
-        requested = requested_by_type.get(agent_type)
-        if not requested:
+    for key in sorted(values):
+        field_path = f"{path}.{key}"
+        spec = schema.get(key)
+        if spec is None:
+            expected = ", ".join(sorted(schema)) or "(none)"
+            if explicit:
+                message = (
+                    f"is not supported on backend {backend_id!r} for agent {agent_id!r}; "
+                    f"expected one of: {expected}"
+                )
+            else:
+                message = f"backend {backend_id!r} returned an undeclared option for agent {agent_id!r}"
+            errors.append({"path": field_path, "message": message})
             continue
-        supported = support.get(agent_type, {}).get(backend_id)
-        if supported is None:
+        _validate_field_value(values[key], field_path, spec.to_dict(), errors)
+
+
+def _common_options(values: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not values:
+        return {}
+    first = values[0]
+    return {
+        key: deepcopy(value)
+        for key, value in first.items()
+        if all(key in other and other[key] == value for other in values[1:])
+    }
+
+
+def _dedupe_details(details: Sequence[Mapping[str, str]]) -> List[Dict[str, str]]:
+    seen: Set[Tuple[str, str]] = set()
+    result: List[Dict[str, str]] = []
+    for detail in details:
+        item = (detail.get("path", ""), detail.get("message", ""))
+        if item in seen:
             continue
-        for key in sorted(requested):
-            if key in supported:
-                continue
-            path = f"{agent_type}_options.{key}"
-            if path in seen:
-                continue
-            seen.add(path)
-            errors.append({"path": path, "message": f"is not supported on the {backend_id!r} backend"})
+        seen.add(item)
+        result.append(dict(detail))
+    return result
 
 
 def _gate_backend_health(
@@ -409,10 +559,14 @@ def _describe_backends(config: CollaborationConfig, health: Any = None) -> Dict[
         for backend_id in ids:
             backend = backend_registry.get_backend(agent_type, backend_id)
             status = health(backend)
+            agent = _representative_agent(config, agent_type, backend_id)
             entries[backend_id] = {
                 "available": status.available,
                 "capabilities": backend.capabilities.to_dict(),
                 "health": status.to_dict(),
+                "option_schema": _option_object_schema(
+                    _effective_backend_schema(backend, agent, f"{agent_type}_options", [])
+                ),
             }
         result[agent_type] = {
             "default": backend_registry.DEFAULT_BACKEND,
@@ -422,29 +576,13 @@ def _describe_backends(config: CollaborationConfig, health: Any = None) -> Dict[
     return result
 
 
-def _effective_options_for_agent(agent: AgentConfig, options: Mapping[str, Any]) -> Dict[str, Any]:
-    effective_options = _default_options_for_agent(agent)
-    if agent.type == "codex" and "thinking_level" in options and "reasoning_effort" not in options:
-        effective_options.pop("reasoning_effort", None)
-    if agent.type == "claude" and "thinking_budget_tokens" in options and "thinking_level" not in options:
-        effective_options.pop("thinking_level", None)
-    effective_options.update(options)
-    return effective_options
-
-
-SETTINGS_DISPLAY_FIELDS = {
-    "claude": ("model", "thinking_level", "thinking_budget_tokens", "permission_mode"),
-    "codex": ("model", "profile", "thinking_level", "sandbox", "approval_policy", "search"),
-    "antigravity": ("model", "mode"),
-}
-
-
 def build_session_settings(
     config: CollaborationConfig,
     workflow_id: str,
     normalized_options: Mapping[str, Mapping[str, Any]],
     *,
     agent_backends: Optional[Mapping[str, str]] = None,
+    agent_options: Optional[Mapping[str, Mapping[str, Any]]] = None,
     warnings: Optional[Sequence[Mapping[str, str]]] = None,
     interactive: bool = False,
     interactive_idle_timeout: float = 600.0,
@@ -473,35 +611,23 @@ def build_session_settings(
             resolved.get(agent_id) or backend_registry.resolve_backend_id(agent)
         )
         options: Dict[str, Any] = {}
-        if agent.type in OPTION_FIELDS:
-            options = dict(normalized_options.get(f"{agent.type}_options") or {})
-            effective = _effective_options_for_agent(agent, options)
-            # Only advertise options the resolved backend actually honours, so
-            # settings never claim a cli-only option (e.g. an inferred `mode` or a
-            # default `thinking_level`) applied on an `sdk` backend that ignores
-            # it. A custom backend with no support entry advertises everything.
-            supported = BACKEND_OPTION_SUPPORT.get(agent.type, {}).get(backend_id) if backend_id else None
-            for field in SETTINGS_DISPLAY_FIELDS.get(agent.type, ()):
-                if supported is not None and field not in supported:
-                    continue
-                if field in effective:
-                    entry[field] = effective[field]
-            if (
-                (supported is None or "thinking_level" in supported)
-                and "thinking_level" not in entry
-                and "reasoning_effort" in effective
-            ):
-                entry["thinking_level"] = effective["reasoning_effort"]
+        if backend_id is not None:
+            backend = backend_registry.get_backend(agent.type, backend_id)
+            if agent_options is not None and agent_id in agent_options:
+                options = dict(agent_options[agent_id])
+            else:
+                requested = dict(normalized_options.get(f"{agent.type}_options") or {})
+                options = dict(backend.normalize_options(agent, requested))
+            entry.update(options)
         if backend_id is not None:
             entry["backend"] = backend_id
             entry["capabilities"] = backend_registry.capabilities_for(agent.type, backend_id).to_dict()
+            summary = _backend_settings_summary(agent, backend_id, options)
+            if summary is not None:
+                entry["backend_summary"] = summary
             if backend_id == "cli":
                 if agent.command:
                     entry["command_preview"] = build_cli_command(agent, options, workdir=workdir)
-            else:
-                summary = _backend_settings_summary(agent, backend_id, options)
-                if summary is not None:
-                    entry["backend_summary"] = summary
         agents[agent_id] = entry
     settings: Dict[str, Any] = {
         "workflow": {"name": workflow_id, "sequence": list(workflow.sequence)},
@@ -517,21 +643,21 @@ def build_session_settings(
 def _backend_settings_summary(
     agent: AgentConfig, backend_id: str, options: Mapping[str, Any]
 ) -> Optional[Dict[str, Any]]:
-    """Non-``cli`` backends describe themselves in place of a command preview."""
+    """Ask the selected backend to summarize the exact normalized options."""
 
     from . import backends as backend_registry
 
     if not backend_registry.is_registered(agent.type, backend_id):
         return None
     backend = backend_registry.get_backend(agent.type, backend_id)
-    describe = getattr(backend, "settings_summary", None)
-    if callable(describe):
-        return describe(agent, dict(options))
-    return None
+    return dict(backend.settings_summary(agent, dict(options)))
 
 
 def apply_agent_options(command: List[str], agent: AgentConfig, options: Mapping[str, Any]) -> List[str]:
-    effective_options = _effective_options_for_agent(agent, options)
+    from . import backends as backend_registry
+
+    backend = backend_registry.get_backend(agent.type, "cli")
+    effective_options = dict(backend.normalize_options(agent, options))
     if not effective_options:
         return list(command)
     if agent.type == "codex":
@@ -691,59 +817,6 @@ def _expect_mapping(value: Any, path: str, errors: List[Dict[str, str]]) -> Mapp
     return value
 
 
-def _validate_type_options(
-    config: CollaborationConfig,
-    agent_type: str,
-    agent_ids: Iterable[str],
-    payload: Mapping[str, Any],
-    path: str,
-    errors: List[Dict[str, str]],
-) -> None:
-    known_fields = OPTION_FIELDS[agent_type]
-    for key in sorted(payload):
-        field_path = f"{path}.{key}"
-        if key not in known_fields:
-            errors.append({"path": field_path, "message": f"unknown option; expected one of: {', '.join(sorted(known_fields))}"})
-            continue
-        _validate_field_value(payload[key], field_path, _effective_field_schema(config, agent_type, agent_ids, key), errors)
-
-
-def _resolve_thinking_level(
-    agent_type: str,
-    payload: Dict[str, Any],
-    explicit_keys: Set[str],
-    path: str,
-    errors: List[Dict[str, str]],
-) -> None:
-    if agent_type == "codex":
-        if "thinking_level" not in payload:
-            return
-        if "thinking_level" in explicit_keys and "reasoning_effort" in explicit_keys:
-            if payload.get("thinking_level") != payload.get("reasoning_effort"):
-                errors.append(
-                    {
-                        "path": f"{path}.thinking_level",
-                        "message": "conflicts with reasoning_effort; use one thinking level field or provide matching values",
-                    }
-                )
-            return
-        if "reasoning_effort" not in explicit_keys:
-            payload["reasoning_effort"] = payload["thinking_level"]
-        return
-
-    if agent_type == "claude":
-        if "thinking_level" in explicit_keys and "thinking_budget_tokens" in explicit_keys:
-            errors.append(
-                {
-                    "path": f"{path}.thinking_level",
-                    "message": "conflicts with thinking_budget_tokens; use thinking_level or a raw token budget, not both",
-                }
-            )
-            return
-        if "thinking_budget_tokens" in explicit_keys:
-            payload.pop("thinking_level", None)
-
-
 def _validate_field_value(value: Any, path: str, schema: Mapping[str, Any], errors: List[Dict[str, str]]) -> None:
     expected_type = schema.get("type")
     if expected_type == "string" and not isinstance(value, str):
@@ -769,128 +842,68 @@ def _validate_field_value(value: Any, path: str, schema: Mapping[str, Any], erro
         errors.append({"path": path, "message": f"must be <= {maximum}"})
 
 
-def _effective_field_schema(
-    config: CollaborationConfig,
-    agent_type: str,
-    agent_ids: Iterable[str],
-    field: str,
-) -> Dict[str, Any]:
-    schema = dict(OPTION_FIELDS[agent_type][field])
-    agents = [config.agents[agent_id] for agent_id in agent_ids]
-    if not agents:
-        agents = [agent for agent in config.agents.values() if agent.type == agent_type]
-    for agent in agents:
-        _merge_field_schema(schema, agent.options.get(field, {}))
-        default = _infer_default(agent, field)
-        if default is not None and "default" not in schema:
-            schema["default"] = default
-    return schema
-
-
-def _default_options_for_agent_type(
-    config: CollaborationConfig,
-    agent_type: str,
-    agent_ids: Iterable[str],
-) -> Dict[str, Any]:
-    defaults: Dict[str, Any] = {}
-    for field in sorted(OPTION_FIELDS[agent_type]):
-        schema = _effective_field_schema(config, agent_type, agent_ids, field)
-        if "default" in schema:
-            defaults[field] = deepcopy(schema["default"])
-    return defaults
-
-
-def _default_options_for_agent(agent: AgentConfig) -> Dict[str, Any]:
-    if agent.type not in OPTION_FIELDS:
-        return {}
-    defaults: Dict[str, Any] = {}
-    for field in sorted(OPTION_FIELDS[agent.type]):
-        schema = dict(OPTION_FIELDS[agent.type][field])
-        _merge_field_schema(schema, agent.options.get(field, {}))
-        if "default" not in schema:
-            inferred = _infer_default(agent, field)
-            if inferred is not None:
-                schema["default"] = inferred
-        if "default" in schema:
-            defaults[field] = deepcopy(schema["default"])
-    return defaults
-
-
 def _schema_for_agent_type(config: CollaborationConfig, agent_type: str) -> Dict[str, Any]:
+    from . import backends as backend_registry
+
     properties: Dict[str, Dict[str, Any]] = {}
-    for field in sorted(OPTION_FIELDS[agent_type]):
-        properties[field] = _effective_field_schema(config, agent_type, [], field)
+    for backend_id in backend_registry.registered_backends(agent_type):
+        backend = backend_registry.get_backend(agent_type, backend_id)
+        agent = _representative_agent(config, agent_type, backend_id)
+        schema = _effective_backend_schema(backend, agent, f"{agent_type}_options", [])
+        for field, spec in schema.items():
+            value = spec.to_dict()
+            if field not in properties:
+                properties[field] = value
+            else:
+                properties[field] = _union_field_schema(properties[field], value)
+    return {"type": "object", "additionalProperties": False, "properties": properties}
+
+
+def _representative_agent(
+    config: CollaborationConfig,
+    agent_type: str,
+    backend_id: str,
+) -> AgentConfig:
+    agents = sorted(
+        (agent for agent in config.agents.values() if agent.type == agent_type),
+        key=lambda agent: agent.id,
+    )
+    if agents:
+        return agents[0]
+    return AgentConfig(id=agent_type, type=agent_type, backend=backend_id)
+
+
+def _option_object_schema(schema: Mapping[str, OptionSpec]) -> Dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
-        "properties": properties,
+        "properties": {key: spec.to_dict() for key, spec in sorted(schema.items())},
     }
 
 
-def _merge_field_schema(schema: MutableMapping[str, Any], configured: Any) -> None:
-    if not isinstance(configured, Mapping):
-        return
-    for key in ("allowed", "min", "max", "default"):
-        if key in configured:
-            schema[key] = deepcopy(configured[key])
-
-
-def _infer_default(agent: AgentConfig, field: str) -> Optional[Any]:
-    args = list(agent.args)
-    if field == "model":
-        return _flag_value(args, "--model")
-    if field == "profile":
-        return _flag_value(args, "--profile")
-    if field == "sandbox":
-        return _flag_value(args, "--sandbox")
-    if field == "approval_policy":
-        return _flag_value(args, "--approval-policy")
-    if field == "thinking_level":
-        if agent.type == "codex":
-            return _config_value(args, "model_reasoning_effort") or _flag_value(args, "--reasoning-effort")
-        if agent.type == "claude":
-            return _flag_value(args, "--effort")
-    if field == "reasoning_effort":
-        return _config_value(args, "model_reasoning_effort") or _flag_value(args, "--reasoning-effort")
-    if field == "permission_mode":
-        return _flag_value(args, "--permission-mode")
-    if field == "mode":
-        return _flag_value(args, "--mode")
-    if field == "thinking_budget_tokens":
-        value = _flag_value(args, "--thinking-budget-tokens")
-        return int(value) if value is not None and value.isdigit() else value
-    if field == "search":
-        return True if "--search" in args else None
-    return None
-
-
-def _config_value(args: Sequence[str], key: str) -> Optional[str]:
-    for index, item in enumerate(args):
-        value: Optional[str] = None
-        if item in {"-c", "--config"} and index + 1 < len(args):
-            value = args[index + 1]
-        elif item.startswith("--config="):
-            value = item[len("--config=") :]
-        if value is not None and _config_item_key(value) == key:
-            raw_value = value.split("=", 1)[1]
-            return raw_value.strip("\"'")
-    return None
+def _union_field_schema(left: Mapping[str, Any], right: Mapping[str, Any]) -> Dict[str, Any]:
+    result = dict(left)
+    if left.get("type") != right.get("type"):
+        return {"type": "any"}
+    if "allowed" not in left or "allowed" not in right:
+        result.pop("allowed", None)
+    else:
+        result["allowed"] = list(dict.fromkeys(list(left["allowed"]) + list(right["allowed"])))
+    if "min" in left or "min" in right:
+        result["min"] = min(value for value in (left.get("min"), right.get("min")) if value is not None)
+    if "max" in left or "max" in right:
+        result["max"] = max(value for value in (left.get("max"), right.get("max")) if value is not None)
+    if left.get("default", OPTION_UNSET) != right.get("default", OPTION_UNSET):
+        result.pop("default", None)
+    if left.get("inferred") or right.get("inferred"):
+        result["inferred"] = True
+    return result
 
 
 def _config_item_key(item: str) -> Optional[str]:
     if "=" not in item:
         return None
     return item.split("=", 1)[0].strip()
-
-
-def _flag_value(args: Sequence[str], flag: str) -> Optional[str]:
-    prefix = f"{flag}="
-    for index, item in enumerate(args):
-        if item == flag and index + 1 < len(args):
-            return args[index + 1]
-        if item.startswith(prefix):
-            return item[len(prefix) :]
-    return None
 
 
 def _workflow_agent_types(config: CollaborationConfig, sequence: Iterable[str]) -> Set[str]:

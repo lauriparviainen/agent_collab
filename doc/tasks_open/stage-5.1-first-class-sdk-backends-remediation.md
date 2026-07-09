@@ -441,6 +441,28 @@ pass. Re-run Slice A's installed-wheel constructor tests and credentialed smokes
 to prove option normalization and runner selection still reach the repaired
 provider integrations.
 
+#### B5 verification record (2026-07-09)
+
+- The final hermetic suite passes under both Python 3.9 and Python 3.12: 346
+  tests, with seven explicitly gated SDK import/constructor/live tests skipped.
+- `tests/test_backend_contract.py` registers a test-only Claude backend with a
+  unique option and proves discovery, health, validation, normalization,
+  settings, runner selection/execution, mixed-backend rejection, and clean
+  unregister. It also checks every built-in backend's contract and rejects an
+  incomplete registration.
+- A mixed Claude workflow proves CLI `--effort` inference reaches only the CLI
+  agent and never the SDK agent. Exact per-agent normalized values are carried
+  through daemon/referee execution and settings.
+- The isolated mock smoke, `pip check`, all SDK imports, and all three installed
+  no-model constructor checks pass after the refactor.
+- The credentialed Claude turn passes again in a disposable empty workspace.
+- The credentialed Codex turn passes again with `gpt-5.4`, including a real
+  thread ID and final response, after routing through the configured local
+  Codex executable. The requested `gpt-5.6-sol` default remains blocked by the
+  unavailable newer Codex runtime asset described in A6.
+- Antigravity's live tool-call gate remains blocked by the missing
+  `GEMINI_API_KEY`; no repository data was exposed and no tool call was made.
+
 ## Shared session identity and capabilities rules
 
 - Retain uniform `provider_session_id` and `provider_session_kind` fields.

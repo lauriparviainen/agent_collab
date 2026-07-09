@@ -22,7 +22,6 @@ from agent_collab.backends.sdk_common import provider_session_event
 from agent_collab.events import Event
 from agent_collab.options import (
     StartOptionsError,
-    _reject_backend_unsupported_options,
     validate_start_backends,
 )
 
@@ -78,39 +77,6 @@ class BackendOptionSupportTests(unittest.TestCase):
         self.assertEqual(selection.agent_backends, {"claude": "cli"})
 
 
-class SdkOnlyOptionRejectionTests(unittest.TestCase):
-    """The rejection is symmetric. No provider ships an sdk-only option today, so
-    the sdk-only-on-cli direction is exercised via an injected support map — the
-    same code path that rejects cli-only options on sdk."""
-
-    def test_sdk_only_option_rejected_on_cli_backend(self):
-        config = _config("claude", backend="cli")
-        support = {"claude": {"cli": {"model"}, "sdk": {"model", "stream_partial"}}}
-        errors = []
-        _reject_backend_unsupported_options(
-            config,
-            {"claude": "cli"},
-            {"claude": {"stream_partial": True}},
-            errors,
-            support,
-        )
-        self.assertEqual(errors[0]["path"], "claude_options.stream_partial")
-        self.assertIn("cli", errors[0]["message"])
-
-    def test_same_option_accepted_on_the_backend_that_supports_it(self):
-        config = _config("claude", backend="sdk")
-        support = {"claude": {"cli": {"model"}, "sdk": {"model", "stream_partial"}}}
-        errors = []
-        _reject_backend_unsupported_options(
-            config,
-            {"claude": "sdk"},
-            {"claude": {"stream_partial": True}},
-            errors,
-            support,
-        )
-        self.assertEqual(errors, [])
-
-
 class SdkSettingsDisplayTests(unittest.TestCase):
     """Settings must not advertise cli-only options on an sdk backend that ignores
     them (an inferred default `thinking_level`, `profile`, `mode`, ...)."""
@@ -127,15 +93,16 @@ class SdkSettingsDisplayTests(unittest.TestCase):
         settings = build_session_settings(config, "solo", normalized, agent_backends={agent_type: "sdk"})
         return settings["agents"][agent_type]
 
-    def test_claude_sdk_settings_show_supported_thinking_level(self):
+    def test_claude_sdk_settings_do_not_inherit_cli_effort_flag(self):
         entry = self._settings("claude", ["--effort", "high"])
         self.assertEqual(entry["backend"], "sdk")
-        self.assertEqual(entry["thinking_level"], "high")
+        self.assertNotIn("thinking_level", entry)
 
-    def test_codex_sdk_settings_show_reasoning_but_hide_profile(self):
+    def test_codex_sdk_settings_do_not_inherit_cli_reasoning_or_profile(self):
         entry = self._settings("codex", ["--profile", "fast", "-c", 'model_reasoning_effort="high"'])
         self.assertEqual(entry["backend"], "sdk")
-        self.assertEqual(entry["thinking_level"], "high")
+        self.assertNotIn("thinking_level", entry)
+        self.assertNotIn("reasoning_effort", entry)
         self.assertNotIn("profile", entry)
 
 
@@ -160,7 +127,15 @@ class ProviderSessionCaptureTests(unittest.TestCase):
 
     @staticmethod
     def _managed(resolved_backends):
-        request = StartSessionRequest(task="t", resolved_backends=resolved_backends)
+        config = CollaborationConfig(
+            agents={"claude": AgentConfig(id="claude", type="claude", backend="sdk")},
+            workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+        )
+        request = StartSessionRequest(
+            task="t",
+            resolved_backends=resolved_backends,
+            collab_config=config,
+        )
         state = SessionState(
             session_id="s1",
             status="running",
@@ -194,9 +169,16 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         result = self._capture({"claude": "sdk"}, Event.create("claude", "message", "hello"))
         self.assertIsNone(result)
 
-    def test_capture_backend_omitted_when_unresolved(self):
+    def test_unselected_agent_session_event_is_rejected(self):
         result = self._capture({}, provider_session_event("claude", "claude", "sess-1", "session"))
-        self.assertEqual(result, {"claude": {"provider_session_id": "sess-1", "provider_session_kind": "session"}})
+        self.assertIsNone(result)
+
+    def test_mismatched_provider_source_is_rejected(self):
+        result = self._capture(
+            {"claude": "sdk"},
+            provider_session_event("codex", "claude", "sess-1", "session"),
+        )
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

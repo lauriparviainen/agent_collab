@@ -23,18 +23,36 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Mapping, Optional
 
 from ..config import AgentConfig
 from ..events import Event, compact_json
 from ..runners import AgentRunner
-from .base import BackendCapabilities, BackendHealth, BackendUnavailable
+from .base import (
+    BackendCapabilities,
+    BackendHealth,
+    BackendOptionError,
+    BackendUnavailable,
+    OptionSpec,
+    normalize_declared_options,
+)
 from .health import codex_api_key_credentials, probe_sdk_backend
 from .sdk_common import package_version, provider_session_event, sdk_error_event, stringify
 
 MODULE_NAME = "openai_codex"
 PACKAGE_NAME = "openai-codex"
 INSTALL_HINT = "install the Codex SDK: pip install openai-codex"
+
+_CODEX_LEVELS = ("minimal", "low", "medium", "high", "xhigh")
+CODEX_SDK_OPTION_SCHEMA = {
+    "model": OptionSpec("string"),
+    "thinking_level": OptionSpec("string", allowed=_CODEX_LEVELS),
+    "reasoning_effort": OptionSpec("string", allowed=_CODEX_LEVELS),
+    "sandbox": OptionSpec(
+        "string",
+        allowed=("read-only", "workspace-write", "danger-full-access"),
+    ),
+}
 
 # ``codex_options.sandbox`` -> the verified Codex SDK ``Sandbox`` member.
 _SANDBOX_MEMBERS = {
@@ -80,11 +98,37 @@ class CodexSdkBackend:
             extra_hint=INSTALL_HINT,
         )
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Dict[str, Any]) -> AgentRunner:
+    def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
+        return dict(CODEX_SDK_OPTION_SCHEMA)
+
+    def normalize_options(
+        self,
+        agent: AgentConfig,
+        requested: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        explicit = set(requested)
+        normalized = normalize_declared_options(agent, requested, self.option_schema(agent))
+        if {"thinking_level", "reasoning_effort"}.issubset(explicit):
+            if normalized.get("thinking_level") != normalized.get("reasoning_effort"):
+                raise BackendOptionError(
+                    "thinking_level",
+                    "conflicts with reasoning_effort; use one thinking level field or provide matching values",
+                )
+        if "thinking_level" in explicit:
+            normalized["reasoning_effort"] = normalized["thinking_level"]
+        elif "reasoning_effort" in explicit:
+            normalized["thinking_level"] = normalized["reasoning_effort"]
+        elif "reasoning_effort" in normalized:
+            normalized["thinking_level"] = normalized["reasoning_effort"]
+        elif "thinking_level" in normalized:
+            normalized["reasoning_effort"] = normalized["thinking_level"]
+        return normalized
+
+    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
         factory = self._item_stream or _default_item_stream
         return CodexSdkRunner(agent, verbose, dict(options or {}), item_stream=factory)
 
-    def settings_summary(self, agent: AgentConfig, options: Dict[str, Any]) -> Dict[str, Any]:
+    def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
         summary: Dict[str, Any] = {"backend": "sdk", "package": PACKAGE_NAME}
         version = package_version(PACKAGE_NAME)
         if version:

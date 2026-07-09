@@ -27,24 +27,28 @@ extra install commands.
 
 ## Current state
 
-Implemented:
+Implemented on the remediation branch:
 
-- `cli` backend for `claude`, `codex`, and `antigravity`.
-- `sdk` backend for `antigravity`, registered lazily and extras-gated.
-- backend registry keyed by `(agent_type, backend_id)`.
-- start-time backend resolution:
-  `start request > agents.<id>.backend > "cli"`.
-- backend health surface in `agent_collab_describe_options`.
-- conservative capability flags, currently all false.
+- `cli` and installed-by-default `sdk` backends for `claude`, `codex`, and
+  `antigravity`, with lazy SDK imports,
+- backend registry keyed by `(agent_type, backend_id)` and start-time resolution
+  `start request > agents.<id>.backend > "cli"`,
+- backend-owned declarative option schemas, normalization, settings summaries,
+  and per-agent normalized option flow,
+- per-backend discovery schemas, health, honest all-false capabilities, and
+  validated provider-session capture,
+- real-wheel constructor checks plus credentialed Claude and Codex turns in
+  disposable workspaces.
 
-Missing:
+Remaining release evidence:
 
-- installed-by-default SDK dependencies,
-- `claude` SDK backend,
-- `codex` SDK backend,
-- common SDK session-id capture and resume plumbing,
-- live smoke coverage for installed SDKs,
-- docs that explain SDK-vs-CLI tradeoffs now that SDKs are first-class.
+- re-run the requested `gpt-5.6-sol` Codex default after a sufficiently new
+  standalone Codex release asset is downloadable,
+- run the Antigravity tool-call smoke when `GEMINI_API_KEY` is available.
+
+See the [remediation verification records](stage-5.1-first-class-sdk-backends-remediation.md)
+for installed API shapes and exact blocked/live evidence. They supersede any
+candidate call shapes in the original provider plans below.
 
 ## SDK source facts to verify during implementation
 
@@ -157,9 +161,10 @@ to follow the pattern.
 Each SDK backend must implement:
 
 - `probe()` with no model call,
+- `option_schema()` and `normalize_options()` for backend-owned validation,
 - `create_runner()` returning an `AgentRunner`,
-- `settings_summary()` with package/backend details instead of a CLI
-  `command_preview`,
+- `settings_summary()` with package/backend details alongside the normalized
+  settings used by execution,
 - explicit option mapping,
 - event mapping into the existing `Event` contract,
 - fake-module tests that exercise event mapping without provider credentials.

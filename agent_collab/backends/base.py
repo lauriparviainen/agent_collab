@@ -16,7 +16,14 @@ the base install and default ``cli`` backend stay standard-library only.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Protocol, runtime_checkable
+
+from ..backend_contract import (
+    OPTION_UNSET,
+    BackendOptionError,
+    OptionSpec,
+    normalize_declared_options,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..config import AgentConfig
@@ -108,7 +115,7 @@ class BackendUnavailable(Exception):
 
 @runtime_checkable
 class AgentBackend(Protocol):
-    """Factory + health surface for one ``(agent_type, backend_id)`` pair."""
+    """Self-describing execution contract for one backend pair."""
 
     id: str  # "cli", "sdk"
     agent_type: str  # "claude", "codex", "antigravity"
@@ -118,11 +125,31 @@ class AgentBackend(Protocol):
         """Return a fresh, side-effect-free health snapshot (never a model call)."""
         ...
 
+    def option_schema(self, agent: "AgentConfig") -> Mapping[str, OptionSpec]:
+        """Declare every provider option this backend can honor."""
+        ...
+
+    def normalize_options(
+        self,
+        agent: "AgentConfig",
+        requested: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        """Return the exact options that will be summarized and executed."""
+        ...
+
+    def settings_summary(
+        self,
+        agent: "AgentConfig",
+        options: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        """Describe backend-specific settings for the start response."""
+        ...
+
     def create_runner(
         self,
         agent: "AgentConfig",
         verbose: bool,
-        options: Dict[str, Any],
+        options: Mapping[str, Any],
     ) -> "AgentRunner":
         """Build the runner that executes a turn for ``agent`` on this backend."""
         ...

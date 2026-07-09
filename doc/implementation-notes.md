@@ -51,6 +51,15 @@ The resolved per-agent backend map is computed once at start validation and
 threaded through `RefereeConfig` to the runner construction path. It must reach
 execution, not only the returned settings.
 
+Every backend owns a declarative `option_schema`, `normalize_options`, and
+`settings_summary` contract. Provider-wide request buckets remain wire-compatible,
+but validation runs against every selected agent/backend and produces an exact
+per-agent option map. Only CLI backends infer values from configured argv; SDK
+backends receive configured defaults and explicit requests without inheriting
+CLI flags. `describe_options` reports each backend's effective schema and the
+top-level provider schema is a union of registered backend declarations. There
+is no central provider/backend support matrix.
+
 Backend capabilities (`resume`, `interrupt`, `tool_gate`) are honest runtime
 facts and are not inferred from provider brand. Live backend health gates starts
 on certainty and is reported by `describe_options`, not by daemon status.
@@ -68,6 +77,15 @@ and read an ephemeral thread without a model call. Antigravity's installed
 cursors for thoughts/tool calls. Claude's installed options and typed message
 blocks confirmed the coding presets, effort/budget fields, tool results, and
 result metadata used by the backend.
+
+The built-in Codex model default is `gpt-5.6-sol`. The latest Python beta pins
+an older Codex runtime, so the SDK backend intentionally uses the agent's
+configured local `codex` executable through `CodexConfig(codex_bin=...)` when
+it resolves on `PATH`; otherwise it falls back to the SDK-pinned runtime. The
+backend summary reports which runtime path is active. On 2026-07-09 the local
+standalone `0.141.0` was still too old for `gpt-5.6-sol`, while `codex update`
+found `0.144.0` but no downloadable release asset, so the 5.6 live gate remains
+an upstream-runtime release check.
 
 Antigravity is opt-in. Its `cli` path uses `agy` print mode as message-only
 plain text. Its `sdk` path targets the installed `google-antigravity` 0.1.5

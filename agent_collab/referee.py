@@ -53,6 +53,9 @@ class RefereeConfig:
     codex_options: Optional[Dict[str, Any]] = None
     claude_options: Optional[Dict[str, Any]] = None
     antigravity_options: Optional[Dict[str, Any]] = None
+    # Exact backend-normalized options by agent. Provider buckets above remain
+    # as the compatibility fallback for direct/non-daemon callers.
+    agent_options: Optional[Dict[str, Dict[str, Any]]] = None
     # Resolved {agent_id: backend_id} carried from start validation so execution
     # uses exactly the selection the start response advertised (no re-resolution).
     agent_backends: Optional[Dict[str, str]] = None
@@ -88,7 +91,7 @@ class Referee:
 
                 runners[agent_id] = DryRunRunner(
                     agent.id,
-                    build_cli_command(agent, self._options_for(agent.type)),
+                    build_cli_command(agent, self._options_for(agent_id, agent.type)),
                     cwd=agent.cwd,
                     agent=agent,
                 )
@@ -96,7 +99,7 @@ class Referee:
                 runners[agent_id] = configured_runner(
                     agent,
                     self.config.verbose,
-                    self._options_for(agent.type),
+                    self._options_for(agent_id, agent.type),
                     self._backend_for(agent_id),
                 )
         return runners
@@ -109,7 +112,9 @@ class Referee:
             return self.config.agent_backends.get(agent_id)
         return None
 
-    def _options_for(self, agent_type: str) -> Dict[str, Any]:
+    def _options_for(self, agent_id: str, agent_type: str) -> Dict[str, Any]:
+        if self.config.agent_options is not None and agent_id in self.config.agent_options:
+            return dict(self.config.agent_options[agent_id])
         if agent_type == "codex":
             return dict(self.config.codex_options or {})
         if agent_type == "claude":

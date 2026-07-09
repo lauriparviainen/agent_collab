@@ -146,12 +146,18 @@ options are also rejected before start when the resolved backend cannot honour
 them (a cli-only option on `sdk`, or an sdk-only option on `cli`), with a
 `<type>_options.<key>` field path.
 
+Each backend declares and normalizes its own options. A provider-wide request is
+valid only when every selected agent/backend of that provider accepts it. CLI
+backends may infer values from their configured command arguments; SDK backends
+do not inherit CLI-only argv defaults. The start response and runner both use
+the same exact per-agent normalized option map.
+
 Every backend this stage reports `resume`, `interrupt`, and `tool_gate` as
 `false` — capabilities are honest runtime facts, never inferred from the provider
 brand. `agent_collab_describe_options` exposes, per agent type, the registered
-backend ids, the default, live availability/health, and capability flags, so the
-selection is discoverable before starting. `mock` agents ignore backend selection
-and reject a `backend` field.
+backend ids, the default, live availability/health, capability flags, and an
+`option_schema` for each backend, so the selection is discoverable before
+starting. `mock` agents ignore backend selection and reject a `backend` field.
 
 ## Start options
 
@@ -162,7 +168,7 @@ The request shape keeps Codex and Claude options separate because their CLIs exp
 ```json
 {
   "codex_options": {
-    "model": "gpt-5-codex",
+    "model": "gpt-5.6-sol",
     "thinking_level": "medium",
     "sandbox": "workspace-write",
     "approval_policy": "on-request"
@@ -181,7 +187,8 @@ Example option rules:
 
 ```toml
 [agents.codex.options]
-model.allowed = ["gpt-5-codex", "gpt-5"]
+model.default = "gpt-5.6-sol"
+model.allowed = ["gpt-5.6-sol"]
 thinking_level.default = "high"
 thinking_level.allowed = ["minimal", "low", "medium", "high", "xhigh"]
 sandbox.allowed = ["read-only", "workspace-write"]

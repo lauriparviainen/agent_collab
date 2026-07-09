@@ -9,6 +9,7 @@ from unittest import mock
 
 from agent_collab import cli
 from agent_collab import backends
+from agent_collab.backends.base import BackendCapabilities, BackendHealth
 from agent_collab.config import (
     DEFAULT_CONFIG_PATH,
     AgentConfig,
@@ -330,7 +331,16 @@ class AgentBackendConfigTests(unittest.TestCase):
     def test_command_optional_for_non_cli_backend(self):
         # Registering a non-cli backend for claude relaxes the command requirement:
         # only the cli backend runs a subprocess and needs a command.
-        fake = SimpleNamespace(agent_type="claude", id="fake")
+        fake = SimpleNamespace(
+            agent_type="claude",
+            id="fake",
+            capabilities=BackendCapabilities(),
+            probe=lambda: BackendHealth(),
+            option_schema=lambda agent: {},
+            normalize_options=lambda agent, requested: dict(requested),
+            settings_summary=lambda agent, options: {"backend": "fake", "options": dict(options)},
+            create_runner=lambda agent, verbose, options: None,
+        )
         backends.register(fake)
         try:
             agent = AgentConfig(id="claude", type="claude", backend="fake")
