@@ -40,21 +40,9 @@ class ConfigTests(unittest.TestCase):
         data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
         self.assertEqual(data["schema_version"], 2)
-        self.assertEqual(data["agents"]["claude"]["options"]["model"]["default"], "opus")
-        self.assertEqual(data["agents"]["codex"]["options"]["thinking_level"]["default"], "high")
-        self.assertEqual(
-            data["agents"]["antigravity"]["options"]["model"]["allowed"],
-            [
-                "Gemini 3.5 Flash (Medium)",
-                "Gemini 3.5 Flash (High)",
-                "Gemini 3.5 Flash (Low)",
-                "Gemini 3.1 Pro (Low)",
-                "Gemini 3.1 Pro (High)",
-                "Claude Sonnet 4.6 (Thinking)",
-                "Claude Opus 4.6 (Thinking)",
-                "GPT-OSS 120B (Medium)",
-            ],
-        )
+        self.assertNotIn("options", data["agents"]["claude"])
+        self.assertNotIn("options", data["agents"]["codex"])
+        self.assertNotIn("options", data["agents"]["antigravity"])
         self.assertEqual(data["workflows"]["solo-claude"]["sequence"], ["claude"])
 
     def test_builtin_defaults(self):
@@ -70,14 +58,13 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.agents["claude"].type, "claude")
             self.assertEqual(config.agents["claude"].command, "claude")
             self.assertEqual(config.agents["claude"].args, ["-p", "--output-format", "stream-json", "--verbose"])
-            self.assertEqual(config.agents["claude"].options["model"]["default"], "opus")
-            self.assertEqual(config.agents["claude"].options["thinking_level"]["default"], "high")
+            self.assertEqual(config.agents["claude"].options, {})
             self.assertEqual(config.agents["codex"].command, "codex")
             self.assertEqual(config.agents["codex"].args, ["exec", "--json"])
-            self.assertEqual(config.agents["codex"].options["thinking_level"]["default"], "high")
+            self.assertEqual(config.agents["codex"].options, {})
             self.assertEqual(config.agents["antigravity"].command, "agy")
             self.assertFalse(config.agents["antigravity"].enabled)
-            self.assertEqual(config.agents["antigravity"].options["model"]["default"], "Gemini 3.5 Flash (High)")
+            self.assertEqual(config.agents["antigravity"].options, {})
             self.assertEqual(config.workflows["solo-claude"].sequence, ["claude"])
             self.assertEqual(config.workflows["solo-codex"].sequence, ["codex"])
             self.assertEqual(config.workflows["cross-review"].sequence, ["claude", "codex", "claude"])
@@ -339,6 +326,7 @@ class AgentBackendConfigTests(unittest.TestCase):
             option_schema=lambda agent: {},
             normalize_options=lambda agent, requested: dict(requested),
             settings_summary=lambda agent, options: {"backend": "fake", "options": dict(options)},
+            command_preview=lambda agent, options, workdir=None: None,
             create_runner=lambda agent, verbose, options: None,
         )
         backends.register(fake)

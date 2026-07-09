@@ -141,16 +141,14 @@ from its `backend` (the *execution mechanism*). The registry is keyed by
 Resolution is most-specific-wins: `start-request backend > agents.<id>.backend >
 default "cli"`. A `--backend NAME` / `"backend"` start override applies uniformly
 to every selected agent and is rejected before any session state when any
-selected agent's type does not register that backend. Explicitly-requested typed
-options are also rejected before start when the resolved backend cannot honour
-them (a cli-only option on `sdk`, or an sdk-only option on `cli`), with a
-`<type>_options.<key>` field path.
+selected agent's type does not register that backend. Explicit options are
+rejected when their named backend is not selected or cannot honor them, with a
+`backend_options.<provider>_<backend>.<key>` field path.
 
-Each backend declares and normalizes its own options. A provider-wide request is
-valid only when every selected agent/backend of that provider accepts it. CLI
-backends may infer values from their configured command arguments; SDK backends
-do not inherit CLI-only argv defaults. The start response and runner both use
-the same exact per-agent normalized option map.
+Each backend package declares its exact options/defaults in `options.toml` and
+normalizes only its own `backend_options` entry. CLI backends may infer values
+from configured argv; SDK backends do not inherit CLI-only argv values. The
+start response and runner use the same per-agent normalized map.
 
 Every backend this stage reports `resume`, `interrupt`, and `tool_gate` as
 `false` — capabilities are honest runtime facts, never inferred from the provider
@@ -161,27 +159,30 @@ starting. `mock` agents ignore backend selection and reject a `backend` field.
 
 ## Start options
 
-MCP and CLI callers can pass typed per-agent-type start options. The server validates these options before creating session state or launching a subprocess.
-
-The request shape keeps Codex and Claude options separate because their CLIs expose different controls:
+MCP and CLI callers pass one backend-qualified map. The server validates it
+before creating session state or launching a subprocess.
 
 ```json
 {
-  "codex_options": {
-    "model": "gpt-5.6-sol",
-    "thinking_level": "medium",
-    "sandbox": "workspace-write",
-    "approval_policy": "on-request"
-  },
-  "claude_options": {
-    "model": "opus",
-    "permission_mode": "default",
-    "thinking_level": "high"
+  "backend_options": {
+    "codex_cli": {
+      "model": "gpt-5.6-sol",
+      "thinking_level": "medium",
+      "sandbox": "workspace-write"
+    },
+    "claude_sdk": {
+      "model": "opus",
+      "thinking_level": "high"
+    }
   }
 }
 ```
 
-Config can advertise accepted values and defaults, and the MCP layer exposes the effective schema through `agent_collab_describe_options`. Defaults are applied when callers omit an option. Unknown keys, wrong types, unsupported values, and options that do not apply to the selected workflow are rejected with actionable field-path errors. The start response echoes the effective settings, including a prompt-free `command_preview` per agent.
+Each backend's colocated manifest is the shipped source of accepted values and
+defaults. Per-agent config may narrow allowed values or override defaults. MCP
+exposes the effective schemas through `agent_collab_describe_options`. Unknown
+keys, wrong types, unsupported values, unselected backends, and invalid
+cross-field combinations are rejected with actionable paths.
 
 Example option rules:
 
@@ -206,17 +207,15 @@ thinking_budget_tokens.min = 0
 thinking_budget_tokens.max = 32768
 ```
 
-Antigravity agents accept `antigravity_options` (`model`, and `mode` for the
-`cli` backend only — one of `default`, `accept-edits`, `plan`). `mode` maps to
-`agy --mode`; on the `sdk` backend `mode` is rejected until a faithful SDK
-equivalent is confirmed. `antigravity_options` are rejected when the selected
-workflow has no Antigravity agent.
+`backend_options.antigravity_cli` accepts `model` and `mode`; the SDK entry
+accepts `model` only. A backend entry is rejected when it is not selected by the
+workflow.
 
 CLI callers can pass JSON option objects and select a backend:
 
 ```bash
-agent-collab start --codex-options '{"thinking_level":"medium"}' --claude-options '{"model":"opus","thinking_level":"high"}' "Task"
-agent-collab start --workflow solo-antigravity --backend sdk --antigravity-options '{"model":"gemini-3-pro"}' "Task"
+agent-collab start --backend-options '{"codex_cli":{"thinking_level":"medium"},"claude_cli":{"model":"opus"}}' "Task"
+agent-collab start --workflow solo-antigravity --backend sdk --backend-options '{"antigravity_sdk":{"model":"Gemini 3.1 Pro (High)"}}' "Task"
 ```
 
 The option-to-command mapping is explicit. Unknown option keys are never appended as arbitrary shell flags.
@@ -278,8 +277,9 @@ Google Antigravity, available on both backends. Disabled by default and opt-in.
   Python ≥ 3.10, lazy-imported). Needs a **Gemini API key** (`GEMINI_API_KEY` env,
   or `LocalAgentConfig(api_key=...)`, or Vertex/ADC) — the SDK does **not** use the
   `~/.gemini` OAuth. It maps typed SDK events to `tool_call`/`command`/`file_change`,
-  degrading to message-only if a turn has no tool calls. `antigravity_options.mode`
-  is cli-only and rejected on `sdk`.
+  degrading to message-only if a turn has no tool calls.
+  `backend_options.antigravity_sdk.mode` is unsupported; mode belongs to
+  `antigravity_cli` only.
 
 The two backends authenticate differently (OAuth for `cli`, an API key for
 `sdk`). Auth is the provider's own concern: agent-collab only passes the

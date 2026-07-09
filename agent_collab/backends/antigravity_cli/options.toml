@@ -1,0 +1,13 @@
+schema_version = 1
+
+[options.model]
+type = "string"
+default = "Gemini 3.5 Flash (High)"
+allowed = ["Gemini 3.5 Flash (Medium)", "Gemini 3.5 Flash (High)", "Gemini 3.5 Flash (Low)", "Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro (High)", "Claude Sonnet 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)", "GPT-OSS 120B (Medium)"]
+inferred = true
+
+[options.mode]
+type = "string"
+default = "accept-edits"
+allowed = ["default", "accept-edits", "plan"]
+inferred = true

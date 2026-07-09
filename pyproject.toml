@@ -32,4 +32,8 @@ agent-collab-mcp = "agent_collab.mcp_server:main"
 include = ["agent_collab*"]
 
 [tool.setuptools.package-data]
-agent_collab = ["default_config.toml"]
+agent_collab = [
+    "default_config.toml",
+    "backends/*/README.md",
+    "backends/*/options.toml",
+]

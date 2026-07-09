@@ -18,7 +18,7 @@ TOOLS = [
         "description": (
             "Start a supervised Claude/Codex collaboration session and return a session id. "
             "workdir is required because it selects project config and subprocess cwd. "
-            "Call agent_collab_describe_options first before passing non-default codex_options or claude_options."
+            "Call agent_collab_describe_options first before passing non-default backend_options."
         ),
         "inputSchema": {
             "type": "object",
@@ -32,9 +32,7 @@ TOOLS = [
                 "dry_run": {"type": "boolean"},
                 "interactive": {"type": "boolean"},
                 "interactive_idle_timeout": {"type": "number"},
-                "codex_options": {"type": "object", "additionalProperties": True},
-                "claude_options": {"type": "object", "additionalProperties": True},
-                "antigravity_options": {"type": "object", "additionalProperties": True},
+                "backend_options": {"type": "object", "additionalProperties": {"type": "object"}},
                 "backend": {"type": "string"},
             },
             "required": ["task", "workdir"],
@@ -43,7 +41,7 @@ TOOLS = [
     {
         "name": "agent_collab_describe_options",
         "description": (
-            "Describe workflows, configured agents, and accepted codex_options and claude_options for starts. "
+            "Describe workflows, configured agents, and accepted backend_options for starts. "
             "workdir is required so options are resolved from the same project config a start will use."
         ),
         "inputSchema": {
@@ -423,6 +421,11 @@ def _int_arg(args: Dict[str, Any], key: str, default: int) -> int:
 
 
 def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
+    from .api_schema import StartSessionRequestModel
+
+    unknown = sorted(set(args) - set(StartSessionRequestModel.WIRE_FIELDS))
+    if unknown:
+        raise ValueError(f"unknown start field {unknown[0]!r}")
     payload = {
         key: args[key]
         for key in (
@@ -435,9 +438,7 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
             "dry_run",
             "interactive",
             "interactive_idle_timeout",
-            "codex_options",
-            "claude_options",
-            "antigravity_options",
+            "backend_options",
             "backend",
         )
         if key in args

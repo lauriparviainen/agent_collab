@@ -28,3 +28,7 @@ MCP access to the same live session state.
 
 For commands, test expectations, and live-agent cautions, use
 [doc/development.md](doc/development.md).
+
+Backend implementations live in peer `agent_collab/backends/<provider>_<backend>/`
+packages. Each package owns an `options.toml` and README. Hermetic tests belong
+under `tests/`; credentialed model calls belong only under `integration_tests/`.

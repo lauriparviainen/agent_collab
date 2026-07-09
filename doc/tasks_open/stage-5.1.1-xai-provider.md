@@ -111,12 +111,11 @@ Add the registry pairs:
 (xai, sdk)
 ```
 
-Add one SDK module; the CLI backend reuses `backends/cli.py` with a new parser:
+Add two standalone peer backend packages:
 
 ```text
-agent_collab/backends/xai_sdk.py   # new, mirrors antigravity_sdk.py
-agent_collab/events.py             # add parse_xai_line
-agent_collab/backends/cli.py       # register CliBackend("xai", parse_xai_line, ...)
+agent_collab/backends/xai_cli/     # backend.py, parser.py, options.toml, README.md
+agent_collab/backends/xai_sdk/     # backend.py, options.toml, README.md
 ```
 
 Provider `type` is `xai`; `grok` is the CLI command and model family. Keep the
@@ -282,27 +281,13 @@ first.
    + the mock-source fallback to `codex`).
 3. `config.py` — `SUBPROCESS_AGENT_TYPES` (drives `AGENT_TYPES`, config type
    validation).
-4. Backend option declarations — add the xAI CLI schema/normalizer with its CLI
-   backend and the SDK schema/normalizer with `xai_sdk.py`. `options.py` needs
-   the new public `xai_options` compatibility bucket and any xAI CLI argv
-   rendering that has not yet moved into the CLI backend, but must not recreate
-   a central provider/backend support table. Extend the print-prompt sentinel
-   with `--single`.
-5. `backends/cli.py` — register `CliBackend("xai", parse_xai_line,
-   probe_binary="grok", credentials=xai_credentials, block_on_unavailable=...)`.
-6. `backends/xai_sdk.py` — new module; register in `backends/__init__`. **Rename
-   the two `build_sdk_backends` factories** (e.g. `build_antigravity_sdk_backends`
-   / `build_xai_sdk_backends`) or alias on import — a second `from .xai_sdk import
-   build_sdk_backends` shadows antigravity's and silently drops a registration.
-7. `backends/health.py` — `xai_credentials()` (XAI_API_KEY or `~/.grok/sessions`).
-8. `api_schema.py` — `StartSessionRequestModel.xai_options` + `WIRE_FIELDS` +
-   `from_dict`/`to_dict`. The contract test keeps `WIRE_FIELDS`, the MCP
-   `inputSchema`, and the daemon dataclass identical — move all three together.
-9. `daemon.py` — `StartSessionRequest.xai_options`; `from_model`;
-   validate/normalize/referee-build call sites; `_session_capabilities`.
-10. `referee.py` — `RefereeConfig.xai_options` + `_options_for`.
-11. `mcp_tools.py` — `agent_collab_start` inputSchema + `_start_payload` keys +
-    guidance text.
+4. Backend option declarations — put exact contracts/defaults in each package's
+   `options.toml`; keep normalization and argv/SDK mapping in that backend.
+5. Add `"xai_cli"` and `"xai_sdk"` to `_BUILTIN_BACKENDS`; the generic
+   `backend_options` request needs no new wire field or MCP schema entry.
+6. Add `xai_credentials()` to `backends/common/health.py`.
+7. Extend provider config validation and event-source attribution for `xai`.
+8. Add mirrored hermetic and integration test packages.
 12. `cli.py` — `--xai-options`.
 13. `default_config.toml` (+ project `.agent-collab/config.toml` for `solo-xai`,
     `enabled=true`).

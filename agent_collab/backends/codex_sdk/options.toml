@@ -1,0 +1,18 @@
+schema_version = 1
+
+[options.model]
+type = "string"
+default = "gpt-5.6-sol"
+
+[options.thinking_level]
+type = "string"
+default = "high"
+allowed = ["minimal", "low", "medium", "high", "xhigh"]
+
+[options.reasoning_effort]
+type = "string"
+allowed = ["minimal", "low", "medium", "high", "xhigh"]
+
+[options.sandbox]
+type = "string"
+allowed = ["read-only", "workspace-write", "danger-full-access"]

@@ -483,7 +483,7 @@ sequence = ["claude-a", "claude-b"]
                             task="bad options",
                             mock=True,
                             workdir=root,
-                            codex_options={"reasoning_effort": "maximum"},
+                            backend_options={"codex_cli": {"reasoning_effort": "maximum"}},
                         )
                     )
 

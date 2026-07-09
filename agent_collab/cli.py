@@ -72,9 +72,10 @@ def build_start_parser() -> argparse.ArgumentParser:
         help="Execution backend for every selected agent (e.g. 'cli', 'sdk'). "
         "Overrides per-agent config; valid only when every selected agent's type registers it.",
     )
-    parser.add_argument("--codex-options", help="JSON object for typed Codex start options.")
-    parser.add_argument("--claude-options", help="JSON object for typed Claude start options.")
-    parser.add_argument("--antigravity-options", help="JSON object for typed Antigravity start options.")
+    parser.add_argument(
+        "--backend-options",
+        help='JSON object keyed by backend name, e.g. {"claude_cli":{"model":"opus"}}.',
+    )
     parser.add_argument("--watch", action="store_true", help="Start the session and immediately watch its transcript.")
     parser.add_argument("--watch-wait-ms", type=int, default=30000, help="Long-poll timeout while watching.")
     parser.add_argument("--no-color", action="store_true")
@@ -254,9 +255,7 @@ def _main_start(argv) -> int:
     parser = build_start_parser()
     args = parser.parse_args(argv)
     try:
-        codex_options = _json_object_arg(args.codex_options, "--codex-options")
-        claude_options = _json_object_arg(args.claude_options, "--claude-options")
-        antigravity_options = _json_object_arg(args.antigravity_options, "--antigravity-options")
+        backend_options = _json_object_arg(args.backend_options, "--backend-options")
         payload = {
             "task": args.task,
             "workflow": args.workflow,
@@ -265,9 +264,7 @@ def _main_start(argv) -> int:
             "timeout": args.timeout,
             "mock": args.mock,
             "dry_run": args.dry_run,
-            "codex_options": codex_options,
-            "claude_options": claude_options,
-            "antigravity_options": antigravity_options,
+            "backend_options": backend_options,
         }
         if args.backend:
             payload["backend"] = args.backend

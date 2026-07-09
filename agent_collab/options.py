@@ -6,17 +6,14 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from .config import AgentConfig, CollaborationConfig, load_config, validate_workflow
-from .backend_contract import BackendOptionError, OPTION_UNSET, OptionSpec
-
-
-PROVIDER_OPTION_TYPES = ("codex", "claude", "antigravity")
+from .backend_contract import BackendOptionError, OptionSpec
 
 
 @dataclass(frozen=True)
 class NormalizedStartOptions:
-    """Provider-compatible buckets plus exact backend-normalized agent values."""
+    """Backend-qualified buckets plus exact backend-normalized agent values."""
 
-    provider_options: Dict[str, Dict[str, Any]]
+    backend_options: Dict[str, Dict[str, Any]]
     agent_options: Dict[str, Dict[str, Any]]
 
 class StartOptionsError(ValueError):
@@ -42,70 +39,80 @@ def format_validation_error(details: Sequence[Mapping[str, str]]) -> str:
 def validate_start_options(
     config: CollaborationConfig,
     workflow_id: str,
-    codex_options: Any = None,
-    claude_options: Any = None,
-    antigravity_options: Any = None,
+    backend_options: Any = None,
     *,
     agent_backends: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """Compatibility wrapper returning the normalized provider-wide buckets."""
+    """Validate and return normalized backend-qualified option buckets."""
 
     return normalize_start_options(
         config,
         workflow_id,
-        codex_options,
-        claude_options,
-        antigravity_options,
+        backend_options,
         agent_backends=agent_backends,
-    ).provider_options
+    ).backend_options
 
 
 def normalize_start_options(
     config: CollaborationConfig,
     workflow_id: str,
-    codex_options: Any = None,
-    claude_options: Any = None,
-    antigravity_options: Any = None,
+    backend_options: Any = None,
     *,
     agent_backends: Optional[Mapping[str, str]] = None,
 ) -> NormalizedStartOptions:
-    """Validate provider buckets through selected backend-owned contracts.
-
-    Requests remain provider-wide for API compatibility. Each selected agent is
-    validated and normalized independently so CLI inference never leaks into an
-    SDK agent and two agents of one provider may safely use different backends.
-    """
+    """Validate backend-qualified buckets through backend-owned contracts."""
 
     from . import backends as backend_registry
 
     errors: List[Dict[str, str]] = []
-    option_payloads = {
-        "codex": _expect_mapping(codex_options, "codex_options", errors),
-        "claude": _expect_mapping(claude_options, "claude_options", errors),
-        "antigravity": _expect_mapping(antigravity_options, "antigravity_options", errors),
-    }
+    raw_payloads = _expect_mapping(backend_options, "backend_options", errors)
+    option_payloads: Dict[str, Mapping[str, Any]] = {}
+    for name, value in raw_payloads.items():
+        if not isinstance(name, str) or not name:
+            errors.append(
+                {"path": "backend_options", "message": "backend names must be non-empty strings"}
+            )
+            continue
+        option_payloads[name] = _expect_mapping(value, f"backend_options.{name}", errors)
     if errors:
         raise StartOptionsError(errors)
 
     validate_workflow(config, workflow_id)
     workflow = config.workflows[workflow_id]
-    workflow_types = _workflow_agent_types(config, workflow.sequence)
-
-    for agent_type, payload in option_payloads.items():
-        if payload and agent_type not in workflow_types:
+    resolved = dict(agent_backends or {})
+    selected_names = {
+        backend_registry.backend_name(
+            config.agents[agent_id].type,
+            resolved.get(agent_id)
+            or backend_registry.resolve_backend_id(config.agents[agent_id]),
+        )
+        for agent_id in workflow.sequence
+        if config.agents[agent_id].type != "mock"
+    }
+    for name, payload in option_payloads.items():
+        if name not in backend_registry.registered_backend_names():
             errors.append(
                 {
-                    "path": f"{agent_type}_options",
+                    "path": f"backend_options.{name}",
                     "message": (
-                        f"does not apply to workflow {workflow_id!r}; "
-                        f"workflow uses: {', '.join(sorted(workflow_types))}"
+                        "unknown backend; expected one of: "
+                        + ", ".join(backend_registry.registered_backend_names())
+                    ),
+                }
+            )
+        elif name not in selected_names:
+            errors.append(
+                {
+                    "path": f"backend_options.{name}",
+                    "message": (
+                        f"does not apply to workflow {workflow_id!r}; selected backends: "
+                        + ", ".join(sorted(selected_names))
                     ),
                 }
             )
     if errors:
         raise StartOptionsError(errors)
 
-    resolved = dict(agent_backends or {})
     agent_options: Dict[str, Dict[str, Any]] = {}
     seen_agents: Set[str] = set()
     for agent_id in workflow.sequence:
@@ -125,9 +132,10 @@ def normalize_start_options(
             )
             continue
         backend = backend_registry.get_backend(agent.type, backend_id)
-        path = f"{agent.type}_options"
+        name = backend_registry.backend_name(agent.type, backend_id)
+        path = f"backend_options.{name}"
         schema = _effective_backend_schema(backend, agent, path, errors)
-        requested = dict(option_payloads.get(agent.type) or {})
+        requested = dict(option_payloads.get(name) or {})
         before = len(errors)
         _validate_backend_values(
             requested,
@@ -177,24 +185,26 @@ def normalize_start_options(
     if errors:
         raise StartOptionsError(_dedupe_details(errors))
 
-    provider_options: Dict[str, Dict[str, Any]] = {}
-    for agent_type in PROVIDER_OPTION_TYPES:
+    normalized_backend_options: Dict[str, Dict[str, Any]] = {}
+    for name in selected_names:
         values = [
             agent_options[agent_id]
             for agent_id in seen_agents
-            if agent_id in agent_options and config.agents[agent_id].type == agent_type
+            if agent_id in agent_options
+            and backend_registry.backend_name(
+                config.agents[agent_id].type,
+                resolved.get(agent_id) or backend_registry.resolve_backend_id(config.agents[agent_id]),
+            ) == name
         ]
-        provider_options[f"{agent_type}_options"] = _common_options(values)
-    return NormalizedStartOptions(provider_options=provider_options, agent_options=agent_options)
+        normalized_backend_options[name] = _common_options(values)
+    return NormalizedStartOptions(backend_options=normalized_backend_options, agent_options=agent_options)
 
 
 def validate_start_backends(
     config: CollaborationConfig,
     workflow_id: str,
     request_backend: Optional[str] = None,
-    antigravity_options: Optional[Mapping[str, Any]] = None,
-    claude_options: Optional[Mapping[str, Any]] = None,
-    codex_options: Optional[Mapping[str, Any]] = None,
+    backend_options: Optional[Mapping[str, Any]] = None,
     *,
     health: Any = None,
 ) -> "BackendSelection":
@@ -245,9 +255,7 @@ def validate_start_backends(
     normalize_start_options(
         config,
         workflow_id,
-        codex_options=codex_options,
-        claude_options=claude_options,
-        antigravity_options=antigravity_options,
+        backend_options=backend_options,
         agent_backends=resolved,
     )
 
@@ -510,16 +518,16 @@ def describe_options(
         "workflows": workflows,
         "workflow_agent_types": workflow_agent_types,
         "backends": _describe_backends(config, health),
-        "codex_options": _schema_for_agent_type(config, "codex"),
-        "claude_options": _schema_for_agent_type(config, "claude"),
-        "antigravity_options": _schema_for_agent_type(config, "antigravity"),
+        "backend_options": _backend_option_schemas(config),
         "examples": [
             {
                 "task": "Review this repository",
                 "workdir": resolved_workdir,
                 "workflow": "compare",
-                "codex_options": {"thinking_level": "medium", "sandbox": "workspace-write"},
-                "claude_options": {"model": "opus", "thinking_level": "high"},
+                "backend_options": {
+                    "codex_cli": {"thinking_level": "medium", "sandbox": "workspace-write"},
+                    "claude_cli": {"model": "opus", "thinking_level": "high"},
+                },
             },
             {
                 "task": "Run a mock smoke test",
@@ -616,7 +624,8 @@ def build_session_settings(
             if agent_options is not None and agent_id in agent_options:
                 options = dict(agent_options[agent_id])
             else:
-                requested = dict(normalized_options.get(f"{agent.type}_options") or {})
+                name = backend_registry.backend_name(agent.type, backend_id)
+                requested = dict(normalized_options.get(name) or {})
                 options = dict(backend.normalize_options(agent, requested))
             entry.update(options)
         if backend_id is not None:
@@ -625,9 +634,9 @@ def build_session_settings(
             summary = _backend_settings_summary(agent, backend_id, options)
             if summary is not None:
                 entry["backend_summary"] = summary
-            if backend_id == "cli":
-                if agent.command:
-                    entry["command_preview"] = build_cli_command(agent, options, workdir=workdir)
+            preview = backend.command_preview(agent, options, workdir)
+            if preview is not None:
+                entry["command_preview"] = preview
         agents[agent_id] = entry
     settings: Dict[str, Any] = {
         "workflow": {"name": workflow_id, "sequence": list(workflow.sequence)},
@@ -651,161 +660,6 @@ def _backend_settings_summary(
         return None
     backend = backend_registry.get_backend(agent.type, backend_id)
     return dict(backend.settings_summary(agent, dict(options)))
-
-
-def apply_agent_options(command: List[str], agent: AgentConfig, options: Mapping[str, Any]) -> List[str]:
-    from . import backends as backend_registry
-
-    backend = backend_registry.get_backend(agent.type, "cli")
-    effective_options = dict(backend.normalize_options(agent, options))
-    if not effective_options:
-        return list(command)
-    if agent.type == "codex":
-        return _apply_codex_options(command, effective_options)
-    if agent.type == "claude":
-        return _apply_claude_options(command, effective_options)
-    if agent.type == "antigravity":
-        return _apply_antigravity_options(command, effective_options)
-    return list(command)
-
-
-def build_cli_command(
-    agent: AgentConfig,
-    options: Mapping[str, Any],
-    *,
-    workdir: Optional[Path] = None,
-) -> List[str]:
-    command = apply_agent_options([agent.command or agent.id] + list(agent.args), agent, options)
-    run_dir = resolve_agent_run_dir(workdir, agent.cwd) if workdir is not None else None
-    return apply_runtime_workdir_args(command, agent, run_dir)
-
-
-def resolve_agent_run_dir(workdir: Path, cwd: Optional[str]) -> Path:
-    base = workdir.expanduser().resolve()
-    if not cwd:
-        return base
-    cwd_path = Path(cwd).expanduser()
-    if cwd_path.is_absolute():
-        return cwd_path
-    return (base / cwd_path).resolve()
-
-
-def apply_runtime_workdir_args(
-    command: List[str],
-    agent: AgentConfig,
-    workdir: Optional[Path],
-) -> List[str]:
-    if agent.type != "antigravity" or workdir is None or _has_flag(command, "--add-dir"):
-        return list(command)
-    return _insert_before_print_prompt(command, ["--add-dir", str(workdir.expanduser().resolve())])
-
-
-def _apply_antigravity_options(command: List[str], options: Mapping[str, Any]) -> List[str]:
-    result = list(command)
-    if "model" in options:
-        result = _set_flag_value_before_print_prompt(result, "--model", str(options["model"]))
-    if "mode" in options:
-        result = _set_flag_value_before_print_prompt(result, "--mode", str(options["mode"]))
-    return result
-
-
-def _apply_codex_options(command: List[str], options: Mapping[str, Any]) -> List[str]:
-    result = list(command)
-    reasoning_effort = options.get("reasoning_effort", options.get("thinking_level"))
-    if reasoning_effort is not None:
-        result = _remove_flag(result, "--reasoning-effort", has_value=True)
-        result = _set_config_value(result, "model_reasoning_effort", str(reasoning_effort))
-    for key, flag in (
-        ("model", "--model"),
-        ("profile", "--profile"),
-        ("sandbox", "--sandbox"),
-        ("approval_policy", "--approval-policy"),
-    ):
-        if key in options:
-            result = _set_flag_value(result, flag, str(options[key]))
-    if "search" in options:
-        result = _remove_flag(result, "--search", has_value=False)
-        if options["search"]:
-            result.append("--search")
-    return result
-
-
-def _apply_claude_options(command: List[str], options: Mapping[str, Any]) -> List[str]:
-    result = list(command)
-    if "model" in options:
-        result = _set_flag_value(result, "--model", str(options["model"]))
-    if "permission_mode" in options:
-        result = _set_flag_value(result, "--permission-mode", str(options["permission_mode"]))
-    if "thinking_level" in options:
-        result = _set_flag_value(result, "--effort", str(options["thinking_level"]))
-    if "thinking_budget_tokens" in options:
-        result = _set_flag_value(result, "--thinking-budget-tokens", str(options["thinking_budget_tokens"]))
-    return result
-
-
-def _set_flag_value(command: List[str], flag: str, value: str) -> List[str]:
-    result = _remove_flag(command, flag, has_value=True)
-    result.extend([flag, value])
-    return result
-
-
-def _set_flag_value_before_print_prompt(command: List[str], flag: str, value: str) -> List[str]:
-    result = _remove_flag(command, flag, has_value=True)
-    return _insert_before_print_prompt(result, [flag, value])
-
-
-def _insert_before_print_prompt(command: List[str], items: Sequence[str]) -> List[str]:
-    result = list(command)
-    for index, item in enumerate(result):
-        if item in {"-p", "--print", "--prompt"}:
-            return result[:index] + list(items) + result[index:]
-    result.extend(items)
-    return result
-
-
-def _has_flag(command: Sequence[str], flag: str) -> bool:
-    prefix = f"{flag}="
-    return any(item == flag or item.startswith(prefix) for item in command)
-
-
-def _set_config_value(command: List[str], key: str, value: str) -> List[str]:
-    result = _remove_config_value(command, key)
-    result.extend(["-c", f'{key}="{value}"'])
-    return result
-
-
-def _remove_flag(command: List[str], flag: str, *, has_value: bool) -> List[str]:
-    result: List[str] = []
-    skip_next = False
-    prefix = f"{flag}="
-    for item in command:
-        if skip_next:
-            skip_next = False
-            continue
-        if item == flag:
-            skip_next = has_value
-            continue
-        if item.startswith(prefix):
-            continue
-        result.append(item)
-    return result
-
-
-def _remove_config_value(command: List[str], key: str) -> List[str]:
-    result: List[str] = []
-    skip_next = False
-    for index, item in enumerate(command):
-        if skip_next:
-            skip_next = False
-            continue
-        if item in {"-c", "--config"} and index + 1 < len(command):
-            if _config_item_key(command[index + 1]) == key:
-                skip_next = True
-                continue
-        if item.startswith("--config=") and _config_item_key(item[len("--config=") :]) == key:
-            continue
-        result.append(item)
-    return result
 
 
 def _expect_mapping(value: Any, path: str, errors: List[Dict[str, str]]) -> Mapping[str, Any]:
@@ -842,20 +696,17 @@ def _validate_field_value(value: Any, path: str, schema: Mapping[str, Any], erro
         errors.append({"path": path, "message": f"must be <= {maximum}"})
 
 
-def _schema_for_agent_type(config: CollaborationConfig, agent_type: str) -> Dict[str, Any]:
+def _backend_option_schemas(config: CollaborationConfig) -> Dict[str, Any]:
     from . import backends as backend_registry
 
     properties: Dict[str, Dict[str, Any]] = {}
-    for backend_id in backend_registry.registered_backends(agent_type):
-        backend = backend_registry.get_backend(agent_type, backend_id)
-        agent = _representative_agent(config, agent_type, backend_id)
-        schema = _effective_backend_schema(backend, agent, f"{agent_type}_options", [])
-        for field, spec in schema.items():
-            value = spec.to_dict()
-            if field not in properties:
-                properties[field] = value
-            else:
-                properties[field] = _union_field_schema(properties[field], value)
+    for agent_type in backend_registry.registered_agent_types():
+        for backend_id in backend_registry.registered_backends(agent_type):
+            name = backend_registry.backend_name(agent_type, backend_id)
+            backend = backend_registry.get_backend(agent_type, backend_id)
+            agent = _representative_agent(config, agent_type, backend_id)
+            schema = _effective_backend_schema(backend, agent, f"backend_options.{name}", [])
+            properties[name] = _option_object_schema(schema)
     return {"type": "object", "additionalProperties": False, "properties": properties}
 
 
@@ -879,31 +730,6 @@ def _option_object_schema(schema: Mapping[str, OptionSpec]) -> Dict[str, Any]:
         "additionalProperties": False,
         "properties": {key: spec.to_dict() for key, spec in sorted(schema.items())},
     }
-
-
-def _union_field_schema(left: Mapping[str, Any], right: Mapping[str, Any]) -> Dict[str, Any]:
-    result = dict(left)
-    if left.get("type") != right.get("type"):
-        return {"type": "any"}
-    if "allowed" not in left or "allowed" not in right:
-        result.pop("allowed", None)
-    else:
-        result["allowed"] = list(dict.fromkeys(list(left["allowed"]) + list(right["allowed"])))
-    if "min" in left or "min" in right:
-        result["min"] = min(value for value in (left.get("min"), right.get("min")) if value is not None)
-    if "max" in left or "max" in right:
-        result["max"] = max(value for value in (left.get("max"), right.get("max")) if value is not None)
-    if left.get("default", OPTION_UNSET) != right.get("default", OPTION_UNSET):
-        result.pop("default", None)
-    if left.get("inferred") or right.get("inferred"):
-        result["inferred"] = True
-    return result
-
-
-def _config_item_key(item: str) -> Optional[str]:
-    if "=" not in item:
-        return None
-    return item.split("=", 1)[0].strip()
 
 
 def _workflow_agent_types(config: CollaborationConfig, sequence: Iterable[str]) -> Set[str]:

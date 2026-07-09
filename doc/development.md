@@ -5,7 +5,7 @@
 Run tests:
 
 ```bash
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests -t .
 ```
 
 Source checkout helper:
@@ -13,8 +13,15 @@ Source checkout helper:
 ```bash
 ./agent_collab.sh help
 ./agent_collab.sh test
+./agent_collab.sh integration-test [claude|codex|antigravity] [cli|sdk] [--strict]
 ./agent_collab.sh smoke
 ```
+
+`test` is hermetic and discovers only `tests/`. `integration-test` discovers
+only `integration_tests/`, may make paid model calls, and uses native provider
+credentials. Missing dependencies/credentials skip by default; `--strict`
+returns exit `2` when an explicitly selected provider cannot run. Behavioral
+failures return `1`.
 
 Run a one-shot mock session:
 

@@ -29,6 +29,7 @@ Usage:
   ./agent_collab.sh status SESSION_ID
   ./agent_collab.sh stop SESSION_ID
   ./agent_collab.sh test
+  ./agent_collab.sh integration-test [PROVIDER] [BACKEND] [--strict]
   ./agent_collab.sh smoke
 
 Examples:
@@ -54,7 +55,12 @@ case "${1:-help}" in
   test)
     shift
     cd "$repo_root"
-    exec python3 -m unittest discover -s tests "$@"
+    exec python3 -m unittest discover -s tests -t . "$@"
+    ;;
+  integration-test)
+    shift
+    cd "$repo_root"
+    exec python3 -m integration_tests "$@"
     ;;
   smoke)
     shift

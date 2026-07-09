@@ -78,7 +78,15 @@ class ShellWrapperTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(captured["cwd"], str(ROOT))
-        self.assertEqual(captured["args"], ["-m", "unittest", "discover", "-s", "tests"])
+        self.assertEqual(captured["args"], ["-m", "unittest", "discover", "-s", "tests", "-t", "."])
+
+    def test_integration_test_command_runs_separate_package(self):
+        result, captured = self._run_with_fake_python(["integration-test", "claude", "sdk", "--strict"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            captured["args"], ["-m", "integration_tests", "claude", "sdk", "--strict"]
+        )
 
     def test_smoke_command_uses_mock_runner(self):
         result, captured = self._run_with_fake_python(["smoke"])

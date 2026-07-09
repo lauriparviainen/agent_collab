@@ -112,9 +112,8 @@ demoted to a *documentation output*, and only for the parts that model cleanly.
 - **`/options` stays the runtime authority.** `describe_options` merges
   configured agents, workflow agent types, backend health, and CLI-arg-inferred
   defaults per workdir ([options.py](../../agent_collab/options.py)
-  `describe_options` / `_schema_for_agent_type`). A static contract may only say
-  the option blocks (`codex_options` / `claude_options` / `antigravity_options`)
-  are objects; their allowed fields/defaults — plus `agents`, `workflows`,
+  `describe_options` / `_backend_option_schemas`). A static contract may only say
+  `backend_options` is an object; its backend-qualified fields/defaults — plus `agents`, `workflows`,
   `workflow_agent_types`, and `backends` — all come from `/options` at runtime.
   The TUI must call `/options`, not bake the option schema in.
 - **`wait_events`** is a normal `GET` returning `EventBatch`; its long-poll
@@ -406,7 +405,7 @@ transport errors only (not JSON-RPC error bodies); added `token_path` to
 `serve` never creates the daemon dir; added `color` to the non-user field list;
 required `workdir` in the `/options` request DTO (fixing
 `client.describe_options()`'s no-payload `400`); generalized the `/options`
-runtime-authority wording beyond `codex_options`; and noted the local token file
+runtime-authority wording around backend-qualified options; and noted the local token file
 only applies to the loopback default.
 
 Fourth pass (finalization, 2026-07-09). Grounding re-verified against the code —

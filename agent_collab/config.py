@@ -51,7 +51,7 @@ AGENT_TYPES = SUBPROCESS_AGENT_TYPES | {"mock"}
 
 def builtin_config() -> CollaborationConfig:
     config = CollaborationConfig()
-    data = _load_toml_file(DEFAULT_CONFIG_PATH)
+    data = load_toml_file(DEFAULT_CONFIG_PATH)
     merge_config_data(config, migrate_config_data(data, source=str(DEFAULT_CONFIG_PATH)))
     return config
 
@@ -85,7 +85,7 @@ def load_config(
     project_path, user_path = config_search_paths(workdir, home, env)
     for path in (user_path, project_path):
         if path.exists():
-            merge_config_data(config, migrate_config_data(_load_toml_file(path), source=str(path)))
+            merge_config_data(config, migrate_config_data(load_toml_file(path), source=str(path)))
             config.loaded_paths.append(path)
 
     validate_config(config)
@@ -224,7 +224,7 @@ def validate_workflow(config: CollaborationConfig, workflow_id: str) -> None:
             raise ConfigError(f"workflows.{workflow_id}.sequence references disabled agent {agent_id!r}")
 
 
-def _load_toml_file(path: Path) -> Dict[str, Any]:
+def load_toml_file(path: Path) -> Dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     try:
         import tomllib  # type: ignore

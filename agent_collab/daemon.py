@@ -45,17 +45,14 @@ class StartSessionRequest:
     color: bool = False
     log_dir: Optional[Union[str, Path]] = None
     session_id: Optional[str] = None
-    codex_options: Optional[Dict[str, Any]] = None
-    claude_options: Optional[Dict[str, Any]] = None
-    antigravity_options: Optional[Dict[str, Any]] = None
+    backend_options: Optional[Dict[str, Dict[str, Any]]] = None
     backend: Optional[str] = None
     interactive: bool = False
     interactive_idle_timeout: float = 600.0
     # Resolved {agent_id: backend_id}, computed once during start validation and
     # carried into execution; not a user input.
     resolved_backends: Optional[Dict[str, str]] = None
-    # Exact backend-normalized options by agent id. Provider buckets remain on
-    # the request for wire compatibility; runners consume this derived map.
+    # Exact backend-normalized options by agent id; runners consume this map.
     agent_options: Optional[Dict[str, Dict[str, Any]]] = None
     # The exact validated config snapshot from start, carried into execution so
     # the runner uses the same agents/types/backends the start response
@@ -87,9 +84,7 @@ class StartSessionRequest:
             dry_run=model.dry_run,
             interactive=model.interactive,
             interactive_idle_timeout=model.interactive_idle_timeout,
-            codex_options=model.codex_options,
-            claude_options=model.claude_options,
-            antigravity_options=model.antigravity_options,
+            backend_options=model.backend_options,
             backend=model.backend,
         )
 
@@ -220,30 +215,21 @@ class SessionManager:
             else self.default_log_dir or GlobalDataPaths.resolve().session_dir
         )
         collab_config = load_config(workdir)
-        requested_antigravity_options = request.antigravity_options
-        requested_claude_options = request.claude_options
-        requested_codex_options = request.codex_options
         selection = validate_start_backends(
             collab_config,
             request.workflow,
             request.backend,
-            requested_antigravity_options,
-            requested_claude_options,
-            requested_codex_options,
+            request.backend_options,
             health=None if (request.mock or request.dry_run) else self._backend_health,
         )
         normalized = normalize_start_options(
             collab_config,
             request.workflow,
-            requested_codex_options,
-            requested_claude_options,
-            requested_antigravity_options,
+            request.backend_options,
             agent_backends=selection.agent_backends,
         )
-        normalized_options = normalized.provider_options
-        request.codex_options = normalized_options["codex_options"]
-        request.claude_options = normalized_options["claude_options"]
-        request.antigravity_options = normalized_options["antigravity_options"]
+        normalized_options = normalized.backend_options
+        request.backend_options = normalized_options
         request.agent_options = dict(normalized.agent_options)
         request.resolved_backends = dict(selection.agent_backends)
         request.collab_config = collab_config
@@ -424,9 +410,6 @@ class SessionManager:
             # Reuse the config validated at start; only reload if it was lost
             # (e.g. an index-restored request, which never runs anyway).
             collab_config=request.collab_config or load_config(workdir),
-            codex_options=dict(request.codex_options or {}),
-            claude_options=dict(request.claude_options or {}),
-            antigravity_options=dict(request.antigravity_options or {}),
             agent_options={key: dict(value) for key, value in (request.agent_options or {}).items()},
             agent_backends=dict(request.resolved_backends or {}),
             interactive=bool(request.interactive),
@@ -466,7 +449,7 @@ class SessionManager:
 
     def _maybe_capture_provider_session(self, managed: _ManagedSession, event: Event) -> None:
         # SDK runners emit a status event whose raw carries a provider session id
-        # plus the emitting agent id (see backends.sdk_common.provider_session_event).
+        # plus the emitting agent id (see backends.common.sdk.provider_session_event).
         # Record it into central session state under one uniform schema; this is
         # capture only — nothing resumes it and capabilities stay honest.
         raw = event.raw if isinstance(event.raw, dict) else None

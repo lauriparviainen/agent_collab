@@ -499,8 +499,7 @@ def build_new_session_payload(
     dry_run: bool = False,
     interactive: bool = False,
     interactive_idle_timeout: float = 600.0,
-    codex_options: Optional[Mapping[str, Any]] = None,
-    claude_options: Optional[Mapping[str, Any]] = None,
+    backend_options: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> dict:
     task = task.strip()
     workflow = workflow.strip()
@@ -519,8 +518,9 @@ def build_new_session_payload(
         "dry_run": bool(dry_run),
         "interactive": bool(interactive),
         "interactive_idle_timeout": float(interactive_idle_timeout),
-        "codex_options": dict(codex_options or {}),
-        "claude_options": dict(claude_options or {}),
+        "backend_options": {
+            key: dict(value) for key, value in (backend_options or {}).items()
+        },
     }
 
 

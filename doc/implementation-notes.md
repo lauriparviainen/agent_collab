@@ -38,8 +38,9 @@ An agent's provider `type` (`claude`, `codex`, `antigravity`, `mock`) is
 separate from its execution `backend` (`cli` or an in-process `sdk`). SDK
 packages install with the project on Python >=3.10; their imports remain lazy.
 
-Backends live in `agent_collab/backends/` and are registered by
-`(agent_type, backend_id)`. Backend resolution order is:
+Each pair lives in `agent_collab/backends/<provider>_<backend>/` with its own
+`backend.py`, `options.toml`, and `README.md`. A single registry list registers
+packages by `(agent_type, backend_id)`. Backend resolution order is:
 
 ```text
 start request > agents.<id>.backend > cli
@@ -51,14 +52,12 @@ The resolved per-agent backend map is computed once at start validation and
 threaded through `RefereeConfig` to the runner construction path. It must reach
 execution, not only the returned settings.
 
-Every backend owns a declarative `option_schema`, `normalize_options`, and
-`settings_summary` contract. Provider-wide request buckets remain wire-compatible,
-but validation runs against every selected agent/backend and produces an exact
-per-agent option map. Only CLI backends infer values from configured argv; SDK
-backends receive configured defaults and explicit requests without inheriting
-CLI flags. `describe_options` reports each backend's effective schema and the
-top-level provider schema is a union of registered backend declarations. There
-is no central provider/backend support matrix.
+Every backend owns a declarative `options.toml`, plus `normalize_options`,
+`settings_summary`, `command_preview`, and runner construction. Requests use one
+dynamic `backend_options` map keyed by canonical names such as `claude_cli` and
+`codex_sdk`; there are no provider-wide option fields or central support table.
+Only CLI backends infer values from argv. `describe_options` reports the exact
+schema for every registered backend.
 
 Backend capabilities (`resume`, `interrupt`, `tool_gate`) are honest runtime
 facts and are not inferred from provider brand. Live backend health gates starts

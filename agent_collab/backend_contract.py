@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -46,6 +47,84 @@ class BackendOptionError(ValueError):
         self.field = field
         self.message = message
         super().__init__(f"{field}: {message}" if field else message)
+
+
+def load_option_schema(path: Path) -> Dict[str, OptionSpec]:
+    """Load and validate a backend-owned ``options.toml`` contract."""
+
+    # Lazy import keeps this module a registry-independent leaf.
+    from .config import ConfigError, load_toml_file
+
+    data = load_toml_file(path)
+    unknown = set(data) - {"schema_version", "options"}
+    if unknown:
+        raise ConfigError(f"{path}: unknown option manifest field {sorted(unknown)[0]!r}")
+    if data.get("schema_version") != 1:
+        raise ConfigError(f"{path}: schema_version must be 1")
+    options = data.get("options")
+    if not isinstance(options, Mapping):
+        raise ConfigError(f"{path}: [options] must be a table")
+
+    result: Dict[str, OptionSpec] = {}
+    valid_types = {"string", "integer", "boolean"}
+    for name, raw in options.items():
+        label = f"{path}: options.{name}"
+        if not isinstance(name, str) or not name or not isinstance(raw, Mapping):
+            raise ConfigError(f"{label} must be a table")
+        extra = set(raw) - {"type", "allowed", "min", "max", "default", "inferred"}
+        if extra:
+            raise ConfigError(f"{label}: unknown field {sorted(extra)[0]!r}")
+        option_type = raw.get("type")
+        if option_type not in valid_types:
+            raise ConfigError(f"{label}.type must be one of {sorted(valid_types)}")
+        allowed = raw.get("allowed")
+        if allowed is not None and not isinstance(allowed, list):
+            raise ConfigError(f"{label}.allowed must be an array")
+        minimum = raw.get("min")
+        maximum = raw.get("max")
+        for key, value in (("min", minimum), ("max", maximum)):
+            if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+                raise ConfigError(f"{label}.{key} must be a number")
+        if (minimum is not None or maximum is not None) and option_type != "integer":
+            raise ConfigError(f"{label}: min/max are supported only for integer options")
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise ConfigError(f"{label}: min must be <= max")
+        inferred = raw.get("inferred", False)
+        if not isinstance(inferred, bool):
+            raise ConfigError(f"{label}.inferred must be a boolean")
+        spec = OptionSpec(
+            option_type,
+            allowed=tuple(allowed) if allowed is not None else None,
+            minimum=minimum,
+            maximum=maximum,
+            default=deepcopy(raw["default"]) if "default" in raw else OPTION_UNSET,
+            inferred=inferred,
+        )
+        _validate_manifest_value(spec.default, spec, f"{label}.default", ConfigError)
+        if spec.allowed is not None:
+            for index, value in enumerate(spec.allowed):
+                _validate_manifest_value(value, spec, f"{label}.allowed[{index}]", ConfigError)
+        if spec.default is not OPTION_UNSET:
+            if spec.allowed is not None and spec.default not in spec.allowed:
+                raise ConfigError(f"{label}.default must be one of allowed")
+            if spec.minimum is not None and spec.default < spec.minimum:
+                raise ConfigError(f"{label}.default must be >= min")
+            if spec.maximum is not None and spec.default > spec.maximum:
+                raise ConfigError(f"{label}.default must be <= max")
+        result[name] = spec
+    return result
+
+
+def _validate_manifest_value(value: Any, spec: OptionSpec, label: str, error_type: type) -> None:
+    if value is OPTION_UNSET:
+        return
+    valid = (
+        (spec.type == "string" and isinstance(value, str))
+        or (spec.type == "integer" and isinstance(value, int) and not isinstance(value, bool))
+        or (spec.type == "boolean" and isinstance(value, bool))
+    )
+    if not valid:
+        raise error_type(f"{label} must match declared type {spec.type!r}")
 
 
 def normalize_declared_options(

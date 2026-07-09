@@ -48,19 +48,17 @@ given `workdir`, including each workflow's sequence and agent types.
 ## Options
 
 Call `agent_collab_describe_options` (with the session's required `workdir`) before
-passing non-default `codex_options` or `claude_options`. It returns:
+passing non-default `backend_options`. It returns:
 
 - available workflows and their agent types,
 - registered execution backends with health, capabilities, and an effective
   `option_schema` for each backend,
-- the union of accepted option fields per agent type, with allowed values and
-  configured defaults (for example `claude_options.model`,
-  `claude_options.thinking_level`, `codex_options.sandbox`,
-  `codex_options.approval_policy`).
+- one exact schema per canonical backend name, with allowed values and defaults
+  (for example `backend_options.claude_cli.model` and
+  `backend_options.codex_sdk.sandbox`).
 
-Only pass options for agent types that the chosen workflow actually uses and
-choose fields declared by every selected backend of that provider; anything
-else is rejected. Omit options you do not need — backend-specific configured
+Only pass entries for backends selected by the chosen workflow; anything else
+is rejected. Omit options you do not need — backend-specific configured
 defaults are applied automatically and echoed back in the start response.
 
 ## Start
@@ -76,7 +74,7 @@ Start a session with `agent_collab_start`:
 ```
 
 Optional fields: `max_turns`, `timeout`, `mock`, `dry_run`, `interactive`,
-`interactive_idle_timeout`, `codex_options`, `claude_options`.
+`interactive_idle_timeout`, `backend_options`, `backend`.
 
 The response is your confirmation of what the server is about to run. Check
 it before watching:
@@ -121,7 +119,7 @@ events.
 
 If `agent_collab_start` returns `isError` with `invalid_start_options`, the
 `details` list contains one entry per problem with a field `path` (for
-example `claude_options.model`) and a `message` naming the allowed values.
+example `backend_options.claude_cli.model`) and a `message` naming the allowed values.
 Fix exactly the named fields and retry; do not guess or drop the options.
 If a workflow or agent is unknown, call `agent_collab_describe_options` for
 the same `workdir` and choose from what it lists. Unknown `session_id`

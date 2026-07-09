@@ -95,8 +95,10 @@ class McpServerTests(unittest.TestCase):
         args = {
             "task": "mcp test",
             "workdir": "/repo",
-            "codex_options": {"reasoning_effort": "medium"},
-            "claude_options": {"model": "sonnet"},
+            "backend_options": {
+                "codex_cli": {"reasoning_effort": "medium"},
+                "claude_cli": {"model": "sonnet"},
+            },
         }
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
@@ -122,12 +124,12 @@ class McpServerTests(unittest.TestCase):
     def test_describe_options_maps_to_client_describe_options(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
-            client.describe_options.return_value = {"workflows": [], "codex_options": {}, "claude_options": {}}
+            client.describe_options.return_value = {"workflows": [], "backend_options": {}}
 
             result = handle_tool("agent_collab_describe_options", {"workdir": "/repo"})
 
         client.describe_options.assert_called_once_with({"workdir": "/repo"})
-        _assert_tool_result(self, result, {"workflows": [], "codex_options": {}, "claude_options": {}})
+        _assert_tool_result(self, result, {"workflows": [], "backend_options": {}})
 
     def test_describe_options_rejects_missing_workdir(self):
         result = handle_tool("agent_collab_describe_options", {})

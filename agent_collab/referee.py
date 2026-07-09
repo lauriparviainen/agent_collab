@@ -16,7 +16,14 @@ from .config import (
 from .events import Event
 from .logging import SessionLogger
 from .paths import GlobalDataPaths
-from .runners import AgentRunner, DryRunRunner, MockRunner, _mock_source, configured_runner
+from .runners import (
+    AgentRunner,
+    BackendDryRunRunner,
+    DryRunRunner,
+    MockRunner,
+    _mock_source,
+    configured_runner,
+)
 from .terminal import print_event
 
 
@@ -50,11 +57,7 @@ class RefereeConfig:
     log_dir: Optional[Path] = None
     session_id: Optional[str] = None
     collab_config: Optional[CollaborationConfig] = None
-    codex_options: Optional[Dict[str, Any]] = None
-    claude_options: Optional[Dict[str, Any]] = None
-    antigravity_options: Optional[Dict[str, Any]] = None
-    # Exact backend-normalized options by agent. Provider buckets above remain
-    # as the compatibility fallback for direct/non-daemon callers.
+    # Exact backend-normalized options by agent.
     agent_options: Optional[Dict[str, Dict[str, Any]]] = None
     # Resolved {agent_id: backend_id} carried from start validation so execution
     # uses exactly the selection the start response advertised (no re-resolution).
@@ -87,19 +90,22 @@ class Referee:
                 name = agent.name or agent.id
                 runners[agent_id] = MockRunner(name, source=_mock_source(agent.type, name))
             elif self.config.dry_run and agent.type != "mock":
-                from .options import build_cli_command
+                from .backends import get_backend, resolve_backend_id
 
-                runners[agent_id] = DryRunRunner(
-                    agent.id,
-                    build_cli_command(agent, self._options_for(agent_id, agent.type)),
-                    cwd=agent.cwd,
-                    agent=agent,
+                backend_id = self._backend_for(agent_id) or resolve_backend_id(agent)
+                backend = get_backend(agent.type, backend_id)
+                options = self._options_for(agent_id)
+                preview = backend.command_preview(agent, options, self.workdir)
+                runners[agent_id] = (
+                    DryRunRunner(agent.id, preview, cwd=agent.cwd)
+                    if preview is not None
+                    else BackendDryRunRunner(agent.id, f"{agent.type}_{backend_id}", cwd=agent.cwd)
                 )
             else:
                 runners[agent_id] = configured_runner(
                     agent,
                     self.config.verbose,
-                    self._options_for(agent_id, agent.type),
+                    self._options_for(agent_id),
                     self._backend_for(agent_id),
                 )
         return runners
@@ -112,15 +118,9 @@ class Referee:
             return self.config.agent_backends.get(agent_id)
         return None
 
-    def _options_for(self, agent_id: str, agent_type: str) -> Dict[str, Any]:
+    def _options_for(self, agent_id: str) -> Dict[str, Any]:
         if self.config.agent_options is not None and agent_id in self.config.agent_options:
             return dict(self.config.agent_options[agent_id])
-        if agent_type == "codex":
-            return dict(self.config.codex_options or {})
-        if agent_type == "claude":
-            return dict(self.config.claude_options or {})
-        if agent_type == "antigravity":
-            return dict(self.config.antigravity_options or {})
         return {}
 
     def _sequence(self) -> List[str]:

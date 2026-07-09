@@ -49,7 +49,7 @@ Confirmed shapes (used by `agent_collab/backends/antigravity_sdk.py`):
 - **`Agent.conversation_id` exists** — a stable, resume-capable id (resolves the
   plan's open question 3: yes).
 - There is no `--mode` equivalent; execution posture is `CapabilitiesConfig` /
-  `policies`, so `antigravity_options.mode` stays cli-only (open question 4).
+  `policies`, so `backend_options.antigravity_sdk.mode` remains unsupported.
 
 `sdk-response-sample.json` holds a resolved typed-buffer sample in the confirmed
 shape (illustrative values) that drives the fake-module tests in

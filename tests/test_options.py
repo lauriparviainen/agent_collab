@@ -1,342 +1,209 @@
-import tempfile
 import unittest
 from pathlib import Path
 
-from agent_collab.backends.base import (
-    CREDENTIALS_OK,
-    HEALTH_OK,
-    BackendHealth,
-)
-from agent_collab.config import AgentConfig, builtin_config, load_config
+from agent_collab.backends.claude_cli import ClaudeCliBackend
+from agent_collab.backends.codex_cli import CodexCliBackend
+from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig, builtin_config
 from agent_collab.options import (
     StartOptionsError,
-    apply_agent_options,
     build_session_settings,
     describe_options,
-    validate_start_backends,
+    normalize_start_options,
     validate_start_options,
 )
 
 
-def _ok_health(backend):
-    return BackendHealth(status=HEALTH_OK, credentials=CREDENTIALS_OK, version="1.0.0", checked_at="t")
+def _config() -> CollaborationConfig:
+    return builtin_config()
 
 
-def _write_config(root: Path, text: str) -> None:
-    path = root / ".agent-collab" / "config.toml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-
-
-class StartOptionsTests(unittest.TestCase):
-    def test_valid_codex_and_claude_options_pass(self):
-        config = builtin_config()
-
+class BackendQualifiedOptionTests(unittest.TestCase):
+    def test_valid_options_are_normalized_per_backend(self):
         validated = validate_start_options(
-            config,
+            _config(),
             "cross-review",
-            codex_options={"thinking_level": "xhigh", "sandbox": "workspace-write", "search": False},
-            claude_options={"model": "sonnet", "thinking_level": "max"},
-        )
-
-        self.assertEqual(validated["codex_options"]["thinking_level"], "xhigh")
-        self.assertEqual(validated["codex_options"]["reasoning_effort"], "xhigh")
-        self.assertEqual(validated["claude_options"]["model"], "sonnet")
-        self.assertEqual(validated["claude_options"]["thinking_level"], "max")
-
-    def test_unknown_wrong_type_and_unsupported_values_are_reported_together(self):
-        config = builtin_config()
-
-        with self.assertRaises(StartOptionsError) as ctx:
-            validate_start_options(
-                config,
-                "cross-review",
-                codex_options={"reasoning_effort": "maximum", "extra": True},
-                claude_options={"thinking_budget_tokens": "large"},
-            )
-
-        details = ctx.exception.to_dict()["details"]
-        by_path = {detail["path"]: detail["message"] for detail in details}
-        self.assertIn("codex_options.extra", by_path)
-        self.assertIn("codex_options.reasoning_effort", by_path)
-        self.assertIn("maximum", by_path["codex_options.reasoning_effort"])
-        self.assertIn("claude_options.thinking_budget_tokens", by_path)
-        self.assertIn("integer", by_path["claude_options.thinking_budget_tokens"])
-
-    def test_workflow_inapplicable_options_are_rejected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            home = root / "home"
-            home.mkdir()
-            _write_config(
-                root,
-                """
-[workflows.claude-only]
-sequence = ["claude"]
-""",
-            )
-            config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
-
-            with self.assertRaises(StartOptionsError) as ctx:
-                validate_start_options(config, "claude-only", codex_options={"model": "gpt-5-codex"})
-
-        details = ctx.exception.to_dict()["details"]
-        self.assertEqual(details[0]["path"], "codex_options")
-        self.assertIn("does not apply", details[0]["message"])
-
-    def test_configured_allowed_values_tighten_validation(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            home = root / "home"
-            home.mkdir()
-            _write_config(
-                root,
-                """
-[agents.codex.options]
-model.allowed = ["gpt-5-codex"]
-reasoning_effort.allowed = ["low", "medium"]
-""",
-            )
-            config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
-
-            with self.assertRaises(StartOptionsError) as ctx:
-                validate_start_options(config, "cross-review", codex_options={"model": "gpt-5", "reasoning_effort": "high"})
-
-        messages = {detail["path"]: detail["message"] for detail in ctx.exception.to_dict()["details"]}
-        self.assertIn("gpt-5-codex", messages["codex_options.model"])
-        self.assertIn("low, medium", messages["codex_options.reasoning_effort"])
-
-    def test_configured_defaults_are_returned_from_validation(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            home = root / "home"
-            home.mkdir()
-            _write_config(
-                root,
-                """
-[agents.claude.options]
-model.default = "opus"
-model.allowed = ["sonnet", "opus"]
-thinking_level.default = "high"
-thinking_level.allowed = ["low", "medium", "high", "xhigh", "max"]
-""",
-            )
-            config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
-
-            validated = validate_start_options(config, "cross-review")
-
-        self.assertEqual(validated["claude_options"]["model"], "opus")
-        self.assertEqual(validated["claude_options"]["thinking_level"], "high")
-
-    def test_build_session_settings_reflects_effective_options(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            home = root / "home"
-            home.mkdir()
-            _write_config(
-                root,
-                """
-[agents.claude.options]
-model.default = "opus"
-thinking_level.default = "high"
-
-[agents.codex.options]
-thinking_level.default = "high"
-""",
-            )
-            config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
-            normalized = validate_start_options(config, "cross-review", claude_options={"model": "sonnet"})
-
-            settings = build_session_settings(config, "cross-review", normalized)
-
-        self.assertEqual(settings["workflow"], {"name": "cross-review", "sequence": ["claude", "codex", "claude"]})
-        claude = settings["agents"]["claude"]
-        codex = settings["agents"]["codex"]
-        self.assertEqual(claude["type"], "claude")
-        self.assertEqual(claude["model"], "sonnet")
-        self.assertEqual(claude["thinking_level"], "high")
-        self.assertEqual(codex["thinking_level"], "high")
-        self.assertIn("--model", claude["command_preview"])
-        self.assertIn("sonnet", claude["command_preview"])
-        self.assertEqual(
-            claude["command_preview"],
-            apply_agent_options(
-                [config.agents["claude"].command] + list(config.agents["claude"].args),
-                config.agents["claude"],
-                normalized["claude_options"],
-            ),
-        )
-
-    def test_build_session_settings_uses_builtin_defaults_and_omits_unavailable_fields(self):
-        config = builtin_config()
-        normalized = validate_start_options(config, "solo-claude")
-
-        settings = build_session_settings(config, "solo-claude", normalized)
-
-        claude = settings["agents"]["claude"]
-        self.assertEqual(set(settings["agents"]), {"claude"})
-        self.assertEqual(claude["model"], "opus")
-        self.assertEqual(claude["thinking_level"], "high")
-        self.assertNotIn("sandbox", claude)
-        self.assertEqual(claude["command_preview"][0], "claude")
-        self.assertIn("opus", claude["command_preview"])
-        self.assertIn("high", claude["command_preview"])
-
-    def test_build_session_settings_command_preview_has_no_prompt(self):
-        config = builtin_config()
-        normalized = validate_start_options(config, "cross-review")
-
-        settings = build_session_settings(config, "cross-review", normalized)
-
-        for agent in settings["agents"].values():
-            for part in agent.get("command_preview", []):
-                self.assertNotIn("TASK", part)
-
-    def test_describe_options_returns_workflows_agents_and_schemas(self):
-        config = builtin_config()
-
-        payload = describe_options(config, Path("."))
-
-        self.assertIn("agents", payload)
-        self.assertIn("workflows", payload)
-        self.assertIn("codex_options", payload)
-        self.assertIn("claude_options", payload)
-        self.assertIn("reasoning_effort", payload["codex_options"]["properties"])
-        self.assertIn("thinking_level", payload["codex_options"]["properties"])
-        self.assertIn("thinking_level", payload["claude_options"]["properties"])
-        self.assertIn("thinking_budget_tokens", payload["claude_options"]["properties"])
-        self.assertTrue(all(example.get("workdir") for example in payload["examples"]))
-
-    def test_describe_options_includes_backends_section(self):
-        config = builtin_config()
-
-        payload = describe_options(config, Path("."), health=_ok_health)
-
-        self.assertIn("backends", payload)
-        self.assertIn("antigravity_options", payload)
-        for agent_type in ("claude", "codex"):
-            section = payload["backends"][agent_type]
-            self.assertEqual(section["default"], "cli")
-            # Stage 5.1: `sdk` is first-class alongside `cli` for every provider.
-            self.assertEqual(section["backends"], ["cli", "sdk"])
-            for backend_id in ("cli", "sdk"):
-                entry = section["entries"][backend_id]
-                self.assertTrue(entry["available"])
-                self.assertEqual(
-                    entry["capabilities"], {"resume": False, "interrupt": False, "tool_gate": False}
-                )
-                self.assertEqual(entry["health"]["status"], "ok")
-
-    def test_build_session_settings_records_backend_and_capabilities(self):
-        config = builtin_config()
-        normalized = validate_start_options(config, "solo-claude")
-        selection = validate_start_backends(config, "solo-claude")
-
-        settings = build_session_settings(
-            config, "solo-claude", normalized, agent_backends=selection.agent_backends
-        )
-
-        claude = settings["agents"]["claude"]
-        self.assertEqual(claude["backend"], "cli")
-        self.assertEqual(
-            claude["capabilities"], {"resume": False, "interrupt": False, "tool_gate": False}
-        )
-        self.assertEqual(claude["command_preview"][0], "claude")
-
-    def test_describe_options_reports_configured_defaults(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            home = root / "home"
-            home.mkdir()
-            _write_config(
-                root,
-                """
-[agents.claude.options]
-model.default = "opus"
-thinking_level.default = "high"
-""",
-            )
-            config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
-
-            payload = describe_options(config, root)
-
-        self.assertEqual(payload["claude_options"]["properties"]["model"]["default"], "opus")
-        self.assertEqual(payload["claude_options"]["properties"]["thinking_level"]["default"], "high")
-
-    def test_apply_agent_options_maps_to_explicit_flags(self):
-        agent = AgentConfig(
-            id="claude",
-            type="claude",
-            command="claude",
-            args=["-p", "--model", "sonnet", "--output-format", "stream-json"],
-        )
-
-        command = apply_agent_options(
-            ["claude"] + agent.args,
-            agent,
-            {"model": "opus", "permission_mode": "default", "thinking_level": "high"},
-        )
-
-        self.assertEqual(command.count("--model"), 1)
-        self.assertIn("--permission-mode", command)
-        self.assertIn("--effort", command)
-        self.assertIn("high", command)
-        self.assertIn("opus", command)
-        self.assertNotIn("sonnet", command)
-
-    def test_apply_agent_options_uses_configured_defaults(self):
-        agent = AgentConfig(
-            id="claude",
-            type="claude",
-            command="claude",
-            args=["-p", "--output-format", "stream-json"],
-            options={
-                "model": {"default": "opus"},
-                "thinking_level": {"default": "high"},
+            {
+                "codex_cli": {"thinking_level": "xhigh", "sandbox": "workspace-write", "search": False},
+                "claude_cli": {"model": "sonnet", "thinking_level": "max"},
             },
         )
+        self.assertEqual(validated["codex_cli"]["reasoning_effort"], "xhigh")
+        self.assertEqual(validated["claude_cli"]["model"], "sonnet")
 
-        command = apply_agent_options(["claude"] + agent.args, agent, {})
+    def test_invalid_values_have_backend_qualified_paths(self):
+        with self.assertRaises(StartOptionsError) as ctx:
+            validate_start_options(
+                _config(),
+                "cross-review",
+                {
+                    "codex_cli": {"reasoning_effort": "maximum", "extra": True},
+                    "claude_cli": {"thinking_budget_tokens": "large"},
+                },
+            )
+        paths = {detail["path"] for detail in ctx.exception.to_dict()["details"]}
+        self.assertIn("backend_options.codex_cli.extra", paths)
+        self.assertIn("backend_options.codex_cli.reasoning_effort", paths)
+        self.assertIn("backend_options.claude_cli.thinking_budget_tokens", paths)
 
-        self.assertIn("--model", command)
-        self.assertIn("opus", command)
-        self.assertIn("--effort", command)
-        self.assertIn("high", command)
+    def test_unknown_and_unselected_backend_names_are_rejected(self):
+        for payload, expected in (
+            ({"unknown_backend": {}}, "backend_options.unknown_backend"),
+            ({"codex_cli": {"model": "gpt-5"}}, "backend_options.codex_cli"),
+        ):
+            with self.subTest(payload=payload), self.assertRaises(StartOptionsError) as ctx:
+                validate_start_options(_config(), "solo-claude", payload)
+            self.assertEqual(ctx.exception.to_dict()["details"][0]["path"], expected)
 
-    def test_apply_codex_thinking_level_uses_config_override(self):
-        agent = AgentConfig(
-            id="codex",
-            type="codex",
-            command="codex",
-            args=["exec", "--json", "--reasoning-effort", "low", "-c", 'model_reasoning_effort="medium"'],
+    def test_defaults_come_from_backend_manifests(self):
+        validated = validate_start_options(_config(), "cross-review")
+        self.assertEqual(validated["claude_cli"]["model"], "opus")
+        self.assertEqual(validated["claude_cli"]["thinking_level"], "high")
+        self.assertEqual(validated["codex_cli"]["model"], "gpt-5.6-sol")
+
+    def test_cli_and_sdk_options_can_coexist_for_same_provider(self):
+        config = CollaborationConfig(
+            agents={
+                "cli": AgentConfig(id="cli", type="claude", command="claude", backend="cli"),
+                "sdk": AgentConfig(id="sdk", type="claude", backend="sdk"),
+            },
+            workflows={"mixed": WorkflowConfig(id="mixed", sequence=["cli", "sdk"])},
         )
+        normalized = normalize_start_options(
+            config,
+            "mixed",
+            {
+                "claude_cli": {"thinking_budget_tokens": 1024},
+                "claude_sdk": {"thinking_level": "max"},
+            },
+            agent_backends={"cli": "cli", "sdk": "sdk"},
+        )
+        self.assertEqual(normalized.agent_options["cli"]["thinking_budget_tokens"], 1024)
+        self.assertEqual(normalized.agent_options["sdk"]["thinking_level"], "max")
 
-        command = apply_agent_options(["codex"] + agent.args, agent, {"thinking_level": "high"})
+    def test_cross_field_conflicts_are_rejected(self):
+        for payload, path in (
+            (
+                {"codex_cli": {"thinking_level": "low", "reasoning_effort": "high"}},
+                "backend_options.codex_cli.thinking_level",
+            ),
+            (
+                {"claude_cli": {"thinking_level": "high", "thinking_budget_tokens": 8192}},
+                "backend_options.claude_cli.thinking_level",
+            ),
+        ):
+            with self.subTest(payload=payload), self.assertRaises(StartOptionsError) as ctx:
+                validate_start_options(_config(), "cross-review", payload)
+            self.assertIn(path, {item["path"] for item in ctx.exception.to_dict()["details"]})
 
-        self.assertNotIn("--reasoning-effort", command)
-        self.assertEqual(command.count("-c"), 1)
+
+class DescribeOptionsTests(unittest.TestCase):
+    def test_describe_exposes_one_schema_per_backend(self):
+        payload = describe_options(_config())
+        schema = payload["backend_options"]
+        self.assertFalse(schema["additionalProperties"])
+        properties = schema["properties"]
+        self.assertEqual(
+            set(properties),
+            {"claude_cli", "claude_sdk", "codex_cli", "codex_sdk", "antigravity_cli", "antigravity_sdk"},
+        )
+        self.assertIn("profile", properties["codex_cli"]["properties"])
+        self.assertNotIn("profile", properties["codex_sdk"]["properties"])
+        self.assertEqual(properties["claude_cli"]["properties"]["model"]["default"], "opus")
+
+    def test_backend_health_and_capabilities_remain_discoverable(self):
+        payload = describe_options(_config())
+        for provider in ("claude", "codex", "antigravity"):
+            section = payload["backends"][provider]
+            self.assertEqual(section["backends"], ["cli", "sdk"])
+            for entry in section["entries"].values():
+                self.assertIn("health", entry)
+                self.assertIn("capabilities", entry)
+
+
+class CommandMappingTests(unittest.TestCase):
+    def test_claude_cli_manifest_options_map_to_flags(self):
+        agent = AgentConfig(
+            id="claude", type="claude", command="claude",
+            args=["-p", "--output-format", "stream-json", "--model", "old"],
+        )
+        backend = ClaudeCliBackend()
+        options = backend.normalize_options(
+            agent,
+            {"model": "sonnet", "thinking_level": "high", "permission_mode": "acceptEdits"},
+        )
+        command = backend.build_command(agent, options)
+        self.assertEqual(command.count("--model"), 1)
+        self.assertIn("sonnet", command)
+        self.assertIn("--effort", command)
+        self.assertIn("--permission-mode", command)
+
+    def test_codex_cli_manifest_options_map_to_config_and_flags(self):
+        agent = AgentConfig(id="codex", type="codex", command="codex", args=["exec", "--json"])
+        backend = CodexCliBackend()
+        options = backend.normalize_options(
+            agent, {"thinking_level": "high", "sandbox": "read-only", "search": True}
+        )
+        command = backend.build_command(agent, options)
         self.assertIn('model_reasoning_effort="high"', command)
+        self.assertIn("--sandbox", command)
+        self.assertIn("--search", command)
 
-    def test_conflicting_thinking_aliases_are_rejected(self):
-        config = builtin_config()
+    def test_configured_agent_options_narrow_manifest(self):
+        config = CollaborationConfig(
+            agents={
+                "claude": AgentConfig(
+                    id="claude", type="claude", command="claude",
+                    options={"model": {"allowed": ["sonnet"], "default": "sonnet"}},
+                )
+            },
+            workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+        )
+        self.assertEqual(validate_start_options(config, "solo")["claude_cli"]["model"], "sonnet")
+        with self.assertRaises(StartOptionsError):
+            validate_start_options(config, "solo", {"claude_cli": {"model": "opus"}})
 
-        with self.assertRaises(StartOptionsError) as codex_ctx:
-            validate_start_options(
-                config,
-                "cross-review",
-                codex_options={"thinking_level": "low", "reasoning_effort": "high"},
-            )
-        codex_messages = {detail["path"]: detail["message"] for detail in codex_ctx.exception.to_dict()["details"]}
-        self.assertIn("codex_options.thinking_level", codex_messages)
+    def test_configured_raw_budget_replaces_manifest_thinking_default(self):
+        config = CollaborationConfig(
+            agents={
+                "claude": AgentConfig(
+                    id="claude", type="claude", command="claude",
+                    options={"thinking_budget_tokens": {"default": 2048}},
+                )
+            },
+            workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+        )
+        options = validate_start_options(config, "solo")["claude_cli"]
+        self.assertEqual(options["thinking_budget_tokens"], 2048)
+        self.assertNotIn("thinking_level", options)
 
-        with self.assertRaises(StartOptionsError) as claude_ctx:
-            validate_start_options(
-                config,
-                "cross-review",
-                claude_options={"thinking_level": "high", "thinking_budget_tokens": 8192},
-            )
-        claude_messages = {detail["path"]: detail["message"] for detail in claude_ctx.exception.to_dict()["details"]}
-        self.assertIn("claude_options.thinking_level", claude_messages)
+
+class SessionSettingsTests(unittest.TestCase):
+    def test_settings_use_backend_preview_without_prompt(self):
+        config = _config()
+        normalized = normalize_start_options(config, "cross-review")
+        settings = build_session_settings(
+            config,
+            "cross-review",
+            normalized.backend_options,
+            agent_backends={"claude": "cli", "codex": "cli"},
+            agent_options=normalized.agent_options,
+            workdir=Path("."),
+        )
+        for entry in settings["agents"].values():
+            self.assertIn("command_preview", entry)
+            self.assertNotIn("Task", entry["command_preview"])
+
+    def test_sdk_settings_have_no_command_preview(self):
+        config = CollaborationConfig(
+            agents={"claude": AgentConfig(id="claude", type="claude", backend="sdk")},
+            workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+        )
+        normalized = normalize_start_options(config, "solo", agent_backends={"claude": "sdk"})
+        settings = build_session_settings(
+            config, "solo", normalized.backend_options,
+            agent_backends={"claude": "sdk"}, agent_options=normalized.agent_options,
+        )
+        self.assertNotIn("command_preview", settings["agents"]["claude"])
 
 
 if __name__ == "__main__":

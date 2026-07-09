@@ -254,17 +254,17 @@ class WatchTests(unittest.TestCase):
                             "--mock",
                             "--workdir",
                             tmp,
-                            "--codex-options",
-                            '{"reasoning_effort": "medium"}',
-                            "--claude-options",
-                            '{"model": "sonnet"}',
+                            "--backend-options",
+                            '{"codex_cli":{"reasoning_effort":"medium"},"claude_cli":{"model":"sonnet"}}',
                             "task",
                         ]
                     )
 
         self.assertEqual(code, 0)
-        self.assertEqual(fake.payload["codex_options"], {"reasoning_effort": "medium"})
-        self.assertEqual(fake.payload["claude_options"], {"model": "sonnet"})
+        self.assertEqual(
+            fake.payload["backend_options"],
+            {"codex_cli": {"reasoning_effort": "medium"}, "claude_cli": {"model": "sonnet"}},
+        )
 
 
 if __name__ == "__main__":

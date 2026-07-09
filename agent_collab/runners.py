@@ -10,6 +10,7 @@ from .events import Event
 
 
 Parser = Callable[[str, bool], Optional[Event]]
+CommandBuilder = Callable[[Path], List[str]]
 
 
 class AgentRunner:
@@ -25,26 +26,40 @@ class DryRunRunner(AgentRunner):
         name: str,
         command: List[str],
         cwd: Optional[str] = None,
-        agent: Optional[AgentConfig] = None,
+        command_builder: Optional[CommandBuilder] = None,
     ):
         self.name = name
         self.command = command
         self.cwd = cwd
-        self.agent = agent
+        self.command_builder = command_builder
 
     async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
         run_dir = _resolve_run_dir(workdir, self.cwd)
-        command = list(self.command)
-        if self.agent is not None:
-            from .options import apply_runtime_workdir_args
-
-            command = apply_runtime_workdir_args(command, self.agent, run_dir)
+        command = self.command_builder(run_dir) if self.command_builder else list(self.command)
         argv = command + [prompt]
         yield Event.create(
             "referee",
             "command",
             f"dry-run would execute in {run_dir}: {' '.join(argv)}",
             {"argv": argv, "workdir": str(run_dir)},
+        )
+
+
+class BackendDryRunRunner(AgentRunner):
+    """Dry-run representation for an in-process backend with no subprocess argv."""
+
+    def __init__(self, name: str, backend_name: str, cwd: Optional[str] = None):
+        self.name = name
+        self.backend_name = backend_name
+        self.cwd = cwd
+
+    async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
+        run_dir = _resolve_run_dir(workdir, self.cwd)
+        yield Event.create(
+            "referee",
+            "status",
+            f"dry-run would execute {self.backend_name} in {run_dir}",
+            {"backend": self.backend_name, "workdir": str(run_dir)},
         )
 
 
@@ -74,7 +89,7 @@ class SubprocessRunner(AgentRunner):
         verbose: bool = False,
         env: Optional[Dict[str, str]] = None,
         cwd: Optional[str] = None,
-        agent: Optional[AgentConfig] = None,
+        command_builder: Optional[CommandBuilder] = None,
     ):
         self.name = name
         self.command_prefix = command_prefix
@@ -82,15 +97,11 @@ class SubprocessRunner(AgentRunner):
         self.verbose = verbose
         self.env = env or {}
         self.cwd = cwd
-        self.agent = agent
+        self.command_builder = command_builder
 
     async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
         run_dir = _resolve_run_dir(workdir, self.cwd)
-        command_prefix = list(self.command_prefix)
-        if self.agent is not None:
-            from .options import apply_runtime_workdir_args
-
-            command_prefix = apply_runtime_workdir_args(command_prefix, self.agent, run_dir)
+        command_prefix = self.command_builder(run_dir) if self.command_builder else list(self.command_prefix)
         argv = command_prefix + [prompt]
         yield Event.create(
             "referee",

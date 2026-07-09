@@ -19,7 +19,7 @@ Implemented:
 - MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.
 - Stdio MCP adapter that connects to the local server.
 - Cursor-based event reads and long-polling.
-- Typed `codex_options`, `claude_options`, and `antigravity_options` with pre-launch validation.
+- Backend-qualified `backend_options` with schemas/defaults owned by each backend package and pre-launch validation.
 - Pluggable agent backends: an agent's provider (`type`) is separate from its execution mechanism (`backend`). The default `cli` subprocess backend runs the provider CLI; a first-class `sdk` backend runs the provider SDK in-process. Claude, Codex, and Antigravity each register both `(cli)` and `(sdk)`; SDK imports are lazy so a missing wheel is an unavailable backend, not an import error. Backends, availability/health, and honest per-session capability flags are discoverable via `agent_collab_describe_options`.
 - MCP option discovery through `agent_collab_describe_options` and usage guidance through `agent_collab_guidance`.
 - Start/status/list responses include the effective session settings: workflow sequence, per-agent typed options, and a prompt-free `command_preview`.
@@ -134,10 +134,8 @@ Useful options:
 - `--workdir /path/to/project`
 - `--log-dir /path/to/logs`
 - `--server-url http://127.0.0.1:8765`
-- `--codex-options '{"thinking_level":"medium"}'`
-- `--claude-options '{"model":"opus","thinking_level":"high"}'`
+- `--backend-options '{"codex_cli":{"thinking_level":"medium"},"claude_cli":{"model":"opus"}}'`
 - `--backend sdk` (only when every selected agent's type registers it)
-- `--antigravity-options '{"model":"gemini-3-pro","mode":"accept-edits"}'`
 
 `agent-collab start` and `agent-collab status` print the effective session settings: the workflow sequence, each agent's model/thinking settings, and a prompt-free `command_preview` of the exact subprocess command. `agent-collab list` shows sessions across all projects with their workflow and agents.
 
@@ -277,7 +275,8 @@ Agents can call `agent_collab_guidance` for full Markdown usage guidance (source
 Run tests:
 
 ```bash
-python3 -m unittest discover -s tests
+./agent_collab.sh test
+./agent_collab.sh integration-test claude sdk  # live, credentialed, opt-in
 ```
 
 Important implementation files:
@@ -287,11 +286,11 @@ Important implementation files:
 - `agent_collab/daemon.py`: in-memory session manager and session lifecycle.
 - `agent_collab/referee.py`: bounded turn loop.
 - `agent_collab/runners.py`: runner primitives (subprocess/mock/dry-run) and the registry-backed `configured_runner`.
-- `agent_collab/backends/`: backend registry, capabilities, health probes, the `cli` backend, and the first-class Claude/Codex/Antigravity `sdk` backends (lazy-imported).
-- `agent_collab/events.py`: normalized event model and stream parsers (`claude`, `codex`, `antigravity`).
+- `agent_collab/backends/`: six standalone `<provider>_<backend>` packages, their option manifests, parsers/runners, and shared infrastructure.
+- `agent_collab/events.py`: normalized provider-neutral event model.
 - `agent_collab/client.py`: HTTP client used by CLI watch/start/list/status.
 - `agent_collab/daemon_supervisor.py`: background daemon PID/state/log lifecycle.
-- `agent_collab/options.py`: typed start option schemas, validation, session settings metadata, and explicit CLI flag mapping.
+- `agent_collab/options.py`: generic backend-option validation and session settings metadata.
 - `agent_collab/paths.py`: global home (`AGENT_COLLAB_HOME`) and session log path helpers.
 - `agent_collab/config_migrations.py`: centralized config schema migrations.
 - `agent_collab/session_index.py`: persistent session index for daemon restarts.

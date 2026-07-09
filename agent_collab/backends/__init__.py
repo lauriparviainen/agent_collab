@@ -31,7 +31,7 @@ from .base import (
     BackendUnavailable,
     OptionSpec,
 )
-from .health import HealthCache
+from .common.health import HealthCache
 
 DEFAULT_BACKEND = "cli"
 
@@ -43,6 +43,14 @@ HEALTH = HealthCache()
 
 def register(backend: AgentBackend) -> None:
     _validate_backend_contract(backend)
+    name = backend_name(backend.agent_type, backend.id)
+    for agent_type, backend_id in _REGISTRY:
+        if (agent_type, backend_id) != (backend.agent_type, backend.id):
+            if backend_name(agent_type, backend_id) == name:
+                raise ValueError(
+                    f"canonical backend name {name!r} collides with "
+                    f"({agent_type!r}, {backend_id!r})"
+                )
     _REGISTRY[(backend.agent_type, backend.id)] = backend
 
 
@@ -60,6 +68,7 @@ def _validate_backend_contract(backend: AgentBackend) -> None:
         "option_schema",
         "normalize_options",
         "settings_summary",
+        "command_preview",
         "create_runner",
     ):
         if not callable(getattr(backend, method, None)):
@@ -91,6 +100,16 @@ def registered_backends(agent_type: str) -> List[str]:
 
 def registered_agent_types() -> List[str]:
     return sorted({atype for (atype, _bid) in _REGISTRY})
+
+
+def backend_name(agent_type: str, backend_id: str) -> str:
+    """Canonical public name for one registered provider/backend pair."""
+
+    return f"{agent_type}_{backend_id}"
+
+
+def registered_backend_names() -> List[str]:
+    return sorted(backend_name(agent_type, backend_id) for agent_type, backend_id in _REGISTRY)
 
 
 def resolve_backend_id(agent: "object", request_backend: Optional[str] = None) -> str:
@@ -131,25 +150,21 @@ def health(backend: AgentBackend, *, fresh: bool = False) -> BackendHealth:
 
 
 def _register_builtins() -> None:
-    from .antigravity_sdk import build_antigravity_sdk_backends
-    from .claude_sdk import build_claude_sdk_backends
-    from .cli import build_cli_backends
-    from .codex_sdk import build_codex_sdk_backends
+    import importlib
 
-    for backend in build_cli_backends():
-        register(backend)
-    # Each SDK module gets a distinct factory name (never a bare
-    # `build_sdk_backends`) so the imports cannot shadow each other as more
-    # providers are added; Stage 5.1.1 (xAI) just follows this convention. The
-    # modules lazy-import the real SDKs (only in probe/factory), so registering
-    # them here costs nothing and needs no dependency installed.
-    for build_sdk in (
-        build_claude_sdk_backends,
-        build_codex_sdk_backends,
-        build_antigravity_sdk_backends,
-    ):
-        for backend in build_sdk():
-            register(backend)
+    for name in _BUILTIN_BACKENDS:
+        module = importlib.import_module(f".{name}", __name__)
+        register(module.build())
+
+
+_BUILTIN_BACKENDS = (
+    "claude_cli",
+    "claude_sdk",
+    "codex_cli",
+    "codex_sdk",
+    "antigravity_cli",
+    "antigravity_sdk",
+)
 
 
 _register_builtins()

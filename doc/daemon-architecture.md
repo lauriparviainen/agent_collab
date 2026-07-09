@@ -219,7 +219,11 @@ agent_collab_stop
 
 MCP code should not run the referee loop directly and should not own a separate session registry.
 
-Before agents pass non-default model, reasoning, permission, or sandbox settings, they should call `agent_collab_describe_options` and then start sessions with typed `codex_options` and `claude_options`. Invalid options are rejected before subprocess launch with field-level feedback. `agent_collab_guidance` serves full Markdown usage guidance from `doc/mcp-guidance.md`. Start payloads use `task`, `workdir`, and `workflow`.
+Before agents pass non-default model, reasoning, permission, or sandbox settings,
+they should call `agent_collab_describe_options` and then start sessions with the
+backend-qualified `backend_options` map. Invalid options are rejected before
+execution with field-level feedback. `agent_collab_guidance` serves full
+Markdown usage guidance from `doc/mcp-guidance.md`.
 
 ## Safety model
 

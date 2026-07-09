@@ -291,8 +291,7 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(payload["dry_run"], False)
         self.assertEqual(payload["interactive"], False)
         self.assertEqual(payload["interactive_idle_timeout"], 600.0)
-        self.assertEqual(payload["codex_options"], {})
-        self.assertEqual(payload["claude_options"], {})
+        self.assertEqual(payload["backend_options"], {})
 
         interactive_payload = build_new_session_payload(
             task="task",

@@ -22,10 +22,13 @@ from ..backend_contract import (
     OPTION_UNSET,
     BackendOptionError,
     OptionSpec,
+    load_option_schema,
     normalize_declared_options,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pathlib import Path
+
     from ..config import AgentConfig
     from ..runners import AgentRunner
 
@@ -143,6 +146,15 @@ class AgentBackend(Protocol):
         options: Mapping[str, Any],
     ) -> Mapping[str, Any]:
         """Describe backend-specific settings for the start response."""
+        ...
+
+    def command_preview(
+        self,
+        agent: "AgentConfig",
+        options: Mapping[str, Any],
+        workdir: Optional["Path"] = None,
+    ) -> Optional[list[str]]:
+        """Return a prompt-free subprocess argv, or ``None`` for in-process backends."""
         ...
 
     def create_runner(

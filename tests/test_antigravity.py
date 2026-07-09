@@ -6,10 +6,9 @@ from pathlib import Path
 from unittest import mock
 
 from agent_collab.config import ConfigError, builtin_config, load_config
-from agent_collab.events import parse_antigravity_line
+from agent_collab.backends.antigravity_cli import AntigravityCliBackend, parse_antigravity_line
 from agent_collab.options import (
     StartOptionsError,
-    apply_agent_options,
     build_session_settings,
     validate_start_backends,
     validate_start_options,
@@ -116,15 +115,15 @@ sequence = ["antigravity"]
             validated = validate_start_options(
                 config,
                 "solo-antigravity",
-                antigravity_options={"model": "Gemini 3.5 Flash (Low)", "mode": "plan"},
+                backend_options={
+                    "antigravity_cli": {"model": "Gemini 3.5 Flash (Low)", "mode": "plan"}
+                },
             )
-            self.assertEqual(validated["antigravity_options"]["model"], "Gemini 3.5 Flash (Low)")
-            self.assertEqual(validated["antigravity_options"]["mode"], "plan")
+            self.assertEqual(validated["antigravity_cli"]["model"], "Gemini 3.5 Flash (Low)")
+            self.assertEqual(validated["antigravity_cli"]["mode"], "plan")
 
             agent = config.agents["antigravity"]
-            command = apply_agent_options(
-                [agent.command] + list(agent.args), agent, validated["antigravity_options"]
-            )
+            command = AntigravityCliBackend().build_command(agent, validated["antigravity_cli"])
             self.assertIn("--model", command)
             self.assertIn("Gemini 3.5 Flash (Low)", command)
             self.assertIn("--mode", command)
@@ -142,9 +141,11 @@ sequence = ["antigravity"]
             home.mkdir()
             config = self._config(root, home)
             with self.assertRaises(StartOptionsError) as ctx:
-                validate_start_options(config, "solo-antigravity", antigravity_options={"mode": "turbo"})
+                validate_start_options(
+                    config, "solo-antigravity", {"antigravity_cli": {"mode": "turbo"}}
+                )
             messages = {d["path"]: d["message"] for d in ctx.exception.to_dict()["details"]}
-            self.assertIn("antigravity_options.mode", messages)
+            self.assertIn("backend_options.antigravity_cli.mode", messages)
 
     def test_settings_records_antigravity_backend_and_command_preview(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -203,13 +204,8 @@ sequence = ["antigravity"]
             root.mkdir()
             agent = builtin_config().agents["antigravity"]
             agent.cwd = "agent-root"
-            runner = SubprocessRunner(
-                "antigravity",
-                [agent.command] + list(agent.args),
-                parse_antigravity_line,
-                cwd=agent.cwd,
-                agent=agent,
-            )
+            backend = AntigravityCliBackend()
+            runner = backend.create_runner(agent, False, backend.normalize_options(agent, {}))
 
             event = asyncio.run(_first_event(runner, workdir=root))
 

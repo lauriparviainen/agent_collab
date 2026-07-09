@@ -1,0 +1,55 @@
+"""Pure cross-field rules shared by backends that expose equivalent options."""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Mapping
+
+from ...backend_contract import BackendOptionError
+
+
+def configured_choices(agent: Any, requested: Mapping[str, Any]) -> Dict[str, Any]:
+    """Fields deliberately selected by config defaults or the current request."""
+
+    result: Dict[str, Any] = {}
+    configured = getattr(agent, "options", {})
+    if isinstance(configured, Mapping):
+        for key, value in configured.items():
+            if isinstance(value, Mapping) and "default" in value:
+                result[key] = value["default"]
+    result.update(requested)
+    return result
+
+
+def resolve_claude_thinking(options: Mapping[str, Any], requested: Mapping[str, Any]) -> Dict[str, Any]:
+    result = dict(options)
+    explicit = set(requested)
+    if {"thinking_level", "thinking_budget_tokens"}.issubset(explicit):
+        raise BackendOptionError(
+            "thinking_level",
+            "conflicts with thinking_budget_tokens; use thinking_level or a raw token budget, not both",
+        )
+    if "thinking_budget_tokens" in explicit:
+        result.pop("thinking_level", None)
+    elif "thinking_level" in explicit:
+        result.pop("thinking_budget_tokens", None)
+    return result
+
+
+def resolve_codex_effort(options: Mapping[str, Any], requested: Mapping[str, Any]) -> Dict[str, Any]:
+    result = dict(options)
+    explicit = set(requested)
+    if {"thinking_level", "reasoning_effort"}.issubset(explicit):
+        if result.get("thinking_level") != result.get("reasoning_effort"):
+            raise BackendOptionError(
+                "thinking_level",
+                "conflicts with reasoning_effort; use one thinking level field or provide matching values",
+            )
+    if "thinking_level" in explicit:
+        result["reasoning_effort"] = result["thinking_level"]
+    elif "reasoning_effort" in explicit:
+        result["thinking_level"] = result["reasoning_effort"]
+    elif "reasoning_effort" in result:
+        result["thinking_level"] = result["reasoning_effort"]
+    elif "thinking_level" in result:
+        result["reasoning_effort"] = result["thinking_level"]
+    return result

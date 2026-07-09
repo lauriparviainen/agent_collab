@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest import mock
 
 from agent_collab.referee import Referee, RefereeConfig
+from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
+from agent_collab.runners import BackendDryRunRunner
 
 
 class RefereeTests(unittest.TestCase):
@@ -69,11 +71,29 @@ command = "configured-claude"
             command_events = [event for event in events if event.type == "command"]
             self.assertEqual(command_events[0].raw["argv"][0], "configured-claude")
 
+    def test_sdk_dry_run_does_not_construct_a_cli_command(self):
+        config = CollaborationConfig(
+            agents={"claude": AgentConfig(id="claude", type="claude", backend="sdk")},
+            workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+        )
+        referee = Referee(
+            RefereeConfig(
+                workflow="solo",
+                dry_run=True,
+                collab_config=config,
+                agent_backends={"claude": "sdk"},
+                agent_options={"claude": {}},
+                color=False,
+            ),
+            printer=lambda event: None,
+        )
+        self.assertIsInstance(referee._runners()["claude"], BackendDryRunRunner)
+
 
 class RecentTranscriptTests(unittest.TestCase):
     def test_provider_session_bookkeeping_is_excluded_from_peer_prompt(self):
         from agent_collab.events import Event
-        from agent_collab.backends.sdk_common import provider_session_event
+        from agent_collab.backends.common.sdk import provider_session_event
 
         referee = Referee(RefereeConfig(mock=True, workdir=Path("."), color=False))
         transcript = [

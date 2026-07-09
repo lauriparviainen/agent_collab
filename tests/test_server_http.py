@@ -73,8 +73,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 response = await server._dispatch("POST", "/options", {}, json.dumps({"workdir": str(root)}).encode("utf-8"))
 
         self.assertIn("workflows", response)
-        self.assertIn("codex_options", response)
-        self.assertIn("claude_options", response)
+        self.assertIn("backend_options", response)
 
     async def test_options_get_route_accepts_workdir_query(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -85,8 +84,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 response = await server._dispatch("GET", f"/options?workdir={root}", {}, b"")
 
         self.assertIn("workflows", response)
-        self.assertIn("codex_options", response)
-        self.assertIn("claude_options", response)
+        self.assertIn("backend_options", response)
 
     async def test_options_route_requires_workdir(self):
         server = AgentCollabHttpServer(manager=SessionManager())
@@ -181,7 +179,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                     "task": "bad http options",
                     "workdir": str(root),
                     "mock": True,
-                    "codex_options": {"reasoning_effort": "maximum"},
+                    "backend_options": {"codex_cli": {"reasoning_effort": "maximum"}},
                 }
             ).encode("utf-8")
 
@@ -356,7 +354,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                                 "task": "bad mcp options",
                                 "workdir": str(root),
                                 "mock": True,
-                                "codex_options": {"reasoning_effort": "maximum"},
+                                "backend_options": {"codex_cli": {"reasoning_effort": "maximum"}},
                             },
                         },
                     ),
@@ -366,7 +364,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(result["content"][0]["text"])
         self.assertTrue(result["isError"])
         self.assertEqual(payload["error"], "invalid_start_options")
-        self.assertEqual(payload["details"][0]["path"], "codex_options.reasoning_effort")
+        self.assertEqual(payload["details"][0]["path"], "backend_options.codex_cli.reasoning_effort")
 
     async def test_mcp_start_rejects_non_object_option_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -387,7 +385,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                                 "task": "bad mcp options",
                                 "workdir": str(root),
                                 "mock": True,
-                                "codex_options": [],
+                                "backend_options": [],
                             },
                         },
                     ),
@@ -397,7 +395,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(result["content"][0]["text"])
         self.assertTrue(result["isError"])
         self.assertEqual(payload["error"], "invalid_start_options")
-        self.assertEqual(payload["details"][0]["path"], "codex_options")
+        self.assertEqual(payload["details"][0]["path"], "backend_options")
         self.assertIn("object", payload["details"][0]["message"])
 
 

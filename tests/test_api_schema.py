@@ -100,11 +100,7 @@ class StartPayloadSyncTests(unittest.TestCase):
         )
 
     def test_start_payload_passes_exactly_the_wire_fields(self):
-        # A payload carrying every wire field plus every non-user field AND some
-        # unknown keys must come out of _start_payload as exactly the wire fields:
-        # non-user and unknown keys dropped, no wire field lost. The unknown-key
-        # sentinels catch _start_payload growing a pass-through that would leak a
-        # non-wire key.
+        # A payload carrying every wire field comes out with no field lost.
         args = {
             "task": "t",
             "workflow": "cross-review",
@@ -115,17 +111,16 @@ class StartPayloadSyncTests(unittest.TestCase):
             "dry_run": False,
             "interactive": False,
             "interactive_idle_timeout": 1.0,
-            "codex_options": {},
-            "claude_options": {},
-            "antigravity_options": {},
+            "backend_options": {},
             "backend": "cli",
-            "__unknown_a__": "leak",
-            "__unknown_b__": 123,
         }
-        for name in NON_USER_START_FIELDS:
-            args[name] = "leak" if name in {"log_dir", "session_id"} else True
         result = _start_payload(args)
         self.assertEqual(set(result), set(StartSessionRequestModel.WIRE_FIELDS))
+
+    def test_start_payload_rejects_non_wire_fields(self):
+        for name in (*NON_USER_START_FIELDS, "codex_options", "__unknown__"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, name):
+                _start_payload({"task": "t", "workdir": "/w", name: {}})
 
     def test_non_user_fields_are_exactly_daemon_minus_wire(self):
         daemon_fields = {f.name for f in dataclass_fields(StartSessionRequest)}
@@ -156,6 +151,12 @@ class StartPayloadSyncTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             StartSessionRequestModel.from_dict({**base, "backend": 5})
 
+    def test_removed_provider_option_fields_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "codex_options"):
+            StartSessionRequestModel.from_dict(
+                {"task": "t", "workdir": "/w", "codex_options": {"model": "old"}}
+            )
+
 
 class ModelRoundTripTests(unittest.TestCase):
     def test_health_round_trips_without_version(self):
@@ -171,7 +172,7 @@ class ModelRoundTripTests(unittest.TestCase):
         self.assertEqual(ErrorModel.from_dict(message_only).to_dict(), message_only)
         with_details = {
             "error": "invalid_start_options",
-            "details": [{"path": "codex_options.model", "message": "unknown field"}],
+            "details": [{"path": "backend_options.codex_cli.model", "message": "unknown field"}],
         }
         self.assertEqual(ErrorModel.from_dict(with_details).to_dict(), with_details)
 
@@ -179,7 +180,9 @@ class ModelRoundTripTests(unittest.TestCase):
         # Tie ErrorModel to the actual error shapes the server emits, not just
         # hand-written dicts: the StartOptionsError body (with details) and the
         # HttpError -> {"error": message} envelope.
-        options_error = StartOptionsError([{"path": "codex_options.model", "message": "unknown field"}]).to_dict()
+        options_error = StartOptionsError(
+            [{"path": "backend_options.codex_cli.model", "message": "unknown field"}]
+        ).to_dict()
         self.assertEqual(ErrorModel.from_dict(options_error).to_dict(), options_error)
         http_error = {"error": HttpError(400, "workdir is required").message}
         self.assertEqual(ErrorModel.from_dict(http_error).to_dict(), http_error)

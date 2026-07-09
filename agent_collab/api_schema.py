@@ -322,9 +322,7 @@ class StartSessionRequestModel:
     dry_run: bool = False
     interactive: bool = False
     interactive_idle_timeout: float = 600.0
-    codex_options: Dict[str, Any] = field(default_factory=dict)
-    claude_options: Dict[str, Any] = field(default_factory=dict)
-    antigravity_options: Dict[str, Any] = field(default_factory=dict)
+    backend_options: Dict[str, Any] = field(default_factory=dict)
     backend: Optional[str] = None
 
     WIRE_FIELDS: ClassVar[Tuple[str, ...]] = (
@@ -337,15 +335,16 @@ class StartSessionRequestModel:
         "dry_run",
         "interactive",
         "interactive_idle_timeout",
-        "codex_options",
-        "claude_options",
-        "antigravity_options",
+        "backend_options",
         "backend",
     )
     REQUIRED_FIELDS: ClassVar[Tuple[str, ...]] = ("task", "workdir")
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "StartSessionRequestModel":
+        unknown = sorted(set(data) - set(cls.WIRE_FIELDS))
+        if unknown:
+            raise ValueError(f"unknown start field {unknown[0]!r}")
         backend = data.get("backend")
         if backend is not None and not isinstance(backend, str):
             raise ValueError("backend must be a string")
@@ -359,9 +358,7 @@ class StartSessionRequestModel:
             dry_run=bool(data.get("dry_run", False)),
             interactive=bool(data.get("interactive", False)),
             interactive_idle_timeout=float(data.get("interactive_idle_timeout", 600.0)),
-            codex_options=_optional_object(data, "codex_options"),
-            claude_options=_optional_object(data, "claude_options"),
-            antigravity_options=_optional_object(data, "antigravity_options"),
+            backend_options=_optional_object(data, "backend_options"),
             backend=str(backend) if backend is not None else None,
         )
 
@@ -376,9 +373,7 @@ class StartSessionRequestModel:
             "dry_run": self.dry_run,
             "interactive": self.interactive,
             "interactive_idle_timeout": self.interactive_idle_timeout,
-            "codex_options": self.codex_options,
-            "claude_options": self.claude_options,
-            "antigravity_options": self.antigravity_options,
+            "backend_options": self.backend_options,
         }
         if self.backend is not None:
             out["backend"] = self.backend
