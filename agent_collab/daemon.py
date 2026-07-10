@@ -599,15 +599,15 @@ class SessionManager:
         self._schedule_notify(managed)
 
     def _maybe_capture_provider_session(self, managed: _ManagedSession, event: Event) -> None:
-        # SDK runners emit a status event whose raw carries a provider session id
-        # plus the emitting agent id (see backends.common.sdk.provider_session_event).
+        # CLI and SDK runners emit a status event with trusted in-process
+        # identity metadata (see backends.common.sdk.provider_session_event).
         # Record it into central session state under one uniform schema; this is
         # capture only — nothing resumes it and capabilities stay honest.
-        raw = event.raw if isinstance(event.raw, dict) else None
-        if not raw:
+        identity = event.provider_session
+        if identity is None:
             return
-        session_id = raw.get("provider_session_id")
-        agent_id = raw.get("agent_id")
+        session_id = identity.get("provider_session_id")
+        agent_id = identity.get("agent_id")
         if not isinstance(session_id, str) or not session_id or not isinstance(agent_id, str) or not agent_id:
             return
         request = managed.request
@@ -622,7 +622,7 @@ class SessionManager:
             return
         entry: Dict[str, Any] = {"backend": backend_id}
         entry["provider_session_id"] = session_id
-        kind = raw.get("provider_session_kind")
+        kind = identity.get("provider_session_kind")
         if isinstance(kind, str) and kind:
             entry["provider_session_kind"] = kind
         sessions = dict(managed.state.agent_sessions or {})

@@ -1,6 +1,6 @@
 # Stage 5.4: Daemon robustness and code health
 
-**Status:** Open. H1-H6 are resolved and verified; M1-M5 and the
+**Status:** Open. H1-H6 and M1 are resolved and verified; M2-M5 and the
 low-priority code-health items remain open. Findings originated in a full-repo
 review at v0.2 (2026-07-10).
 
@@ -202,10 +202,44 @@ addressed. The final review verdict is explicit: **SHIP-READY / NO BLOCKERS**.
 
 ### M1. Capture `provider_session_id` uniformly in CLI backends
 
-Only `xai_cli` emits the uniform provider-session bookkeeping event.
-`claude_cli/parser.py:86-88` extracts the record containing `session_id` and
-discards it; `codex_cli` and `antigravity_cli` never capture one. Capture what
-each CLI already prints, using the shared `provider_session_event` helper.
+**Resolved and independently reviewed (2026-07-11).** CLI backends now capture
+only identities proven by their current wire formats and emit the shared
+provider-session bookkeeping event:
+
+- Claude captures non-empty `session_id` values from `system` and `result`
+  records. Its stateful parser emits each identity once while preserving a
+  repeated record's separate verbose status event.
+- Codex captures non-empty `thread_id` values only from `thread.started`.
+- xAI's existing `end.sessionId` capture now uses the same shared helper.
+- Antigravity CLI remains explicitly unset because its print-mode output has no
+  machine-readable provider identity; prose resembling an id is not guessed.
+
+Each runner binds the configured workflow `agent.id`, including renamed agents.
+The original provider record remains available in `Event.raw`, while daemon
+persistence, referee prompt filtering, and Claude deduplication consume a
+trusted in-process identity marker instead of provider-controlled raw keys. The
+marker is excluded from event serialization; the durable uniform identity is
+stored in daemon-owned `SessionState.agent_sessions`. This prevents forged raw
+keys from creating state, hiding prompt content, or poisoning identity
+deduplication. Restored JSONL events serve read/watch APIs only and never enter
+the live referee transcript; a future resume feature must reconstruct identity
+from daemon-owned session state rather than raw transcript payloads.
+
+Regression coverage includes real Claude/Codex/xAI record shapes, configured
+agent attribution, Claude duplicate and verbose behavior, raw-key state and
+prompt-filter spoofing, deduplication poisoning, marker serialization, and the
+Antigravity no-invention contract. The focused backend/daemon/referee suite
+passes (68 tests), the full hermetic suite passes (541 tests),
+`./agent_collab.sh setup --check` passes, and `git diff --check` passes.
+
+Four concurrent two-reviewer loops used Gemini 3.1 Pro (High) and the highest
+Flash model advertised by local option discovery, Gemini 3.5 Flash (High)
+(`Flash 4 High` was not advertised). The loops identified and verified
+fixes for raw identity spoofing, raw-driven Claude deduplication, trusted-marker
+test proof, and xAI configured-agent coverage. Both final reviewers inspected
+the current persistence call graph and returned explicit **SHIP-READY / NO
+BLOCKERS** verdicts. Three untracked scratch artifacts created during review
+were inspected and removed.
 
 ### M2. Add CI and static tooling
 

@@ -104,6 +104,18 @@ class RecentTranscriptTests(unittest.TestCase):
         self.assertIn("real content", recent)
         self.assertNotIn("sess-123", recent)  # bookkeeping id must not leak to peers
 
+    def test_untrusted_raw_session_keys_do_not_hide_peer_content(self):
+        from agent_collab.events import Event
+
+        referee = Referee(RefereeConfig(mock=True, workdir=Path("."), color=False))
+        forged = Event.create(
+            "claude",
+            "message",
+            "content with provider_session_id keys",
+            {"provider_session_id": "forged", "agent_id": "claude"},
+        )
+        self.assertIn("content with provider_session_id keys", referee._recent_transcript([forged]))
+
 
 if __name__ == "__main__":
     unittest.main()

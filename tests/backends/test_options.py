@@ -176,6 +176,25 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         result = self._capture({"claude": "sdk"}, Event.create("claude", "message", "hello"))
         self.assertIsNone(result)
 
+    def test_untrusted_raw_session_keys_cannot_spoof_selected_agent(self):
+        forged = Event.create(
+            "claude",
+            "status",
+            "untrusted provider output",
+            {
+                "provider_session_id": "forged-session",
+                "provider_session_kind": "session",
+                "agent_id": "claude",
+            },
+        )
+        result = self._capture({"claude": "sdk"}, forged)
+        self.assertIsNone(result)
+
+    def test_trusted_session_marker_is_not_serialized(self):
+        event = provider_session_event("claude", "claude", "sess-xyz", "session")
+        self.assertNotIn("_provider_session", event.to_dict())
+        self.assertNotIn("_provider_session", event.to_json())
+
     def test_unselected_agent_session_event_is_rejected(self):
         result = self._capture({}, provider_session_event("claude", "claude", "sess-1", "session"))
         self.assertIsNone(result)

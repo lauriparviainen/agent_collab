@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Capture proven Claude, Codex, and xAI CLI provider-session identities under
+  the shared session schema, with trusted attribution and spoof-resistant
+  bookkeeping; leave Antigravity CLI identity unset until its wire format
+  exposes one.
 - Close every SDK turn stream deterministically on completion, error, and
   cancellation without allowing cleanup failures to mask task cancellation.
 - Require backend gating and event/session-fidelity metadata at registration,

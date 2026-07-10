@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Union
 
 from ...events import Event, compact_json, parse_json_line
+from ..common.sdk import provider_session_event
 
 
 def _event_text(raw: Dict[str, Any]) -> str:
@@ -43,19 +44,8 @@ def parse_xai_line(
     if event_type == "end":
         session_id = raw.get("sessionId")
         if isinstance(session_id, str) and session_id:
-            session_raw = dict(raw)
-            session_raw.update(
-                {
-                    "provider_session_id": session_id,
-                    "provider_session_kind": "session",
-                    "agent_id": agent_id,
-                }
-            )
-            return Event.create(
-                "xai",
-                "status",
-                f"xai session_id={session_id}",
-                session_raw,
+            return provider_session_event(
+                "xai", agent_id, session_id, "session", raw=raw
             )
         return Event.create("xai", "status", _event_text(raw), raw) if verbose else None
     return Event.create("xai", "status", compact_json(raw), raw) if verbose else None

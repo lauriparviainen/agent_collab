@@ -113,6 +113,14 @@ class XaiCliBackendTests(unittest.TestCase):
         self.assertEqual(event.raw["provider_session_kind"], "session")
         self.assertEqual(event.raw["sessionId"], "sess")
         self.assertEqual(event.raw["requestId"], "req")
+        self.assertEqual(
+            event.provider_session,
+            {
+                "provider_session_id": "sess",
+                "provider_session_kind": "session",
+                "agent_id": "reviewer",
+            },
+        )
 
     def test_runner_coalesces_text_deltas_and_keeps_session_event(self):
         runner = self.backend.create_runner(self.agent(), False, {})

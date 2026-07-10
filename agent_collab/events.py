@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import json
 from typing import Any, Dict, Optional
@@ -30,6 +30,12 @@ class Event:
     type: str
     text: str
     raw: Any
+    # Trusted in-process bookkeeping. This is deliberately not serialized: raw
+    # provider output may contain identically named keys, but only backend code
+    # can mark an Event as carrying a provider session identity.
+    _provider_session: Optional[Dict[str, str]] = field(
+        default=None, repr=False, compare=False
+    )
 
     @classmethod
     def create(cls, source: str, event_type: str, text: str, raw: Any = None) -> "Event":
@@ -40,7 +46,27 @@ class Event:
         return cls(utc_timestamp(), source, event_type, text, raw)
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        result = asdict(self)
+        result.pop("_provider_session", None)
+        return result
+
+    def mark_provider_session(
+        self, *, agent_id: str, session_id: str, kind: str
+    ) -> "Event":
+        """Attach trusted, non-wire provider-session metadata to this event."""
+
+        self._provider_session = {
+            "agent_id": agent_id,
+            "provider_session_id": session_id,
+            "provider_session_kind": kind,
+        }
+        return self
+
+    @property
+    def provider_session(self) -> Optional[Dict[str, str]]:
+        """Return trusted provider-session metadata, if backend code marked it."""
+
+        return dict(self._provider_session) if self._provider_session is not None else None
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False)

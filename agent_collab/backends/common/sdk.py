@@ -1,6 +1,6 @@
-"""Helpers shared by the first-class SDK backends (claude/codex/antigravity/xai).
+"""Helpers shared by first-class provider backends (claude/codex/antigravity/xai).
 
-Every SDK backend maps a young, provider-specific API onto the one ``Event``
+Every provider backend maps a provider-specific API onto the one ``Event``
 contract and the one persisted session schema. The provider-specific *calls*
 live in each module; only the cross-provider glue lives here:
 
@@ -13,12 +13,13 @@ live in each module; only the cross-provider glue lives here:
   workflow ``agent_id`` so the daemon can attribute it. Nothing resumes it this
   stage; capabilities stay honest.
 
-Nothing here imports a real SDK; it is standard-library only.
+Nothing here imports a real SDK; it is standard-library only, and the uniform
+provider-session event helper is intentionally shared with CLI parsers.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from ...events import Event
 
@@ -98,6 +99,8 @@ def provider_session_event(
     agent_id: str,
     provider_session_id: str,
     provider_session_kind: str,
+    *,
+    raw: Optional[Mapping[str, Any]] = None,
 ) -> Event:
     """Build the status event that carries a provider session id to session state.
 
@@ -107,13 +110,21 @@ def provider_session_event(
     capture is reliable; it never claims the session is resumable.
     """
 
-    return Event.create(
-        source,
-        "status",
-        f"{source} {provider_session_kind}_id={provider_session_id}",
+    event_raw = dict(raw or {})
+    event_raw.update(
         {
             "provider_session_id": provider_session_id,
             "provider_session_kind": provider_session_kind,
             "agent_id": agent_id,
-        },
+        }
+    )
+    return Event.create(
+        source,
+        "status",
+        f"{source} {provider_session_kind}_id={provider_session_id}",
+        event_raw,
+    ).mark_provider_session(
+        agent_id=agent_id,
+        session_id=provider_session_id,
+        kind=provider_session_kind,
     )

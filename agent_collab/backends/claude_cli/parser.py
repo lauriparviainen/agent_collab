@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Union
 
 from ...events import Event, compact_json, parse_json_line
 from ..common.parse import first_text, looks_like_command, looks_like_file_change, looks_like_tool
+from ..common.sdk import provider_session_event
 
 _THINKING_BLOCK_TYPES = {"thinking", "redacted_thinking"}
 
@@ -74,18 +75,37 @@ def _parse_message(raw: Dict[str, Any], verbose: bool) -> Optional[Event]:
     return None
 
 
-def parse_claude_line(line: str, verbose: bool = False) -> Optional[Event]:
+def parse_claude_line(
+    line: str,
+    verbose: bool = False,
+    *,
+    agent_id: str = "claude",
+) -> Optional[Union[Event, List[Event]]]:
     raw = parse_json_line(line)
     if raw is None:
         text = line.strip()
         return Event.create("claude", "message", text, {"line": line}) if text else None
     if not isinstance(raw, dict):
         return Event.create("claude", "status", compact_json(raw), raw) if verbose else None
+    identity = None
+    session_id = raw.get("session_id")
+    if (
+        raw.get("type") in {"system", "result"}
+        and isinstance(session_id, str)
+        and session_id
+    ):
+        identity = provider_session_event(
+            "claude", agent_id, session_id, "session", raw=raw
+        )
     if raw.get("type") in {"error", "fatal_error"} or "error" in raw:
-        return Event.create("error", "error", first_text(raw) or compact_json(raw), raw)
+        event = Event.create("error", "error", first_text(raw) or compact_json(raw), raw)
+        return [identity, event] if identity is not None else event
     if raw.get("type") in {"system", "rate_limit_event", "result"}:
         text = str(raw.get("subtype") or raw.get("status") or raw.get("type"))
-        return Event.create("claude", "status", text, raw) if verbose else None
+        event = Event.create("claude", "status", text, raw) if verbose else None
+        if identity is None:
+            return event
+        return [identity, event] if event is not None else identity
     if raw.get("type") in {"assistant", "user"} or isinstance(raw.get("message"), dict):
         return _parse_message(raw, verbose)
     for predicate, event_type in (
@@ -99,3 +119,32 @@ def parse_claude_line(line: str, verbose: bool = False) -> Optional[Event]:
     if text:
         return Event.create("claude", "message", text, raw)
     return Event.create("claude", "status", compact_json(raw), raw) if verbose else None
+
+
+class ClaudeStreamingParser:
+    """Stateful CLI parser that emits each provider session identity once."""
+
+    def __init__(self, agent_id: str = "claude") -> None:
+        self.agent_id = agent_id
+        self._seen_session_ids: set[str] = set()
+
+    def __call__(self, line: str, verbose: bool = False):
+        parsed = parse_claude_line(line, verbose, agent_id=self.agent_id)
+        events = parsed if isinstance(parsed, list) else [parsed]
+        kept = []
+        for event in events:
+            if event is None:
+                continue
+            identity = event.provider_session
+            if identity is not None:
+                session_id = identity.get("provider_session_id")
+            else:
+                session_id = None
+            if isinstance(session_id, str):
+                if session_id in self._seen_session_ids:
+                    continue
+                self._seen_session_ids.add(session_id)
+            kept.append(event)
+        if not kept:
+            return None
+        return kept[0] if len(kept) == 1 else kept

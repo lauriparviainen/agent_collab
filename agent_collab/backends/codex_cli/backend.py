@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -85,7 +86,7 @@ class CodexCliBackend:
         return SubprocessRunner(
             agent.id,
             self.build_command(agent, options),
-            parse_codex_line,
+            partial(parse_codex_line, agent_id=agent.id),
             verbose,
             env=dict(agent.env),
             cwd=agent.cwd,

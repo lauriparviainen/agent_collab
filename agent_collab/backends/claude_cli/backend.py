@@ -12,7 +12,7 @@ from ..base import BackendCapabilities, BackendHealth
 from ..common.cli import flag_value, set_flag_value
 from ..common.health import default_version_runner, probe_cli_backend
 from ..common.options import configured_choices, resolve_claude_thinking
-from .parser import parse_claude_line
+from .parser import ClaudeStreamingParser
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 
@@ -76,7 +76,7 @@ class ClaudeCliBackend:
         return SubprocessRunner(
             agent.id,
             self.build_command(agent, options),
-            parse_claude_line,
+            ClaudeStreamingParser(agent.id),
             verbose,
             env=dict(agent.env),
             cwd=agent.cwd,

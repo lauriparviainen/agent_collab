@@ -33,9 +33,15 @@ EventAppender = Callable[[Event], Awaitable[int]]
 
 
 def _is_provider_session_event(event: Event) -> bool:
-    """A provider-session bookkeeping event (carries a captured provider id)."""
+    """A live provider-session bookkeeping event (carries a captured id).
 
-    return isinstance(event.raw, dict) and bool(event.raw.get("provider_session_id"))
+    Referee transcripts are constructed from live runner events and are never
+    restored from JSONL. The trusted marker intentionally does not survive log
+    serialization; a future resume feature must reconstruct identity from
+    daemon-owned session state, never from provider-controlled ``raw`` keys.
+    """
+
+    return event.provider_session is not None
 
 
 @dataclass
