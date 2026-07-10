@@ -14,6 +14,7 @@ from .config import DEFAULT_WORKFLOW
 from .tui_core import (
     ACCENT_ANSI8,
     ACCENT_XTERM256,
+    GUTTER_WIDTH,
     READ_ONLY_INPUT_MESSAGE,
     CursorState,
     ParsedInput,
@@ -87,7 +88,7 @@ HELP_LINES = (
     "End follow  Esc closes overlays",
 )
 
-SOURCE_LABEL_WIDTH = 8
+SOURCE_LABEL_WIDTH = GUTTER_WIDTH + 1  # gutter column + separating space
 SLASH_MENU_MAX_ROWS = 8
 
 # Box-drawing chrome (rounded when UTF-8 capable, ASCII fallback otherwise).

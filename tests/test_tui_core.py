@@ -62,13 +62,13 @@ class TuiCoreTests(unittest.TestCase):
         lines = render_transcript_lines(format_transcript_event(event))
 
         # Calm direction: lowercase gutter labels (was uppercase CLAUDE).
-        self.assertEqual(lines, ("claude  hello", "        world"))
+        self.assertEqual(lines, ("claude      hello", "            world"))
 
         long_event = Event.create("tool", "command", "abcdef ghijkl mnop")
-        wrapped = wrap_transcript_lines(format_transcript_event(long_event), 13)
+        wrapped = wrap_transcript_lines(format_transcript_event(long_event), 17)
         rendered = render_transcript_lines(wrapped)
 
-        self.assertEqual(rendered[0], "tool    abcde")
+        self.assertEqual(rendered[0], "tool        abcde")
         self.assertTrue(rendered[1].startswith("        "))
 
     def test_details_format_uses_top_level_state_and_settings_agents(self):

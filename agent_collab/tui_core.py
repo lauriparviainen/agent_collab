@@ -241,7 +241,9 @@ def format_activity_indicator(session: Any, tick: int = 0, *, utf8: bool = True)
     return status or "live"
 
 
-GUTTER_WIDTH = 7
+# Wide enough for the longest built-in provider name ("antigravity"); longer
+# custom agent ids still ellipsize via gutter_label.
+GUTTER_WIDTH = 11
 BAND_SOURCES = {"referee", "human"}
 
 
@@ -325,7 +327,9 @@ def wrap_transcript_lines(lines: Sequence[TranscriptLine], width: int) -> Tuple[
         return ()
     wrapped = []
     for line in lines:
-        for index, chunk in enumerate(_wrap_display_text(line.text, width, continuation_indent="        ")):
+        for index, chunk in enumerate(
+            _wrap_display_text(line.text, width, continuation_indent=" " * (GUTTER_WIDTH + 1))
+        ):
             wrapped.append(
                 TranscriptLine(
                     source=line.source,

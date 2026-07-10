@@ -312,7 +312,7 @@ class ToolSummaryTests(unittest.TestCase):
     def test_single_line_tool_event_has_no_size_suffix(self):
         event = Event.create("tool", "command", "Read options.py:281")
         rendered = render_transcript_lines(format_transcript_event(event))[0]
-        self.assertEqual(rendered, "tool    Read options.py:281")
+        self.assertEqual(rendered, "tool        Read options.py:281")
 
 
 class DetailsClipMarkerTests(unittest.TestCase):
@@ -442,7 +442,7 @@ class RenderIntegrationTests(unittest.TestCase):
         out = screen.text()
         # Transcript stays on the left (regression guard: details mode must read
         # the screen width, not the transcript width).
-        self.assertIn("claude  the epoch guard drops stale batches", out)
+        self.assertIn("claude      the epoch guard drops stale batches", out)
         self.assertIn("│", out)  # hairline separator column
         self.assertIn("…", out)  # clip marker on overflow
 
@@ -532,15 +532,16 @@ class EscPopsTopmostTests(unittest.TestCase):
 
 class GutterLabelTests(unittest.TestCase):
     def test_long_source_is_ellipsized_into_the_fixed_gutter(self):
-        self.assertEqual(gutter_label("antigravity"), "antigr…")
+        self.assertEqual(gutter_label("antigravity"), "antigravity")  # 11 fits exactly
         self.assertEqual(len(gutter_label("antigravity_sdk")), GUTTER_WIDTH)
-        self.assertEqual(gutter_label("referee"), "referee")  # exactly 7 fits
+        self.assertEqual(gutter_label("antigravity_sdk"), "antigravit…")
+        self.assertEqual(gutter_label("referee"), "referee")
         self.assertEqual(gutter_label("claude"), "claude")
 
     def test_long_source_rows_stay_column_aligned(self):
         event = Event.create("antigravity", "message", "first line\nsecond line")
         lines = format_transcript_event(event)
-        self.assertTrue(lines[0].text.startswith("antigr… "))
+        self.assertTrue(lines[0].text.startswith("antigravity "))
         self.assertEqual(lines[0].text.index("first"), GUTTER_WIDTH + 1)
         self.assertEqual(lines[1].text.index("second"), GUTTER_WIDTH + 1)
         # The full source survives for brand-color lookup.
