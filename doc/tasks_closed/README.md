@@ -15,3 +15,5 @@ Completed task docs move here when their implementation is done and verified.
 - [Stage 4.9: Pluggable agent backends (CLI subprocess vs SDK)](stage-4.9-pluggable-agent-backends.md)
 - [Stage 5.1: First-class SDK backends](stage-5.1-first-class-sdk-backends.md)
 - [Stage 5.1 remediation: Verify and repair SDK backends](stage-5.1-first-class-sdk-backends-remediation.md)
+- [Stage 5.2: Calm TUI cleanup](stage-5.2-calm-tui-cleanup/README.md)
+- [Backend discovery and recommendation protocol](backend-discovery-and-recommendation.md)

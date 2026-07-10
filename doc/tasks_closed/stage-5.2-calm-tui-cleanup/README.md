@@ -1,10 +1,13 @@
 # Stage 5.2 - Calm TUI Cleanup
 
-Status: Stage 1a approved; Stage 1b decisions folded in (2026-07-10). Stage 2
-implemented 2026-07-10 (five render paths, three approved interaction changes,
-slice 3 + brand_color landed first) — pending user acceptance in a real
-terminal. Outstanding: the narrow-fallback hero capture was skipped by
-request; live acceptance replaces it.
+Status: **Done (2026-07-10).** Stage 1a approved; Stage 1b decisions folded in;
+Stage 2 implemented (five render paths, four approved interaction changes,
+slice 3 + brand_color landed first) and accepted live in a real terminal. Live
+acceptance drove a follow-up round — `q` removed as a quit key entirely, Esc
+layering, info-line clip, non-UTF-8 chrome fallbacks, and a widened gutter that
+fits `antigravity`. The narrow-fallback hero capture was skipped by request;
+live acceptance replaced it. The scrollable-overlay-at-wide-widths `/details`
+idea remains deliberately deferred (not required for close).
 
 ## Goal
 
@@ -357,9 +360,10 @@ Also resolved to keep scope down:
 - **`/details` wide-panel overflow:** keep clipping, add a `…` marker on the
   last visible row (option (a) from `details-visible.md`); the
   scrollable-overlay-at-wide-widths idea is deferred.
-- **Stage 1b captures:** only the three hero screens (main session, palette,
-  narrow fallback) are rendered and approved; the remaining mockups are
-  reference material and get no captures.
+- **Stage 1b captures:** the main-session and palette hero screens were
+  rendered and approved; the narrow-fallback capture was skipped by request
+  (live acceptance replaced it). The remaining mockups are reference material
+  and got no captures.
 
 After the screenshots are approved:
 

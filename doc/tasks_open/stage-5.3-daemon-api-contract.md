@@ -9,7 +9,7 @@ first** (both live in this doc). Grounding verified against the code on
 
 Give the CLI <-> daemon HTTP API a single source of truth so the upcoming TUI
 data layer is stable, and add lightweight loopback authentication. The TUI
-refactor in [stage-5.2](stage-5.2-calm-tui-cleanup/README.md) should sit on a
+refactor in [stage-5.2](../tasks_closed/stage-5.2-calm-tui-cleanup/README.md) should sit on a
 **typed, versioned client** — not hand-shaped dicts — so the UI code stays free
 of defensive `if key in resp` branches and shape guesses.
 
@@ -26,7 +26,7 @@ first); they touch the same files, so coordinate:
 
 Motivation from the TUI work: the data layer must be stable *before* the TUI is
 re-implemented, or the new UI inherits brittle shape-handling. This task is a
-precursor to [stage-5.2](stage-5.2-calm-tui-cleanup/README.md) **Stage 2**
+precursor to [stage-5.2](../tasks_closed/stage-5.2-calm-tui-cleanup/README.md) **Stage 2**
 (implementation) — land the typed client first so the TUI consumes stable
 objects. Workstream B is orthogonal to 5.2 but shares the client/server files.
 
@@ -275,7 +275,7 @@ helpers accept the DTO or a wire dict via `_value`; `HttpClientToolBackend`
     Workstream A API version (`summary` becomes the versioned default) and
     call it out in the changelog. The TUI display side of the same problem
     (one dim summary row per tool call) is owned by
-    [stage-5.2](stage-5.2-calm-tui-cleanup/README.md), not here.
+    [stage-5.2](../tasks_closed/stage-5.2-calm-tui-cleanup/README.md), not here.
 
 ## Workstream B - Loopback Auth (rotating shared-secret token)
 
@@ -368,7 +368,7 @@ Ship as **two separate PRs / sub-tasks** (they touch the same files but are
 independent concerns — one data-shape, one security/process):
 
 1. **A first** (shared typed DTOs + typed client + contract test), so
-   [stage-5.2](stage-5.2-calm-tui-cleanup/README.md) Stage 2 builds on the typed
+   [stage-5.2](../tasks_closed/stage-5.2-calm-tui-cleanup/README.md) Stage 2 builds on the typed
    client. Smallest useful first step: the DTOs + route/model contract test.
 2. **B** separately — it has enough perms/atomic-write/readiness edge cases to
    warrant its own task/PR. Smallest useful first step: the token

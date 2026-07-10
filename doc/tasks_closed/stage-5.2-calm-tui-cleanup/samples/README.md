@@ -1,10 +1,12 @@
 # Samples
 
-Stage 1a delivers plain-text markdown mockups here, one file per view, before
-any implementation. Stage 1b adds ANSI/color captures of the approved mockups
-(see the parent [README](../README.md) for the staging and approval gates).
+**Task closed 2026-07-10 — these are historical design records.** Stage 1a
+delivered the plain-text markdown mockups here (one file per view); Stage 1b
+added the ANSI/color captures. Both were approved and Stage 2 shipped; where a
+post-implementation review superseded a mockup detail, the amendment notes
+below and the parent [README](../README.md) hold the authoritative version.
 
-## Files (Stage 1b — colored hero captures, pending approval)
+## Files (Stage 1b — colored hero captures, approved)
 
 Rendered with the David AI tokens from the parent README's terminal mapping;
 generated from one script so the two frames stay consistent:
@@ -12,9 +14,10 @@ generated from one script so the two frames stay consistent:
 - `stage1b-main-session.svg` — main session, 80×24, following.
 - `stage1b-slash-palette.svg` — bare `/` palette (state 2a), 80×24.
 
-Remaining hero screen for Stage 1b sign-off: the narrow fallback. **Only these
-three heroes get captures** (scope simplification, 2026-07-10 — see the parent
-README's Stage 2 section): the other mockups are reference material describing
+The narrow-fallback hero capture was **skipped by request**; live acceptance
+in a real terminal replaced it. **Only these two heroes were captured**
+(scope simplification, 2026-07-10 — see the parent README's Stage 2 section):
+the other mockups are reference material describing
 state variations of the same render paths, and are covered by formatting-helper
 unit tests rather than screens.
 
