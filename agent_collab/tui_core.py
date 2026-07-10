@@ -245,6 +245,19 @@ GUTTER_WIDTH = 7
 BAND_SOURCES = {"referee", "human"}
 
 
+def gutter_label(source: str) -> str:
+    """Lowercase gutter label, ellipsized into the fixed gutter column.
+
+    Agent ids are arbitrary (``antigravity``, ``claude-a``, …); ``{label:<N}``
+    only pads to a *minimum*, so a long source would push its rows out of
+    column with everyone else's. Keep the gutter fixed and mark the cut.
+    """
+    label = str(source or "").lower()
+    if len(label) <= GUTTER_WIDTH:
+        return label
+    return label[: GUTTER_WIDTH - 1] + "…"
+
+
 def short_time(timestamp: Any) -> str:
     """Render an ISO ``timestamp`` as ``H:MM`` (no leading hour zero).
 
@@ -269,7 +282,7 @@ def format_transcript_event(event: Any) -> Tuple[TranscriptLine, ...]:
     display-only projection; the JSONL keeps the full payload.
     """
     source = str(_value(event, "source", "error"))
-    label = source.lower()
+    label = gutter_label(source)
     text = str(_value(event, "text", "") or "")
     stamp = short_time(_value(event, "timestamp", "")) if source in BAND_SOURCES else ""
 

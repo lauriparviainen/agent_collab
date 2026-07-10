@@ -28,7 +28,9 @@ from agent_collab.tui_core import (
     format_details_overlay_lines,
     format_session_picker_lines,
     format_slash_completion_lines,
+    GUTTER_WIDTH,
     format_transcript_event,
+    gutter_label,
     input_mode_chip,
     info_agents_from_session,
     make_session_picker,
@@ -526,6 +528,23 @@ class EscPopsTopmostTests(unittest.TestCase):
         self.assertIsNone(app.new_wizard)
         self.assertIsNone(app.overlay_lines)
         self.assertEqual(app.message, "new session cancelled")
+
+
+class GutterLabelTests(unittest.TestCase):
+    def test_long_source_is_ellipsized_into_the_fixed_gutter(self):
+        self.assertEqual(gutter_label("antigravity"), "antigr…")
+        self.assertEqual(len(gutter_label("antigravity_sdk")), GUTTER_WIDTH)
+        self.assertEqual(gutter_label("referee"), "referee")  # exactly 7 fits
+        self.assertEqual(gutter_label("claude"), "claude")
+
+    def test_long_source_rows_stay_column_aligned(self):
+        event = Event.create("antigravity", "message", "first line\nsecond line")
+        lines = format_transcript_event(event)
+        self.assertTrue(lines[0].text.startswith("antigr… "))
+        self.assertEqual(lines[0].text.index("first"), GUTTER_WIDTH + 1)
+        self.assertEqual(lines[1].text.index("second"), GUTTER_WIDTH + 1)
+        # The full source survives for brand-color lookup.
+        self.assertEqual(lines[0].source, "antigravity")
 
 
 class AsciiFallbackTests(unittest.TestCase):
