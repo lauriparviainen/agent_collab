@@ -44,13 +44,15 @@ the session does not track one today.
 ## 3. Color-token intent
 
 - Context line (row 0): `dim`. Branch + project path only; no activity here.
-- Session-info line (row 1): `muted`, with `accent` (teal) on the agent names
-  (`claude`, `codex`); task and workflow in `muted`. Truncates right-to-left
-  per the parent README priority.
+- Session-info line (row 1): `muted`, with each agent name in its **provider
+  brand hue** (`claude` Anthropic coral `#D97757`, `codex` OpenAI green
+  `#10A37F`; unknown providers fall back to the accent teal — see the parent
+  README's Provider brand colors); task and workflow in `muted`. Truncates
+  right-to-left per the parent README priority.
 - Hairlines (rows 2, 21): `hairline` separator (dim, single rule).
-- Body source gutter: label in the source's calmed hue — `claude` primary
-  `text`, `codex` `accent`, `referee` `muted`; continuation lines and the
-  `◆ thinking…` metadata in `dim`. Timestamp (`9:22`) in `dim`, right-aligned.
+- Body source gutter: label in the source's provider brand hue, weight 600 —
+  `claude` coral, `codex` green, `referee` `muted`; the `◆ thinking…` metadata
+  in `dim`. Timestamp (`9:22`) in `dim`, right-aligned.
 - Input rail (row 22): prompt `[referee]` in `muted`; typed text in `text`; the
   mode chip `referee note` right-aligned in `accent`.
 - Status/hint line (row 23): transient message left — `accent` for success

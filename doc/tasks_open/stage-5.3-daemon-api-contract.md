@@ -248,6 +248,28 @@ non-blocking finding (`/mcp` `backend: null`) fixed + tested above.
   If the contract wants all malformed request fields to be `400`, have the DTO
   `from_dict` raise `ValueError` on those conversions.
 - **`doc/http-api.md` generator** — still deferred.
+- **Tool-output elision on read (`tool_output` parameter)** — requested
+  2026-07-10: full tool payloads in `read_events`/`wait_events`/
+  `read_transcript` responses bloat every reading agent's context (a 50-line
+  `Read` result is replayed to the referee and to each cross-review turn),
+  and the reader almost never needs the payload — only that the call happened.
+  Design:
+  - Storage keeps **full fidelity in the JSONL**; elision is strictly a
+    read-time projection, never applied at write time.
+  - Add `tool_output: "summary" | "full"` (default `summary`) to
+    `read_events`, `wait_events`, and `read_transcript`. Summary renders one
+    line per `tool`-source event: tool name, compact args digest, result size,
+    plus the **event id** so a caller can re-fetch that single event with
+    `full` when it genuinely needs the payload.
+  - Only `tool`-source events are elided — agent prose, referee notes, and
+    errors always stay full.
+  - Even under `full`, byte-cap pathological outputs with a
+    `+N bytes truncated, see transcript file` marker.
+  - The default flip is a behavior change for MCP callers; land it behind the
+    Workstream A API version (`summary` becomes the versioned default) and
+    call it out in the changelog. The TUI display side of the same problem
+    (one dim summary row per tool call) is owned by
+    [stage-5.2](stage-5.2-calm-tui-cleanup/README.md), not here.
 
 ## Workstream B - Loopback Auth (rotating shared-secret token)
 

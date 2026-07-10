@@ -111,5 +111,8 @@ Same content as the wide panel, but scrollable (so long blocks are reachable).
   in `chrome` dim), labels/values get calmed hues, and the `[details]` tag reads
   quieter. Panel *content* stays the `format_session_details` output.
 - **Approved interaction change:** `Esc` closes the panel.
-- **Open question (flagged, not decided):** whether to fix the wide-panel
-  clip-with-no-scroll — surfaced above for approval.
+- **Resolved (2026-07-10, Stage 2 scope simplification):** the wide panel
+  keeps clipping but adds a `…` marker on the last visible row (option (a));
+  the scrollable-overlay-at-wide-widths idea is deferred. The narrow overlay
+  is the shared scrollable overlay component (also used by `/help` and the
+  picker).

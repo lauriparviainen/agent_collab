@@ -751,3 +751,58 @@ Exclude initially:
 - No daemon startup or optional backend failure prevents the daemon from
   serving discovery for other backends.
 - No automatic backend switch occurs.
+
+## Review recommendation: staged delivery
+
+The analysis above is accurate against the current code (`_gate_backend_health`
+does skip backends where both `block_on_unavailable` and `checks_credentials`
+are false; the registry is the flat six-package list; the CLI backends carry the
+legacy defer-to-turn policy). The core decision — extend `describe_options`
+rather than add a discovery tool — is sound and should stand.
+
+Do not implement this as one undifferentiated change. Split it into four stages,
+lowest-risk first, each with its own acceptance criteria and tests.
+
+**Stage 1 — Normalize the response contract (cheap, high value, low risk).**
+Return the effective canonical backend and its selection source for each agent
+and each workflow occurrence, so callers stop re-deriving resolution from raw
+`agent.backend` (which is null even when the effective backend is `cli`). Key the
+catalog by canonical name to line up directly with `backend_options`. Keep the
+existing provider-grouped shape as a compatibility projection from the same
+objects. No new features in this stage.
+
+**Stage 2 — Add the native-runtime probe dimension (cheap).** Teach the
+Antigravity SDK package to distinguish "SDK imports" from "bundled binary can
+run on this host," and report the glibc case as `unavailable` with safe
+remediation. One probe in one backend package; injectable host facts for
+hermetic tests. Fixes a real confusing case today.
+
+**Stage 3 — Add `backends.<canonical>.enabled` home policy (new feature).**
+Absent entry = enabled; project config cannot re-enable a home-disabled backend.
+An existing project-config `[backends.*]` section should be stripped with a
+warning on load (via `config_migrations.py`), not hard-rejected, so old configs
+do not break the daemon. Start refuses a disabled selected backend up front,
+before probing or session creation. Its own stage because it carries user-facing
+config and migration risk.
+
+**Stage 4 — Tighten start's fresh probing, narrowly.** Freshly re-probe only the
+selected backends whose policy can act on the result (the SDK and Antigravity
+backends). Deliberately do **not** fresh-probe `claude_cli`/`codex_cli` at start:
+their policy gates nothing, so a fresh `--version` subprocess (up to 5s) is pure
+latency on the hot path. Prefer per-backend disclosure (`start_probe_policy:
+"fresh" | "not_probed"`) over a blanket `fresh_probes_enabled_selected_backends:
+true` claim. This inverts the preference stated in the freshness section above:
+disclosure is primary, universal probing is not adopted.
+
+**Defer — the recommendation engine.** Current workflows declare only a
+sequence and no requirements, and preference must not be inferred from brand,
+`cli`-vs-`sdk`, or capabilities. A recommender therefore can only ever emit
+"keep the configured backend unless it has a definite blocker" — a large ranking
+apparatus for a near-constant answer. Ship facts + assessment + structured
+remediation now, plus a trivial "keep unless blocked." Build the per-agent and
+per-workflow recommender only once the workflow model can express explicit
+requirements to rank against.
+
+The rest of this document (field ownership, availability/readiness semantics,
+freshness reporting, start-error structure, knowledge included/excluded) applies
+across the stages and does not need to change.

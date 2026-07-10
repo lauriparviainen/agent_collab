@@ -1,6 +1,7 @@
 # Stage 5.2 - Calm TUI Cleanup
 
-Status: draft, not approved for implementation.
+Status: Stage 1a text mockups approved (2026-07-10). Stage 1b colored captures
+in review (`samples/stage1b-*.svg`); implementation not yet approved.
 
 ## Goal
 
@@ -59,18 +60,47 @@ old "Initial Open Questions" (kept at the bottom for history).
 - **Session info to surface:** model, task, workdir, and backend should be
   legible for the active session (today's header shows session id, status,
   workflow, and workdir but not model or backend). Note: model and backend are
-  **per agent** (`settings.agents[*].model` and `.type`), not one session-level
-  value — a session can pair `claude` and `codex` on different models. The info
+  **per agent** (`settings.agents[*].model` and `settings.agents[*].backend`),
+  not one session-level value — a session can pair `claude` and `codex` on
+  different models and backends. `.type` is the *provider* (claude/codex/
+  antigravity, already carried by the agent name); the *execution backend* is
+  `.backend` (`cli`/`sdk`, canonical `<type>_<backend>` e.g. `codex_sdk`), which
+  stage 5.1 promoted to a first-class axis alongside the CLI backends. The info
   line summarizes participants (e.g. `claude:opus-4.8 · codex:gpt-5`) and
   collapses to a single entry for one-agent sessions.
   - **Inline vs `/details` (reconciled):** the info line shows, per agent,
-    `name:model` always; backend (`.type`) is appended inline only when it
-    differs from that agent's configured default, and the full per-agent block
-    (`format_session_details`) stays behind `/details`. Both this README and
+    `name:model` always; the execution backend (`.backend`, shown as the bare
+    backend id e.g. `sdk`) is appended inline only when it differs from that
+    agent's default (`cli`, the registry fallback), and the full per-agent block
+    (`format_session_details`, which carries `backend=…` and the canonical
+    `<type>_<backend>`) stays behind `/details`. Both this README and
     `samples/README.md` must state this identically.
   - **Truncation priority** when the line overflows the width (drop right-most
     first): workflow -> workdir/project -> secondary agents (keep the lead
     agent) -> task (ellipsize last, never drop entirely).
+- **Solid palette block (Stage 1b review, 2026-07-10):** the command palette
+  renders on a solid gray fill like the Grok reference menu, using the David
+  AI gray ramp — `--color-gray-floor #1F2124`, selected row on
+  `--color-gray-panel #2E3033` (the system's "+1 rule") — see the Terminal
+  color mapping table.
+- **Grok-style input box (Stage 1b review, 2026-07-10):** the input rail is a
+  bordered box (rounded box-drawing `╭─╮ │ ╰─╯`) with a `>` prompt inside and
+  the mode chip right-aligned inside the box — the `[referee]`/`[new …]`
+  bracket prompt is replaced by the chip, which already names the input
+  target. The border uses the design system's warm `--border #635441`, per
+  its "borders are interactive-only, warm = ours" rule. Bottom chrome becomes
+  the 3-row box + the status/hint line (body height shrinks by one row); the
+  hairline above the rail is dropped, the box border is the separator.
+- **Provider brand colors (Stage 1b review, 2026-07-10):** agent labels and
+  info-line agent names take the provider's official brand hue, declared per
+  backend package (same for a provider's cli/sdk pair); unknown providers fall
+  back to the accent teal — see Provider brand colors.
+- **Tool events render as one summary row (2026-07-10):** a `tool` event shows
+  a single dim line — tool name + compact args digest + result size (e.g.
+  `tool  Read options.py:281 · +50 lines`) — never the full payload inline.
+  Display-only projection (**target delta**): the JSONL transcript keeps full
+  fidelity. The MCP read-side counterpart (`tool_output` parameter) is owned by
+  [stage-5.3](../stage-5.3-daemon-api-contract.md), Remaining Workstream A.
 
 ## Design System Inputs
 
@@ -91,8 +121,14 @@ Use the David AI dark, warm-charcoal system as the source of truth:
 
 Terminal color support is limited, and setting background fills overrides the
 user's terminal theme, so this design leans on **foreground color + weight**,
-and reserves background fills for the two bands that need contrast (the user
-message band and the selected palette row). Every color degrades gracefully:
+and reserves background fills for the surfaces that need contrast: the user
+message band (`raised`), and the command palette, which is a **solid gray
+block** like the Grok reference menu — but drawn from the David AI gray ramp
+(`--color-gray-floor #1F2124` fill, selected row on the next rung
+`--color-gray-panel #2E3033`, the system's "+1 rule"), decided 2026-07-10
+during Stage 1b review. Gray is the system's colorless tone, so the menu
+reads as chrome, not content, while staying inside the design system. Every
+color degrades gracefully:
 truecolor -> xterm-256 -> the 8-color source labels the current TUI already
 uses.
 
@@ -107,12 +143,42 @@ uses.
 | dim / caption         | `#8C8170` | 245       | `A_DIM`              |
 | accent (one only)     | `#30AB92` | 36        | `COLOR_CYAN`         |
 | hairline separator    | white .09 | 236/238   | `A_DIM` dashes       |
+| menu fill (palette)   | `#1F2124` | 234       | default bg           |
+| menu selected row     | `#2E3033` | 236       | `A_REVERSE`          |
+| input box border      | `#635441` | 59        | `A_DIM`              |
 
 Source labels (`human`, `referee`, `claude`, `codex`, `tool`, `error`) keep
-distinct hues today. The calm direction reduces reliance on six colors: prefer
-one accent plus the aligned source label for identity, and let secondary agents
-read in muted/dim tones. Stage 1a mockups should state, per source, whether a
-hue is retained or flattened.
+distinct hues today. The calm direction reduces reliance on six colors: agent
+identity comes from **provider brand colors** (below); the non-agent sources
+read in system tones (`referee`/`human` muted on the raised band, `tool` dim,
+`error` red). Stage 1a mockups should state, per source, whether a hue is
+retained or flattened.
+
+### Provider brand colors
+
+Decided 2026-07-10 during Stage 1b review: each agent takes its provider's
+"official" brand hue, used for the gutter label and the info-line agent name.
+The color is a **static backend fact**: each backend package declares a
+`brand_color` (alongside `capabilities` on the `AgentBackend` protocol in
+[../../../agent_collab/backends/base.py](../../../agent_collab/backends/base.py)),
+with the **same value for a provider's `cli` and `sdk` backends** — brand
+belongs to the provider, and hue must never encode the execution backend.
+Unknown/other providers fall back to the David AI accent teal, which keeps
+teal readable as "the system's own color" (chrome, referee cursor, spinner —
+and any agent it doesn't recognize).
+
+| Provider     | Brand hue        | truecolor | xterm-256 | 8-color fallback |
+| ------------ | ---------------- | --------- | --------- | ---------------- |
+| claude       | Anthropic coral  | `#D97757` | 173       | `COLOR_RED`      |
+| codex        | OpenAI green     | `#10A37F` | 36        | `COLOR_GREEN`    |
+| antigravity  | Gemini blue      | `#4285F4` | 69        | `COLOR_BLUE`     |
+| _(unknown)_  | accent teal      | `#30AB92` | 37        | `COLOR_CYAN`     |
+
+Note the accent's 256-color cell moves to 37 (from 36 in the base mapping
+table) so the fallback teal and OpenAI green stay distinguishable at 256
+colors; in 8-color they split as cyan vs green. In truecolor OpenAI green and
+the teal are close relatives — accepted, since codex also reads by its gutter
+position and name.
 
 ### Activity spinner
 
@@ -143,19 +209,24 @@ render in [tui.py](../../../agent_collab/tui.py) so Stage 2 has a clear delta.
    left-aligned in a narrow gutter; user/referee messages get a subtle
    `raised` band with a timestamp; thinking/tool/status metadata stays `dim`.
 4. **Command palette (contextual).** Appears near the input while typing `/`:
-   a few rows, selected row highlighted (`raised`), `command` + short
+   a few rows on a solid gray band (Grok-style, `--color-gray-floor #1F2124`),
+   selected row highlighted (`--color-gray-panel #2E3033`), `command` + short
    description columns. Prominent but compact.
-5. **Input rail.** A single focused prompt line. Right side shows the input
-   **mode / target** (referee note vs `#agent` directed vs `/new` wizard step),
-   the analogue of Grok's `Grok Build · auto` mode chip.
-6. **Status/hint line (contextual).** One line directly below the rail, split:
-   the transient **message** on the left (`sent note`, `queued for X`, errors,
-   `refreshed`, read-only notices — today's `_render_status_line` message) and
-   the state **hint + activity** on the right. The message updates on actions;
-   the hint updates on state. This is **two-row bottom chrome** (rail + this
-   line) in the steady state; a third row is spent only when an overlay is open
-   (palette, picker, details) or a high-severity error needs its own line.
-   Activity is shown once here (right), not repeated in the top context line.
+5. **Input box.** A bordered one-line input (Grok-style: rounded box-drawing
+   border in the warm interactive `--border #635441`), `>` prompt inside, and
+   the input **mode / target** chip right-aligned inside the box (referee note
+   vs `#agent` directed vs `/new` wizard step) — the analogue of Grok's
+   `Grok Build · auto` mode chip, replacing the old `[referee]` bracket
+   prompt.
+6. **Status/hint line (contextual).** One line directly below the input box,
+   split: the transient **message** on the left (`sent note`, `queued for X`,
+   errors, `refreshed`, read-only notices — today's `_render_status_line`
+   message) and the state **hint + activity** on the right. The message
+   updates on actions; the hint updates on state. Bottom chrome is the 3-row
+   input box + this line in the steady state; extra rows are spent only when
+   an overlay is open (palette, picker, details) or a high-severity error
+   needs its own line. Activity is shown once here (right), not repeated in
+   the top context line.
 
    Resolve the hint by this **precedence** (first match wins): new-session
    wizard -> session picker open -> slash palette open -> `/details` overlay ->
@@ -204,9 +275,13 @@ Grounding for Stage 2, from [tui.py](../../../agent_collab/tui.py):
   (`agent-collab id status workflow workdir [tags]`). Split into the quiet
   context line + the session info line; add model and backend.
 - Status line (`_render_status_line`) mixes the transient message with the
-  scroll/activity mode. Restructure into one **status/hint line** below the rail
-  — message left, state hint + activity right — the two-row bottom chrome in
-  layout region 6. Activity shows here only, not in the top context line.
+  scroll/activity mode. Restructure into one **status/hint line** below the
+  input box — message left, state hint + activity right — layout region 6.
+  Activity shows here only, not in the top context line.
+- Input line (`_render_input_line`) is a bare `[referee] ` prompt row. Becomes
+  the Grok-style bordered input box (region 5): `>` prompt, mode chip inside
+  right, border in the warm `--border #635441`; body height gives up one row
+  for the box.
 - Slash completion (`_render_slash_completion`) already renders a compact
   menu near the input with a selected row — this is close to the target
   palette; restyle to David AI tokens rather than rebuild.
@@ -245,6 +320,37 @@ Store alongside the mockups. Review and approve before implementation.
 
 ## Stage 2 - Implementation
 
+### Scope simplification (2026-07-10, agreed before implementation)
+
+The Stage 1a sample set exists for design approval; it is **not** a list of
+distinct things to build. Implementation-wise there are only **five render
+paths**:
+
+1. the main session layout (context + session-info lines, gutter body,
+   bordered input box, status/hint line);
+2. the palette menu block (gray slab docked above the input box);
+3. **one** scrollable full-body overlay component, reused by `/help`, the
+   session picker, and `/details` below the width threshold — do not build
+   three separately-styled overlays;
+4. the `/details` wide side panel;
+5. narrow / sub-minimum degradation.
+
+Everything else in the samples (first-launch, awaiting-input, error,
+read-only rejection, directed input, `/new` wizard steps, sdk-backend chip) is
+the main layout with different chip / hint / info-line / message contents —
+specified entirely by the hint-precedence list, the mode-chip states, and the
+truncation + brand-color rules, and verified by unit tests on the formatting
+helpers, not by bespoke screens.
+
+Also resolved to keep scope down:
+
+- **`/details` wide-panel overflow:** keep clipping, add a `…` marker on the
+  last visible row (option (a) from `details-visible.md`); the
+  scrollable-overlay-at-wide-widths idea is deferred.
+- **Stage 1b captures:** only the three hero screens (main session, palette,
+  narrow fallback) are rendered and approved; the remaining mockups are
+  reference material and get no captures.
+
 After the screenshots are approved:
 
 - Refactor TUI rendering around the approved layout.
@@ -261,14 +367,22 @@ After the screenshots are approved:
   `HttpClientToolBackend` ([mcp_tools.py](../../../agent_collab/mcp_tools.py)) to
   `.to_dict()` the client results before the MCP `content()` serializer. See
   stage-5.3 "Remaining Workstream A work".
+- Add `brand_color: str` to the `AgentBackend` protocol
+  ([backends/base.py](../../../agent_collab/backends/base.py)) and each backend
+  package — a static registry fact like `capabilities`, identical across a
+  provider's `cli`/`sdk` pair (claude `#D97757`, codex `#10A37F`, antigravity
+  `#4285F4`). Surface it through the session settings / `describe_options` so
+  the TUI colors labels from backend data instead of a hardcoded provider map,
+  falling back to the accent teal for providers it doesn't recognize.
 - Keep command/event behavior unchanged unless the approved samples require a
   specific interaction change.
-- Add focused tests for formatting helpers, command palette behavior, session
-  picker behavior, the contextual hint precedence selection, the status/hint
-  line composition (message left + hint/activity right), the spinner
-  (braille frames + ASCII fallback selection), directed argument-entry mode,
-  `Esc` closing `/details`, the `/details` wide-panel vs narrow-overlay
-  fallback, and narrow-terminal rendering. Also cover the slice-3 client change:
+- Add focused tests for formatting helpers, command palette behavior, the
+  shared scrollable overlay component (one suite covering `/help`, the picker,
+  and `/details` narrow — per the scope simplification above), the contextual
+  hint precedence selection, the status/hint line composition (message left +
+  hint/activity right), the spinner (braille frames + ASCII fallback
+  selection), directed argument-entry mode, `Esc` closing `/details`, the
+  `/details` wide-panel clip-with-`…`-marker, and narrow-terminal rendering. Also cover the slice-3 client change:
   each `AgentCollabClient` method returns its `api_schema` DTO, and
   `HttpClientToolBackend` still serializes correctly (DTOs `.to_dict()`ed for
   MCP `content()`).

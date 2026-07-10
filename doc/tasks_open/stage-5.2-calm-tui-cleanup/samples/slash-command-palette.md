@@ -97,10 +97,17 @@ Faithful: `make_slash_completion("/xyz")` returns an empty-match state, and
 
 ## 3. Color-token intent
 
-- Palette header (`/ commands`): `dim`.
+- Palette block (header + rows): solid fill from the David AI gray ramp,
+  Grok-style (Stage 1b decision, 2026-07-10) — `--color-gray-floor #1F2124`,
+  so the menu reads as one chrome surface, not transparent rows over the
+  transcript.
+- No palette header (Stage 1b decision, 2026-07-10): the typed `/` in the
+  input box is the label and keys live on the status/hint line, so the header
+  row is dropped; the Stage 1a mockups' ` / commands` line is superseded.
 - Rows: command name in `accent`, description in `muted`.
-- Selected row (`▸`): `raised` background band (one of the two allowed fills),
-  name in `text`. Today's `selection` style restated in David AI tokens.
+- Selected row (`▸`): `--color-gray-panel #2E3033` band over the gray fill
+  (the "+1 rule"), name in `text`. Today's `selection` style restated in
+  David AI tokens.
 - `no matches`: `dim`.
 - Rail mode chip: `referee note` (`accent`) normally; `-> ask AGENT` (`accent`)
   in argument mode.
@@ -122,9 +129,11 @@ Faithful: `make_slash_completion("/xyz")` returns an empty-match state, and
 
 ## 5. Removed / simplified
 
-- **Target delta:** restyles the existing completion menu — header becomes
-  `/ commands` (today `commands  Tab/Enter accepts  Esc closes`), selection is a
-  `raised` band, marker `▸` (today `>`). Same windowing and match behavior.
+- **Target delta:** restyles the existing completion menu — the header row is
+  dropped entirely (today `commands  Tab/Enter accepts  Esc closes`; the typed
+  `/` and the hint line carry that information), the block gets the solid gray
+  fill, selection is a `--color-gray-panel` band, marker `▸` (today `>`). Same
+  windowing and match behavior.
 - **Approved interaction change:** directed argument-entry mode for `/ask ` (see
   2d and the parent README).
 - Demotes the 19-line `HELP_LINES` overlay: still reachable via `/help`, but the
