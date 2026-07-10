@@ -170,6 +170,33 @@ def accept_slash_completion(prefix: str, state: SlashCompletionState) -> str:
 
 SLASH_SELECTED_MARKER = "▸"
 
+# 1:1 glyph fallbacks for non-UTF-8 terminals, applied at the single draw
+# funnel (``TuiApp._add``). One-to-one on purpose: substitution must never
+# change column math. The spinner and input-box corners have their own
+# dedicated fallbacks; this covers every remaining chrome glyph.
+ASCII_FALLBACKS = str.maketrans(
+    {
+        "▸": ">",
+        "▏": "|",
+        "◆": "*",
+        "│": "|",
+        "─": "-",
+        "╭": "+",
+        "╮": "+",
+        "╰": "+",
+        "╯": "+",
+        "·": "|",
+        "…": "~",
+        "↑": "^",
+        "↓": "v",
+    }
+)
+
+
+def ascii_fallback(text: str) -> str:
+    """Substitute chrome glyphs for ASCII on non-UTF-8 terminals (1:1)."""
+    return str(text).translate(ASCII_FALLBACKS)
+
 
 def format_slash_completion_lines(state: SlashCompletionState, max_items: int = 6) -> Tuple[str, ...]:
     """Render the palette menu rows.

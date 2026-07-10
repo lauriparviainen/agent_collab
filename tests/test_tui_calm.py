@@ -17,6 +17,7 @@ from agent_collab.tui_core import (
     DirectedEntryState,
     ScrollState,
     ansi8_from_hex,
+    ascii_fallback,
     build_info_line_segments,
     classify_message,
     clip_with_marker,
@@ -491,6 +492,68 @@ class EscBehaviourTests(unittest.TestCase):
         app._handle_key(27)
         # A complete turn is not argument-entry, so Esc leaves the rail as-is.
         self.assertEqual(app.input_text, "#codex fix it")
+
+
+class EscPopsTopmostTests(unittest.TestCase):
+    """Esc pops only the topmost open state per press (review finding)."""
+
+    def _app(self):
+        return TuiApp(_DummyScreen(), _DummyClient(), initial_session_id=None)
+
+    def test_esc_closes_picker_before_details(self):
+        app = self._app()
+        app.details_visible = True
+        app.picker = make_session_picker([])
+        app._handle_key(27)
+        self.assertIsNone(app.picker)
+        self.assertTrue(app.details_visible)  # untouched by the first press
+        app._handle_key(27)
+        self.assertFalse(app.details_visible)
+
+    def test_esc_closes_overlay_before_details(self):
+        app = self._app()
+        app.details_visible = True
+        app.overlay_lines = ("help",)
+        app._handle_key(27)
+        self.assertIsNone(app.overlay_lines)
+        self.assertTrue(app.details_visible)
+
+    def test_esc_cancels_wizard_with_its_overlay_in_one_press(self):
+        app = self._app()
+        app.new_wizard = {"step": "task", "task": "", "workflow": "", "workdir": ""}
+        app.overlay_lines = ("new session", "enter task")
+        app._handle_key(27)
+        self.assertIsNone(app.new_wizard)
+        self.assertIsNone(app.overlay_lines)
+        self.assertEqual(app.message, "new session cancelled")
+
+
+class AsciiFallbackTests(unittest.TestCase):
+    def test_substitutions_are_one_to_one(self):
+        for glyph in "▸▏◆│─╭╮╰╯·…↑↓":
+            self.assertEqual(len(ascii_fallback(glyph)), 1, glyph)
+
+    def test_chrome_strings_become_ascii(self):
+        self.assertEqual(ascii_fallback("▸ /help"), "> /help")
+        self.assertEqual(ascii_fallback("↑↓ scroll · q quit"), "^v scroll | q quit")
+        self.assertTrue(ascii_fallback("╭─╮│╰─╯▏…").isascii())
+
+    def test_non_utf8_render_draws_only_ascii_chrome(self):
+        app, screen = _app_with_transcript(24, 80)
+        app.utf8 = False
+        app._render()
+        for line in screen.text().splitlines():
+            self.assertTrue(line.isascii(), line)
+
+
+class InfoLineWidthTests(unittest.TestCase):
+    def test_ellipsized_info_line_keeps_its_last_character(self):
+        # At narrow widths the task ellipsizes; the trailing char (often the
+        # ellipsis itself) must survive the x=1 draw offset (review finding).
+        app, screen = _app_with_transcript(24, 30)
+        app._render()
+        info_row = screen.text().splitlines()[1]
+        self.assertIn("…", info_row)
 
 
 class QKeyBehaviourTests(unittest.TestCase):

@@ -22,6 +22,7 @@ from .tui_core import (
     accept_slash_completion,
     advance_cursor_state,
     ansi8_from_hex,
+    ascii_fallback,
     build_info_line_segments,
     build_new_session_payload,
     clamp_scroll,
@@ -425,15 +426,23 @@ class TuiApp:
                 # back to referee mode, clearing the rail.
                 self._set_input_text("")
                 return
-            self.overlay_lines = None
-            self.picker = None
+            # Esc pops only the topmost open state per press. The wizard owns
+            # its overlay lines, so cancelling it clears both together.
+            if self.new_wizard:
+                self.new_wizard = None
+                self.overlay_lines = None
+                self.message = "new session cancelled"
+                return
+            if self.picker is not None:
+                self.picker = None
+                return
+            if self.overlay_lines is not None:
+                self.overlay_lines = None
+                return
             if self.details_visible:
                 # Approved interaction change: Esc dismisses /details, matching
                 # how it already closes the palette and picker.
                 self.details_visible = False
-            if self.new_wizard:
-                self.new_wizard = None
-                self.message = "new session cancelled"
             return
         if self.picker is not None:
             if key in (curses.KEY_UP, ord("k")):
@@ -861,7 +870,8 @@ class TuiApp:
             task = ""
             agents = ()
             workflow = ""
-        segments = build_info_line_segments(task, agents, workflow, max(1, width - 1))
+        # Drawable columns run from x=1 to width-2 inclusive: width-2 cells.
+        segments = build_info_line_segments(task, agents, workflow, max(1, width - 2))
         x = 1
         for segment in segments:
             if x >= width - 1:
@@ -1030,6 +1040,8 @@ class TuiApp:
     def _add(self, y: int, x: int, text: str, width: int, attr: int = 0) -> None:
         if width <= 0:
             return
+        if not self.utf8:
+            text = ascii_fallback(text)
         try:
             self.stdscr.addnstr(y, x, text, width, attr)
         except curses.error:
