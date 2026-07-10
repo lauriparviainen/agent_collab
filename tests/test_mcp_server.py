@@ -131,6 +131,29 @@ class McpServerTests(unittest.TestCase):
         client.describe_options.assert_called_once_with({"workdir": "/repo"})
         _assert_tool_result(self, result, {"workflows": [], "backend_options": {}})
 
+    def test_describe_options_maps_fresh_health_request(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            client.describe_options.return_value = {"discovery": {"health_request": "fresh"}}
+
+            result = handle_tool(
+                "agent_collab_describe_options",
+                {"workdir": "/repo", "health_refresh": "fresh"},
+            )
+
+        client.describe_options.assert_called_once_with(
+            {"workdir": "/repo", "health_refresh": "fresh"}
+        )
+        _assert_tool_result(self, result, {"discovery": {"health_request": "fresh"}})
+
+    def test_describe_options_rejects_invalid_health_refresh(self):
+        result = handle_tool(
+            "agent_collab_describe_options",
+            {"workdir": "/repo", "health_refresh": "eventually"},
+        )
+        self.assertTrue(result.get("isError"))
+        self.assertEqual(_payload(result), {"error": "health_refresh must be 'cached' or 'fresh'"})
+
     def test_describe_options_rejects_missing_workdir(self):
         result = handle_tool("agent_collab_describe_options", {})
 

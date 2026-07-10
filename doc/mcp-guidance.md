@@ -47,12 +47,15 @@ given `workdir`, including each workflow's sequence and agent types.
 
 ## Options
 
-Call `agent_collab_describe_options` (with the session's required `workdir`) before
-passing non-default `backend_options`. It returns:
+Call `agent_collab_describe_options` with the intended absolute `workdir` before
+selecting a workflow or starting. Use `health_refresh: "cached"` normally, or
+`"fresh"` when a newer advisory snapshot matters. It returns:
 
-- available workflows and their agent types,
-- registered execution backends with health, capabilities, and an effective
-  `option_schema` for each backend,
+- a canonical-name-keyed registered backend catalog with separate user
+  enablement policy, raw health/credential/native evidence, cache age, policy
+  assessment, uncertainty, and remediation,
+- each configured agent's effective backend and selection source, plus each
+  workflow occurrence's effective canonical backend,
 - one exact schema per canonical backend name, with allowed values and defaults
   (for example `backend_options.claude_cli.model` and
   `backend_options.codex_sdk.sandbox`).
@@ -60,6 +63,10 @@ passing non-default `backend_options`. It returns:
 Only pass entries for backends selected by the chosen workflow; anything else
 is rejected. Omit options you do not need — backend-specific configured
 defaults are applied automatically and echoed back in the start response.
+The compatibility `available` boolean means only `health.status == "ok"`; use
+the separate policy and assessment fields for decisions. Discovery never makes
+a model call and cannot prove authentication, entitlement, model support, or a
+successful turn.
 
 ## Start
 
@@ -75,6 +82,13 @@ Start a session with `agent_collab_start`:
 
 Optional fields: `max_turns`, `timeout`, `mock`, `dry_run`, `interactive`,
 `interactive_idle_timeout`, `backend_options`, `backend`.
+
+Start is authoritative for preflight: it reloads workdir config, re-resolves
+the exact selection, rejects disabled backends, revalidates options, and freshly
+probes selected backends whose `start_probe_policy` is `fresh`, all before
+creating session state. Backends marked `not_probed` deliberately defer health
+failure to the real turn. In every case, the first real turn remains the
+authority for provider-side failures a side-effect-free probe cannot establish.
 
 The response is your confirmation of what the server is about to run. Check
 it before watching:
@@ -121,6 +135,11 @@ If `agent_collab_start` returns `isError` with `invalid_start_options`, the
 `details` list contains one entry per problem with a field `path` (for
 example `backend_options.claude_cli.model`) and a `message` naming the allowed values.
 Fix exactly the named fields and retry; do not guess or drop the options.
+Backend failures also include a machine-readable `code`, canonical backend,
+check timestamp, and structured remediation when known. A disabled backend must
+be enabled in the user config, not project config. If discovery said usable but
+the real turn fails, prefer the turn error, request fresh discovery, and
+remediate deliberately rather than automatically oscillating between backends.
 If a workflow or agent is unknown, call `agent_collab_describe_options` for
 the same `workdir` and choose from what it lists. Unknown `session_id`
 errors usually mean the id was mistyped or belongs to a different daemon.

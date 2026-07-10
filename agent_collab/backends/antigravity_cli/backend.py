@@ -19,6 +19,8 @@ OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 class AntigravityCliBackend:
     id = "cli"
     agent_type = "antigravity"
+    event_fidelity = "message_only"
+    provider_session_id_kind = None
     capabilities = BackendCapabilities()
     checks_credentials = True
     block_on_unavailable = True

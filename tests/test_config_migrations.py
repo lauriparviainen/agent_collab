@@ -1,4 +1,5 @@
 import copy
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,6 +69,17 @@ class MigrateConfigDataTests(unittest.TestCase):
         config = CollaborationConfig()
         with self.assertRaisesRegex(ConfigError, "unknown config section"):
             merge_config_data(config, migrate_config_data({"surprises": {}}))
+
+    def test_project_backend_policy_is_stripped_with_warning(self):
+        stream = io.StringIO()
+        with self.assertLogs("agent_collab.config", level="WARNING") as logs:
+            migrated = migrate_config_data(
+                {"backends": {"claude_cli": {"enabled": False}}},
+                source="project.toml",
+                scope="project",
+            )
+        self.assertNotIn("backends", migrated)
+        self.assertIn("user config", "\n".join(logs.output))
 
 
 class LoadConfigMigrationTests(unittest.TestCase):

@@ -15,7 +15,7 @@ import copy
 import logging
 from typing import Any, Callable, Dict, Mapping
 
-CURRENT_CONFIG_SCHEMA = 3
+CURRENT_CONFIG_SCHEMA = 4
 
 _logger = logging.getLogger("agent_collab.config")
 
@@ -24,7 +24,12 @@ class ConfigMigrationError(ValueError):
     """Raised when config data cannot be migrated to the current schema."""
 
 
-def migrate_config_data(data: Mapping[str, Any], source: str = "") -> Dict[str, Any]:
+def migrate_config_data(
+    data: Mapping[str, Any],
+    source: str = "",
+    *,
+    scope: str = "generic",
+) -> Dict[str, Any]:
     """Return a new dict migrated to ``CURRENT_CONFIG_SCHEMA``.
 
     Never mutates ``data``. Missing ``schema_version`` means version 1.
@@ -47,6 +52,12 @@ def migrate_config_data(data: Mapping[str, Any], source: str = "") -> Dict[str, 
         version += 1
         result["schema_version"] = version
     result["schema_version"] = CURRENT_CONFIG_SCHEMA
+    if scope == "project" and "backends" in result:
+        _logger.warning(
+            "%s: ignoring project [backends.*] policy; backend enablement is allowed only in the user config",
+            label,
+        )
+        result.pop("backends", None)
     return result
 
 
@@ -69,7 +80,14 @@ def _migrate_v2_to_v3(data: Dict[str, Any], source: str) -> Dict[str, Any]:
     return data
 
 
+def _migrate_v3_to_v4(data: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """v4 adds optional daemon-user backend enablement policy."""
+
+    return data
+
+
 MIGRATIONS: Dict[int, Callable[[Dict[str, Any], str], Dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
+    3: _migrate_v3_to_v4,
 }

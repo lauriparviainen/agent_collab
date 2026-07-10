@@ -82,6 +82,18 @@ def build_start_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_options_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="agent-collab options",
+        description="Inspect the daemon's workdir-scoped backend discovery snapshot.",
+    )
+    parser.add_argument("--server-url")
+    parser.add_argument("--workdir", type=Path, default=Path("."))
+    parser.add_argument("--fresh", action="store_true", help="Bypass the backend health cache for this snapshot.")
+    parser.add_argument("--json", action="store_true", help="Print the complete discovery response as JSON.")
+    return parser
+
+
 def build_daemon_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-collab daemon", description="Manage the global background server.")
     subparsers = parser.add_subparsers(dest="action", required=True)
@@ -286,6 +298,40 @@ def _main_start(argv) -> int:
     return 0
 
 
+def _main_options(argv) -> int:
+    parser = build_options_parser()
+    args = parser.parse_args(argv)
+    try:
+        payload = {
+            "workdir": str(args.workdir.expanduser().resolve()),
+            "health_refresh": "fresh" if args.fresh else "cached",
+        }
+        result = _client(args.server_url).describe_options(payload)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
+        discovery = result.get("discovery") or {}
+        print(f"workdir: {discovery.get('workdir', payload['workdir'])}")
+        print(f"health: {discovery.get('health_request', payload['health_refresh'])} (advisory; start revalidates)")
+        for name, item in sorted((result.get("canonical_backends") or {}).items()):
+            probe = item.get("probe") or {}
+            assessment = item.get("assessment") or {}
+            policy = item.get("policy") or {}
+            health = probe.get("health") or {}
+            print(
+                f"backend {name}: enabled={str(policy.get('enabled', True)).lower()} "
+                f"readiness={assessment.get('state', 'unknown')} health={health.get('status', probe.get('status', 'unknown'))} "
+                f"start_probe={policy.get('start_probe_policy', 'unknown')}"
+            )
+        for workflow in result.get("workflows") or []:
+            selected = ", ".join(workflow.get("selected_canonical_backends") or []) or "(mock)"
+            print(f"workflow {workflow.get('id')}: {selected} eligible={str(workflow.get('start_eligible')).lower()}")
+    except Exception as exc:
+        print(f"ERROR   {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _main_daemon(argv) -> int:
     from .daemon_supervisor import DaemonSupervisorError, daemon_status, start_daemon, stop_daemon, tail_daemon_log
 
@@ -333,7 +379,7 @@ def _main_daemon(argv) -> int:
 
 
 def _main_config(argv) -> int:
-    from .config import DEFAULT_CONFIG_PATH, load_config
+    from .config import DEFAULT_CONFIG_PATH, load_config, render_user_config
     from .config_migrations import CURRENT_CONFIG_SCHEMA
     from .paths import AgentCollabHome
 
@@ -341,11 +387,20 @@ def _main_config(argv) -> int:
     subparsers = parser.add_subparsers(dest="action", required=True)
     show = subparsers.add_parser("show", help="Print the effective merged config for a workdir.")
     show.add_argument("--workdir", type=Path, default=Path("."), help="Project root whose config to resolve.")
+    init = subparsers.add_parser("init", help="Create a user config with explicit backend enablement policy.")
+    init.add_argument("--force", action="store_true", help="Replace an existing user config.")
     args = parser.parse_args(argv)
 
     try:
-        workdir = args.workdir.expanduser().resolve()
         home = AgentCollabHome.resolve()
+        if args.action == "init":
+            if home.config_path.exists() and not args.force:
+                raise ValueError(f"user config already exists: {home.config_path} (pass --force to replace it)")
+            home.root.mkdir(parents=True, exist_ok=True)
+            home.config_path.write_text(render_user_config(), encoding="utf-8")
+            print(f"created user config: {home.config_path}")
+            return 0
+        workdir = args.workdir.expanduser().resolve()
         config = load_config(workdir, home=home)
         print(f"schema_version: {CURRENT_CONFIG_SCHEMA}")
         print(f"workdir: {workdir}")
@@ -360,6 +415,12 @@ def _main_config(argv) -> int:
             for option, schema in sorted(agent.options.items()):
                 details = " ".join(f"{key}={value}" for key, value in sorted(schema.items()))
                 print(f"  backend {agent.backend or 'cli'} option {option}: {details}")
+        from .backends import registered_backend_names
+        from .config import backend_policy
+
+        for name in registered_backend_names():
+            policy = backend_policy(config, name)
+            print(f"backend {name}: enabled={str(policy.enabled).lower()} source={policy.source}")
         for workflow_id, workflow in sorted(config.workflows.items()):
             print(f"workflow {workflow_id}: {' -> '.join(workflow.sequence)}")
     except Exception as exc:
@@ -484,6 +545,7 @@ def main(argv=None) -> int:
         "serve": _main_serve,
         "daemon": _main_daemon,
         "start": _main_start,
+        "options": _main_options,
         "list": _main_list,
         "status": _main_status,
         "events": _main_events,

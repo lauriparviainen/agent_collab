@@ -20,6 +20,8 @@ OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 class ClaudeCliBackend:
     id = "cli"
     agent_type = "claude"
+    event_fidelity = "typed"
+    provider_session_id_kind = "session"
     capabilities = BackendCapabilities()
     checks_credentials = False
     block_on_unavailable = False

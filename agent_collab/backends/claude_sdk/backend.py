@@ -68,6 +68,8 @@ class ClaudeSdkBackend:
 
     id = "sdk"
     agent_type = "claude"
+    event_fidelity = "typed"
+    provider_session_id_kind = "session"
 
     def __init__(self, message_stream: Optional[MessageStreamFactory] = None) -> None:
         self.capabilities = BackendCapabilities()

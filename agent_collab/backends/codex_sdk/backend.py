@@ -75,6 +75,8 @@ class CodexSdkBackend:
 
     id = "sdk"
     agent_type = "codex"
+    event_fidelity = "message_first"
+    provider_session_id_kind = "thread"
 
     def __init__(self, item_stream: Optional[ItemStreamFactory] = None) -> None:
         self.capabilities = BackendCapabilities()

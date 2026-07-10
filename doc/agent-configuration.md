@@ -36,12 +36,12 @@ Agent commands should be changed in `agent-collab` config, not through dedicated
 
 Built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml), so the base agent commands, option defaults, and built-in workflows are inspectable without reading Python code.
 
-Config files declare a top-level `schema_version` (currently `3`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
+Config files declare a top-level `schema_version` (currently `4`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
 ## Example
 
 ```toml
-schema_version = 3
+schema_version = 4
 
 [agents.claude]
 type = "claude"
@@ -157,6 +157,25 @@ brand. `agent_collab_describe_options` exposes, per agent type, the registered
 backend ids, the default, live availability/health, capability flags, and an
 `option_schema` for each backend, so the selection is discoverable before
 starting. `mock` agents ignore backend selection and reject a `backend` field.
+
+### User backend policy
+
+The user config may independently disable a canonical backend for every agent:
+
+```toml
+[backends.claude_cli]
+enabled = true
+
+[backends.antigravity_sdk]
+enabled = false
+```
+
+This section is accepted only from `$AGENT_COLLAB_HOME/config.toml`. A project
+`[backends.*]` section is ignored with a migration warning, so project
+precedence cannot undo daemon-user policy. Missing entries mean enabled.
+`agent-collab config init` generates one explicit section per registered
+backend. Disabled backends remain visible in discovery but start rejects them
+before health probing or session creation.
 
 ## Start options
 

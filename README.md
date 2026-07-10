@@ -15,7 +15,7 @@ Implemented:
 - Per-session `workdir` that selects the project config and the subprocess cwd, so one daemon serves sessions across projects.
 - Persistent session index; `list`/`status` survive daemon restarts, and sessions that were running or awaiting input when the daemon died are marked `interrupted`.
 - Foreground local session server at `127.0.0.1:8765`.
-- CLI client commands: `serve`, `daemon`, `start`, `list`, `status`, `events`, `watch`, `stop`, `config show`.
+- CLI client commands: `serve`, `daemon`, `options`, `start`, `list`, `status`, `events`, `watch`, `stop`, `config init`, `config show`.
 - MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.
 - Stdio MCP adapter that connects to the local server.
 - Cursor-based event reads and long-polling.
@@ -23,7 +23,7 @@ Implemented:
 - Pluggable agent backends: an agent's provider (`type`) is separate from its execution mechanism (`backend`). The default `cli` subprocess backend runs the provider CLI; a first-class `sdk` backend runs the provider SDK in-process. Claude, Codex, and Antigravity each register both `(cli)` and `(sdk)`; SDK imports are lazy so a missing wheel is an unavailable backend, not an import error. Backends, availability/health, and honest per-session capability flags are discoverable via `agent_collab_describe_options`.
 - MCP option discovery through `agent_collab_describe_options` and usage guidance through `agent_collab_guidance`.
 - Start/status/list responses include the effective session settings: workflow sequence, per-agent typed options, and a prompt-free `command_preview`.
-- Centralized config schema migrations (`schema_version`, currently 3).
+- Centralized config schema migrations (`schema_version`, currently 4).
 - JSONL and Markdown session logs under `~/.agent-collab/data/sessions/`.
 
 Current transition:
@@ -116,12 +116,15 @@ agent-collab daemon status
 agent-collab daemon logs --tail 100
 agent-collab daemon stop
 agent-collab start --mock --watch --workdir /path/to/project "Task"
+agent-collab options --workdir /path/to/project
+agent-collab options --workdir /path/to/project --fresh --json
 agent-collab list
 agent-collab status SESSION_ID
 agent-collab events SESSION_ID --cursor 0
 agent-collab watch SESSION_ID
 agent-collab stop SESSION_ID
 agent-collab config show --workdir /path/to/project
+agent-collab config init
 ```
 
 The daemon is global: one daemon serves sessions for any number of projects, and each session's `--workdir` decides which project config applies and where agent subprocesses run. `daemon start --workdir DIR` only sets the default workdir for sessions that do not pass one; it never changes where daemon state lives.
@@ -187,7 +190,13 @@ SESSION_WORKDIR/.agent-collab/config.toml
 built-in defaults
 ```
 
-The built-in defaults live in [agent_collab/default_config.toml](agent_collab/default_config.toml). Project config comes from the session `workdir`, never from the caller's shell directory. Config files carry a `schema_version` (currently 3); known old shapes are migrated in memory at load time by a centralized migration layer, and unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir /path/to/project`. See [doc/agent-configuration.md](doc/agent-configuration.md).
+The built-in defaults live in [agent_collab/default_config.toml](agent_collab/default_config.toml). Project config comes from the session `workdir`, never from the caller's shell directory. Config files carry a `schema_version` (currently 4); known old shapes are migrated in memory at load time by a centralized migration layer, and unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir /path/to/project`. See [doc/agent-configuration.md](doc/agent-configuration.md).
+
+The user config may disable any registered execution backend globally with
+`[backends.<provider>_<backend>] enabled = false`. Project config cannot
+re-enable it. `agent-collab config init` generates explicit entries for the
+backends registered in the current build; absent entries remain enabled for
+backward compatibility.
 
 The built-in defaults include Claude Opus with high effort and Codex high reasoning effort:
 
@@ -268,7 +277,7 @@ Exposed tools:
 - `agent_collab_read_transcript`
 - `agent_collab_stop`
 
-Agents can call `agent_collab_guidance` for full Markdown usage guidance (source: [doc/mcp-guidance.md](doc/mcp-guidance.md)), and should call `agent_collab_describe_options` with the required `workdir` before passing non-default model, reasoning, sandbox, or permission settings. Prefer `thinking_level` over provider-specific raw fields: Codex accepts `minimal`, `low`, `medium`, `high`, or `xhigh`; Claude accepts `low`, `medium`, `high`, `xhigh`, or `max`. `agent_collab_start` requires `workdir`, rejects unknown keys, wrong types, unsupported values, and options that do not apply to the selected workflow before any subprocess is launched, and its response confirms the effective settings including prompt-free command previews.
+Agents can call `agent_collab_guidance` for full Markdown usage guidance (source: [doc/mcp-guidance.md](doc/mcp-guidance.md)), and should call `agent_collab_describe_options` with the intended absolute `workdir` before selecting a workflow or backend. The response is a versioned discovery snapshot with canonical backends, effective per-agent/workflow selections, enablement policy, probe freshness, readiness, remediation, and backend-qualified option schemas. `health_refresh` accepts `cached` (default) or `fresh`; either result is advisory. Start reloads the same workdir config, rejects disabled selections, validates options, and freshly probes only selected backends whose policy acts on health. Prefer `thinking_level` over provider-specific raw fields: Codex accepts `minimal`, `low`, `medium`, `high`, or `xhigh`; Claude accepts `low`, `medium`, `high`, `xhigh`, or `max`.
 
 ## Development
 

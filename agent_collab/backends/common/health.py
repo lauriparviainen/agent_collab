@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
@@ -78,6 +79,17 @@ def probe_cli_backend(
             credentials=CREDENTIALS_UNKNOWN,
             version=None,
             checked_at=checked_at,
+            checks={
+                "dependency": {"status": "missing", "kind": "path", "command": binary},
+                "credentials": {"status": "not_checked"},
+            },
+            reason_codes=("dependency_missing",),
+            remediation=(
+                {
+                    "code": "install_cli",
+                    "message": f"Install {binary} and ensure it is available on the daemon PATH.",
+                },
+            ),
         )
     version = run_version(binary, path) if run_version is not None else None
     creds = credentials() if credentials is not None else CREDENTIALS_UNKNOWN
@@ -87,6 +99,18 @@ def probe_cli_backend(
         credentials=creds,
         version=version,
         checked_at=checked_at,
+        checks={
+            "dependency": {
+                "status": "present",
+                "kind": "path",
+                "command": binary,
+                "version": version,
+            },
+            "credentials": {
+                "status": creds,
+                "method": "provider_local_evidence" if credentials is not None else "not_checked",
+            },
+        },
     )
 
 
@@ -121,6 +145,17 @@ def probe_sdk_backend(
             credentials=CREDENTIALS_UNKNOWN,
             version=None,
             checked_at=checked_at,
+            checks={
+                "dependency": {"status": "missing", "kind": "python_module", "module": module_name},
+                "credentials": {"status": "not_checked"},
+            },
+            reason_codes=("dependency_missing",),
+            remediation=(
+                {
+                    "code": "install_sdk",
+                    "message": extra_hint or f"Install the Python package that provides {module_name}.",
+                },
+            ),
         )
     version = package_version() if package_version is not None else None
     creds = credentials() if credentials is not None else CREDENTIALS_UNKNOWN
@@ -130,6 +165,18 @@ def probe_sdk_backend(
         credentials=creds,
         version=version,
         checked_at=checked_at,
+        checks={
+            "dependency": {
+                "status": "present",
+                "kind": "python_module",
+                "module": module_name,
+                "version": version,
+            },
+            "credentials": {
+                "status": creds,
+                "method": "provider_local_evidence" if credentials is not None else "not_checked",
+            },
+        },
     )
 
 
@@ -202,6 +249,18 @@ def gemini_api_key_credentials(env: Optional[Mapping[str, str]] = None) -> str:
     return CREDENTIALS_UNKNOWN
 
 
+@dataclass(frozen=True)
+class HealthObservation:
+    health: BackendHealth
+    cache_hit: bool
+    age_seconds: float
+    ttl_seconds: float
+
+    @property
+    def stale(self) -> bool:
+        return self.age_seconds >= self.ttl_seconds
+
+
 class HealthCache:
     """Cache probe results with a short TTL; ``fresh=True`` always re-probes.
 
@@ -220,14 +279,19 @@ class HealthCache:
         self._entries: Dict[Tuple[str, str], Tuple[BackendHealth, float]] = {}
 
     def health(self, backend: Any, *, fresh: bool = False) -> BackendHealth:
+        return self.observe(backend, fresh=fresh).health
+
+    def observe(self, backend: Any, *, fresh: bool = False) -> HealthObservation:
         key = (backend.agent_type, backend.id)
+        now = self._clock()
         if not fresh:
             cached = self._entries.get(key)
-            if cached is not None and (self._clock() - cached[1]) < self._ttl:
-                return cached[0]
+            if cached is not None and (now - cached[1]) < self._ttl:
+                return HealthObservation(cached[0], True, max(0.0, now - cached[1]), self._ttl)
         result = backend.probe()
-        self._entries[key] = (result, self._clock())
-        return result
+        stored_at = self._clock()
+        self._entries[key] = (result, stored_at)
+        return HealthObservation(result, False, 0.0, self._ttl)
 
     def clear(self) -> None:
         self._entries.clear()

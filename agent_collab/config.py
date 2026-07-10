@@ -41,9 +41,17 @@ class WorkflowConfig:
 
 
 @dataclass
+class BackendPolicyConfig:
+    canonical_backend: str
+    enabled: bool = True
+    source: str = "user_config"
+
+
+@dataclass
 class CollaborationConfig:
     agents: Dict[str, AgentConfig] = field(default_factory=dict)
     workflows: Dict[str, WorkflowConfig] = field(default_factory=dict)
+    backends: Dict[str, BackendPolicyConfig] = field(default_factory=dict)
     loaded_paths: List[Path] = field(default_factory=list)
 
 
@@ -58,7 +66,10 @@ AGENT_TYPES = SUBPROCESS_AGENT_TYPES | {"mock"}
 def builtin_config() -> CollaborationConfig:
     config = CollaborationConfig()
     data = load_toml_file(DEFAULT_CONFIG_PATH)
-    merge_config_data(config, migrate_config_data(data, source=str(DEFAULT_CONFIG_PATH)))
+    merge_config_data(
+        config,
+        migrate_config_data(data, source=str(DEFAULT_CONFIG_PATH), scope="built_in"),
+    )
     return config
 
 
@@ -89,16 +100,24 @@ def load_config(
 
     config = builtin_config()
     project_path, user_path = config_search_paths(workdir, home, env)
-    for path in (user_path, project_path):
-        if path.exists():
-            merge_config_data(config, migrate_config_data(load_toml_file(path), source=str(path)))
-            config.loaded_paths.append(path)
+    if user_path.exists():
+        merge_config_data(
+            config,
+            migrate_config_data(load_toml_file(user_path), source=str(user_path), scope="user"),
+        )
+        config.loaded_paths.append(user_path)
+    if project_path.exists():
+        merge_config_data(
+            config,
+            migrate_config_data(load_toml_file(project_path), source=str(project_path), scope="project"),
+        )
+        config.loaded_paths.append(project_path)
 
     validate_config(config)
     return config
 
 
-KNOWN_TOP_LEVEL_KEYS = {"schema_version", "agents", "workflows"}
+KNOWN_TOP_LEVEL_KEYS = {"schema_version", "agents", "workflows", "backends"}
 
 
 def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> None:
@@ -127,6 +146,20 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
             config.workflows[str(workflow_id)] = _merge_workflow(
                 config.workflows.get(str(workflow_id)), str(workflow_id), values
             )
+
+    backend_policies = data.get("backends", {})
+    if backend_policies is not None:
+        if not isinstance(backend_policies, Mapping):
+            raise ConfigError("[backends] must be a table")
+        for canonical_name, values in backend_policies.items():
+            name = str(canonical_name)
+            if not isinstance(values, Mapping):
+                raise ConfigError(f"[backends.{name}] must be a table")
+            unknown = sorted(set(values) - {"enabled"})
+            if unknown:
+                raise ConfigError(f"unknown field backends.{name}.{unknown[0]}")
+            enabled = _expect_bool(values.get("enabled", True), f"backends.{name}.enabled")
+            config.backends[name] = BackendPolicyConfig(name, enabled, "user_config")
 
 
 def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping[str, Any]) -> AgentConfig:
@@ -188,10 +221,40 @@ def _merge_workflow(existing: Optional[WorkflowConfig], workflow_id: str, values
 
 
 def validate_config(config: CollaborationConfig) -> None:
+    from .backends import registered_backend_names
+
+    registered = set(registered_backend_names())
+    for name in config.backends:
+        if name not in registered:
+            raise ConfigError(
+                f"backends.{name} is not a registered canonical backend; expected one of: "
+                + ", ".join(sorted(registered))
+            )
     for agent in config.agents.values():
         validate_agent(agent)
     for workflow in config.workflows.values():
         validate_workflow(config, workflow.id)
+
+
+def backend_policy(config: CollaborationConfig, canonical_backend: str) -> BackendPolicyConfig:
+    """Return explicit user policy or the backward-compatible enabled default."""
+
+    return config.backends.get(
+        canonical_backend,
+        BackendPolicyConfig(canonical_backend, True, "default"),
+    )
+
+
+def render_user_config() -> str:
+    """Generate a user config with explicit policy for every registered backend."""
+
+    from .backends import registered_backend_names
+    from .config_migrations import CURRENT_CONFIG_SCHEMA
+
+    lines = [f"schema_version = {CURRENT_CONFIG_SCHEMA}", ""]
+    for name in registered_backend_names():
+        lines.extend((f"[backends.{name}]", "enabled = true", ""))
+    return "\n".join(lines)
 
 
 def validate_agent(agent: AgentConfig) -> None:

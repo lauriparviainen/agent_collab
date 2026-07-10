@@ -54,7 +54,7 @@ built-in defaults
 < explicit session/start options
 ```
 
-The caller's current shell directory does not affect project config unless it is also the session `workdir`. Config files declare a `schema_version` (currently 3, missing means 1); `agent_collab/config_migrations.py` migrates known old shapes in memory before validation. Inspect the merged result with `agent-collab config show --workdir PROJECT`.
+The caller's current shell directory does not affect project config unless it is also the session `workdir`. Config files declare a `schema_version` (currently 4, missing means 1); `agent_collab/config_migrations.py` migrates known old shapes in memory before validation. Inspect the merged result with `agent-collab config show --workdir PROJECT`. Canonical `[backends.*].enabled` policy is user-config-only; a project copy is stripped with a warning so project precedence cannot re-enable a daemon-user-disabled backend.
 
 The built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml). They are still the lowest-precedence layer, but they are an inspectable TOML file rather than an embedded Python dict.
 

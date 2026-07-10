@@ -3,6 +3,7 @@ from pathlib import Path
 
 from agent_collab.backends.claude_cli import ClaudeCliBackend
 from agent_collab.backends.codex_cli import CodexCliBackend
+from agent_collab.backends.base import BackendHealth
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig, builtin_config
 from agent_collab.options import (
     StartOptionsError,
@@ -118,6 +119,37 @@ class DescribeOptionsTests(unittest.TestCase):
             for entry in section["entries"].values():
                 self.assertIn("health", entry)
                 self.assertIn("capabilities", entry)
+
+    def test_discovery_reports_canonical_effective_agent_and_workflow_backends(self):
+        payload = describe_options(_config())
+        self.assertEqual(payload["discovery"]["protocol_version"], 1)
+        self.assertEqual(
+            set(payload["canonical_backends"]),
+            set(payload["backend_options"]["properties"]),
+        )
+        agents = {item["id"]: item for item in payload["agents"]}
+        self.assertEqual(agents["claude"]["canonical_backend"], "claude_cli")
+        self.assertEqual(agents["claude"]["selection_source"], "registry_default")
+        workflow = next(item for item in payload["workflows"] if item["id"] == "cross-review")
+        self.assertEqual(
+            workflow["selected_canonical_backends"],
+            ["claude_cli", "codex_cli"],
+        )
+        self.assertEqual(workflow["effective_agents"][0]["canonical_backend"], "claude_cli")
+
+    def test_disabled_backend_stays_registered_but_is_not_selection_eligible(self):
+        from agent_collab.config import BackendPolicyConfig
+
+        config = _config()
+        config.backends["claude_cli"] = BackendPolicyConfig("claude_cli", False)
+        calls = []
+        payload = describe_options(config, health=lambda backend: calls.append(backend) or BackendHealth())
+        entry = payload["canonical_backends"]["claude_cli"]
+        self.assertFalse(entry["policy"]["enabled"])
+        self.assertEqual(entry["probe"]["status"], "not_run")
+        self.assertNotIn("claude_cli", [f"{item.agent_type}_{item.id}" for item in calls])
+        workflow = next(item for item in payload["workflows"] if item["id"] == "cross-review")
+        self.assertFalse(workflow["start_eligible"])
 
 
 class CommandMappingTests(unittest.TestCase):

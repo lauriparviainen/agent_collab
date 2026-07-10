@@ -39,7 +39,7 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_file_parses_with_fallback_toml_parser(self):
         data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(data["schema_version"], 3)
+        self.assertEqual(data["schema_version"], 4)
         self.assertNotIn("options", data["agents"]["claude"])
         self.assertNotIn("options", data["agents"]["codex"])
         self.assertNotIn("options", data["agents"]["antigravity"])
@@ -125,6 +125,30 @@ command = "user-claude"
             self.assertEqual(config.agents["claude"].command, "user-claude")
             self.assertEqual(config.loaded_paths, [home.resolve() / "config.toml"])
 
+    def test_user_backend_policy_is_loaded_and_project_cannot_override_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_user_config(home, "[backends.claude_cli]\nenabled = false\n")
+            _write_config(root, "[backends.claude_cli]\nenabled = true\n")
+
+            config = load_config(root, env=_env(home))
+
+            self.assertFalse(config.backends["claude_cli"].enabled)
+            self.assertEqual(config.backends["claude_cli"].source, "user_config")
+
+    def test_config_init_materializes_every_registered_backend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, _env(Path(tmp) / "home")):
+                with contextlib.redirect_stdout(output):
+                    code = cli.main(["config", "init"])
+            text = (Path(tmp) / "home" / "config.toml").read_text(encoding="utf-8")
+            self.assertEqual(code, 0)
+            for name in backends.registered_backend_names():
+                self.assertIn(f"[backends.{name}]", text)
+
     def test_shell_cwd_does_not_affect_project_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_a = Path(tmp) / "project-a"
@@ -183,6 +207,31 @@ sequence = ["claude"]
             self.assertIn("workflow custom: claude", text)
             self.assertIn("workflow cross-review: claude -> codex -> claude", text)
             self.assertIn(str(root.resolve() / ".agent-collab" / "config.toml"), text)
+
+    def test_cli_options_is_a_projection_of_daemon_discovery(self):
+        client = mock.Mock()
+        client.describe_options.return_value = {
+            "discovery": {"workdir": "/repo", "health_request": "fresh"},
+            "canonical_backends": {
+                "claude_cli": {
+                    "probe": {"health": {"status": "ok"}},
+                    "policy": {"enabled": True, "start_probe_policy": "not_probed"},
+                    "assessment": {"state": "usable"},
+                }
+            },
+            "workflows": [
+                {"id": "solo-claude", "selected_canonical_backends": ["claude_cli"], "start_eligible": True}
+            ],
+        }
+        output = io.StringIO()
+        with mock.patch("agent_collab.cli._client", return_value=client):
+            with contextlib.redirect_stdout(output):
+                code = cli.main(["options", "--workdir", "/repo", "--fresh"])
+        self.assertEqual(code, 0)
+        client.describe_options.assert_called_once_with(
+            {"workdir": str(Path("/repo").resolve()), "health_refresh": "fresh"}
+        )
+        self.assertIn("backend claude_cli", output.getvalue())
 
     def test_legacy_modes_section_is_rejected_with_hint(self):
         with tempfile.TemporaryDirectory() as tmp:

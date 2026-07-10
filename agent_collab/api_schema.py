@@ -389,13 +389,17 @@ class OptionsRequestModel:
     """
 
     workdir: str
+    health_refresh: str = "cached"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "OptionsRequestModel":
-        return cls(workdir=_required_str(data, "workdir"))
+        health_refresh = data.get("health_refresh", "cached")
+        if not isinstance(health_refresh, str) or health_refresh not in {"cached", "fresh"}:
+            raise ValueError("health_refresh must be 'cached' or 'fresh'")
+        return cls(workdir=_required_str(data, "workdir"), health_refresh=health_refresh)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"workdir": self.workdir}
+        return {"workdir": self.workdir, "health_refresh": self.health_refresh}
 
 
 @dataclass

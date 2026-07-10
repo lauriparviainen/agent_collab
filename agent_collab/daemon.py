@@ -303,9 +303,14 @@ class SessionManager:
         backend = backend_registry.get_backend(agent_type, backend_id)
         return backend_registry.HEALTH.health(backend, fresh=True)
 
-    def describe_options(self, workdir: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+    def describe_options(
+        self,
+        workdir: Optional[Union[str, Path]] = None,
+        *,
+        health_refresh: str = "cached",
+    ) -> Dict[str, Any]:
         root = Path(workdir).expanduser().resolve() if workdir else self.default_workdir
-        return describe_options(load_config(root), root)
+        return describe_options(load_config(root), root, health_refresh=health_refresh)
 
     async def stop_session(self, session_id: str) -> SessionState:
         managed = self._get_managed(session_id)

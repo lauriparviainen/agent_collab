@@ -86,6 +86,15 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("workflows", response)
         self.assertIn("backend_options", response)
 
+    async def test_options_route_accepts_fresh_health_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = AgentCollabHttpServer(manager=SessionManager(default_workdir=root))
+            body = json.dumps({"workdir": str(root), "health_refresh": "fresh"}).encode("utf-8")
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                response = await server._dispatch("POST", "/options", {}, body)
+        self.assertEqual(response["discovery"]["health_request"], "fresh")
+
     async def test_options_route_requires_workdir(self):
         server = AgentCollabHttpServer(manager=SessionManager())
 

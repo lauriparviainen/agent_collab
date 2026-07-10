@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import enum
 import inspect
+import platform
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
 
@@ -58,6 +59,7 @@ from ..common.sdk import classify_tool_kind, package_version, provider_session_e
 MODULE_NAME = "google.antigravity"
 PACKAGE_NAME = "google-antigravity"
 INSTALL_HINT = "install the Antigravity SDK: pip install google-antigravity"
+REQUIRED_GLIBC = "2.36"
 
 ANTIGRAVITY_SDK_OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 ANTIGRAVITY_SDK_CONFIG_SCHEMA = load_option_schema(Path(__file__).with_name("config.toml"))
@@ -67,28 +69,149 @@ ANTIGRAVITY_SDK_CONFIG_SCHEMA = load_option_schema(Path(__file__).with_name("con
 AgentFactory = Callable[[AgentConfig, Dict[str, Any], Path], Any]
 
 
+def assess_native_runtime(
+    host_libc: tuple[str, str],
+    *,
+    required: str = REQUIRED_GLIBC,
+) -> Dict[str, str]:
+    """Compare injectable host libc facts without launching the native runtime."""
+
+    family, observed = host_libc
+    normalized = (family or "").lower()
+    if normalized and normalized not in {"glibc", "gnu libc"}:
+        return {
+            "status": "not_applicable",
+            "required": f"glibc >= {required} on glibc Linux hosts",
+            "observed": f"{family} {observed}".strip(),
+        }
+    if not normalized or not _version_tuple(observed):
+        return {
+            "status": "indeterminate",
+            "required": f"glibc >= {required}",
+            "observed": f"{family} {observed}".strip() or "unknown",
+        }
+    status = "compatible" if _version_tuple(observed) >= _version_tuple(required) else "incompatible"
+    return {
+        "status": status,
+        "required": f"glibc >= {required}",
+        "observed": f"glibc {observed}",
+    }
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    parts = []
+    for part in (value or "").split("."):
+        digits = "".join(char for char in part if char.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
 class AntigravitySdkBackend:
     """Registered as ``(antigravity, "sdk")``. Capabilities are all false."""
 
     id = "sdk"
     agent_type = "antigravity"
+    event_fidelity = "typed"
+    provider_session_id_kind = "conversation"
 
-    def __init__(self, agent_factory: Optional[AgentFactory] = None) -> None:
+    def __init__(
+        self,
+        agent_factory: Optional[AgentFactory] = None,
+        *,
+        dependency_probe: Optional[Callable[[], BackendHealth]] = None,
+        libc_ver: Optional[Callable[[], tuple[str, str]]] = None,
+    ) -> None:
         self.capabilities = BackendCapabilities()
         self.checks_credentials = True
         # Opt-in backend: a missing extra / sign-out fails the start fast.
         self.block_on_unavailable = True
         self._agent_factory = agent_factory
+        self._dependency_probe = dependency_probe
+        self._libc_ver = libc_ver or platform.libc_ver
 
     def probe(self) -> BackendHealth:
         # The SDK authenticates with a Gemini API key, not the ~/.gemini OAuth the
         # agy CLI uses; check the right thing (absence -> unknown, never missing).
-        return probe_sdk_backend(
-            MODULE_NAME,
-            package_version=lambda: package_version(PACKAGE_NAME),
-            credentials=gemini_api_key_credentials,
-            extra_hint=INSTALL_HINT,
+        health = (
+            self._dependency_probe()
+            if self._dependency_probe is not None
+            else probe_sdk_backend(
+                MODULE_NAME,
+                package_version=lambda: package_version(PACKAGE_NAME),
+                credentials=gemini_api_key_credentials,
+                extra_hint=INSTALL_HINT,
+            )
         )
+        if health.status != "ok":
+            return health
+
+        checks = dict(health.checks)
+        # The native runtime is package-versioned evidence. A test/fake module
+        # without distribution metadata must not be turned into a false blocker.
+        if not health.version:
+            checks["native_runtime"] = {
+                "status": "indeterminate",
+                "reason": "package version metadata is unavailable",
+            }
+            return BackendHealth(
+                status=health.status,
+                reason=health.reason,
+                credentials=health.credentials,
+                version=health.version,
+                checked_at=health.checked_at,
+                checks=checks,
+                reason_codes=health.reason_codes,
+                remediation=health.remediation,
+            )
+
+        native = assess_native_runtime(self._libc_ver(), required=REQUIRED_GLIBC)
+        checks["native_runtime"] = native
+        if native["status"] != "incompatible":
+            return BackendHealth(
+                status=health.status,
+                reason=health.reason,
+                credentials=health.credentials,
+                version=health.version,
+                checked_at=health.checked_at,
+                checks=checks,
+                reason_codes=health.reason_codes,
+                remediation=health.remediation,
+            )
+        observed = native.get("observed", "unknown")
+        reason = f"bundled native runtime requires glibc >= {REQUIRED_GLIBC}; observed {observed}"
+        return BackendHealth(
+            status="unavailable",
+            reason=reason,
+            credentials=health.credentials,
+            version=health.version,
+            checked_at=health.checked_at,
+            checks=checks,
+            reason_codes=("native_runtime_incompatible",),
+            remediation=(
+                {
+                    "code": "use_compatible_native_runtime",
+                    "message": (
+                        f"Use a glibc {REQUIRED_GLIBC}+ host/container or a compatible provider binary. "
+                        "Do not replace the host system glibc manually."
+                    ),
+                },
+            ),
+        )
+
+    def configuration_schema(self) -> Mapping[str, OptionSpec]:
+        return dict(ANTIGRAVITY_SDK_CONFIG_SCHEMA)
+
+    def safe_configuration_summary(self, agent: AgentConfig) -> Mapping[str, Any]:
+        self.normalize_config(agent)
+        return {
+            "validation": "valid",
+            "fields": {
+                name: "configured" if name in agent.backend_config else "default_or_unset"
+                for name in sorted(ANTIGRAVITY_SDK_CONFIG_SCHEMA)
+            },
+        }
 
     def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
         return dict(ANTIGRAVITY_SDK_OPTION_SCHEMA)

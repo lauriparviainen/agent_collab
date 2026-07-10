@@ -41,12 +41,15 @@ TOOLS = [
     {
         "name": "agent_collab_describe_options",
         "description": (
-            "Describe workflows, configured agents, and accepted backend_options for starts. "
-            "workdir is required so options are resolved from the same project config a start will use."
+            "Run the versioned pre-start discovery protocol for one absolute workdir, including canonical "
+            "backends, effective workflow selections, probe evidence, policy, remediation, and accepted options."
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {"workdir": {"type": "string"}},
+            "properties": {
+                "workdir": {"type": "string"},
+                "health_refresh": {"type": "string", "enum": ["cached", "fresh"]},
+            },
             "required": ["workdir"],
         },
     },
@@ -170,7 +173,10 @@ class SessionManagerToolBackend:
         return state.to_dict()
 
     async def describe_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self.manager.describe_options(Path(_required_str(payload, "workdir")))
+        return self.manager.describe_options(
+            Path(_required_str(payload, "workdir")),
+            health_refresh=str(payload.get("health_refresh", "cached")),
+        )
 
     async def list_sessions(self) -> Dict[str, Any]:
         return {"sessions": [state.to_dict() for state in self.manager.list_sessions()]}
@@ -369,7 +375,8 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                     "capabilities": {"tools": {}},
                     "instructions": (
                         "Call agent_collab_guidance for full usage guidance. "
-                        "Call agent_collab_describe_options before passing non-default options. "
+                        "Resolve the intended project to an absolute workdir and call agent_collab_describe_options "
+                        "before every start selection; its cached probe is advisory and start revalidates freshly per backend policy. "
                         "Use agent_collab_start with task, workdir, and workflow. "
                         "Use agent_collab_wait_events with a cursor; do not make one blocking call. "
                         "On validation errors, fix the named field paths instead of guessing."
@@ -467,9 +474,11 @@ def _post_message_payload(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _describe_payload(args: Dict[str, Any]) -> Dict[str, Any]:
-    payload = {key: args[key] for key in ("workdir",) if key in args}
+    payload = {key: args[key] for key in ("workdir", "health_refresh") if key in args}
     if not isinstance(payload.get("workdir"), str) or not payload["workdir"].strip():
         raise ValueError("workdir is required")
+    if payload.get("health_refresh", "cached") not in {"cached", "fresh"}:
+        raise ValueError("health_refresh must be 'cached' or 'fresh'")
     return payload
 
 

@@ -139,9 +139,16 @@ class AgentCollabHttpServer:
                 data = _decode_json_object(body)
             else:
                 values = query.get("workdir")
-                data = {"workdir": values[0] if values else None}
+                refresh = query.get("health_refresh")
+                data = {
+                    "workdir": values[0] if values else None,
+                    "health_refresh": refresh[0] if refresh else "cached",
+                }
             options_request = _parse(OptionsRequestModel.from_dict, data)
-            return self.manager.describe_options(Path(options_request.workdir))
+            return self.manager.describe_options(
+                Path(options_request.workdir),
+                health_refresh=options_request.health_refresh,
+            )
 
         if method == "POST" and path_parts == ["sessions"]:
             data = _decode_json_object(body)

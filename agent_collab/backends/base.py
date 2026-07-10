@@ -15,8 +15,9 @@ the base install and default ``cli`` backend stay standard-library only.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Protocol, runtime_checkable
+from copy import deepcopy
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Protocol, Tuple, runtime_checkable
 
 from ..backend_contract import (
     OPTION_UNSET,
@@ -79,6 +80,9 @@ class BackendHealth:
     credentials: str = CREDENTIALS_UNKNOWN
     version: Optional[str] = None
     checked_at: Optional[str] = None
+    checks: Mapping[str, Any] = field(default_factory=dict)
+    reason_codes: Tuple[str, ...] = ()
+    remediation: Tuple[Mapping[str, str], ...] = ()
 
     @property
     def available(self) -> bool:
@@ -91,6 +95,9 @@ class BackendHealth:
             "credentials": self.credentials,
             "version": self.version,
             "checked_at": self.checked_at,
+            "checks": deepcopy(dict(self.checks)),
+            "reason_codes": list(self.reason_codes),
+            "remediation": [dict(item) for item in self.remediation],
         }
 
 

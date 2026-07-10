@@ -489,6 +489,31 @@ sequence = ["claude-a", "claude-b"]
 
             self.assertEqual(manager.list_sessions(), [])
 
+    async def test_disabled_backend_fails_before_session_state_is_created(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                "schema_version = 4\n[backends.claude_cli]\nenabled = false\n",
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                with self.assertRaises(StartOptionsError) as ctx:
+                    await manager.start_session(
+                        StartSessionRequest(
+                            task="disabled backend",
+                            workflow="solo-claude",
+                            mock=True,
+                            workdir=root,
+                        )
+                    )
+            detail = ctx.exception.to_dict()["details"][0]
+            self.assertEqual(detail["code"], "backend_disabled")
+            self.assertEqual(detail["canonical_backend"], "claude_cli")
+            self.assertEqual(manager.list_sessions(), [])
+
     async def test_stop_session_transitions_running_session_to_stopped(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

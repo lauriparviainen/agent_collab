@@ -161,6 +161,18 @@ class HealthCacheTests(unittest.TestCase):
         clock[0] = 200.0
         self.assertEqual(cache.health(backend).status, HEALTH_OK)
 
+    def test_observation_reports_cache_hit_age_and_ttl(self):
+        clock = [10.0]
+        cache = HealthCache(ttl_seconds=60.0, clock=lambda: clock[0])
+        backend = _CliProbeBackend(_WhichFake(True))
+        first = cache.observe(backend)
+        clock[0] = 25.0
+        second = cache.observe(backend)
+        self.assertFalse(first.cache_hit)
+        self.assertTrue(second.cache_hit)
+        self.assertEqual(second.age_seconds, 15.0)
+        self.assertEqual(second.ttl_seconds, 60.0)
+
 
 class _GatingBackend:
     id = "cli"
@@ -214,6 +226,40 @@ class StartHealthGatingTests(unittest.TestCase):
         message = ctx.exception.to_dict()["details"][0]["message"]
         self.assertIn("unavailable", message)
         self.assertIn("command not found", message)
+
+    def test_unavailable_backend_preserves_structured_probe_remediation(self):
+        config = _antigravity_config()
+        status = BackendHealth(
+            status=HEALTH_UNAVAILABLE,
+            reason="native runtime incompatible",
+            checked_at="t",
+            reason_codes=("native_runtime_incompatible",),
+            remediation=({"code": "use_compatible_native_runtime", "message": "Use a compatible host."},),
+        )
+        with self.assertRaises(StartOptionsError) as ctx:
+            validate_start_backends(config, "solo", health=lambda *args: status)
+        detail = ctx.exception.to_dict()["details"][0]
+        self.assertEqual(detail["code"], "native_runtime_incompatible")
+        self.assertEqual(detail["canonical_backend"], "antigravity_cli")
+        self.assertEqual(detail["checked_at"], "t")
+        self.assertEqual(detail["remediation"][0]["code"], "use_compatible_native_runtime")
+
+    def test_disabled_backend_rejects_before_probe_with_structured_detail(self):
+        from agent_collab.config import BackendPolicyConfig
+
+        config = _antigravity_config()
+        config.backends["antigravity_cli"] = BackendPolicyConfig("antigravity_cli", False)
+        calls = []
+        with self.assertRaises(StartOptionsError) as ctx:
+            validate_start_backends(
+                config,
+                "solo",
+                health=lambda *args: calls.append(args) or BackendHealth(status=HEALTH_OK),
+            )
+        detail = ctx.exception.to_dict()["details"][0]
+        self.assertEqual(detail["code"], "backend_disabled")
+        self.assertEqual(detail["canonical_backend"], "antigravity_cli")
+        self.assertEqual(calls, [])
 
     def test_missing_credentials_reject_with_sign_in_hint(self):
         config = _antigravity_config()

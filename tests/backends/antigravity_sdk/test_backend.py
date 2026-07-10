@@ -21,11 +21,12 @@ from unittest import mock
 
 from agent_collab.backends.antigravity_sdk.backend import (
     AntigravitySdkBackend,
+    assess_native_runtime,
     AntigravitySdkRunner,
     _default_agent_factory,
     map_antigravity_turn,
 )
-from agent_collab.backends.base import BackendOptionError, BackendUnavailable
+from agent_collab.backends.base import BackendHealth, BackendOptionError, BackendUnavailable
 from agent_collab.backends.common.health import gemini_api_key_credentials
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.daemon import SessionState
@@ -391,6 +392,51 @@ class SdkCredentialsTests(unittest.TestCase):
                 health = AntigravitySdkBackend().probe()
         self.assertEqual(health.status, "ok")
         self.assertEqual(health.credentials, "unknown")  # never "missing" -> never blocks
+
+
+class NativeRuntimeProbeTests(unittest.TestCase):
+    def _dependency_health(self):
+        return BackendHealth(
+            status="ok",
+            credentials="ok",
+            version="0.1.5",
+            checked_at="t",
+            checks={"dependency": {"status": "present", "version": "0.1.5"}},
+        )
+
+    def test_glibc_comparison_is_injectable(self):
+        self.assertEqual(
+            assess_native_runtime(("glibc", "2.34"), required="2.36")["status"],
+            "incompatible",
+        )
+        self.assertEqual(
+            assess_native_runtime(("glibc", "2.36"), required="2.36")["status"],
+            "compatible",
+        )
+        self.assertEqual(
+            assess_native_runtime(("", ""), required="2.36")["status"],
+            "indeterminate",
+        )
+
+    def test_incompatible_native_runtime_is_definite_unavailability(self):
+        health = AntigravitySdkBackend(
+            dependency_probe=self._dependency_health,
+            libc_ver=lambda: ("glibc", "2.34"),
+        ).probe()
+        self.assertEqual(health.status, "unavailable")
+        self.assertEqual(health.reason_codes, ("native_runtime_incompatible",))
+        self.assertEqual(health.checks["dependency"]["status"], "present")
+        self.assertEqual(health.checks["native_runtime"]["status"], "incompatible")
+        self.assertEqual(health.remediation[0]["code"], "use_compatible_native_runtime")
+        self.assertIn("Do not replace", health.remediation[0]["message"])
+
+    def test_compatible_native_runtime_preserves_dependency_health(self):
+        health = AntigravitySdkBackend(
+            dependency_probe=self._dependency_health,
+            libc_ver=lambda: ("glibc", "2.37"),
+        ).probe()
+        self.assertEqual(health.status, "ok")
+        self.assertEqual(health.checks["native_runtime"]["status"], "compatible")
 
 
 class SdkSelectionTests(unittest.TestCase):
