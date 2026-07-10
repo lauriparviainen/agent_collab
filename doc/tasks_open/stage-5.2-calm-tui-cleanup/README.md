@@ -1,7 +1,10 @@
 # Stage 5.2 - Calm TUI Cleanup
 
-Status: Stage 1a text mockups approved (2026-07-10). Stage 1b colored captures
-in review (`samples/stage1b-*.svg`); implementation not yet approved.
+Status: Stage 1a approved; Stage 1b decisions folded in (2026-07-10). Stage 2
+implemented 2026-07-10 (five render paths, three approved interaction changes,
+slice 3 + brand_color landed first) — pending user acceptance in a real
+terminal. Outstanding: the narrow-fallback hero capture was skipped by
+request; live acceptance replaces it.
 
 ## Goal
 

@@ -26,6 +26,7 @@ class TranscriptLine:
     source: str
     text: str
     continuation: bool = False
+    timestamp: str = ""
 
 
 @dataclass(frozen=True)
@@ -167,25 +168,40 @@ def accept_slash_completion(prefix: str, state: SlashCompletionState) -> str:
     return f"{selected} "
 
 
+SLASH_SELECTED_MARKER = "▸"
+
+
 def format_slash_completion_lines(state: SlashCompletionState, max_items: int = 6) -> Tuple[str, ...]:
-    header = "commands  Tab/Enter accepts  Esc closes"
+    """Render the palette menu rows.
+
+    Headerless (Stage 1b amendment): the typed ``/`` in the input box is the
+    label and the keys live on the status/hint line. Selected row is marked
+    ``▸`` (was ``>``). Windowing/filter behaviour is unchanged.
+    """
     if not state.matches:
-        return (header, "  no matches")
+        return ("  no matches",)
 
     item_count = max(1, int(max_items))
     start = max(0, min(state.index - item_count // 2, len(state.matches) - item_count))
     end = min(len(state.matches), start + item_count)
-    lines = [header]
+    lines = []
     for index, match in enumerate(state.matches[start:end], start=start):
-        marker = ">" if index == state.index else " "
+        marker = SLASH_SELECTED_MARKER if index == state.index else " "
         lines.append(f"{marker} {match.name:<14} {match.description}")
     return tuple(lines)
 
 
-ACTIVITY_FRAMES = ("-", "\\", "|", "/")
+BRAILLE_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+ASCII_PULSE_FRAMES = (".", "..", "...")
 
 
-def format_activity_indicator(session: Any, tick: int = 0) -> str:
+def spinner_frame(tick: int, *, utf8: bool = True) -> str:
+    """Return the running-spinner frame: braille orbit (UTF-8) or dot-pulse."""
+    frames = BRAILLE_FRAMES if utf8 else ASCII_PULSE_FRAMES
+    return frames[int(tick) % len(frames)]
+
+
+def format_activity_indicator(session: Any, tick: int = 0, *, utf8: bool = True) -> str:
     if not session:
         return "no session"
     status = str(_value(session, "status", None) or "")
@@ -194,19 +210,62 @@ def format_activity_indicator(session: Any, tick: int = 0) -> str:
     if status == "awaiting_input":
         return "awaiting input"
     if status == "running":
-        frame = ACTIVITY_FRAMES[int(tick) % len(ACTIVITY_FRAMES)]
-        return f"{frame} running"
+        return f"{spinner_frame(tick, utf8=utf8)} running"
     return status or "live"
 
 
+GUTTER_WIDTH = 7
+BAND_SOURCES = {"referee", "human"}
+
+
+def short_time(timestamp: Any) -> str:
+    """Render an ISO ``timestamp`` as ``H:MM`` (no leading hour zero).
+
+    Returns ``""`` when a time cannot be extracted; the value is display-only
+    and never affects dispatch.
+    """
+    text = str(timestamp or "")
+    if "T" not in text or len(text) < 16:
+        return ""
+    clock = text[11:16]
+    if len(clock) != 5 or clock[2] != ":":
+        return ""
+    hour = clock[:2].lstrip("0") or "0"
+    return f"{hour}:{clock[3:]}"
+
+
 def format_transcript_event(event: Any) -> Tuple[TranscriptLine, ...]:
+    """Project one event into gutter-labelled transcript lines.
+
+    Source labels are lowercase (calm direction). ``tool`` events collapse to a
+    single dim summary row (name + first-line digest + ``+N lines`` size) — a
+    display-only projection; the JSONL keeps the full payload.
+    """
     source = str(_value(event, "source", "error"))
-    label = source.upper()
+    label = source.lower()
     text = str(_value(event, "text", "") or "")
+    stamp = short_time(_value(event, "timestamp", "")) if source in BAND_SOURCES else ""
+
+    if source == "tool":
+        raw_lines = text.splitlines()
+        first = raw_lines[0].strip() if raw_lines else ""
+        extra = max(0, len(raw_lines) - 1)
+        digest = first
+        if extra > 0:
+            digest = f"{first} · +{extra} lines" if first else f"+{extra} lines"
+        return (TranscriptLine(source=source, text=f"{label:<{GUTTER_WIDTH}} {digest}".rstrip()),)
+
     result = []
     for index, line in enumerate(text.splitlines() or [""]):
-        prefix = f"{label:<7}" if index == 0 else f"{'':<7}"
-        result.append(TranscriptLine(source=source, text=f"{prefix} {line}", continuation=index > 0))
+        prefix = f"{label:<{GUTTER_WIDTH}}" if index == 0 else f"{'':<{GUTTER_WIDTH}}"
+        result.append(
+            TranscriptLine(
+                source=source,
+                text=f"{prefix} {line}",
+                continuation=index > 0,
+                timestamp=stamp if index == 0 else "",
+            )
+        )
     return tuple(result)
 
 
@@ -232,6 +291,7 @@ def wrap_transcript_lines(lines: Sequence[TranscriptLine], width: int) -> Tuple[
                     source=line.source,
                     text=chunk,
                     continuation=line.continuation or index > 0,
+                    timestamp=line.timestamp if index == 0 else "",
                 )
             )
     return tuple(wrapped)
@@ -385,16 +445,25 @@ def selected_picker_session_id(picker: SessionPickerState) -> Optional[str]:
 
 
 def format_session_picker_lines(picker: SessionPickerState) -> Tuple[str, ...]:
-    lines = ["sessions", "enter switches  esc closes", ""]
+    """Render the session picker as shared-overlay body lines.
+
+    Behaviour (latest-first sort, pre-selection, activation) is unchanged; the
+    title/columns are lowercase and the selected row is marked ``▸`` (target
+    delta from today's uppercase headers and ``>`` marker).
+    """
     if not picker.sessions:
-        lines.append("no daemon sessions found")
-        return tuple(lines)
-    lines.append(f"{'':2} {'SESSION_ID':<24} {'STATUS':<11} {'WORKFLOW':<14} {'UPDATED':<25} WORKDIR")
+        return (
+            "sessions · Esc close",
+            "",
+            "    no daemon sessions found — /new to start one",
+        )
+    lines = ["sessions · ↑↓ choose · Enter switch · Esc close", ""]
+    lines.append(f"    {'session':<24} {'status':<15} {'workflow':<14} {'updated':<25} workdir")
     for index, session in enumerate(picker.sessions):
-        marker = ">" if index == picker.index else " "
+        marker = SLASH_SELECTED_MARKER if index == picker.index else " "
         lines.append(
-            f"{marker} {str(_value(session, 'session_id', None) or ''):<24} "
-            f"{str(_value(session, 'status', None) or ''):<11} "
+            f"{marker}   {str(_value(session, 'session_id', None) or ''):<24} "
+            f"{str(_value(session, 'status', None) or ''):<15} "
             f"{session_workflow_name(session):<14} "
             f"{str(_value(session, 'updated_at', None) or _value(session, 'created_at', None) or ''):<25} "
             f"{str(_value(session, 'workdir', None) or '')}"
@@ -536,6 +605,390 @@ def workflow_ids_from_options(options: Mapping[str, Any]) -> Tuple[str, ...]:
         if isinstance(workflow, Mapping) and workflow.get("id"):
             ids.append(str(workflow["id"]))
     return tuple(ids)
+
+
+# ---------------------------------------------------------------------------
+# Calm-TUI color infrastructure (David AI mapping)
+#
+# ``curses`` cannot do truecolor, so brand hues degrade truecolor -> xterm-256
+# -> the 8-color source labels. These helpers are pure so unknown providers
+# degrade sanely and the three known brand hexes are pinned by test.
+# ---------------------------------------------------------------------------
+
+DEFAULT_BACKEND = "cli"
+ACCENT_XTERM256 = 37
+ACCENT_ANSI8 = 6  # curses.COLOR_CYAN
+
+_CUBE_STEPS = (0, 95, 135, 175, 215, 255)
+INFO_SEPARATOR = " · "
+
+
+def _hex_to_rgb(hex_str: Any) -> Tuple[int, int, int]:
+    text = str(hex_str or "").strip().lstrip("#")
+    if len(text) != 6:
+        raise ValueError(f"expected a '#RRGGBB' hex, got {hex_str!r}")
+    return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+
+
+def _nearest_cube_index(value: int) -> int:
+    return min(range(len(_CUBE_STEPS)), key=lambda i: abs(_CUBE_STEPS[i] - value))
+
+
+def xterm256_from_hex(hex_str: Any) -> int:
+    """Nearest xterm-256 cell (6x6x6 cube or grayscale ramp) for ``hex_str``.
+
+    The three known brand hexes pin to 173/36/69 (asserted in tests); unknown
+    providers still get a sane nearest match.
+    """
+    r, g, b = _hex_to_rgb(hex_str)
+    ri, gi, bi = _nearest_cube_index(r), _nearest_cube_index(g), _nearest_cube_index(b)
+    cube_index = 16 + 36 * ri + 6 * gi + bi
+    cube_rgb = (_CUBE_STEPS[ri], _CUBE_STEPS[gi], _CUBE_STEPS[bi])
+
+    gray_step = max(0, min(23, round(((r + g + b) / 3 - 8) / 10)))
+    gray_value = 8 + 10 * gray_step
+    gray_index = 232 + gray_step
+
+    def _dist(a: Tuple[int, int, int], b_: Tuple[int, int, int]) -> int:
+        return sum((x - y) ** 2 for x, y in zip(a, b_))
+
+    if _dist(cube_rgb, (r, g, b)) <= _dist((gray_value, gray_value, gray_value), (r, g, b)):
+        return cube_index
+    return gray_index
+
+
+def ansi8_from_hex(hex_str: Any) -> int:
+    """Nearest of the 8 basic ANSI colors for ``hex_str``.
+
+    Channel bit-threshold reduction; the threshold is tuned so the four design
+    brand hues land on their table cells (claude red, codex green, antigravity
+    blue, teal cyan). Very dark hues fall back to white so they stay visible.
+    """
+    r, g, b = _hex_to_rgb(hex_str)
+    bits = (1 if r >= 140 else 0) | (2 if g >= 140 else 0) | (4 if b >= 140 else 0)
+    return bits or 7  # COLOR_WHITE
+
+
+# ---------------------------------------------------------------------------
+# Session-info line (region 2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AgentInfo:
+    name: str
+    type: str = ""
+    model: str = ""
+    backend: str = ""
+    brand_color: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class InfoSegment:
+    text: str
+    role: str
+    brand_color: Optional[str] = None
+
+
+def info_agents_from_session(session: Any) -> Tuple[AgentInfo, ...]:
+    """Per-agent info in workflow-sequence order (settings.agents insertion)."""
+    raw_settings = _value(session, "settings", None)
+    settings = raw_settings if isinstance(raw_settings, Mapping) else {}
+    agents = settings.get("agents") if isinstance(settings.get("agents"), Mapping) else {}
+    result = []
+    for agent_id, agent in agents.items():
+        if not isinstance(agent, Mapping):
+            result.append(AgentInfo(name=str(agent_id)))
+            continue
+        brand = agent.get("brand_color")
+        result.append(
+            AgentInfo(
+                name=str(agent_id),
+                type=str(agent.get("type") or ""),
+                model=str(agent.get("model") or ""),
+                backend=str(agent.get("backend") or ""),
+                brand_color=brand if isinstance(brand, str) and brand else None,
+            )
+        )
+    return tuple(result)
+
+
+def _ellipsize(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width == 1:
+        return "…"
+    return text[: width - 1] + "…"
+
+
+def build_info_line_segments(
+    task: Any,
+    agents: Sequence[AgentInfo],
+    workflow: Any,
+    width: int,
+    *,
+    default_backend: str = DEFAULT_BACKEND,
+) -> Tuple[InfoSegment, ...]:
+    """Compose the session-info line as styled segments with truncation.
+
+    Truncation priority when overflowing (drop right-most first): workflow ->
+    secondary agents (keep the lead) -> ellipsize the task (never dropped). The
+    inline backend id travels with its agent token and is shown only when it
+    differs from ``default_backend``. Workdir/project (the next priority) lives
+    on the separate context line and is truncated there.
+    """
+    task = str(task or "")
+    agents = list(agents)
+    workflow = str(workflow or "")
+    if not task and not agents and not workflow:
+        return (InfoSegment("no active session", "placeholder"),)
+
+    def _assemble(include_workflow: bool, keep_agents: Sequence[AgentInfo], task_text: str) -> list:
+        segments: list = []
+        if task_text:
+            segments.append(InfoSegment(task_text, "task"))
+        for agent in keep_agents:
+            if segments:
+                segments.append(InfoSegment(INFO_SEPARATOR, "sep"))
+            segments.append(InfoSegment(agent.name, "agent", agent.brand_color))
+            if agent.model:
+                segments.append(InfoSegment(f":{agent.model}", "model"))
+            if agent.backend and agent.backend != default_backend:
+                segments.append(InfoSegment(f" {agent.backend}", "backend"))
+        if include_workflow and workflow:
+            if segments:
+                segments.append(InfoSegment(INFO_SEPARATOR, "sep"))
+            segments.append(InfoSegment(workflow, "workflow"))
+        return segments
+
+    def _total(segments: Sequence[InfoSegment]) -> int:
+        return sum(len(segment.text) for segment in segments)
+
+    segments = _assemble(True, agents, task)
+    if _total(segments) <= width:
+        return tuple(segments)
+
+    segments = _assemble(False, agents, task)
+    if _total(segments) <= width:
+        return tuple(segments)
+
+    lead = agents[:1]
+    segments = _assemble(False, lead, task)
+    if _total(segments) <= width or not task:
+        return tuple(segments)
+
+    fixed = _assemble(False, lead, "")
+    sep_width = len(INFO_SEPARATOR) if fixed else 0
+    available = width - _total(fixed) - sep_width
+    return tuple(_assemble(False, lead, _ellipsize(task, available)))
+
+
+# ---------------------------------------------------------------------------
+# Context line (region 1)
+# ---------------------------------------------------------------------------
+
+
+def abbreviate_path(path: Any) -> str:
+    text = str(path or "")
+    if not text:
+        return ""
+    home = str(Path.home())
+    if text == home:
+        return "~"
+    if text.startswith(home + "/"):
+        return "~" + text[len(home):]
+    return text
+
+
+def format_context_line(workdir: Any, branch: Any = None) -> str:
+    path = abbreviate_path(workdir)
+    if not path:
+        return "agent-collab"
+    branch = str(branch or "").strip()
+    return f"{branch}  {path}" if branch else path
+
+
+def git_branch(workdir: Any) -> Optional[str]:
+    """Best-effort current git branch from ``<workdir>/.git/HEAD`` (no subprocess)."""
+    try:
+        content = (Path(str(workdir)) / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    prefix = "ref: refs/heads/"
+    if content.startswith(prefix):
+        return content[len(prefix):].strip() or None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Input mode chip + directed argument-entry mode (region 5)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DirectedEntryState:
+    target_label: str
+    usage_hint: str
+    awaiting_arg: bool
+
+
+def directed_entry_state(input_text: Any) -> Optional[DirectedEntryState]:
+    """Detect the directed argument-entry mode for the rail contents.
+
+    ``#agent …`` and ``/ask AGENT …`` forms yield the target label and the live
+    usage hint; ``awaiting_arg`` is True while the message (or agent) is still
+    missing, which is when ``Esc`` cancels back to referee mode.
+    """
+    text = str(input_text or "")
+    if text.startswith("#"):
+        tag, _, rest = text.partition(" ")
+        agent = tag[1:]
+        if not agent:
+            return None
+        return DirectedEntryState(agent, f"message {agent} directly", not rest.strip())
+    if text.startswith("/ask "):
+        agent, _, message = text[5:].partition(" ")
+        agent = agent.strip()
+        if not agent:
+            return DirectedEntryState("ask AGENT", "usage: /ask AGENT message", True)
+        return DirectedEntryState(agent, "usage: /ask AGENT message", not message.strip())
+    return None
+
+
+def input_mode_chip(
+    input_text: Any,
+    *,
+    new_wizard: bool = False,
+    picker_open: bool = False,
+    has_session: bool = True,
+    accepts_input: bool = True,
+) -> str:
+    """The right-aligned mode/target chip inside the input box."""
+    if new_wizard:
+        return "new session"
+    if picker_open:
+        return "picking"
+    if not has_session:
+        return "no session"
+    if not accepts_input:
+        return "read-only"
+    directed = directed_entry_state(input_text)
+    if directed is not None:
+        return f"-> {directed.target_label}"
+    return "referee note"
+
+
+# ---------------------------------------------------------------------------
+# Status/hint line (region 6): hint precedence + overlay selection
+# ---------------------------------------------------------------------------
+
+
+def select_hint(
+    *,
+    new_wizard_step: Optional[str] = None,
+    picker_open: bool = False,
+    palette_open: bool = False,
+    details_mode: Optional[str] = None,
+    overlay_open: bool = False,
+    has_session: bool = True,
+    read_only: bool = False,
+    following: bool = True,
+) -> str:
+    """Resolve the contextual hint by first-match precedence (region 6)."""
+    if new_wizard_step is not None:
+        return "Enter start · Esc cancel" if new_wizard_step == "workdir" else "Enter next · Esc cancel"
+    if picker_open:
+        return "↑↓ move · Enter open · Esc close"
+    if palette_open:
+        return "Enter send · Tab complete · Esc close"
+    if details_mode == "narrow":
+        return "↑↓ scroll · Esc close"
+    if details_mode == "wide":
+        return "Enter send · / cmds · Esc close"
+    if overlay_open:
+        return "↑↓ scroll · Esc close"
+    if not has_session:
+        return "/new start · /help commands · q quit"
+    if read_only:
+        return "q quit"
+    if not following:
+        return "↑↓ scroll · End follow · q quit"
+    return "Enter send · / cmds · q"
+
+
+def format_details_overlay_lines(session: Any) -> Tuple[str, ...]:
+    """Details block as shared-overlay body lines (title + detail rows)."""
+    return ("details · ↑↓ scroll · Esc close",) + format_session_details(session)
+
+
+def clip_with_marker(lines: Sequence[str], height: int, marker: str = "…") -> Tuple[str, ...]:
+    """Clip ``lines`` to ``height`` rows, marking the last visible row when cut.
+
+    The wide ``/details`` side panel does not scroll (scope simplification): it
+    keeps clipping but shows a ``…`` marker so overflow is never silent.
+    """
+    if height <= 0:
+        return ()
+    rows = list(lines)
+    if len(rows) <= height:
+        return tuple(rows)
+    visible = rows[:height]
+    visible[-1] = marker
+    return tuple(visible)
+
+
+def compose_status_right(activity: str, hint: str) -> str:
+    """Compose the right side of the status/hint line (activity then hint).
+
+    Fields join with ``·``; an empty activity (no active session) drops out so
+    the hint stands alone.
+    """
+    return " · ".join(part for part in (str(activity or ""), str(hint or "")) if part)
+
+
+def overlay_body_lines(
+    *,
+    picker: Optional[SessionPickerState] = None,
+    overlay_lines: Optional[Sequence[str]] = None,
+    details_overlay: Optional[Sequence[str]] = None,
+) -> Optional[Tuple[str, ...]]:
+    """Select the active shared-overlay body content (picker / help / details).
+
+    One component backs all three; this returns whichever overlay is active (or
+    ``None`` for the transcript), so the caller renders identical chrome.
+    """
+    if picker is not None:
+        return format_session_picker_lines(picker)
+    if overlay_lines is not None:
+        return tuple(overlay_lines)
+    if details_overlay is not None:
+        return tuple(details_overlay)
+    return None
+
+
+_ERROR_MESSAGE_MARKERS = (
+    "read-only", "unknown", "cannot", "error", "required", "invalid",
+    "ambiguous", "refused", "already", "no active session", "usage:",
+    "available only",
+)
+_SUCCESS_MESSAGE_MARKERS = (
+    "sent", "asked", "queued", "opened", "refreshed", "following",
+    "stopped", "inserted",
+)
+
+
+def classify_message(message: Any) -> str:
+    """Classify the transient message slot as error / success / neutral (color only)."""
+    text = str(message or "").lower()
+    if not text:
+        return "neutral"
+    if any(marker in text for marker in _ERROR_MESSAGE_MARKERS):
+        return "error"
+    if any(text.startswith(marker) for marker in _SUCCESS_MESSAGE_MARKERS):
+        return "success"
+    return "neutral"
 
 
 def _append_present(lines: list[str], key: str, data: Any) -> None:

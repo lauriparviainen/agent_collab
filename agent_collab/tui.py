@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import curses
+import locale
 import queue
 import threading
 import time
@@ -11,6 +12,8 @@ from .api_schema import SessionStateModel
 from .client import AgentCollabClient
 from .config import DEFAULT_WORKFLOW
 from .tui_core import (
+    ACCENT_ANSI8,
+    ACCENT_XTERM256,
     READ_ONLY_INPUT_MESSAGE,
     CursorState,
     ParsedInput,
@@ -18,21 +21,34 @@ from .tui_core import (
     SessionPickerState,
     accept_slash_completion,
     advance_cursor_state,
+    ansi8_from_hex,
+    build_info_line_segments,
     build_new_session_payload,
     clamp_scroll,
+    classify_message,
+    clip_with_marker,
+    compose_status_right,
+    directed_entry_state,
     format_activity_indicator,
+    format_context_line,
+    format_details_overlay_lines,
     follow_scroll,
     format_session_details,
     format_session_picker_lines,
     format_slash_completion_lines,
     format_transcript_events,
+    git_branch,
+    info_agents_from_session,
+    input_mode_chip,
     make_slash_completion,
     make_session_picker,
     move_session_picker,
     move_slash_completion,
+    overlay_body_lines,
     parse_input,
     reset_cursor_state,
     scroll_by,
+    select_hint,
     select_latest_session_id,
     selected_picker_session_id,
     selected_slash_command,
@@ -44,11 +60,12 @@ from .tui_core import (
     workflow_ids_from_options,
     wrap_plain_lines,
     wrap_transcript_lines,
+    xterm256_from_hex,
 )
 
 
 HELP_LINES = (
-    "commands",
+    "commands · ↑↓ scroll · Esc close",
     "/help                    show this help",
     "/sessions                pick from daemon sessions",
     "/session SESSION_ID      switch active session",
@@ -71,20 +88,20 @@ HELP_LINES = (
 SOURCE_LABEL_WIDTH = 8
 SLASH_MENU_MAX_ROWS = 8
 
-SOURCE_STYLE_DEFS = (
-    ("human", curses.COLOR_CYAN, -1, 0),
-    ("referee", curses.COLOR_MAGENTA, -1, 0),
-    ("claude", curses.COLOR_WHITE, -1, curses.A_BOLD),
-    ("codex", curses.COLOR_GREEN, -1, curses.A_BOLD),
-    ("tool", curses.COLOR_YELLOW, -1, 0),
-    ("error", curses.COLOR_RED, -1, curses.A_BOLD),
-)
+# Box-drawing chrome (rounded when UTF-8 capable, ASCII fallback otherwise).
+_BOX_UTF8 = {"tl": "╭", "tr": "╮", "bl": "╰", "br": "╯", "h": "─", "v": "│"}
+_BOX_ASCII = {"tl": "+", "tr": "+", "bl": "+", "br": "+", "h": "-", "v": "|"}
 
-UI_STYLE_DEFS = (
-    ("chrome", curses.COLOR_WHITE, -1, curses.A_DIM),
-    ("menu", curses.COLOR_WHITE, -1, 0),
-    ("selection", curses.COLOR_CYAN, -1, curses.A_REVERSE | curses.A_BOLD),
-)
+# David AI xterm-256 cells for the calm palette (foreground unless noted).
+_CELL_TEXT = 255
+_CELL_MUTED = 250
+_CELL_DIM = 245
+_CELL_HAIRLINE = 236
+_CELL_ERROR = 203
+_CELL_BORDER = 59        # warm --border #635441
+_CELL_MENU_FILL = 234    # --color-gray-floor
+_CELL_MENU_SELECTED = 236  # --color-gray-panel
+_CELL_BAND = 237         # --raised
 
 
 class TuiApp:
@@ -117,6 +134,12 @@ class TuiApp:
         self.slash_completion_dismissed_for: Optional[str] = None
         self._last_status_refresh = 0.0
         self._initial_session_id = initial_session_id
+        self.branch: Optional[str] = None
+        self.colors_256 = False
+        self.utf8 = True
+        self._pair_cache: dict[tuple, int] = {}
+        self._next_pair = 1
+        self._brand_cache: dict[str, int] = {}
 
     def run(self) -> int:
         self._setup_curses()
@@ -153,6 +176,7 @@ class TuiApp:
         self.cursor_state = cursor
         self.session_id = session_id
         self.session = session
+        self.branch = git_branch(session.workdir) if session.workdir else None
         self.transcript_lines = format_transcript_events(batch.events)
         self.scroll = follow_scroll(len(self.transcript_lines), self._body_height())
         self.overlay_lines = None
@@ -173,20 +197,105 @@ class TuiApp:
             curses.curs_set(1)
         except curses.error:
             pass
-        style_defs = SOURCE_STYLE_DEFS + UI_STYLE_DEFS
-        for name, _, _, attrs in style_defs:
-            self.styles[name] = attrs
+        self.utf8 = _terminal_is_utf8()
+        has_colors = False
         if curses.has_colors():
+            has_colors = True
             try:
                 curses.use_default_colors()
             except curses.error:
                 pass
-            for index, (name, foreground, background, attrs) in enumerate(style_defs, start=1):
-                try:
-                    curses.init_pair(index, foreground, background)
-                    self.styles[name] = curses.color_pair(index) | attrs
-                except curses.error:
-                    pass
+        self.colors_256 = has_colors and curses.COLORS >= 256
+        self._build_styles(has_colors)
+
+    def _build_styles(self, has_colors: bool) -> None:
+        A_BOLD = curses.A_BOLD
+        A_DIM = curses.A_DIM
+        A_REVERSE = curses.A_REVERSE
+        styles: dict[str, int] = {}
+        if self.colors_256:
+            styles["text"] = self._pair(_CELL_TEXT)
+            styles["muted"] = self._pair(_CELL_MUTED)
+            styles["dim"] = self._pair(_CELL_DIM)
+            styles["accent"] = self._pair(ACCENT_XTERM256)
+            styles["hairline"] = self._pair(_CELL_HAIRLINE) | A_DIM
+            styles["error"] = self._pair(_CELL_ERROR) | A_BOLD
+            styles["border"] = self._pair(_CELL_BORDER)
+            styles["band"] = self._pair(_CELL_MUTED, _CELL_BAND)
+            styles["menu"] = self._pair(_CELL_TEXT, _CELL_MENU_FILL)
+            styles["menu_name"] = self._pair(ACCENT_XTERM256, _CELL_MENU_FILL)
+            styles["menu_desc"] = self._pair(_CELL_MUTED, _CELL_MENU_FILL)
+            styles["menu_selected"] = self._pair(_CELL_TEXT, _CELL_MENU_SELECTED) | A_BOLD
+        elif has_colors:
+            styles["text"] = 0
+            styles["muted"] = 0
+            styles["dim"] = A_DIM
+            styles["accent"] = self._pair(ACCENT_ANSI8)
+            styles["hairline"] = A_DIM
+            styles["error"] = self._pair(curses.COLOR_RED) | A_BOLD
+            styles["border"] = A_DIM
+            styles["band"] = A_REVERSE
+            styles["menu"] = 0
+            styles["menu_name"] = self._pair(ACCENT_ANSI8)
+            styles["menu_desc"] = 0
+            styles["menu_selected"] = A_REVERSE
+        else:
+            styles["text"] = 0
+            styles["muted"] = 0
+            styles["dim"] = A_DIM
+            styles["accent"] = A_BOLD
+            styles["hairline"] = A_DIM
+            styles["error"] = A_BOLD
+            styles["border"] = A_DIM
+            styles["band"] = A_REVERSE
+            styles["menu"] = 0
+            styles["menu_name"] = A_BOLD
+            styles["menu_desc"] = 0
+            styles["menu_selected"] = A_REVERSE
+        self.styles = styles
+
+    @staticmethod
+    def _has_colors() -> bool:
+        try:
+            return bool(curses.has_colors())
+        except curses.error:
+            return False
+
+    def _pair(self, fg: int, bg: int = -1) -> int:
+        if not self._has_colors():
+            return 0
+        key = (fg, bg)
+        cached = self._pair_cache.get(key)
+        if cached is not None:
+            return cached
+        index = self._next_pair
+        if index >= curses.COLOR_PAIRS:
+            return 0
+        try:
+            curses.init_pair(index, fg, bg)
+        except curses.error:
+            return 0
+        self._next_pair += 1
+        attr = curses.color_pair(index)
+        self._pair_cache[key] = attr
+        return attr
+
+    def _brand_style(self, brand_color: Optional[str]) -> int:
+        if not brand_color:
+            return self._style("accent") | curses.A_BOLD
+        cached = self._brand_cache.get(brand_color)
+        if cached is not None:
+            return cached
+        attr = curses.A_BOLD
+        try:
+            if self.colors_256:
+                attr |= self._pair(xterm256_from_hex(brand_color))
+            elif self._has_colors():
+                attr |= self._pair(ansi8_from_hex(brand_color))
+        except ValueError:
+            attr = self._style("accent") | curses.A_BOLD
+        self._brand_cache[brand_color] = attr
+        return attr
 
     def _start_poller(self) -> None:
         if not should_start_poller(self.session) or not self.session_id:
@@ -309,8 +418,18 @@ class TuiApp:
             if self._current_slash_completion() is not None:
                 self.slash_completion_dismissed_for = self.input_text
                 return
+            entry = directed_entry_state(self.input_text)
+            if entry is not None and entry.awaiting_arg:
+                # Approved interaction change: cancel directed argument-entry mode
+                # back to referee mode, clearing the rail.
+                self._set_input_text("")
+                return
             self.overlay_lines = None
             self.picker = None
+            if self.details_visible:
+                # Approved interaction change: Esc dismisses /details, matching
+                # how it already closes the palette and picker.
+                self.details_visible = False
             if self.new_wizard:
                 self.new_wizard = None
                 self.message = "new session cancelled"
@@ -618,16 +737,19 @@ class TuiApp:
         height, width = self.stdscr.getmaxyx()
         self.stdscr.erase()
         if height < 5 or width < 20:
-            self._add(0, 0, "terminal too small", max(0, width - 1))
+            self._add(0, 0, "terminal too small", max(0, width - 1), self._style("dim"))
             self.stdscr.refresh()
             return
 
         details_width = self._details_width(width)
         transcript_width = width - details_width - (1 if details_width else 0)
-        self._render_header(width)
-        self._add(1, 0, "-" * width, width, self._style("chrome"))
 
-        body_top = 2
+        # Region 1-2: quiet context line + legible session-info line, hairline.
+        self._render_context_line(0, width)
+        self._render_info_line(1, width)
+        self._add(2, 0, self._hairline(width), width, self._style("hairline"))
+
+        body_top = 3
         body_height = self._body_height()
         body_lines = self._active_body_lines(transcript_width)
         self.scroll = clamp_scroll(self.scroll, len(body_lines), body_height)
@@ -636,123 +758,256 @@ class TuiApp:
             self._render_body_line(row, line, transcript_width)
 
         if details_width:
-            separator_x = transcript_width
-            for row in range(body_top, body_top + body_height):
-                self._add(row, separator_x, "|", 1, self._style("chrome"))
-            detail_lines = wrap_plain_lines(format_session_details(self.session) if self.session else (), details_width - 2)
-            for index, line in enumerate(detail_lines[:body_height]):
-                self._add(body_top + index, separator_x + 1, line, details_width - 2)
+            self._render_details_panel(body_top, body_height, transcript_width, details_width)
 
         self._render_slash_completion(body_top, body_height, transcript_width)
-        footer_y = height - 3
-        self._add(footer_y, 0, "-" * width, width, self._style("chrome"))
-        self._render_input_line(height - 2, width)
+
+        # Region 5-6: bordered input box (3 rows) + status/hint line.
+        box_top = height - 4
+        self._render_input_box(box_top, width)
         self._render_status_line(height - 1, width)
         self.stdscr.refresh()
 
+    def _hairline(self, width: int) -> str:
+        return (_BOX_UTF8["h"] if self.utf8 else _BOX_ASCII["h"]) * width
+
+    def _render_details_panel(self, body_top: int, body_height: int, transcript_width: int, details_width: int) -> None:
+        separator_x = transcript_width
+        vertical = _BOX_UTF8["v"] if self.utf8 else _BOX_ASCII["v"]
+        for row in range(body_top, body_top + body_height):
+            self._add(row, separator_x, vertical, 1, self._style("hairline"))
+        detail_lines = wrap_plain_lines(
+            format_session_details(self.session) if self.session else (),
+            details_width - 2,
+        )
+        visible = clip_with_marker(detail_lines, body_height)
+        for index, line in enumerate(visible):
+            self._add(body_top + index, separator_x + 1, line, details_width - 2, self._style("muted"))
+
     def _render_body_line(self, row: int, line, width: int) -> None:
         if line.source == "ui":
-            self._add(row, 0, line.text, width, self._style("menu"))
+            # Shared scrollable overlay (picker / help / narrow details): the
+            # first line is a title/hint, the rest is body content.
+            style = self._style("dim") if row == 3 else self._style("text")
+            self._add(row, 0, line.text, width, style)
             return
         if line.continuation:
-            self._add(row, 0, line.text, width)
+            self._add(row, 0, line.text, width, self._style("text"))
             return
-        attr = self._attr_for_source(line.source)
-        if not attr or len(line.text) <= SOURCE_LABEL_WIDTH:
+
+        band = line.source in ("referee", "human")
+        attr = self._style_for_source(line.source)
+        if band:
+            # Raised band for referee/human, right-aligned timestamp.
+            self._add(row, 0, " " * width, width, self._style("band"))
+            self._add(row, 0, line.text, width, self._style("band"))
+            if line.timestamp and width > len(line.timestamp) + 1:
+                self._add(row, width - len(line.timestamp), line.timestamp, len(line.timestamp), self._style("band"))
+            return
+        if len(line.text) <= SOURCE_LABEL_WIDTH:
             self._add(row, 0, line.text, width, attr)
             return
         label_width = min(width, SOURCE_LABEL_WIDTH)
         self._add(row, 0, line.text[:label_width], label_width, attr)
         if width > SOURCE_LABEL_WIDTH:
-            self._add(row, SOURCE_LABEL_WIDTH, line.text[SOURCE_LABEL_WIDTH:], width - SOURCE_LABEL_WIDTH)
+            # Tool summaries stay dim across the whole row; other bodies read in text.
+            body_attr = self._style("dim") if line.source == "tool" else self._style("text")
+            self._add(row, SOURCE_LABEL_WIDTH, line.text[SOURCE_LABEL_WIDTH:], width - SOURCE_LABEL_WIDTH, body_attr)
 
     def _render_slash_completion(self, body_top: int, body_height: int, width: int) -> None:
         completion = self._current_slash_completion()
         if completion is None:
             return
         max_rows = max(1, min(SLASH_MENU_MAX_ROWS, body_height))
-        max_items = max(1, max_rows - 1)
-        lines = format_slash_completion_lines(completion, max_items=max_items)[:max_rows]
+        lines = format_slash_completion_lines(completion, max_items=max_rows)[:max_rows]
         start_y = body_top + body_height - len(lines)
         for offset, line in enumerate(lines):
             y = start_y + offset
-            attr = self._style("selection") if line.startswith(">") else self._style("menu")
-            self._add(y, 0, " " * width, width, self._style("menu"))
-            self._add(y, 0, line, width, attr)
+            selected = line.startswith("▸")
+            fill = self._style("menu_selected") if selected else self._style("menu")
+            self._add(y, 0, " " * width, width, fill)
+            if selected:
+                self._add(y, 0, line, width, fill)
+            else:
+                # marker + name in accent, description in muted, on the gray fill.
+                self._add(y, 0, line, width, self._style("menu_name"))
 
-    def _render_header(self, width: int) -> None:
+    def _render_context_line(self, y: int, width: int) -> None:
+        workdir = self.session.workdir if self.session else ""
+        text = format_context_line(workdir, self.branch)
+        self._add(y, 1, text, max(0, width - 1), self._style("dim"))
+
+    def _render_info_line(self, y: int, width: int) -> None:
         if self.session:
-            session_id = self.session.session_id or self.session_id or ""
-            status = self.session.status
+            task = self.session.task
+            agents = info_agents_from_session(self.session)
             workflow = session_workflow_name(self.session)
-            workdir = self.session.workdir
         else:
-            session_id = self.session_id or "no-session"
-            status = "read-only"
+            task = ""
+            agents = ()
             workflow = ""
-            workdir = ""
-        tags = []
-        if self.details_visible:
-            tags.append("[details]")
-        if self.session and session_is_terminal(self.session):
-            tags.append("[read-only]")
-        header = "  ".join(part for part in ("agent-collab", session_id, status, workflow, workdir, " ".join(tags)) if part)
-        self._add(0, 0, header, width)
+        segments = build_info_line_segments(task, agents, workflow, max(1, width - 1))
+        x = 1
+        for segment in segments:
+            if x >= width - 1:
+                break
+            attr = self._info_segment_style(segment.role, segment.brand_color)
+            self._add(y, x, segment.text, width - 1 - x, attr)
+            x += len(segment.text)
 
-    def _render_input_line(self, y: int, width: int) -> None:
-        prompt = self._input_prompt()
-        text = prompt + self.input_text
-        self._add(y, 0, text, width)
-        cursor_x = min(width - 1, len(text))
+    def _info_segment_style(self, role: str, brand_color: Optional[str]) -> int:
+        if role == "agent":
+            return self._brand_style(brand_color)
+        if role in ("model", "task", "workflow"):
+            return self._style("muted")
+        if role in ("backend", "sep", "placeholder"):
+            return self._style("dim")
+        return self._style("muted")
+
+    def _render_input_box(self, box_top: int, width: int) -> None:
+        box = _BOX_UTF8 if self.utf8 else _BOX_ASCII
+        border = self._style("border")
+        inner = max(0, width - 2)
+        self._add(box_top, 0, box["tl"] + box["h"] * inner + box["tr"], width, border)
+        self._add(box_top + 2, 0, box["bl"] + box["h"] * inner + box["br"], width, border)
+
+        mid = box_top + 1
+        self._add(mid, 0, box["v"], 1, border)
+        self._add(mid, width - 1, box["v"], 1, border)
+
+        content_x = 2
+        content_width = max(1, width - 4)
+        chip = self._input_chip()
+        chip_style = self._chip_style(chip)
+        prompt = "> "
+        typed = prompt + self.input_text
+        # Right-aligned chip inside the box; keep room between text and chip.
+        chip_x = width - 2 - len(chip)
+        if chip and chip_x > content_x + len(typed):
+            self._add(mid, chip_x, chip, len(chip), chip_style)
+            text_width = chip_x - content_x - 1
+        else:
+            text_width = content_width
+        self._add(mid, content_x, typed, max(0, text_width), self._style("text"))
+        cursor_x = min(content_x + max(0, text_width), content_x + len(typed))
         try:
-            self.stdscr.move(y, cursor_x)
+            self.stdscr.move(mid, max(content_x, min(width - 2, cursor_x)))
         except curses.error:
             pass
 
+    def _input_chip(self) -> str:
+        return input_mode_chip(
+            self.input_text,
+            new_wizard=bool(self.new_wizard),
+            picker_open=self.picker is not None,
+            has_session=self.session is not None,
+            accepts_input=bool(self.session and _session_accepts_input(self.session)),
+        )
+
+    def _chip_style(self, chip: str) -> int:
+        if chip in ("read-only", "no session", "picking"):
+            return self._style("dim")
+        return self._style("accent")
+
     def _render_status_line(self, y: int, width: int) -> None:
-        scroll_mode = "following" if self.scroll.follow else "scrollback"
-        activity = format_activity_indicator(self.session, int(time.monotonic() * 4))
-        if not self.session:
-            mode = activity
-        elif session_is_terminal(self.session):
-            mode = activity
+        entry = directed_entry_state(self.input_text)
+        if entry is not None and entry.awaiting_arg:
+            # Live guidance while entering a directed argument (not an error).
+            message = entry.usage_hint
+            message_style = self._style("muted")
         else:
-            mode = f"{activity} | {scroll_mode}"
-        message = self.message or "q/Ctrl-C quit  arrows/page keys scroll  End follow"
-        line = f"{message:<{max(1, width - len(mode) - 1)}} {mode}"
-        self._add(y, 0, line, width)
+            message = self.message
+            message_style = self._message_style(message)
+
+        activity = format_activity_indicator(
+            self.session, int(time.monotonic() * 4), utf8=self.utf8
+        ) if self.session else ""
+        hint = self._select_hint(width)
+        right = compose_status_right(activity, hint)
+
+        right_x = max(1, width - len(right) - 1)
+        self._add(y, right_x, right, width - right_x, self._style("dim"))
+        self._add(y, 1, message, max(0, right_x - 2), message_style)
+
+    def _message_style(self, message: str) -> int:
+        classification = classify_message(message)
+        if classification == "error":
+            return self._style("error")
+        if classification == "success":
+            return self._style("accent")
+        return self._style("muted")
+
+    def _select_hint(self, width: int) -> str:
+        step = self.new_wizard.get("step") if self.new_wizard else None
+        palette_open = self._current_slash_completion() is not None
+        details_mode = self._details_mode(width)
+        read_only = bool(self.session) and not _session_accepts_input(self.session)
+        overlay_open = self.overlay_lines is not None
+        return select_hint(
+            new_wizard_step=step,
+            picker_open=self.picker is not None,
+            palette_open=palette_open,
+            details_mode=details_mode,
+            overlay_open=overlay_open,
+            has_session=self.session is not None,
+            read_only=read_only,
+            following=self.scroll.follow,
+        )
 
     def _active_body_lines(self, width: Optional[int] = None):
         if width is None:
             width = self._transcript_width()
-        if self.picker is not None:
-            return tuple(_ui_line(line) for line in wrap_plain_lines(format_session_picker_lines(self.picker), width))
-        if self.overlay_lines is not None:
-            return tuple(_ui_line(line) for line in wrap_plain_lines(self.overlay_lines, width))
+        _, screen_width = self.stdscr.getmaxyx()
+        details_overlay = None
+        if self._details_mode(screen_width) == "narrow" and self.session:
+            details_overlay = format_details_overlay_lines(self.session)
+        overlay = overlay_body_lines(
+            picker=self.picker,
+            overlay_lines=self.overlay_lines,
+            details_overlay=details_overlay,
+        )
+        if overlay is not None:
+            return tuple(_ui_line(line) for line in wrap_plain_lines(overlay, width))
         return wrap_transcript_lines(self.transcript_lines, width)
 
-    def _input_prompt(self) -> str:
-        if self.new_wizard:
-            step = self.new_wizard.get("step", "task")
-            return f"[new {step}] "
-        return "[referee] "
-
     def _body_height(self) -> int:
+        # Row map: 0 context, 1 info, 2 hairline, body, box top, input, box
+        # bottom, status = 3 top rows + 4 bottom rows of chrome.
         height, _ = self.stdscr.getmaxyx()
-        return max(1, height - 5)
+        return max(1, height - 7)
 
     def _transcript_width(self) -> int:
         _, width = self.stdscr.getmaxyx()
         details_width = self._details_width(width)
         return max(1, width - details_width - (1 if details_width else 0))
 
+    def _details_mode(self, width: int) -> Optional[str]:
+        if not self.details_visible or not self.session:
+            return None
+        return "wide" if width >= 100 else "narrow"
+
     def _details_width(self, width: int) -> int:
-        if not self.details_visible or width < 100 or not self.session:
+        if self._details_mode(width) != "wide":
             return 0
         return min(48, max(32, width // 3))
 
-    def _attr_for_source(self, source: str) -> int:
-        return self.styles.get(source, 0)
+    def _style_for_source(self, source: str) -> int:
+        if source in ("referee", "human"):
+            return self._style("band")
+        if source == "error":
+            return self._style("error")
+        if source in ("tool", "status"):
+            return self._style("dim")
+        brand = self._source_brand_color(source)
+        if brand is not None:
+            return self._brand_style(brand)
+        return self._style("text")
+
+    def _source_brand_color(self, source: str) -> Optional[str]:
+        for agent in info_agents_from_session(self.session):
+            if source in (agent.name, agent.type) and agent.brand_color:
+                return agent.brand_color
+        return None
 
     def _style(self, name: str) -> int:
         return self.styles.get(name, 0)
@@ -764,6 +1019,15 @@ class TuiApp:
             self.stdscr.addnstr(y, x, text, width, attr)
         except curses.error:
             pass
+
+
+def _terminal_is_utf8() -> bool:
+    """Best-effort UTF-8 capability check (drives braille spinner + box chars)."""
+    try:
+        encoding = locale.getpreferredencoding(False) or ""
+    except Exception:
+        encoding = ""
+    return "utf" in encoding.lower()
 
 
 def _ui_line(text: str):

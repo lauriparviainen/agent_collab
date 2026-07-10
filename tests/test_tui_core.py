@@ -61,13 +61,14 @@ class TuiCoreTests(unittest.TestCase):
 
         lines = render_transcript_lines(format_transcript_event(event))
 
-        self.assertEqual(lines, ("CLAUDE  hello", "        world"))
+        # Calm direction: lowercase gutter labels (was uppercase CLAUDE).
+        self.assertEqual(lines, ("claude  hello", "        world"))
 
         long_event = Event.create("tool", "command", "abcdef ghijkl mnop")
         wrapped = wrap_transcript_lines(format_transcript_event(long_event), 13)
         rendered = render_transcript_lines(wrapped)
 
-        self.assertEqual(rendered[0], "TOOL    abcde")
+        self.assertEqual(rendered[0], "tool    abcde")
         self.assertTrue(rendered[1].startswith("        "))
 
     def test_details_format_uses_top_level_state_and_settings_agents(self):
@@ -157,7 +158,8 @@ class TuiCoreTests(unittest.TestCase):
         self.assertTrue(slash_completion_matches_input("/session", state))
         self.assertTrue(slash_completion_matches_input("/SESSION", state))
         self.assertEqual(accept_slash_completion("/se", state), "/session ")
-        self.assertIn("> /session", "\n".join(format_slash_completion_lines(state, max_items=2)))
+        # Headerless menu with ▸ selection marker (Stage 1b amendment).
+        self.assertIn("▸ /session", "\n".join(format_slash_completion_lines(state, max_items=2)))
         self.assertEqual(move_slash_completion(state, 99).index, len(state.matches) - 1)
         self.assertEqual(move_slash_completion(state, -99).index, 0)
 
@@ -176,8 +178,12 @@ class TuiCoreTests(unittest.TestCase):
 
     def test_activity_indicator_changes_for_running_waiting_and_terminal_sessions(self):
         self.assertEqual(format_activity_indicator(None), "no session")
-        self.assertEqual(format_activity_indicator({"status": "running"}, tick=0), "- running")
-        self.assertEqual(format_activity_indicator({"status": "running"}, tick=1), "\\ running")
+        # Approved change: braille-orbit spinner (was ASCII - \ | /).
+        self.assertEqual(format_activity_indicator({"status": "running"}, tick=0), "⠋ running")
+        self.assertEqual(format_activity_indicator({"status": "running"}, tick=1), "⠙ running")
+        # ASCII dot-pulse fallback on non-UTF-8 terminals.
+        self.assertEqual(format_activity_indicator({"status": "running"}, tick=0, utf8=False), ". running")
+        self.assertEqual(format_activity_indicator({"status": "running"}, tick=2, utf8=False), "... running")
         self.assertEqual(format_activity_indicator({"status": "awaiting_input"}, tick=2), "awaiting input")
         self.assertEqual(format_activity_indicator({"status": "done"}, tick=3), "read-only done")
 
@@ -260,8 +266,9 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(selected_picker_session_id(picker), "new")
 
         rendered = "\n".join(format_session_picker_lines(picker))
-        self.assertIn("SESSION_ID", rendered)
-        self.assertIn("> new", rendered)
+        # Target delta: lowercase columns and ▸ selection marker.
+        self.assertIn("session", rendered)
+        self.assertIn("▸   new", rendered)
 
     def test_options_helpers_extract_enabled_agents_and_workflows(self):
         options = {
@@ -343,7 +350,7 @@ class TuiCoreMockDaemonTests(unittest.IsolatedAsyncioTestCase):
 
         lines = render_transcript_lines(format_transcript_events(batch.events))
         self.assertGreater(batch.cursor, 0)
-        self.assertTrue(any(line.startswith("HUMAN") for line in lines))
+        self.assertTrue(any(line.startswith("human") for line in lines))
         self.assertIn("tui mock task", "\n".join(lines))
         self.assertTrue(session_is_terminal(final.to_dict()))
         self.assertFalse(should_start_poller(final.to_dict()))
