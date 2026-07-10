@@ -6,9 +6,9 @@ REST route, and the API version constants. It is intentionally dependency-light
 (only :data:`agent_collab.config.DEFAULT_WORKFLOW`) so both ``server_http`` and
 ``client`` can import it without a cycle.
 
-See ``doc/tasks_open/stage-5.3-daemon-api-contract.md`` (Workstream A). This
-first slice adds the DTOs + a contract test; wiring ``server_http``/``client``
-onto these models is the following slice.
+See ``doc/tasks_closed/stage-5.3-daemon-api-contract.md`` (Workstream A).
+``./agent_collab.sh setup`` generates the documentation artifacts under
+``doc/daemon_api_doc/`` from these DTOs and :data:`ROUTES`.
 
 Deliberate non-coverage (documented, not accidental):
 
@@ -36,7 +36,7 @@ from .config import DEFAULT_WORKFLOW
 # emit ``api_version`` in ``GET /health`` and the ``X-Agent-Collab-API`` header
 # on every REST response, and has the client assert a compatible *major* on
 # connect. Bump on a breaking wire change.
-API_VERSION = 1
+API_VERSION = 2
 API_VERSION_HEADER = "X-Agent-Collab-API"
 
 
@@ -59,6 +59,29 @@ def _optional_object(data: Dict[str, Any], key: str) -> Dict[str, Any]:
     return {} if value is None else value
 
 
+def _integer(data: Dict[str, Any], key: str, default: int) -> int:
+    value = data.get(key, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+
+
+def _number(data: Dict[str, Any], key: str, default: float) -> float:
+    value = data.get(key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be a number") from exc
+
+
+def _tool_output(data: Dict[str, Any]) -> str:
+    value = data.get("tool_output", "summary")
+    if not isinstance(value, str) or value not in {"summary", "full"}:
+        raise ValueError("tool_output must be 'summary' or 'full'")
+    return value
+
+
 # --- Response DTOs ----------------------------------------------------------
 
 
@@ -66,9 +89,8 @@ def _optional_object(data: Dict[str, Any], key: str) -> Dict[str, Any]:
 class HealthModel:
     """``GET /health`` — open, unauthenticated liveness probe.
 
-    ``api_version`` is ``None`` until the refactor slice makes the server emit
-    it; ``to_dict`` omits it while ``None`` so it round-trips today's wire
-    exactly.
+    ``api_version`` is optional only so the typed client can still parse a
+    pre-versioning daemon response; current servers always emit it.
     """
 
     status: str
@@ -135,12 +157,12 @@ class SessionStateModel:
             markdown_path=str(data.get("markdown_path", "")),
             created_at=str(data.get("created_at", "")),
             updated_at=str(data.get("updated_at", "")),
-            max_turns=int(data.get("max_turns", 3)),
-            timeout=int(data.get("timeout", 900)),
+            max_turns=_integer(data, "max_turns", 3),
+            timeout=_integer(data, "timeout", 900),
             mock=bool(data.get("mock", False)),
             dry_run=bool(data.get("dry_run", False)),
             interactive=bool(data.get("interactive", False)),
-            interactive_idle_timeout=float(data.get("interactive_idle_timeout", 600.0)),
+            interactive_idle_timeout=_number(data, "interactive_idle_timeout", 600.0),
             ended_at=data.get("ended_at"),
             error=data.get("error"),
             settings=data.get("settings"),
@@ -352,12 +374,12 @@ class StartSessionRequestModel:
             task=_required_str(data, "task"),
             workdir=_required_str(data, "workdir"),
             workflow=str(data.get("workflow", DEFAULT_WORKFLOW)),
-            max_turns=int(data.get("max_turns", 3)),
-            timeout=int(data.get("timeout", 900)),
+            max_turns=_integer(data, "max_turns", 3),
+            timeout=_integer(data, "timeout", 900),
             mock=bool(data.get("mock", False)),
             dry_run=bool(data.get("dry_run", False)),
             interactive=bool(data.get("interactive", False)),
-            interactive_idle_timeout=float(data.get("interactive_idle_timeout", 600.0)),
+            interactive_idle_timeout=_number(data, "interactive_idle_timeout", 600.0),
             backend_options=_optional_object(data, "backend_options"),
             backend=str(backend) if backend is not None else None,
         )
@@ -429,6 +451,77 @@ class PostMessageRequestModel:
         return out
 
 
+@dataclass
+class ReadEventsRequestModel:
+    """Query for ``GET .../events``.
+
+    ``limit`` makes a one-event full-fidelity re-fetch possible after a summary
+    reports an absolute event id.
+    """
+
+    cursor: int = 0
+    limit: Optional[int] = None
+    tool_output: str = "summary"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ReadEventsRequestModel":
+        cursor = _integer(data, "cursor", 0)
+        if cursor < 0:
+            raise ValueError("cursor must be >= 0")
+        limit = None
+        if data.get("limit") is not None:
+            limit = _integer(data, "limit", 0)
+            if limit < 1:
+                raise ValueError("limit must be >= 1")
+        return cls(cursor=cursor, limit=limit, tool_output=_tool_output(data))
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {"cursor": self.cursor, "tool_output": self.tool_output}
+        if self.limit is not None:
+            out["limit"] = self.limit
+        return out
+
+
+@dataclass
+class WaitEventsRequestModel:
+    """Query for ``GET .../events/wait``."""
+
+    cursor: int = 0
+    timeout_ms: int = 30000
+    tool_output: str = "summary"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "WaitEventsRequestModel":
+        cursor = _integer(data, "cursor", 0)
+        timeout_ms = _integer(data, "timeout_ms", 30000)
+        if cursor < 0:
+            raise ValueError("cursor must be >= 0")
+        if timeout_ms < 0:
+            raise ValueError("timeout_ms must be >= 0")
+        return cls(cursor=cursor, timeout_ms=timeout_ms, tool_output=_tool_output(data))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "cursor": self.cursor,
+            "timeout_ms": self.timeout_ms,
+            "tool_output": self.tool_output,
+        }
+
+
+@dataclass
+class TranscriptRequestModel:
+    """Query for ``GET .../transcript``."""
+
+    tool_output: str = "summary"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TranscriptRequestModel":
+        return cls(tool_output=_tool_output(data))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"tool_output": self.tool_output}
+
+
 # --- Route registry ---------------------------------------------------------
 
 
@@ -441,6 +534,7 @@ class Route:
 
     method: str
     path: str
+    handler: str
     client_method: Optional[str]
     request_model: Optional[type] = None
     response_model: Optional[type] = None
@@ -455,17 +549,45 @@ class Route:
 # not REST). ``SERVER_ONLY_ROUTES`` below pins the set that legitimately has no
 # client method, so a route silently losing its client method is caught.
 ROUTES: Tuple[Route, ...] = (
-    Route("GET", "/health", "health", None, HealthModel),
-    Route("POST", "/options", "describe_options", OptionsRequestModel, None, dynamic_response=True),
-    Route("GET", "/options", None, OptionsRequestModel, None, dynamic_response=True),
-    Route("POST", "/sessions", "start_session", StartSessionRequestModel, SessionStateModel),
-    Route("GET", "/sessions", "list_sessions", None, SessionListModel),
-    Route("GET", "/sessions/{session_id}", "get_session", None, SessionStateModel),
-    Route("GET", "/sessions/{session_id}/events", "read_events", None, EventBatchModel),
-    Route("GET", "/sessions/{session_id}/events/wait", "wait_events", None, EventBatchModel),
-    Route("POST", "/sessions/{session_id}/messages", "post_message", PostMessageRequestModel, EventBatchModel),
-    Route("GET", "/sessions/{session_id}/transcript", "read_transcript", None, TranscriptModel),
-    Route("POST", "/sessions/{session_id}/stop", "stop_session", None, SessionStateModel),
+    Route("GET", "/health", "health", "health", None, HealthModel),
+    Route("POST", "/options", "options", "describe_options", OptionsRequestModel, None, dynamic_response=True),
+    Route("GET", "/options", "options", None, OptionsRequestModel, None, dynamic_response=True),
+    Route("POST", "/sessions", "start_session", "start_session", StartSessionRequestModel, SessionStateModel),
+    Route("GET", "/sessions", "list_sessions", "list_sessions", None, SessionListModel),
+    Route("GET", "/sessions/{session_id}", "get_session", "get_session", None, SessionStateModel),
+    Route(
+        "GET",
+        "/sessions/{session_id}/events",
+        "read_events",
+        "read_events",
+        ReadEventsRequestModel,
+        EventBatchModel,
+    ),
+    Route(
+        "GET",
+        "/sessions/{session_id}/events/wait",
+        "wait_events",
+        "wait_events",
+        WaitEventsRequestModel,
+        EventBatchModel,
+    ),
+    Route(
+        "POST",
+        "/sessions/{session_id}/messages",
+        "post_message",
+        "post_message",
+        PostMessageRequestModel,
+        EventBatchModel,
+    ),
+    Route(
+        "GET",
+        "/sessions/{session_id}/transcript",
+        "read_transcript",
+        "read_transcript",
+        TranscriptRequestModel,
+        TranscriptModel,
+    ),
+    Route("POST", "/sessions/{session_id}/stop", "stop_session", "stop_session", None, SessionStateModel),
 )
 
 # REST routes that legitimately have no typed-client method (server/manual-curl
@@ -488,6 +610,9 @@ __all__ = [
     "StartSessionRequestModel",
     "OptionsRequestModel",
     "PostMessageRequestModel",
+    "ReadEventsRequestModel",
+    "WaitEventsRequestModel",
+    "TranscriptRequestModel",
     "Route",
     "ROUTES",
     "SERVER_ONLY_ROUTES",

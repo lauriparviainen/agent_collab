@@ -125,9 +125,11 @@ Read events incrementally with a cursor:
    events arrive. `awaiting_input` is live, not terminal.
 
 Never make one unbounded blocking call. Always pass the cursor from the
-previous response, not a guess. `agent_collab_read_transcript` returns the
-whole Markdown transcript when you want a readable summary instead of raw
-events.
+previous response, not a guess. Tool events default to compact summaries that
+include an absolute event id. If the payload is genuinely needed, fetch only
+that event with `cursor: EVENT_ID`, `limit: 1`, and `tool_output: "full"`.
+`agent_collab_read_transcript` likewise summarizes tool payloads by default;
+pass `tool_output: "full"` for the stored Markdown transcript.
 
 ## Errors
 

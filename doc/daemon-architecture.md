@@ -110,31 +110,29 @@ and receive:
 For near-streaming behavior, clients call:
 
 ```text
-wait_events(session_id, cursor, timeout_ms)
+wait_events(session_id, cursor, timeout_ms, tool_output="summary")
 ```
 
 The server returns as soon as new events exist or the timeout expires.
 
 ## Local API
 
-The local server API binds to `127.0.0.1` by default.
-
-Suggested endpoints:
-
-```text
-POST /sessions
-POST /options
-GET  /options?workdir=/path/to/project
-GET  /sessions
-GET  /sessions/{session_id}
-GET  /sessions/{session_id}/events?cursor=N
-GET  /sessions/{session_id}/events/wait?cursor=N&timeout_ms=30000
-GET  /sessions/{session_id}/transcript
-POST /sessions/{session_id}/stop
-```
+The local server API binds to `127.0.0.1` by default. The shared DTOs and
+`ROUTES` registry in
+[`agent_collab/api_schema.py`](../agent_collab/api_schema.py) are the single
+source of truth for the complete REST surface; the server dispatch table and
+typed client both consume that registry. The generated human-readable and
+OpenAPI outputs live under [`doc/daemon_api_doc/`](daemon_api_doc/http-api.md)
+and are refreshed by `./agent_collab.sh setup`.
 
 `POST /sessions` and `/options` require an explicit non-blank `workdir`; the
 `workdir` selects project config and the session subprocess cwd.
+
+Event and transcript reads use `tool_output=summary` by default. Tool events are
+projected to one line containing their absolute cursor index, tool/argument
+digest, and result size; storage remains full fidelity. A caller can retrieve a
+specific payload with `read_events(cursor=EVENT_ID, limit=1,
+tool_output="full")`.
 
 MCP endpoint:
 
@@ -144,6 +142,18 @@ GET  /mcp  -> 405 until SSE is implemented
 ```
 
 `/mcp` implements the Streamable HTTP JSON POST path for `initialize`, `tools/list`, and `tools/call`. It accepts MCP notifications and client responses with HTTP `202`, validates non-local `Origin` headers on all `/mcp` methods, validates supported `MCP-Protocol-Version` headers, and returns `405 Method Not Allowed` for `GET /mcp` because SSE is not implemented yet.
+
+All HTTP routes except `GET /health` require the per-daemon-lifetime bearer
+token stored in the global daemon directory. `GET /health` is intentionally an
+open liveness probe and exposes only status, session count, and API version.
+The supervisor verifies readiness against authenticated `GET /sessions`, so a
+stale token or an unrelated listener cannot satisfy startup. The token and
+daemon state files are owner-only, and the daemon directory is owner-only.
+
+This is a loopback, cross-user safety measure, not a sandbox against other
+processes running as the same OS user: same-user processes can read the token
+file. Non-loopback clients must supply `AGENT_COLLAB_TOKEN`; the client does not
+reuse a local daemon token for a remote server URL.
 
 Optional later session event stream:
 
@@ -186,20 +196,20 @@ This makes it useful even without a running server.
 
 ## MCP shape
 
-Preferred MCP shape:
-
-```text
-MCP client
-  -> http://127.0.0.1:8765/mcp
-  -> SessionManager
-```
-
-Compatibility MCP shape:
+Recommended local MCP shape (the adapter reads the rotating token file):
 
 ```text
 MCP client
   -> stdio agent_collab.mcp_server
-  -> local HTTP server
+  -> authenticated local HTTP
+  -> SessionManager
+```
+
+Direct MCP shape (client must refresh the bearer token after daemon restart):
+
+```text
+MCP client
+  -> authenticated http://127.0.0.1:8765/mcp
   -> SessionManager
 ```
 

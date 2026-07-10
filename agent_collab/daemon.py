@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 import uuid
 
 from .config import DEFAULT_WORKFLOW, CollaborationConfig, load_config
-from .events import Event, utc_timestamp
+from .events import Event, compact_json, utc_timestamp
 from .options import (
     build_session_settings,
     describe_options,
@@ -30,6 +30,8 @@ STOPPED = "stopped"
 INTERRUPTED = "interrupted"
 TERMINAL_STATUSES = {DONE, FAILED, STOPPED, INTERRUPTED}
 LIVE_WAIT_STATUSES = {RUNNING, AWAITING_INPUT}
+MAX_FULL_TOOL_BYTES = 64 * 1024
+MAX_FULL_TRANSCRIPT_BYTES = 1024 * 1024
 
 
 @dataclass
@@ -366,18 +368,41 @@ class SessionManager:
     def get_session(self, session_id: str) -> SessionState:
         return self._copy_state(self._get_managed(session_id).state)
 
-    def read_events(self, session_id: str, cursor: int = 0) -> EventBatch:
+    def read_events(
+        self,
+        session_id: str,
+        cursor: int = 0,
+        *,
+        limit: Optional[int] = None,
+        tool_output: str = "summary",
+    ) -> EventBatch:
         managed = self._get_managed(session_id)
-        cursor = self._normalize_cursor(cursor)
         if managed.request is None and not managed.events:
             managed.events = _load_events_from_jsonl(Path(managed.state.jsonl_path))
-        events = [copy.deepcopy(event) for event in managed.events[cursor:]]
-        return EventBatch(session_id=session_id, cursor=len(managed.events), events=events)
+        cursor = min(self._normalize_cursor(cursor), len(managed.events))
+        limit = self._normalize_limit(limit)
+        tool_output = self._normalize_tool_output(tool_output)
+        end = len(managed.events) if limit is None else min(len(managed.events), cursor + limit)
+        events = [
+            _project_event(event, event_id, tool_output)
+            for event_id, event in enumerate(managed.events[cursor:end], start=cursor)
+        ]
+        return EventBatch(session_id=session_id, cursor=end, events=events)
 
-    async def wait_events(self, session_id: str, cursor: int = 0, timeout_ms: int = 30000) -> EventBatch:
+    async def wait_events(
+        self,
+        session_id: str,
+        cursor: int = 0,
+        timeout_ms: int = 30000,
+        *,
+        tool_output: str = "summary",
+    ) -> EventBatch:
         managed = self._get_managed(session_id)
+        if managed.request is None and not managed.events:
+            managed.events = _load_events_from_jsonl(Path(managed.state.jsonl_path))
         cursor = min(self._normalize_cursor(cursor), len(managed.events))
         timeout = max(0, int(timeout_ms)) / 1000.0
+        tool_output = self._normalize_tool_output(tool_output)
 
         if len(managed.events) <= cursor and managed.state.status in LIVE_WAIT_STATUSES and timeout > 0:
             async with managed.condition:
@@ -392,7 +417,27 @@ class SessionManager:
                     except asyncio.TimeoutError:
                         pass
 
-        return self.read_events(session_id, cursor)
+        return self.read_events(session_id, cursor, tool_output=tool_output)
+
+    def read_transcript(self, session_id: str, *, tool_output: str = "summary") -> str:
+        managed = self._get_managed(session_id)
+        tool_output = self._normalize_tool_output(tool_output)
+        if tool_output == "full":
+            path = Path(managed.state.markdown_path)
+            text = path.read_text(encoding="utf-8") if path.exists() else ""
+            return _truncate_text(text, MAX_FULL_TRANSCRIPT_BYTES)
+
+        events = _load_events_from_jsonl(Path(managed.state.jsonl_path))
+        if not events:
+            events = [copy.deepcopy(event) for event in managed.events]
+        parts = [f"# agent-collab session {session_id}\n\n"]
+        for event_id, event in enumerate(events):
+            projected = _project_event(event, event_id, tool_output)
+            label = str(projected.get("source", "error")).upper()
+            event_type = str(projected.get("type", "status"))
+            text = str(projected.get("text", ""))
+            parts.append(f"## {label} `{event_type}`\n\n{text}\n\n")
+        return "".join(parts)
 
     async def _run_session(self, managed: _ManagedSession) -> None:
         request = managed.request
@@ -553,6 +598,22 @@ class SessionManager:
             raise ValueError("cursor must be >= 0")
         return cursor
 
+    def _normalize_limit(self, limit: Optional[int]) -> Optional[int]:
+        if limit is None:
+            return None
+        try:
+            normalized = int(limit)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("limit must be an integer") from exc
+        if normalized < 1:
+            raise ValueError("limit must be >= 1")
+        return normalized
+
+    def _normalize_tool_output(self, tool_output: Any) -> str:
+        if tool_output not in {"summary", "full"}:
+            raise ValueError("tool_output must be 'summary' or 'full'")
+        return str(tool_output)
+
     def _normalize_idle_timeout(self, value: Any) -> float:
         try:
             timeout = float(value)
@@ -658,3 +719,80 @@ def _load_events_from_jsonl(path: Path) -> List[Dict[str, Any]]:
         if isinstance(payload, dict):
             events.append(payload)
     return events
+
+
+def _project_event(event: Dict[str, Any], event_id: int, tool_output: str) -> Dict[str, Any]:
+    projected = copy.deepcopy(event)
+    if projected.get("source") != "tool":
+        return projected
+    if tool_output == "summary":
+        projected["text"] = _tool_event_summary(projected, event_id)
+        projected["raw"] = None
+        return projected
+
+    projected["text"] = _truncate_text(str(projected.get("text", "")), MAX_FULL_TOOL_BYTES)
+    raw = projected.get("raw")
+    encoded = _json_bytes(raw)
+    if len(encoded) > MAX_FULL_TOOL_BYTES:
+        preview = encoded[:MAX_FULL_TOOL_BYTES].decode("utf-8", errors="replace")
+        omitted = len(encoded) - MAX_FULL_TOOL_BYTES
+        projected["raw"] = {
+            "truncated": True,
+            "preview": preview,
+            "omitted_bytes": omitted,
+            "message": f"+{omitted} bytes truncated, see transcript file",
+        }
+    return projected
+
+
+def _tool_event_summary(event: Dict[str, Any], event_id: int) -> str:
+    name, args = _tool_identity(event.get("raw"))
+    text = str(event.get("text", ""))
+    if not name:
+        first = text.strip().split(None, 1)
+        name = first[0] if first else str(event.get("type", "tool"))
+        if args is None and len(first) > 1:
+            args = first[1]
+    digest = ""
+    if args not in (None, "", {}, []):
+        digest = " " + compact_json(args, limit=120)
+    result_size = max(len(text.encode("utf-8")), len(_json_bytes(event.get("raw"))))
+    return f"[event {event_id}] {name}{digest} — result {result_size} bytes"
+
+
+def _tool_identity(value: Any) -> Tuple[str, Any]:
+    if isinstance(value, dict):
+        name = value.get("name") or value.get("tool_name")
+        args = next(
+            (value[key] for key in ("input", "arguments", "args", "command") if key in value),
+            None,
+        )
+        if isinstance(name, str) and name:
+            return name, args
+        for key in ("item", "message", "content", "tool_call", "tool_calls"):
+            if key in value:
+                nested_name, nested_args = _tool_identity(value[key])
+                if nested_name:
+                    return nested_name, nested_args
+    elif isinstance(value, list):
+        for item in value:
+            name, args = _tool_identity(item)
+            if name:
+                return name, args
+    return "", None
+
+
+def _json_bytes(value: Any) -> bytes:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    except (TypeError, ValueError):
+        return repr(value).encode("utf-8", errors="replace")
+
+
+def _truncate_text(text: str, byte_limit: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= byte_limit:
+        return text
+    omitted = len(encoded) - byte_limit
+    preview = encoded[:byte_limit].decode("utf-8", errors="ignore")
+    return f"{preview}\n+{omitted} bytes truncated, see transcript file"

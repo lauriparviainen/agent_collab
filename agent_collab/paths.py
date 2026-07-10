@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+import tempfile
 from typing import List, Mapping, Optional
 
 HOME_ENV = "AGENT_COLLAB_HOME"
@@ -32,6 +33,7 @@ class GlobalDataPaths:
     session_index_path: Path
     pid_path: Path
     state_path: Path
+    token_path: Path
     daemon_log_path: Path
     daemon_stderr_path: Path
 
@@ -48,6 +50,7 @@ class GlobalDataPaths:
             session_index_path=data_dir / "session-index.json",
             pid_path=daemon_dir / "pid",
             state_path=daemon_dir / "state.json",
+            token_path=daemon_dir / "token",
             daemon_log_path=daemon_dir / "daemon.log",
             daemon_stderr_path=daemon_dir / "daemon.stderr.log",
         )
@@ -58,8 +61,33 @@ class GlobalDataPaths:
 
     def ensure_dirs(self) -> None:
         self.daemon_dir.mkdir(parents=True, exist_ok=True)
+        self.daemon_dir.chmod(0o700)
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
+
+
+def atomic_write_private_text(path: Path, text: str) -> None:
+    """Atomically replace ``path`` with owner-only text in the same directory."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    temp_path = Path(temporary)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(str(temp_path), str(path))
+        path.chmod(0o600)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def project_config_path(workdir: Path) -> Path:

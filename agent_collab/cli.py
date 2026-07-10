@@ -54,6 +54,7 @@ def build_serve_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--workdir", type=Path, default=Path("."), help=argparse.SUPPRESS)
     parser.add_argument("--session-log-dir", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--token-path", type=Path, help=argparse.SUPPRESS)
     return parser
 
 
@@ -250,6 +251,7 @@ def _main_serve(argv) -> int:
             args.port,
             default_workdir=args.workdir,
             session_log_dir=args.session_log_dir,
+            token_path=args.token_path,
         )
     except KeyboardInterrupt:
         return 130

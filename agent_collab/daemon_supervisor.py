@@ -5,14 +5,15 @@ import json
 import os
 from pathlib import Path
 import signal
-import socket
 import subprocess
 import sys
 import time
 from typing import Any, Dict, Optional
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from .events import utc_timestamp
-from .paths import GlobalDataPaths
+from .paths import GlobalDataPaths, atomic_write_private_text
 
 
 @dataclass
@@ -40,6 +41,10 @@ def start_daemon(
         if _is_running(pid):
             raise DaemonSupervisorError(f"global agent-collab daemon already running on {host}:{port} with pid {pid}")
         _remove_pid_state(paths)
+    try:
+        paths.token_path.unlink()
+    except FileNotFoundError:
+        pass
 
     stdout = paths.daemon_log_path.open("a", encoding="utf-8")
     stderr = paths.daemon_stderr_path.open("a", encoding="utf-8")
@@ -54,6 +59,8 @@ def start_daemon(
         str(port),
         "--session-log-dir",
         str(paths.session_dir),
+        "--token-path",
+        str(paths.token_path),
     ]
     if default_workdir is not None:
         argv.extend(["--workdir", str(Path(default_workdir).expanduser().resolve())])
@@ -74,13 +81,14 @@ def start_daemon(
     stderr.close()
     try:
         _wait_for_ready(process, host, port, paths)
+        state = _build_state(paths, process.pid, host, port, argv, default_workdir)
+        _write_state(paths, state)
+        atomic_write_private_text(paths.pid_path, f"{process.pid}\n")
+        return state
     except Exception:
         _terminate_process(process)
+        _remove_pid_state(paths)
         raise
-    state = _build_state(paths, process.pid, host, port, argv, default_workdir)
-    _write_state(paths, state)
-    paths.pid_path.write_text(f"{process.pid}\n", encoding="utf-8")
-    return state
 
 
 def daemon_status(paths: Optional[GlobalDataPaths] = None) -> DaemonStatus:
@@ -152,6 +160,7 @@ def _build_state(
         "default_workdir": str(Path(default_workdir).expanduser().resolve()) if default_workdir else None,
         "data_dir": str(paths.data_dir),
         "daemon_dir": str(paths.daemon_dir),
+        "token_path": str(paths.token_path),
         "session_dir": str(paths.session_dir),
         "daemon_log_path": str(paths.daemon_log_path),
         "daemon_stderr_path": str(paths.daemon_stderr_path),
@@ -173,7 +182,9 @@ def _read_state(paths: GlobalDataPaths) -> Dict[str, Any]:
 
 
 def _write_state(paths: GlobalDataPaths, state: Dict[str, Any]) -> None:
-    paths.state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_private_text(
+        paths.state_path, json.dumps(state, indent=2, sort_keys=True) + "\n"
+    )
 
 
 def _read_pid(paths: GlobalDataPaths) -> Optional[int]:
@@ -235,13 +246,25 @@ def _wait_for_ready(process: subprocess.Popen, host: str, port: int, paths: Glob
                 message += f": {stderr_tail}"
             raise DaemonSupervisorError(message)
         try:
-            with socket.create_connection((host, port), timeout=0.2):
-                time.sleep(0.05)
-                code = poll()
-                if code is None:
-                    return
-                raise DaemonSupervisorError(f"agent-collab daemon exited during startup with code {code}")
-        except OSError as exc:
+            token = paths.token_path.read_text(encoding="utf-8").strip()
+            if not token:
+                raise OSError("daemon token is not ready")
+            display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+            request = Request(
+                f"http://{display_host}:{port}/sessions",
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                method="GET",
+            )
+            with urlopen(request, timeout=0.2) as response:
+                if response.status != 200:
+                    raise OSError(f"protected readiness probe returned {response.status}")
+                response.read()
+            time.sleep(0.05)
+            code = poll()
+            if code is None:
+                return
+            raise DaemonSupervisorError(f"agent-collab daemon exited during startup with code {code}")
+        except (OSError, HTTPError, URLError) as exc:
             last_error = exc
             time.sleep(0.05)
     suffix = f": {last_error}" if last_error else ""
@@ -267,7 +290,7 @@ def _terminate_process(process: subprocess.Popen) -> None:
 
 
 def _remove_pid_state(paths: GlobalDataPaths) -> None:
-    for path in (paths.pid_path, paths.state_path):
+    for path in (paths.pid_path, paths.state_path, paths.token_path):
         try:
             path.unlink()
         except FileNotFoundError:

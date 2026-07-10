@@ -10,6 +10,7 @@ Start here:
 - [Agent configuration](agent-configuration.md)
 - [Runtime layout](runtime-layout.md)
 - [MCP guidance](mcp-guidance.md)
+- [Generated daemon REST API](daemon_api_doc/http-api.md)
 - [Development notes](development.md)
 
 Task folders:

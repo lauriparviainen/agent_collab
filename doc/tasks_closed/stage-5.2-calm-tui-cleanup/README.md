@@ -105,8 +105,8 @@ old "Initial Open Questions" (kept at the bottom for history).
   a single dim line — tool name + compact args digest + result size (e.g.
   `tool  Read options.py:281 · +50 lines`) — never the full payload inline.
   Display-only projection (**target delta**): the JSONL transcript keeps full
-  fidelity. The MCP read-side counterpart (`tool_output` parameter) is owned by
-  [stage-5.3](../stage-5.3-daemon-api-contract.md), Remaining Workstream A.
+  fidelity. The MCP read-side counterpart (`tool_output` parameter) was
+  completed by [stage-5.3](../stage-5.3-daemon-api-contract.md).
 
 ## Design System Inputs
 
@@ -368,9 +368,9 @@ Also resolved to keep scope down:
 After the screenshots are approved:
 
 - Refactor TUI rendering around the approved layout.
-- **Consume the typed daemon client in the same pass — this is stage-5.3's
-  deferred "slice 3."** [stage-5.3](../stage-5.3-daemon-api-contract.md) landed
-  shared typed DTOs (`api_schema`) + a versioned client but deliberately left
+- **Consume the typed daemon client in the same pass — this was stage-5.3's
+  then-deferred "slice 3."** [stage-5.3](../stage-5.3-daemon-api-contract.md) had landed
+  shared typed DTOs (`api_schema`) + a versioned client but initially left
   `AgentCollabClient` methods returning raw dicts, so the doomed dict-based
   `tui.py`/`cli.py` call sites are migrated **once here, not churned twice**. In
   this Stage 2: swap the client return types to the DTOs (`get_session ->
@@ -380,7 +380,7 @@ After the screenshots are approved:
   `session["status"]` / `.get(...)` dict access to typed attributes; and update
   `HttpClientToolBackend` ([mcp_tools.py](../../../agent_collab/mcp_tools.py)) to
   `.to_dict()` the client results before the MCP `content()` serializer. See
-  stage-5.3 "Remaining Workstream A work".
+  the [stage-5.3 completion record](../stage-5.3-daemon-api-contract.md).
 - Add `brand_color: str` to the `AgentBackend` protocol
   ([backends/base.py](../../../agent_collab/backends/base.py)) and each backend
   package — a static registry fact like `capabilities`, identical across a

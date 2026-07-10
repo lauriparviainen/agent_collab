@@ -17,6 +17,7 @@ Global user-owned state (root overridable with `AGENT_COLLAB_HOME`):
     daemon/
       pid
       state.json
+      token
       daemon.log
       daemon.stderr.log
     sessions/
@@ -27,6 +28,17 @@ Global user-owned state (root overridable with `AGENT_COLLAB_HOME`):
 ```
 
 `tmp/` is reserved for future temp review workdirs. `session-index.json` is the persistent session index that lets `list`/`status` survive daemon restarts.
+
+The daemon directory is mode `0700`; `pid`, `state.json`, and `token` are
+atomically replaced with mode `0600`. The serving process mints a new `token`
+for every daemon lifetime before it accepts protected requests. Local clients
+read it automatically; `AGENT_COLLAB_TOKEN` overrides it for manual or remote
+clients. `GET /health` remains unauthenticated, while every other REST route and
+`/mcp` require `Authorization: Bearer <token>`.
+
+The token prevents other local users from casually controlling the loopback
+daemon. It does not isolate the daemon from processes running as the same OS
+user, which can read the owner-owned token file.
 
 Project-owned config:
 

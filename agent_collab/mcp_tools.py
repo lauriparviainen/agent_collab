@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol
 
+from .api_schema import ReadEventsRequestModel, TranscriptRequestModel, WaitEventsRequestModel
 from .daemon import SessionManager, StartSessionRequest
 from .options import StartOptionsError
 
@@ -65,30 +66,52 @@ TOOLS = [
     },
     {
         "name": "agent_collab_read_events",
-        "description": "Read daemon session events after a numeric cursor offset.",
+        "description": (
+            "Read daemon session events after a numeric cursor offset. Tool payloads default to one-line "
+            "summaries carrying absolute event ids; re-fetch one with cursor=<id>, limit=1, tool_output='full'."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"session_id": {"type": "string"}, "cursor": {"type": "integer"}},
+            "properties": {
+                "session_id": {"type": "string"},
+                "cursor": {"type": "integer"},
+                "limit": {"type": "integer", "minimum": 1},
+                "tool_output": {"type": "string", "enum": ["summary", "full"]},
+            },
             "required": ["session_id"],
         },
     },
     {
         "name": "agent_collab_wait_events",
-        "description": "Long-poll daemon session events after a numeric cursor offset.",
+        "description": (
+            "Long-poll daemon session events after a numeric cursor offset. Tool payloads default to "
+            "one-line summaries; pass tool_output='full' only when the payload is needed."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "session_id": {"type": "string"},
                 "cursor": {"type": "integer"},
                 "timeout_ms": {"type": "integer"},
+                "tool_output": {"type": "string", "enum": ["summary", "full"]},
             },
             "required": ["session_id"],
         },
     },
     {
         "name": "agent_collab_read_transcript",
-        "description": "Read the Markdown transcript for a daemon-owned session.",
-        "inputSchema": {"type": "object", "properties": {"session_id": {"type": "string"}}, "required": ["session_id"]},
+        "description": (
+            "Read the Markdown transcript for a daemon-owned session. Tool payloads are summarized by "
+            "default; pass tool_output='full' for the stored transcript."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "tool_output": {"type": "string", "enum": ["summary", "full"]},
+            },
+            "required": ["session_id"],
+        },
     },
     {
         "name": "agent_collab_post_message",
@@ -146,13 +169,17 @@ class ToolBackend(Protocol):
     async def get_session(self, session_id: str) -> Dict[str, Any]:
         ...
 
-    async def read_events(self, session_id: str, cursor: int) -> Dict[str, Any]:
+    async def read_events(
+        self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
+    ) -> Dict[str, Any]:
         ...
 
-    async def wait_events(self, session_id: str, cursor: int, timeout_ms: int) -> Dict[str, Any]:
+    async def wait_events(
+        self, session_id: str, cursor: int, timeout_ms: int, tool_output: str
+    ) -> Dict[str, Any]:
         ...
 
-    async def read_transcript(self, session_id: str) -> str:
+    async def read_transcript(self, session_id: str, tool_output: str) -> str:
         ...
 
     async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -184,16 +211,24 @@ class SessionManagerToolBackend:
     async def get_session(self, session_id: str) -> Dict[str, Any]:
         return self.manager.get_session(session_id).to_dict()
 
-    async def read_events(self, session_id: str, cursor: int) -> Dict[str, Any]:
-        return self.manager.read_events(session_id, cursor).to_dict()
+    async def read_events(
+        self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
+    ) -> Dict[str, Any]:
+        return self.manager.read_events(
+            session_id, cursor, limit=limit, tool_output=tool_output
+        ).to_dict()
 
-    async def wait_events(self, session_id: str, cursor: int, timeout_ms: int) -> Dict[str, Any]:
-        return (await self.manager.wait_events(session_id, cursor, timeout_ms)).to_dict()
+    async def wait_events(
+        self, session_id: str, cursor: int, timeout_ms: int, tool_output: str
+    ) -> Dict[str, Any]:
+        return (
+            await self.manager.wait_events(
+                session_id, cursor, timeout_ms, tool_output=tool_output
+            )
+        ).to_dict()
 
-    async def read_transcript(self, session_id: str) -> str:
-        state = self.manager.get_session(session_id)
-        path = Path(state.markdown_path)
-        return path.read_text(encoding="utf-8") if path.exists() else ""
+    async def read_transcript(self, session_id: str, tool_output: str) -> str:
+        return self.manager.read_transcript(session_id, tool_output=tool_output)
 
     async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return (
@@ -232,14 +267,22 @@ class HttpClientToolBackend:
     async def get_session(self, session_id: str) -> Dict[str, Any]:
         return self.client_factory().get_session(session_id).to_dict()
 
-    async def read_events(self, session_id: str, cursor: int) -> Dict[str, Any]:
-        return self.client_factory().read_events(session_id, cursor).to_dict()
+    async def read_events(
+        self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
+    ) -> Dict[str, Any]:
+        return self.client_factory().read_events(
+            session_id, cursor, limit=limit, tool_output=tool_output
+        ).to_dict()
 
-    async def wait_events(self, session_id: str, cursor: int, timeout_ms: int) -> Dict[str, Any]:
-        return self.client_factory().wait_events(session_id, cursor, timeout_ms).to_dict()
+    async def wait_events(
+        self, session_id: str, cursor: int, timeout_ms: int, tool_output: str
+    ) -> Dict[str, Any]:
+        return self.client_factory().wait_events(
+            session_id, cursor, timeout_ms, tool_output=tool_output
+        ).to_dict()
 
-    async def read_transcript(self, session_id: str) -> str:
-        return self.client_factory().read_transcript(session_id)
+    async def read_transcript(self, session_id: str, tool_output: str) -> str:
+        return self.client_factory().read_transcript(session_id, tool_output=tool_output)
 
     async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.client_factory().post_message(
@@ -335,17 +378,38 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
         if name == "agent_collab_status":
             return content(await backend.get_session(session_id))
         if name == "agent_collab_read_events":
-            return content(await backend.read_events(session_id, _int_arg(args, "cursor", 0)))
+            request = ReadEventsRequestModel.from_dict(
+                {key: args[key] for key in ("cursor", "limit", "tool_output") if key in args}
+            )
+            return content(
+                await backend.read_events(
+                    session_id,
+                    request.cursor,
+                    request.limit,
+                    request.tool_output,
+                )
+            )
         if name == "agent_collab_wait_events":
+            request = WaitEventsRequestModel.from_dict(
+                {
+                    key: args[key]
+                    for key in ("cursor", "timeout_ms", "tool_output")
+                    if key in args
+                }
+            )
             return content(
                 await backend.wait_events(
                     session_id,
-                    _int_arg(args, "cursor", 0),
-                    _int_arg(args, "timeout_ms", 30000),
+                    request.cursor,
+                    request.timeout_ms,
+                    request.tool_output,
                 )
             )
         if name == "agent_collab_read_transcript":
-            return text_content(await backend.read_transcript(session_id))
+            request = TranscriptRequestModel.from_dict(
+                {key: args[key] for key in ("tool_output",) if key in args}
+            )
+            return text_content(await backend.read_transcript(session_id, request.tool_output))
         if name == "agent_collab_post_message":
             return content(await backend.post_message(session_id, _post_message_payload(args)))
         if name == "agent_collab_stop":
@@ -424,14 +488,6 @@ def _required_str(args: Dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{key} is required")
     return value
-
-
-def _int_arg(args: Dict[str, Any], key: str, default: int) -> int:
-    value = args.get(key, default)
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{key} must be an integer") from exc
 
 
 def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:

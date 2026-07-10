@@ -210,6 +210,50 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ctx.exception.status, 400)
                 self.assertEqual(ctx.exception.message, "workdir is required")
 
+    async def test_null_and_malformed_numeric_requests_are_bad_requests(self):
+        server = AgentCollabHttpServer(manager=SessionManager())
+        for field, value in (("max_turns", None), ("timeout", [])):
+            payload = {"task": "bad number", "workdir": "/tmp", field: value}
+            with self.subTest(field=field), self.assertRaises(HttpError) as ctx:
+                await server._dispatch("POST", "/sessions", {}, json.dumps(payload).encode())
+            self.assertEqual(ctx.exception.status, 400)
+        with self.assertRaises(HttpError) as ctx:
+            await server._dispatch("GET", "/sessions/s/events?limit=null", {}, b"")
+        self.assertEqual(ctx.exception.status, 400)
+
+    async def test_bearer_auth_protects_everything_except_health(self):
+        server = AgentCollabHttpServer(manager=SessionManager(), auth_token="secret")
+        health = await server._dispatch("GET", "/health", {}, b"")
+        self.assertEqual(health["status"], "ok")
+
+        for headers in ({}, {"authorization": "Bearer wrong"}):
+            with self.subTest(headers=headers), self.assertRaises(HttpError) as ctx:
+                await server._dispatch("GET", "/sessions", headers, b"")
+            self.assertEqual(ctx.exception.status, 401)
+
+        listed = await server._dispatch(
+            "GET", "/sessions", {"authorization": "Bearer secret"}, b""
+        )
+        self.assertEqual(listed, {"sessions": []})
+        health_with_slash = await server._dispatch("GET", "/health/", {}, b"")
+        self.assertEqual(health_with_slash["status"], "ok")
+        with self.assertRaises(HttpError) as ctx:
+            await server._dispatch("POST", "/health", {}, b"")
+        self.assertEqual(ctx.exception.status, 401)
+
+    async def test_mcp_requires_bearer_token_when_auth_is_enabled(self):
+        server = AgentCollabHttpServer(manager=SessionManager(), auth_token="secret")
+        with self.assertRaises(HttpError) as ctx:
+            await server._dispatch("POST", "/mcp", {}, _mcp_body(1, "tools/list"))
+        self.assertEqual(ctx.exception.status, 401)
+        response = await server._dispatch(
+            "POST",
+            "/mcp/",
+            {"authorization": "Bearer secret"},
+            _mcp_body(1, "tools/list"),
+        )
+        self.assertEqual(response["id"], 1)
+
     async def test_mcp_rejects_non_local_origin(self):
         server = AgentCollabHttpServer(manager=SessionManager())
 

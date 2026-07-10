@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+from ipaddress import ip_address
+from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from .api_schema import (
@@ -16,10 +18,12 @@ from .api_schema import (
     SessionStateModel,
     TranscriptModel,
 )
+from .paths import GlobalDataPaths
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8765"
 SERVER_URL_ENV = "AGENT_COLLAB_SERVER"
+TOKEN_ENV = "AGENT_COLLAB_TOKEN"
 
 
 class ClientError(RuntimeError):
@@ -40,9 +44,17 @@ class AgentCollabClient:
     (see stage-5.3 "What does NOT go into a static schema").
     """
 
-    def __init__(self, server_url: Optional[str] = None, timeout: float = 60.0):
+    def __init__(
+        self,
+        server_url: Optional[str] = None,
+        timeout: float = 60.0,
+        token_path: Optional[Path] = None,
+    ):
         self.server_url = (server_url or default_server_url()).rstrip("/")
         self.timeout = timeout
+        self.token_path = Path(token_path) if token_path else GlobalDataPaths.resolve().token_path
+        self._token: Optional[str] = None
+        self._token_loaded = False
 
     def health(self) -> HealthModel:
         return HealthModel.from_dict(self._request("GET", "/health"))
@@ -59,17 +71,34 @@ class AgentCollabClient:
     def get_session(self, session_id: str) -> SessionStateModel:
         return SessionStateModel.from_dict(self._request("GET", f"/sessions/{session_id}"))
 
-    def read_events(self, session_id: str, cursor: int = 0) -> EventBatchModel:
+    def read_events(
+        self,
+        session_id: str,
+        cursor: int = 0,
+        *,
+        limit: Optional[int] = None,
+        tool_output: str = "summary",
+    ) -> EventBatchModel:
+        query: Dict[str, Any] = {"cursor": cursor, "tool_output": tool_output}
+        if limit is not None:
+            query["limit"] = limit
         return EventBatchModel.from_dict(
-            self._request("GET", f"/sessions/{session_id}/events", {"cursor": cursor})
+            self._request("GET", f"/sessions/{session_id}/events", query)
         )
 
-    def wait_events(self, session_id: str, cursor: int = 0, timeout_ms: int = 30000) -> EventBatchModel:
+    def wait_events(
+        self,
+        session_id: str,
+        cursor: int = 0,
+        timeout_ms: int = 30000,
+        *,
+        tool_output: str = "summary",
+    ) -> EventBatchModel:
         return EventBatchModel.from_dict(
             self._request(
                 "GET",
                 f"/sessions/{session_id}/events/wait",
-                {"cursor": cursor, "timeout_ms": timeout_ms},
+                {"cursor": cursor, "timeout_ms": timeout_ms, "tool_output": tool_output},
                 timeout=max(self.timeout, (timeout_ms / 1000.0) + 5),
             )
         )
@@ -88,8 +117,10 @@ class AgentCollabClient:
             self._request("POST", f"/sessions/{session_id}/messages", payload)
         )
 
-    def read_transcript(self, session_id: str) -> str:
-        result = self._request("GET", f"/sessions/{session_id}/transcript")
+    def read_transcript(self, session_id: str, *, tool_output: str = "summary") -> str:
+        result = self._request(
+            "GET", f"/sessions/{session_id}/transcript", {"tool_output": tool_output}
+        )
         return TranscriptModel.from_dict(result).transcript
 
     def stop_session(self, session_id: str) -> SessionStateModel:
@@ -111,22 +142,38 @@ class AgentCollabClient:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
 
-        request = Request(url, data=data, headers=headers, method=method)
-        try:
-            with urlopen(request, timeout=timeout or self.timeout) as response:
-                _assert_compatible_api(response.headers)
-                body = response.read().decode("utf-8")
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
+        for attempt in range(2):
+            request_headers = dict(headers)
+            token = self._load_token(force=attempt > 0)
+            if token and path != "/health":
+                request_headers["Authorization"] = f"Bearer {token}"
+            request = Request(url, data=data, headers=request_headers, method=method)
             try:
-                payload = json.loads(body)
-            except json.JSONDecodeError:
-                raise ClientError(body or str(exc)) from exc
-            if isinstance(payload, dict):
-                raise ClientError(_format_error_payload(payload), payload=payload) from exc
-            raise ClientError(str(payload)) from exc
-        except URLError as exc:
-            raise ClientError(f"could not reach agent-collab daemon at {self.server_url}: {exc.reason}") from exc
+                with urlopen(request, timeout=timeout or self.timeout) as response:
+                    _assert_compatible_api(response.headers)
+                    body = response.read().decode("utf-8")
+                break
+            except HTTPError as exc:
+                _assert_compatible_api(exc.headers)
+                if exc.code == 401:
+                    exc.read()
+                    if attempt == 0:
+                        continue
+                    raise ClientError("daemon token mismatch; restart the daemon") from exc
+                body = exc.read().decode("utf-8", errors="replace")
+                try:
+                    error_payload = json.loads(body)
+                except json.JSONDecodeError:
+                    raise ClientError(body or str(exc)) from exc
+                if isinstance(error_payload, dict):
+                    raise ClientError(
+                        _format_error_payload(error_payload), payload=error_payload
+                    ) from exc
+                raise ClientError(str(error_payload)) from exc
+            except URLError as exc:
+                raise ClientError(
+                    f"could not reach agent-collab daemon at {self.server_url}: {exc.reason}"
+                ) from exc
 
         if not body:
             return {}
@@ -134,6 +181,23 @@ class AgentCollabClient:
             return json.loads(body)
         except json.JSONDecodeError as exc:
             raise ClientError(f"invalid JSON response from daemon: {body[:200]}") from exc
+
+    def _load_token(self, *, force: bool = False) -> Optional[str]:
+        if self._token_loaded and not force:
+            return self._token
+        override = os.environ.get(TOKEN_ENV)
+        if override is not None:
+            token = override.strip()
+        elif _is_loopback_server(self.server_url):
+            try:
+                token = self.token_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                token = ""
+        else:
+            token = ""
+        self._token = token or None
+        self._token_loaded = True
+        return self._token
 
 
 def _assert_compatible_api(headers: Any) -> None:
@@ -169,3 +233,15 @@ def _format_error_payload(payload: Dict[str, Any]) -> str:
                 lines.append(f"{path}: {message}" if path else message)
         return "\n".join(lines)
     return str(error)
+
+
+def _is_loopback_server(server_url: str) -> bool:
+    host = urlparse(server_url).hostname
+    if host == "localhost":
+        return True
+    if host is None:
+        return False
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False

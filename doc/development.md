@@ -8,6 +8,15 @@ Run tests:
 python3 -m unittest discover -s tests -t .
 ```
 
+Validate repository configuration and generate the daemon REST API artifacts:
+
+```bash
+./agent_collab.sh setup
+./agent_collab.sh setup --check
+```
+
+`setup --check` does not write and fails if `doc/daemon_api_doc/` is stale.
+
 Source checkout helper:
 
 ```bash

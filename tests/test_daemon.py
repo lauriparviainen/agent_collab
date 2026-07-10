@@ -77,6 +77,39 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 for part in agent.get("command_preview", []):
                     self.assertNotIn("daemon mock task", part)
 
+    async def test_tool_output_defaults_to_summary_and_supports_single_full_refetch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="projection task", mock=True, max_turns=1, timeout=5, workdir=root
+                    )
+                )
+                await self._wait_for_terminal(manager, state.session_id)
+
+            full = manager.read_events(state.session_id, 0, tool_output="full")
+            summary = manager.read_events(state.session_id, 0)
+            tool_id = next(
+                index for index, event in enumerate(full.events) if event["source"] == "tool"
+            )
+            self.assertEqual(summary.events[tool_id]["raw"], None)
+            self.assertIn(f"[event {tool_id}]", summary.events[tool_id]["text"])
+            self.assertIn("result", summary.events[tool_id]["text"])
+
+            refetched = manager.read_events(
+                state.session_id, tool_id, limit=1, tool_output="full"
+            )
+            self.assertEqual(refetched.cursor, tool_id + 1)
+            self.assertEqual(refetched.events, [full.events[tool_id]])
+
+            summary_transcript = manager.read_transcript(state.session_id)
+            full_transcript = manager.read_transcript(state.session_id, tool_output="full")
+            self.assertIn(f"[event {tool_id}]", summary_transcript)
+            self.assertNotIn("[event", full_transcript)
+            self.assertIn("inspects repository state", full_transcript)
+
     async def test_config_is_loaded_once_and_snapshot_carried_into_execution(self):
         # Guards the start/run divergence: start_session validates a config
         # snapshot and _run_session must reuse it, not reload (which could resolve

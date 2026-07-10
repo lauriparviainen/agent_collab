@@ -54,6 +54,7 @@ Usage:
   ./agent_collab.sh list
   ./agent_collab.sh status SESSION_ID
   ./agent_collab.sh stop SESSION_ID
+  ./agent_collab.sh setup [--check] [--workdir DIR]
   ./agent_collab.sh test
   ./agent_collab.sh integration-test [PROVIDER_BACKEND] [--strict]
   ./agent_collab.sh smoke
@@ -62,6 +63,8 @@ Examples:
   ./agent_collab.sh smoke
   ./agent_collab.sh serve
   ./agent_collab.sh daemon start
+  ./agent_collab.sh setup
+  ./agent_collab.sh setup --check
   ./agent_collab.sh start --mock --watch --workdir . "Smoke test"
   ./agent_collab.sh watch
 
@@ -85,6 +88,11 @@ case "${1:-help}" in
     shift
     cd "$repo_root"
     exec "$python_bin" -m unittest discover -s tests -t . "$@"
+    ;;
+  setup)
+    shift
+    cd "$repo_root"
+    exec "$python_bin" -m agent_collab.project_setup "$@"
     ;;
   integration-test)
     shift

@@ -29,10 +29,13 @@ from agent_collab.api_schema import (
     HealthModel,
     OptionsRequestModel,
     PostMessageRequestModel,
+    ReadEventsRequestModel,
     SessionListModel,
     SessionStateModel,
     StartSessionRequestModel,
     TranscriptModel,
+    TranscriptRequestModel,
+    WaitEventsRequestModel,
 )
 from agent_collab.api_schema import API_VERSION, API_VERSION_HEADER
 from agent_collab.client import AgentCollabClient, ClientError, _assert_compatible_api
@@ -78,6 +81,12 @@ class RouteRegistryTests(unittest.TestCase):
     def test_routes_are_unique(self):
         keys = [(route.method, route.path) for route in ROUTES]
         self.assertEqual(len(keys), len(set(keys)))
+
+    def test_every_registry_route_names_a_server_handler(self):
+        server = AgentCollabHttpServer(manager=SessionManager())
+        for route in ROUTES:
+            with self.subTest(route=f"{route.method} {route.path}"):
+                self.assertTrue(callable(getattr(server, f"_route_{route.handler}", None)))
 
     def test_start_model_fields_match_declared_wire_fields(self):
         model_fields = {f.name for f in dataclass_fields(StartSessionRequestModel)}
@@ -157,6 +166,16 @@ class StartPayloadSyncTests(unittest.TestCase):
                 {"task": "t", "workdir": "/w", "codex_options": {"model": "old"}}
             )
 
+    def test_null_and_malformed_start_numbers_are_value_errors(self):
+        base = {"task": "t", "workdir": "/w"}
+        for field, value in (
+            ("max_turns", None),
+            ("timeout", []),
+            ("interactive_idle_timeout", {}),
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
+                StartSessionRequestModel.from_dict({**base, field: value})
+
 
 class ModelRoundTripTests(unittest.TestCase):
     def test_health_round_trips_without_version(self):
@@ -214,6 +233,9 @@ class ModelRoundTripTests(unittest.TestCase):
             (OptionsRequestModel, {"workdir": "/w"}),
             (PostMessageRequestModel, {"text": "go"}),
             (PostMessageRequestModel, {"text": "go", "source": "human", "target": "codex"}),
+            (ReadEventsRequestModel, {"cursor": 4, "limit": 1, "tool_output": "full"}),
+            (WaitEventsRequestModel, {"cursor": 4, "timeout_ms": 10}),
+            (TranscriptRequestModel, {"tool_output": "full"}),
         ]
         for model, payload in cases:
             with self.subTest(model=model.__name__, payload=payload):

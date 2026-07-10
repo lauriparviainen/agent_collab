@@ -222,7 +222,7 @@ class McpServerTests(unittest.TestCase):
 
             result = handle_tool("agent_collab_read_events", {"session_id": "s1", "cursor": 2})
 
-        client.read_events.assert_called_once_with("s1", 2)
+        client.read_events.assert_called_once_with("s1", 2, limit=None, tool_output="summary")
         _assert_tool_result(self, result, batch.to_dict())
 
     def test_wait_events_maps_to_client_wait_events(self):
@@ -236,7 +236,7 @@ class McpServerTests(unittest.TestCase):
                 {"session_id": "s1", "cursor": 2, "timeout_ms": 30000},
             )
 
-        client.wait_events.assert_called_once_with("s1", 2, 30000)
+        client.wait_events.assert_called_once_with("s1", 2, 30000, tool_output="summary")
         _assert_tool_result(self, result, batch.to_dict())
 
     def test_transcript_maps_to_client_read_transcript_as_direct_text(self):
@@ -246,8 +246,52 @@ class McpServerTests(unittest.TestCase):
 
             result = handle_tool("agent_collab_read_transcript", {"session_id": "s1"})
 
-        client.read_transcript.assert_called_once_with("s1")
+        client.read_transcript.assert_called_once_with("s1", tool_output="summary")
         self.assertEqual(result, {"content": [{"type": "text", "text": "# transcript\n\nhello\n"}], "isError": False})
+
+    def test_read_projection_options_map_to_client(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            client.read_events.return_value = _batch(cursor=8)
+            client.wait_events.return_value = _batch(cursor=8)
+            client.read_transcript.return_value = "full"
+
+            handle_tool(
+                "agent_collab_read_events",
+                {"session_id": "s1", "cursor": 7, "limit": 1, "tool_output": "full"},
+            )
+            handle_tool(
+                "agent_collab_wait_events",
+                {"session_id": "s1", "cursor": 7, "timeout_ms": 5, "tool_output": "full"},
+            )
+            handle_tool(
+                "agent_collab_read_transcript",
+                {"session_id": "s1", "tool_output": "full"},
+            )
+
+        client.read_events.assert_called_once_with("s1", 7, limit=1, tool_output="full")
+        client.wait_events.assert_called_once_with("s1", 7, 5, tool_output="full")
+        client.read_transcript.assert_called_once_with("s1", tool_output="full")
+
+    def test_read_projection_uses_shared_query_validation(self):
+        for tool, args, message in (
+            ("agent_collab_read_events", {"session_id": "s1", "cursor": -1}, "cursor must be >= 0"),
+            ("agent_collab_read_events", {"session_id": "s1", "limit": 0}, "limit must be >= 1"),
+            (
+                "agent_collab_wait_events",
+                {"session_id": "s1", "timeout_ms": -1},
+                "timeout_ms must be >= 0",
+            ),
+            (
+                "agent_collab_read_transcript",
+                {"session_id": "s1", "tool_output": "everything"},
+                "tool_output must be 'summary' or 'full'",
+            ),
+        ):
+            with self.subTest(tool=tool):
+                result = handle_tool(tool, args)
+                self.assertTrue(result["isError"])
+                self.assertEqual(_payload(result), {"error": message})
 
     def test_post_message_maps_to_client_post_message(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
