@@ -9,6 +9,7 @@ not touch a real curses screen (the Esc key paths render nothing).
 
 import unittest
 
+from agent_collab.api_schema import SessionStateModel
 from agent_collab.events import Event
 from agent_collab.tui import TuiApp
 from agent_collab.tui_core import (
@@ -218,16 +219,16 @@ class HintPrecedenceTests(unittest.TestCase):
         self.assertEqual(select_hint(details_mode="wide"), "Enter send · / cmds · Esc close")
         self.assertEqual(select_hint(overlay_open=True), "↑↓ scroll · Esc close")
         self.assertEqual(select_hint(has_session=False), "/new start · /help commands · q quit")
-        self.assertEqual(select_hint(read_only=True), "q quit")
-        self.assertEqual(select_hint(following=False), "↑↓ scroll · End follow · q quit")
-        self.assertEqual(select_hint(), "Enter send · / cmds · q")
+        self.assertEqual(select_hint(read_only=True), "↑↓ scroll · q quit")
+        self.assertEqual(select_hint(following=False), "↑↓ scroll · End follow")
+        self.assertEqual(select_hint(), "Enter send · / cmds")
 
 
 class StatusCompositionTests(unittest.TestCase):
     def test_activity_then_hint_joined(self):
         self.assertEqual(
-            compose_status_right("⠹ running", "Enter send · / cmds · q"),
-            "⠹ running · Enter send · / cmds · q",
+            compose_status_right("⠹ running", "Enter send · / cmds"),
+            "⠹ running · Enter send · / cmds",
         )
 
     def test_empty_activity_leaves_hint_alone(self):
@@ -429,7 +430,7 @@ class RenderIntegrationTests(unittest.TestCase):
         self.assertIn("╭", out)  # bordered input box
         self.assertIn("> ", out)
         self.assertIn("referee note", out)  # mode chip
-        self.assertIn("running · Enter send · / cmds · q", out)  # status/hint
+        self.assertIn("running · Enter send · / cmds", out)  # status/hint
 
     def test_wide_details_keeps_transcript_left_and_panel_right(self):
         app, screen = _app_with_transcript(24, 120)
@@ -490,6 +491,52 @@ class EscBehaviourTests(unittest.TestCase):
         app._handle_key(27)
         # A complete turn is not argument-entry, so Esc leaves the rail as-is.
         self.assertEqual(app.input_text, "#codex fix it")
+
+
+class QKeyBehaviourTests(unittest.TestCase):
+    """``q`` quits only in viewer states; in a live interactive session it types."""
+
+    def _app(self):
+        return TuiApp(_DummyScreen(), _DummyClient(), initial_session_id=None)
+
+    def test_q_types_into_the_rail_in_a_live_interactive_session(self):
+        app = self._app()
+        app.session = _session()  # running + interactive
+        app.session_id = "daemon-1"
+        app._handle_key(ord("q"))
+        self.assertFalse(app.done)
+        self.assertEqual(app.input_text, "q")
+
+    def test_q_quits_with_no_session(self):
+        app = self._app()
+        app._handle_key(ord("q"))
+        self.assertTrue(app.done)
+
+    def test_q_quits_a_read_only_terminal_session(self):
+        app = self._app()
+        session = _session().to_dict()
+        session["status"] = "done"
+        app.session = SessionStateModel.from_dict(session)
+        app.session_id = "daemon-1"
+        app._handle_key(ord("q"))
+        self.assertTrue(app.done)
+
+    def test_q_quits_a_non_interactive_session(self):
+        app = self._app()
+        session = _session().to_dict()
+        session["interactive"] = False
+        session["settings"] = {}
+        app.session = SessionStateModel.from_dict(session)
+        app.session_id = "daemon-1"
+        app._handle_key(ord("q"))
+        self.assertTrue(app.done)
+
+    def test_q_never_quits_while_the_rail_holds_text(self):
+        app = self._app()  # even with no session, mid-word q must type
+        app.input_text = "status "
+        app._handle_key(ord("q"))
+        self.assertFalse(app.done)
+        self.assertEqual(app.input_text, "status q")
 
 
 if __name__ == "__main__":

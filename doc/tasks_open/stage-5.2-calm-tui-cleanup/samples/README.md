@@ -40,6 +40,10 @@ authoritative for styling where they differ from the Stage 1a ASCII frames
   fall back to the accent teal.
 - **Tool events:** one dim summary row per tool call (name + args digest +
   result size); the full payload is never rendered inline.
+- **`q` is viewer-only (post-implementation):** interactive-session hint lines
+  drop `· q` (quit is `/quit`/`Ctrl-C`; `q` types into the rail); `q quit`
+  remains in the no-session and read-only hints. Mockups showing `· q` on
+  interactive hints are superseded.
 
 ## Files (Stage 1a)
 
@@ -110,7 +114,7 @@ only — not approved.
            ◆ thinking…
 ────────────────────────────────────────────────────────────────────
  [referee] ▏                                           referee note
- sent note                        ⠹ running · Enter send · / cmds · q
+ sent note                            ⠹ running · Enter send · / cmds
 ```
 
 Regions: line 1 context (`dim`), line 2 session info

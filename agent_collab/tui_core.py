@@ -912,10 +912,10 @@ def select_hint(
     if not has_session:
         return "/new start · /help commands · q quit"
     if read_only:
-        return "q quit"
+        return "↑↓ scroll · q quit"
     if not following:
-        return "↑↓ scroll · End follow · q quit"
-    return "Enter send · / cmds · q"
+        return "↑↓ scroll · End follow"
+    return "Enter send · / cmds"
 
 
 def format_details_overlay_lines(session: Any) -> Tuple[str, ...]:
