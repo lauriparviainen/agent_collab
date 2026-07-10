@@ -400,8 +400,8 @@ def _gate_backend_health(
     for agent_id, backend_id in resolved.items():
         agent_type = config.agents[agent_id].type
         backend = backend_registry.get_backend(agent_type, backend_id)
-        block = getattr(backend, "block_on_unavailable", False)
-        checks_credentials = getattr(backend, "checks_credentials", False)
+        block = backend.block_on_unavailable
+        checks_credentials = backend.checks_credentials
         # Default providers (claude/codex on cli) keep their legacy per-turn-error
         # contract: nothing to gate or warn about, so never probe them on start.
         if not block and not checks_credentials:
@@ -602,12 +602,11 @@ def _describe_canonical_backends(
                 "enabled": user_policy.enabled,
                 "enabled_source": user_policy.source,
                 "selection_eligible": user_policy.enabled,
-                "block_on_unavailable": bool(getattr(backend, "block_on_unavailable", False)),
-                "checks_credentials": bool(getattr(backend, "checks_credentials", False)),
+                "block_on_unavailable": backend.block_on_unavailable,
+                "checks_credentials": backend.checks_credentials,
                 "start_probe_policy": (
                     "fresh"
-                    if getattr(backend, "block_on_unavailable", False)
-                    or getattr(backend, "checks_credentials", False)
+                    if backend.block_on_unavailable or backend.checks_credentials
                     else "not_probed"
                 ),
             }
@@ -622,8 +621,8 @@ def _describe_canonical_backends(
                 },
                 "static": {
                     "capabilities": backend.capabilities.to_dict(),
-                    "event_fidelity": getattr(backend, "event_fidelity", "unknown"),
-                    "provider_session_id_kind": getattr(backend, "provider_session_id_kind", None),
+                    "event_fidelity": backend.event_fidelity,
+                    "provider_session_id_kind": backend.provider_session_id_kind,
                     "option_schema": option_schema,
                     "configuration_schema": config_schema,
                 },

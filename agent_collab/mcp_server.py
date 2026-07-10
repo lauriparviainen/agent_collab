@@ -25,11 +25,25 @@ def serve() -> None:
         for line in sys.stdin:
             if not line.strip():
                 continue
+            request_id = None
             try:
                 request = json.loads(line)
+                if isinstance(request, dict):
+                    request_id = request.get("id")
                 response = handle(request)
+            except json.JSONDecodeError:
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32700, "message": "invalid JSON"},
+                }
             except Exception as exc:
-                response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(exc)}}
+                print(f"agent-collab MCP request error {exc!r}", file=sys.stderr, flush=True)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32603, "message": "internal server error"},
+                }
             if response is not None:
                 print(json.dumps(response), flush=True)
     except KeyboardInterrupt:

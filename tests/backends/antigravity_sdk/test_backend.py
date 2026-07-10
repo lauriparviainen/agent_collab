@@ -155,11 +155,13 @@ class _FakeAgent:
     def __init__(self, response, conversation_id=None):
         self._response = response
         self.conversation_id = conversation_id
+        self.exited = False
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *exc):
+        self.exited = True
         return False
 
     async def chat(self, prompt):
@@ -223,6 +225,52 @@ class SdkEventMappingTests(unittest.TestCase):
         self.assertEqual(response.cursor_accesses, 0)
         self.assertTrue(any(event.type == "message" for event in events))
         self.assertFalse(any("async_generator" in event.text for event in events))
+
+    def test_cancellation_closes_response_before_agent_context_exits(self):
+        async def scenario(close_error):
+            entered = asyncio.Event()
+            lifecycle = []
+
+            class BlockingResponse:
+                def __init__(self):
+                    self.closed = False
+
+                async def resolve(self):
+                    entered.set()
+                    await asyncio.Event().wait()
+
+                async def aclose(self):
+                    self.closed = True
+                    lifecycle.append("response_closed")
+                    if close_error:
+                        raise RuntimeError("close failed")
+
+            response = BlockingResponse()
+
+            class TrackingAgent(_FakeAgent):
+                async def __aexit__(self, *exc):
+                    lifecycle.append("agent_exited")
+                    return await super().__aexit__(*exc)
+
+            sdk_agent = TrackingAgent(response)
+            runner = AntigravitySdkRunner(
+                AGENT,
+                False,
+                {},
+                agent_factory=lambda *_args: sdk_agent,
+            )
+            consumer = asyncio.create_task(_collect(runner))
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            consumer.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await consumer
+            self.assertTrue(response.closed)
+            self.assertTrue(sdk_agent.exited)
+            self.assertEqual(lifecycle, ["response_closed", "agent_exited"])
+
+        for close_error in (False, True):
+            with self.subTest(close_error=close_error):
+                asyncio.run(scenario(close_error))
 
     def test_reasoning_hidden_unless_verbose_and_never_leaks_signature(self):
         quiet = _run(_FakeResponse(_sample()["chat_response"]), verbose=False)

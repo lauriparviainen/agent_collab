@@ -303,6 +303,48 @@ class ClaudeSessionCaptureTests(unittest.TestCase):
         )
         self.assertFalse(any((e.raw or {}).get("provider_session_id") for e in events))
 
+    def test_cancellation_closes_message_stream(self):
+        async def scenario(close_error):
+            entered = asyncio.Event()
+
+            class BlockingStream:
+                def __init__(self):
+                    self.closed = False
+
+                def __aiter__(self):
+                    return self
+
+                async def __anext__(self):
+                    entered.set()
+                    await asyncio.Event().wait()
+
+                async def aclose(self):
+                    self.closed = True
+                    if close_error:
+                        raise RuntimeError("close failed")
+
+            stream = BlockingStream()
+            runner = ClaudeSdkRunner(
+                AGENT,
+                False,
+                {},
+                message_stream=lambda *_args: stream,
+            )
+
+            async def collect():
+                return [event async for event in runner.run("cancel me", Path("."))]
+
+            consumer = asyncio.create_task(collect())
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            consumer.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await consumer
+            self.assertTrue(stream.closed)
+
+        for close_error in (False, True):
+            with self.subTest(close_error=close_error):
+                asyncio.run(scenario(close_error))
+
 
 class ClaudeOptionMappingTests(unittest.TestCase):
     def test_map_sdk_options_keeps_only_supported_keys(self):

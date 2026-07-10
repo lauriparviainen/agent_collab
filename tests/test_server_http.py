@@ -9,9 +9,10 @@ from pathlib import Path
 from unittest import mock
 
 from agent_collab.backends.base import BackendHealth, HEALTH_UNAVAILABLE
-from agent_collab.daemon import SessionManager
+from agent_collab.daemon import SessionManager, SessionRequestError
 from agent_collab.options import StartOptionsError
 from agent_collab.server_http import (
+    INTERNAL_SERVER_ERROR_MESSAGE,
     MAX_REQUEST_BODY_BYTES,
     MAX_REQUEST_HEADER_BYTES,
     MAX_REQUEST_HEADERS,
@@ -195,6 +196,114 @@ class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
         head, body = bytes(writer.buffer).split(b"\r\n\r\n", 1)
         self.assertIn(b"HTTP/1.1 431 Request Header Fields Too Large", head)
         self.assertEqual(json.loads(body), {"error": "request headers too large"})
+
+    async def test_unexpected_exception_details_are_logged_but_not_sent_on_wire(self):
+        sensitive_detail = "/private/runtime/session-index.json: access denied"
+        server = AgentCollabHttpServer(
+            manager=mock.Mock(spec=SessionManager),
+            log_requests=False,
+        )
+        logged = []
+        server._log = logged.append
+
+        for exception_type in (RuntimeError, ValueError, KeyError):
+            with self.subTest(exception_type=exception_type.__name__):
+                server.manager.list_sessions.side_effect = exception_type(sensitive_detail)
+                writer = _CaptureWriter()
+
+                await server._handle_connection(
+                    _request_reader(b"GET /health HTTP/1.1\r\n\r\n"),
+                    writer,
+                )
+
+                head, body = bytes(writer.buffer).split(b"\r\n\r\n", 1)
+                self.assertIn(b"HTTP/1.1 500 Internal Server Error", head)
+                self.assertEqual(
+                    json.loads(body),
+                    {"error": INTERNAL_SERVER_ERROR_MESSAGE},
+                )
+                self.assertNotIn(sensitive_detail.encode(), bytes(writer.buffer))
+                self.assertIn(exception_type.__name__, logged[-1])
+                self.assertIn(sensitive_detail, logged[-1])
+                self.assertTrue(writer.closed)
+
+        self.assertEqual(len(logged), 3)
+
+    async def test_unknown_session_keeps_structured_404_wire_contract(self):
+        writer = _CaptureWriter()
+
+        await self.server._handle_connection(
+            _request_reader(b"GET /sessions/missing HTTP/1.1\r\n\r\n"),
+            writer,
+        )
+
+        head, body = bytes(writer.buffer).split(b"\r\n\r\n", 1)
+        self.assertIn(b"HTTP/1.1 404 Not Found", head)
+        self.assertEqual(json.loads(body), {"error": "'unknown session_id missing'"})
+
+    async def test_session_request_error_keeps_structured_400_wire_contract(self):
+        manager = mock.Mock(spec=SessionManager)
+        manager.post_message = mock.AsyncMock(
+            side_effect=SessionRequestError("session is not live: done")
+        )
+        server = AgentCollabHttpServer(manager=manager)
+        body = json.dumps({"text": "too late"}).encode()
+        request = (
+            b"POST /sessions/finished/messages HTTP/1.1\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        writer = _CaptureWriter()
+
+        await server._handle_connection(_request_reader(request), writer)
+
+        head, response_body = bytes(writer.buffer).split(b"\r\n\r\n", 1)
+        self.assertIn(b"HTTP/1.1 400 Bad Request", head)
+        self.assertEqual(
+            json.loads(response_body),
+            {"error": "session is not live: done"},
+        )
+
+    async def test_unexpected_mcp_tool_exception_is_logged_and_sanitized_on_wire(self):
+        sensitive_detail = "/private/mcp/backend.json: corrupt"
+        server = AgentCollabHttpServer(
+            manager=mock.Mock(spec=SessionManager),
+            log_requests=False,
+        )
+        logged = []
+        server._log = logged.append
+        body = _mcp_body(91, "tools/call", {"name": "agent_collab_list_sessions"})
+
+        for exception_type in (RuntimeError, ValueError, KeyError):
+            with self.subTest(exception_type=exception_type.__name__):
+                server.manager.list_sessions.side_effect = exception_type(sensitive_detail)
+                request = (
+                    b"POST /mcp HTTP/1.1\r\n"
+                    + f"Content-Length: {len(body)}\r\n\r\n".encode()
+                    + body
+                )
+                writer = _CaptureWriter()
+
+                await server._handle_connection(_request_reader(request), writer)
+
+                head, response_body = bytes(writer.buffer).split(b"\r\n\r\n", 1)
+                self.assertIn(b"HTTP/1.1 500 Internal Server Error", head)
+                self.assertEqual(
+                    json.loads(response_body),
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 91,
+                        "error": {
+                            "code": -32603,
+                            "message": INTERNAL_SERVER_ERROR_MESSAGE,
+                        },
+                    },
+                )
+                self.assertNotIn(sensitive_detail.encode(), bytes(writer.buffer))
+                self.assertIn(exception_type.__name__, logged[-1])
+                self.assertIn(sensitive_detail, logged[-1])
+
+        self.assertEqual(len(logged), 3)
 
 
 class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):

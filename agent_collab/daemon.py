@@ -34,6 +34,14 @@ MAX_FULL_TOOL_BYTES = 64 * 1024
 MAX_FULL_TRANSCRIPT_BYTES = 1024 * 1024
 
 
+class SessionNotFoundError(KeyError):
+    """A caller supplied a session id that the manager does not own."""
+
+
+class SessionRequestError(ValueError):
+    """A session operation is invalid for caller-controlled state or input."""
+
+
 @dataclass
 class StartSessionRequest:
     task: str
@@ -674,13 +682,13 @@ class SessionManager:
         try:
             return self._sessions[session_id]
         except KeyError as exc:
-            raise KeyError(f"unknown session_id {session_id}") from exc
+            raise SessionNotFoundError(f"unknown session_id {session_id}") from exc
 
     def _validate_new_session_id(self, session_id: str) -> None:
         if not session_id or "/" in session_id or "\\" in session_id or session_id in {".", ".."}:
-            raise ValueError(f"invalid session_id {session_id!r}")
+            raise SessionRequestError(f"invalid session_id {session_id!r}")
         if session_id in self._sessions:
-            raise ValueError(f"session_id already exists: {session_id}")
+            raise SessionRequestError(f"session_id already exists: {session_id}")
 
     def _new_session_id(self) -> str:
         return f"daemon-{uuid.uuid4().hex[:16]}"
@@ -688,7 +696,7 @@ class SessionManager:
     def _normalize_cursor(self, cursor: int) -> int:
         cursor = int(cursor)
         if cursor < 0:
-            raise ValueError("cursor must be >= 0")
+            raise SessionRequestError("cursor must be >= 0")
         return cursor
 
     def _normalize_limit(self, limit: Optional[int]) -> Optional[int]:
@@ -697,70 +705,70 @@ class SessionManager:
         try:
             normalized = int(limit)
         except (TypeError, ValueError) as exc:
-            raise ValueError("limit must be an integer") from exc
+            raise SessionRequestError("limit must be an integer") from exc
         if normalized < 1:
-            raise ValueError("limit must be >= 1")
+            raise SessionRequestError("limit must be >= 1")
         return normalized
 
     def _normalize_tool_output(self, tool_output: Any) -> str:
         if tool_output not in {"summary", "full"}:
-            raise ValueError("tool_output must be 'summary' or 'full'")
+            raise SessionRequestError("tool_output must be 'summary' or 'full'")
         return str(tool_output)
 
     def _normalize_idle_timeout(self, value: Any) -> float:
         try:
             timeout = float(value)
         except (TypeError, ValueError) as exc:
-            raise ValueError("interactive_idle_timeout must be a number") from exc
+            raise SessionRequestError("interactive_idle_timeout must be a number") from exc
         if timeout < 0:
-            raise ValueError("interactive_idle_timeout must be >= 0")
+            raise SessionRequestError("interactive_idle_timeout must be >= 0")
         return timeout
 
     def _normalize_message_text(self, text: Any) -> str:
         if not isinstance(text, str):
-            raise ValueError("text is required")
+            raise SessionRequestError("text is required")
         value = text.strip()
         if not value:
-            raise ValueError("text is required")
+            raise SessionRequestError("text is required")
         return value
 
     def _normalize_message_source(self, source: Any) -> str:
         value = "referee" if source is None else source
         if not isinstance(value, str) or value not in {"human", "referee"}:
-            raise ValueError("source must be 'human' or 'referee'")
+            raise SessionRequestError("source must be 'human' or 'referee'")
         return str(value)
 
     def _validate_message_session(self, managed: _ManagedSession) -> None:
         state = managed.state
         if managed.request is None:
-            raise ValueError("session is read-only because it has no live runner")
+            raise SessionRequestError("session is read-only because it has no live runner")
         if state.status not in LIVE_WAIT_STATUSES:
-            raise ValueError(f"session is not live: {state.status}")
+            raise SessionRequestError(f"session is not live: {state.status}")
         if not state.interactive or not managed.request.interactive:
-            raise ValueError("session was not started with interactive input enabled")
+            raise SessionRequestError("session was not started with interactive input enabled")
 
     async def _require_event_appender(self, managed: _ManagedSession) -> EventAppender:
         if managed.append_event is not None:
             return managed.append_event
         task = managed.task
         if task is None or task.done():
-            raise ValueError("session is read-only because it has no live runner")
+            raise SessionRequestError("session is read-only because it has no live runner")
         try:
             await asyncio.wait_for(managed.appender_ready.wait(), timeout=2.0)
         except asyncio.TimeoutError as exc:
-            raise ValueError("session is not ready for input") from exc
+            raise SessionRequestError("session is not ready for input") from exc
         if managed.append_event is None:
-            raise ValueError("session is read-only because it has no live runner")
+            raise SessionRequestError("session is read-only because it has no live runner")
         return managed.append_event
 
     def _resolve_message_target(self, managed: _ManagedSession, target: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
         if target is None:
             return None, None
         if not isinstance(target, str):
-            raise ValueError("target must be a string")
+            raise SessionRequestError("target must be a string")
         selector = target.strip()
         if not selector:
-            raise ValueError("target must not be empty")
+            raise SessionRequestError("target must not be empty")
 
         agents = self._session_agent_refs(managed)
         enabled_ids = tuple(agent_id for agent_id, _agent_type in agents)
@@ -773,8 +781,10 @@ class SessionManager:
             return selector, type_matches[0]
         valid = ", ".join(enabled_ids) if enabled_ids else "(none)"
         if len(type_matches) > 1:
-            raise ValueError(f"ambiguous agent type {selector!r}; valid agent ids: {valid}")
-        raise ValueError(f"unknown target {selector!r}; valid agent ids: {valid}")
+            raise SessionRequestError(
+                f"ambiguous agent type {selector!r}; valid agent ids: {valid}"
+            )
+        raise SessionRequestError(f"unknown target {selector!r}; valid agent ids: {valid}")
 
     def _session_agent_refs(self, managed: _ManagedSession) -> Tuple[Tuple[str, str], ...]:
         settings = managed.state.settings if isinstance(managed.state.settings, dict) else {}

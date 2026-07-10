@@ -22,7 +22,13 @@ from ...events import Event
 from ...runners import AgentRunner
 from ..base import BackendCapabilities, BackendHealth, BackendUnavailable
 from ..common.health import probe_sdk_backend, xai_api_key_credentials
-from ..common.sdk import package_version, provider_session_event, sdk_error_event, stringify
+from ..common.sdk import (
+    close_async_stream,
+    package_version,
+    provider_session_event,
+    sdk_error_event,
+    stringify,
+)
 
 MODULE_NAME = "xai_sdk"
 PACKAGE_NAME = "xai-sdk"
@@ -152,9 +158,7 @@ class XaiSdkRunner(AgentRunner):
             yield sdk_error_event("xai", exc)
             return
         finally:
-            close = getattr(stream, "aclose", None)
-            if callable(close):
-                await close()
+            await close_async_stream(stream)
         if self.verbose:
             yield Event.create("xai", "status", "xai sdk turn complete")
 

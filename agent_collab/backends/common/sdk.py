@@ -77,6 +77,22 @@ def sdk_error_event(source: str, exc: Exception) -> Event:
     )
 
 
+async def close_async_stream(stream: Any) -> None:
+    """Best-effort close without masking a turn error or cancellation.
+
+    ``CancelledError`` remains a ``BaseException`` and is deliberately not
+    swallowed if a new cancellation interrupts the close itself.
+    """
+
+    close = getattr(stream, "aclose", None)
+    if not callable(close):
+        return
+    try:
+        await close()
+    except Exception:
+        return
+
+
 def provider_session_event(
     source: str,
     agent_id: str,

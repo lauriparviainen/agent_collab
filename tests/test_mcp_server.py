@@ -1,10 +1,11 @@
+import io
 import json
 import unittest
 from unittest import mock
 
 from agent_collab.api_schema import EventBatchModel, SessionListModel, SessionStateModel
 from agent_collab.client import ClientError
-from agent_collab.mcp_server import handle, handle_tool
+from agent_collab.mcp_server import handle, handle_tool, serve
 
 
 def _payload(result):
@@ -347,6 +348,52 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("error", response)
         self.assertEqual(response["id"], 7)
         _assert_tool_result(self, response["result"], {"error": "could not reach daemon"}, is_error=True)
+
+    def test_unexpected_client_exception_is_not_converted_to_tool_content(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client_cls.return_value.get_session.side_effect = RuntimeError(
+                "/private/client-state.json"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "private/client-state"):
+                handle(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 71,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "agent_collab_status",
+                            "arguments": {"session_id": "s1"},
+                        },
+                    }
+                )
+
+    def test_stdio_unexpected_exception_is_logged_and_sanitized(self):
+        sensitive_detail = "/private/stdio-state.json"
+        stdin = io.StringIO('{"jsonrpc":"2.0","id":72,"method":"tools/list"}\n')
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with mock.patch("agent_collab.mcp_server.sys.stdin", stdin), mock.patch(
+            "agent_collab.mcp_server.sys.stdout", stdout
+        ), mock.patch("agent_collab.mcp_server.sys.stderr", stderr), mock.patch(
+            "agent_collab.mcp_server.handle",
+            side_effect=RuntimeError(sensitive_detail),
+        ):
+            serve()
+
+        response = json.loads(stdout.getvalue())
+        self.assertEqual(
+            response,
+            {
+                "jsonrpc": "2.0",
+                "id": 72,
+                "error": {"code": -32603, "message": "internal server error"},
+            },
+        )
+        self.assertNotIn(sensitive_detail, stdout.getvalue())
+        self.assertIn("RuntimeError", stderr.getvalue())
+        self.assertIn(sensitive_detail, stderr.getvalue())
 
     def test_unknown_tool_through_jsonrpc_call_is_protocol_error(self):
         response = handle(

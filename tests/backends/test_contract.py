@@ -5,6 +5,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from agent_collab import backends
 from agent_collab.backends.base import (
@@ -53,6 +54,8 @@ class _ContractBackend:
     agent_type = "claude"
     capabilities = BackendCapabilities()
     brand_color = "#123456"
+    event_fidelity = "typed"
+    provider_session_id_kind = None
     checks_credentials = False
     block_on_unavailable = False
 
@@ -95,6 +98,26 @@ def _contract_config(options=None):
     return CollaborationConfig(
         agents={"claude": agent},
         workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+    )
+
+
+def _registration_candidate(backend_id):
+    source = _ContractBackend()
+    return SimpleNamespace(
+        id=backend_id,
+        agent_type=source.agent_type,
+        capabilities=source.capabilities,
+        brand_color=source.brand_color,
+        event_fidelity=source.event_fidelity,
+        provider_session_id_kind=source.provider_session_id_kind,
+        checks_credentials=source.checks_credentials,
+        block_on_unavailable=source.block_on_unavailable,
+        probe=source.probe,
+        option_schema=source.option_schema,
+        normalize_options=source.normalize_options,
+        settings_summary=source.settings_summary,
+        command_preview=source.command_preview,
+        create_runner=source.create_runner,
     )
 
 
@@ -254,12 +277,52 @@ class BuiltinBackendContractTests(unittest.TestCase):
             id = "incomplete"
             agent_type = "claude"
             capabilities = BackendCapabilities()
+            block_on_unavailable = False
+            checks_credentials = False
+            event_fidelity = "typed"
+            provider_session_id_kind = None
 
             def probe(self):
                 return BackendHealth()
 
         with self.assertRaisesRegex(TypeError, "option_schema"):
             backends.register(Incomplete())
+
+    def test_missing_policy_and_fidelity_attributes_are_rejected_at_registration(self):
+        for attribute in (
+            "block_on_unavailable",
+            "checks_credentials",
+            "event_fidelity",
+            "provider_session_id_kind",
+        ):
+            candidate = _registration_candidate(f"missing-{attribute}")
+            delattr(candidate, attribute)
+            try:
+                with self.subTest(attribute=attribute), self.assertRaisesRegex(
+                    TypeError, attribute
+                ):
+                    backends.register(candidate)
+            finally:
+                backends.unregister("claude", candidate.id)
+
+    def test_invalid_policy_and_fidelity_attribute_types_are_rejected(self):
+        cases = (
+            ("block_on_unavailable", 0),
+            ("checks_credentials", "yes"),
+            ("event_fidelity", ""),
+            ("provider_session_id_kind", ""),
+            ("provider_session_id_kind", 1),
+        )
+        for attribute, value in cases:
+            candidate = _registration_candidate(f"invalid-{attribute}-{value!r}")
+            setattr(candidate, attribute, value)
+            try:
+                with self.subTest(attribute=attribute, value=value), self.assertRaisesRegex(
+                    TypeError, attribute
+                ):
+                    backends.register(candidate)
+            finally:
+                backends.unregister("claude", candidate.id)
 
     def test_mixed_cli_and_sdk_agents_get_distinct_normalized_defaults(self):
         config = CollaborationConfig(

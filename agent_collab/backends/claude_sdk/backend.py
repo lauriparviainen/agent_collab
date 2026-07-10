@@ -44,6 +44,7 @@ from ..base import (
 from ..common.health import anthropic_api_key_credentials, probe_sdk_backend
 from ..common.sdk import (
     classify_tool_kind,
+    close_async_stream,
     package_version,
     provider_session_event,
     sdk_error_event,
@@ -171,6 +172,11 @@ class ClaudeSdkRunner(AgentRunner):
         except Exception as exc:  # surface SDK errors as transcript errors
             yield sdk_error_event("claude", exc)
             return
+        finally:
+            # A cancelled daemon turn stops consuming before the SDK iterator
+            # is exhausted. Close it explicitly so the provider connection and
+            # any child resources unwind before cancellation completes.
+            await close_async_stream(stream)
         if self.verbose:
             yield Event.create("claude", "status", "claude sdk turn complete")
 

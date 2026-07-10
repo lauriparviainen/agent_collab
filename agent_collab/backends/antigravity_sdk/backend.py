@@ -54,7 +54,13 @@ from ..base import (
     normalize_declared_options,
 )
 from ..common.health import gemini_api_key_credentials, probe_sdk_backend
-from ..common.sdk import classify_tool_kind, package_version, provider_session_event, sdk_error_event
+from ..common.sdk import (
+    classify_tool_kind,
+    close_async_stream,
+    package_version,
+    provider_session_event,
+    sdk_error_event,
+)
 
 MODULE_NAME = "google.antigravity"
 PACKAGE_NAME = "google-antigravity"
@@ -280,21 +286,28 @@ class AntigravitySdkRunner(AgentRunner):
             return
         try:
             async with agent_cm as sdk_agent:
-                response = await sdk_agent.chat(prompt)
-                # Resolve the SDK's shared response stream exactly once. Its
-                # thoughts/tool_calls properties are async cursors, not lists.
-                chunks = await _resolve_chunks(response)
-                usage_metadata = getattr(response, "usage_metadata", None)
-                for event in map_antigravity_turn(chunks, self.verbose, usage_metadata):
-                    yield event
-                conversation_id = getattr(sdk_agent, "conversation_id", None)
-                if conversation_id:
-                    # Uniform provider-session capture (kind="conversation"). The
-                    # daemon records it into central session state; nothing resumes
-                    # it this stage (capabilities stay false).
-                    yield provider_session_event(
-                        "antigravity", self.name, str(conversation_id), "conversation"
-                    )
+                response = None
+                try:
+                    response = await sdk_agent.chat(prompt)
+                    # Resolve the SDK's shared response stream exactly once. Its
+                    # thoughts/tool_calls properties are async cursors, not lists.
+                    chunks = await _resolve_chunks(response)
+                    usage_metadata = getattr(response, "usage_metadata", None)
+                    for event in map_antigravity_turn(chunks, self.verbose, usage_metadata):
+                        yield event
+                    conversation_id = getattr(sdk_agent, "conversation_id", None)
+                    if conversation_id:
+                        # Uniform provider-session capture (kind="conversation"). The
+                        # daemon records it into central session state; nothing resumes
+                        # it this stage (capabilities stay false).
+                        yield provider_session_event(
+                            "antigravity", self.name, str(conversation_id), "conversation"
+                        )
+                finally:
+                    # The installed ChatResponse is drained by resolve(), while
+                    # injected/future implementations may also own an explicit
+                    # async close hook. Honor it before leaving the agent context.
+                    await close_async_stream(response)
         except BackendUnavailable as exc:
             yield Event.create("error", "error", str(exc), {"error": str(exc)})
             return

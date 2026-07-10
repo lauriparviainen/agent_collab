@@ -1,6 +1,6 @@
 # Stage 5.4: Daemon robustness and code health
 
-**Status:** Open. H1-H3 are resolved and verified; H4-H6, M1-M5, and the
+**Status:** Open. H1-H6 are resolved and verified; M1-M5 and the
 low-priority code-health items remain open. Findings originated in a full-repo
 review at v0.2 (2026-07-10).
 
@@ -109,30 +109,94 @@ marked H3 ship-ready for a cautious maintainer.
 
 ### H4. Stop leaking internal exception text to clients
 
-The top-level handler returns `{"error": str(exc)}` with status 500
-(`server_http.py:99-101`), exposing internal paths and error strings. Log the
-detail server-side; return a generic message.
+**Resolved (2026-07-11).** Unexpected failures now keep their exception type
+and detail in daemon diagnostics while returning only `internal server error`
+to clients.
+
+- REST requests receive a structured HTTP 500 with the generic message.
+- HTTP MCP requests receive HTTP 500 with a JSON-RPC `-32603` error envelope
+  carrying the original request id and the same generic message.
+- Stdio MCP requests likewise retain the original JSON-RPC id, emit `-32603`,
+  and log the unexpected exception to stderr. Malformed JSON remains a
+  protocol-level `-32700` parse error.
+- Explicit `SessionNotFoundError`, `SessionRequestError`, and `McpToolError`
+  types separate intentional 404, 400, and MCP tool-validation failures from
+  arbitrary `KeyError` and `ValueError` bugs. `StartOptionsError` and typed
+  `ClientError` payload contracts remain intact.
+- Unexpected MCP tool failures are allowed to reach the HTTP or stdio
+  transport boundary instead of being converted to detailed tool content.
+
+Regression coverage exercises complete HTTP bytes for REST and MCP
+`RuntimeError`, `ValueError`, and `KeyError` failures, asserts that sensitive
+paths are absent from the wire but present in server diagnostics, verifies the
+intentional 400/404 contracts, proves HTTP MCP preserves its JSON-RPC id and
+error envelope, and directly verifies stdio MCP stdout/stderr behavior. Focused
+HTTP/MCP/daemon tests pass, the full hermetic suite passes (523 tests), and
+`./agent_collab.sh setup --check` passes.
+
+Five iterative read-only Antigravity reviews used Gemini 3.1 Pro (High). The
+first two found the broad built-in-exception and MCP tool-content leaks; a later
+review caught missing JSON-RPC ids/envelopes after stdio coverage was added.
+All findings and the worthwhile stdio test gap were addressed. The final
+review verdict is explicit: **SHIP-READY / NO BLOCKERS**.
 
 ### H5. Formalize informal backend gating attributes
 
-`options.py` reads `block_on_unavailable`, `checks_credentials`,
-`event_fidelity`, and `provider_session_id_kind` via `getattr(..., default)`
-(`options.py:403-404`, `options.py:605-610`, `options.py:722-724`), but none
-are declared in the `AgentBackend` protocol (`backends/base.py`) or checked by
-`_validate_backend_contract` (`backends/__init__.py`). A backend that omits
-`block_on_unavailable` silently defaults to not gated.
+**Resolved (2026-07-11).** Backend gating and fidelity metadata are now a
+required part of the `AgentBackend` contract rather than optional runtime
+conventions.
 
-- Declare these attributes in the protocol.
-- Validate them at registration so omission is a startup error, not a silent
-  policy change.
+- The protocol declares `block_on_unavailable` and `checks_credentials` as
+  booleans, `event_fidelity` as a string, and `provider_session_id_kind` as an
+  optional string.
+- Registration rejects a missing or non-boolean gating flag, a missing or
+  empty/non-string fidelity value, and a missing or invalid provider-session
+  kind. An explicitly declared `None` provider-session kind remains valid.
+- Validation completes before `_REGISTRY` is mutated, so rejected backends do
+  not leave partial entries behind.
+- Start gating and option discovery use direct attribute access. The former
+  false/`unknown`/`None` `getattr` fallbacks were removed, so omission can no
+  longer silently weaken preflight or invent public metadata.
+- Built-in backends already supplied valid values; extension and gating test
+  doubles were updated to satisfy the same production contract.
+
+Regression tests remove each required attribute in turn and verify registration
+fails, cover invalid boolean/string values (including integers masquerading as
+booleans), and clean up registry state defensively. The focused backend
+contract/config/gating suite passes (91 tests), the full hermetic suite passes
+(525 tests), and `./agent_collab.sh setup --check` passes. A read-only
+Antigravity review using Gemini 3.1 Pro (High) found no blocking or substantive
+issues and gave the explicit verdict **SHIP-READY / NO BLOCKERS**.
 
 ### H6. Close SDK streams on cancellation consistently
 
-`codex_sdk` and `xai_sdk` close their streams in `finally`; `claude_sdk`
-(`backends/claude_sdk/backend.py:144-176`) and `antigravity_sdk` do not. A
-mid-turn stop unwinds the SDK connection nondeterministically. This is also
-groundwork for the interrupt semantics in
-[sdk-session-control.md](sdk-session-control.md).
+**Resolved (2026-07-11).** All four SDK runners now close their turn stream or
+response deterministically from `finally` when consumption completes, fails, or
+is cancelled.
+
+- Claude explicitly closes its message iterator; Antigravity closes a
+  close-capable `ChatResponse` before leaving the owning agent context. Codex
+  and xAI use the same shared cleanup path.
+- `close_async_stream` treats `aclose()` as optional and best-effort. Ordinary
+  close failures cannot replace a primary SDK error or an in-flight
+  `CancelledError`; a new cancellation raised while awaiting close remains a
+  `BaseException` and propagates.
+- Antigravity retains its existing agent context manager and now guarantees
+  child-response cleanup before parent-agent `__aexit__` cleanup.
+
+Each SDK backend has a cancellation/concurrency regression that blocks inside
+its async iterator or response, cancels the consumer task, and verifies prompt
+closure plus `CancelledError` propagation. Every test runs both successful and
+failing `aclose()` variants; the Antigravity test additionally records and
+asserts exact `response_closed` then `agent_exited` ordering. These tests fail
+without the runner-level cleanup because custom async iterators are not closed
+automatically. The focused four-SDK suite passes (79 tests), the full hermetic
+suite passes (529 tests), and `./agent_collab.sh setup --check` passes.
+
+Four iterative read-only Antigravity reviews used Gemini 3.1 Pro (High). They
+identified close-error cancellation masking and the need for explicit coverage
+on every SDK backend; both findings and the cleanup-order proof gap were
+addressed. The final review verdict is explicit: **SHIP-READY / NO BLOCKERS**.
 
 ## Medium priority
 

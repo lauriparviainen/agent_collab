@@ -34,6 +34,41 @@ async def _collect(runner):
 
 
 class XaiSdkBackendTests(unittest.TestCase):
+    def test_cancellation_closes_turn_stream_even_when_close_fails(self):
+        async def scenario(close_error):
+            entered = asyncio.Event()
+
+            class BlockingStream:
+                def __init__(self):
+                    self.closed = False
+
+                def __aiter__(self):
+                    return self
+
+                async def __anext__(self):
+                    entered.set()
+                    await asyncio.Event().wait()
+
+                async def aclose(self):
+                    self.closed = True
+                    if close_error:
+                        raise RuntimeError("close failed")
+
+            stream = BlockingStream()
+            runner = XaiSdkBackend(turn_stream=lambda *_args: stream).create_runner(
+                _agent(), False, {"model": "grok-4.5"}
+            )
+            consumer = asyncio.create_task(_collect(runner))
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            consumer.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await consumer
+            self.assertTrue(stream.closed)
+
+        for close_error in (False, True):
+            with self.subTest(close_error=close_error):
+                asyncio.run(scenario(close_error))
+
     def test_registration_schema_and_capability_contract(self):
         backend = backends.get_backend("xai", "sdk")
         self.assertIsInstance(backend, XaiSdkBackend)

@@ -117,6 +117,10 @@ class _FakeBackend:
         self.id = backend_id
         self.capabilities = BackendCapabilities()
         self.brand_color = "#123456"
+        self.event_fidelity = "typed"
+        self.provider_session_id_kind = None
+        self.checks_credentials = False
+        self.block_on_unavailable = False
 
     def probe(self):  # pragma: no cover - not exercised here
         from agent_collab.backends.base import BackendHealth

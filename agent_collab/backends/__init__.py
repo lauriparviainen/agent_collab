@@ -63,6 +63,27 @@ def _validate_backend_contract(backend: AgentBackend) -> None:
         raise TypeError("backend.id must be a non-empty string")
     if not isinstance(getattr(backend, "capabilities", None), BackendCapabilities):
         raise TypeError(f"backend ({agent_type}, {backend_id}) must declare BackendCapabilities")
+    for attribute in ("block_on_unavailable", "checks_credentials"):
+        if not isinstance(getattr(backend, attribute, None), bool):
+            raise TypeError(
+                f"backend ({agent_type}, {backend_id}) must declare {attribute} as bool"
+            )
+    event_fidelity = getattr(backend, "event_fidelity", None)
+    if not isinstance(event_fidelity, str) or not event_fidelity:
+        raise TypeError(
+            f"backend ({agent_type}, {backend_id}) must declare event_fidelity "
+            "as a non-empty string"
+        )
+    missing = object()
+    provider_session_id_kind = getattr(backend, "provider_session_id_kind", missing)
+    if provider_session_id_kind is missing or not (
+        provider_session_id_kind is None
+        or isinstance(provider_session_id_kind, str) and provider_session_id_kind
+    ):
+        raise TypeError(
+            f"backend ({agent_type}, {backend_id}) must declare provider_session_id_kind "
+            "as None or a non-empty string"
+        )
     for method in (
         "probe",
         "option_schema",

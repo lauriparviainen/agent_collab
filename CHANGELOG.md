@@ -13,6 +13,14 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Close every SDK turn stream deterministically on completion, error, and
+  cancellation without allowing cleanup failures to mask task cancellation.
+- Require backend gating and event/session-fidelity metadata at registration,
+  rejecting missing or invalid policy fields instead of silently applying
+  permissive defaults.
+- Prevent REST and MCP 500 responses from exposing internal exception text;
+  preserve intentional client-error contracts and JSON-RPC ids/envelopes while
+  logging unexpected failure details only on the server side.
 - Bound HTTP request bodies to 16 MiB and request headers to 100 fields/64 KiB;
   return structured client errors for oversized, malformed, ambiguous-framing,
   and incomplete requests before they can trigger unbounded daemon allocation.

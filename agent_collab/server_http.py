@@ -22,15 +22,26 @@ from .api_schema import (
     TranscriptRequestModel,
     WaitEventsRequestModel,
 )
-from .daemon import SessionManager, StartSessionRequest
+from .daemon import (
+    SessionManager,
+    SessionNotFoundError,
+    SessionRequestError,
+    StartSessionRequest,
+)
 from .paths import GlobalDataPaths, atomic_write_private_text
-from .mcp_tools import SUPPORTED_PROTOCOL_VERSIONS, SessionManagerToolBackend, handle_request as handle_mcp_request
+from .mcp_tools import (
+    SUPPORTED_PROTOCOL_VERSIONS,
+    SessionManagerToolBackend,
+    handle_request as handle_mcp_request,
+    jsonrpc_error,
+)
 from .options import StartOptionsError
 
 
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_HEADER_BYTES = 64 * 1024
 MAX_REQUEST_HEADERS = 100
+INTERNAL_SERVER_ERROR_MESSAGE = "internal server error"
 _HEADER_NAME_PUNCTUATION = frozenset("!#$%&'*+-.^_`|~")
 
 
@@ -93,18 +104,25 @@ class AgentCollabHttpServer:
         except HttpError as exc:
             self._log_request(f"request error {exc.status} {exc.message}")
             await self._write_json(writer, exc.status, {"error": exc.message})
-        except KeyError as exc:
+        except SessionNotFoundError as exc:
             self._log_request(f"request error 404 {exc}")
             await self._write_json(writer, 404, {"error": str(exc)})
         except StartOptionsError as exc:
             self._log_request(f"request error 400 {exc.code}")
             await self._write_json(writer, 400, exc.to_dict())
-        except ValueError as exc:
+        except SessionRequestError as exc:
             self._log_request(f"request error 400 {exc}")
             await self._write_json(writer, 400, {"error": str(exc)})
         except Exception as exc:
-            self._log_request(f"request error 500 {exc}")
-            await self._write_json(writer, 500, {"error": str(exc)})
+            # Unexpected failures are always operationally visible, even when
+            # routine request logging is disabled.  Keep their type and detail
+            # in the daemon log, but never put exception text on the wire.
+            self._log_unexpected_error(exc)
+            await self._write_json(
+                writer,
+                500,
+                {"error": INTERNAL_SERVER_ERROR_MESSAGE},
+            )
         finally:
             writer.close()
             await writer.wait_closed()
@@ -306,12 +324,29 @@ class AgentCollabHttpServer:
 
         request = _decode_json_object(body)
         self._log_mcp(request)
-        response = await handle_mcp_request(request, SessionManagerToolBackend(self.manager))
+        try:
+            response = await handle_mcp_request(
+                request,
+                SessionManagerToolBackend(self.manager),
+            )
+        except Exception as exc:
+            self._log_unexpected_error(exc)
+            return HttpResponse(
+                500,
+                jsonrpc_error(
+                    request.get("id"),
+                    -32603,
+                    INTERNAL_SERVER_ERROR_MESSAGE,
+                ),
+            )
         return HttpResponse(202) if response is None else response
 
     def _log_request(self, message: str) -> None:
         if self.log_requests:
             self._log(message)
+
+    def _log_unexpected_error(self, exc: Exception) -> None:
+        self._log(f"request error 500 {exc!r}")
 
     def _log_mcp(self, request: Dict[str, Any]) -> None:
         if not self.log_requests:

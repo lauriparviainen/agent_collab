@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol
 
 from .api_schema import ReadEventsRequestModel, TranscriptRequestModel, WaitEventsRequestModel
-from .daemon import SessionManager, StartSessionRequest
+from .client import ClientError
+from .daemon import (
+    SessionManager,
+    SessionNotFoundError,
+    SessionRequestError,
+    StartSessionRequest,
+)
 from .options import StartOptionsError
 
 
@@ -154,6 +160,10 @@ class McpProtocolError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class McpToolError(ValueError):
+    """A caller-visible validation error for one MCP tool invocation."""
 
 
 class ToolBackend(Protocol):
@@ -331,11 +341,13 @@ _GUIDANCE_HEADINGS = {
 
 def guidance_text(topic: Optional[str] = None) -> str:
     if topic is not None and topic not in GUIDANCE_TOPICS:
-        raise ValueError(f"unknown guidance topic {topic!r}; expected one of: {', '.join(GUIDANCE_TOPICS)}")
+        raise McpToolError(
+            f"unknown guidance topic {topic!r}; expected one of: {', '.join(GUIDANCE_TOPICS)}"
+        )
     try:
         text = _GUIDANCE_PATH.read_text(encoding="utf-8")
-    except OSError:
-        raise ValueError(f"guidance document is unavailable at {_GUIDANCE_PATH}")
+    except OSError as exc:
+        raise RuntimeError("MCP guidance document is unavailable") from exc
     if topic is None or topic == "overview":
         return text
     return _guidance_section(text, _GUIDANCE_HEADINGS[topic], topic)
@@ -353,7 +365,7 @@ def _guidance_section(text: str, heading: str, topic: str) -> str:
             end = index
             break
     if start is None:
-        raise ValueError(f"guidance topic {topic!r} section not found")
+        raise RuntimeError(f"MCP guidance section is unavailable: {topic}")
     return "\n".join(lines[start:end]).strip() + "\n"
 
 
@@ -367,7 +379,7 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
         if name == "agent_collab_guidance":
             topic = args.get("topic")
             if topic is not None and not isinstance(topic, str):
-                raise ValueError("topic must be a string")
+                raise McpToolError("topic must be a string")
             return text_content(guidance_text(topic))
         if name == "agent_collab_start":
             return content(await backend.start_session(_start_payload(args)))
@@ -380,7 +392,8 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
         if name == "agent_collab_status":
             return content(await backend.get_session(session_id))
         if name == "agent_collab_read_events":
-            request = ReadEventsRequestModel.from_dict(
+            request = _parse_tool_request(
+                ReadEventsRequestModel.from_dict,
                 {key: args[key] for key in ("cursor", "limit", "tool_output") if key in args}
             )
             return content(
@@ -392,7 +405,8 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
                 )
             )
         if name == "agent_collab_wait_events":
-            request = WaitEventsRequestModel.from_dict(
+            request = _parse_tool_request(
+                WaitEventsRequestModel.from_dict,
                 {
                     key: args[key]
                     for key in ("cursor", "timeout_ms", "tool_output")
@@ -408,7 +422,8 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
                 )
             )
         if name == "agent_collab_read_transcript":
-            request = TranscriptRequestModel.from_dict(
+            request = _parse_tool_request(
+                TranscriptRequestModel.from_dict,
                 {key: args[key] for key in ("tool_output",) if key in args}
             )
             return text_content(await backend.read_transcript(session_id, request.tool_output))
@@ -418,10 +433,11 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
             return content(await backend.stop_session(session_id))
     except StartOptionsError as exc:
         return content(exc.to_dict(), is_error=True)
-    except Exception as exc:
-        error_payload = getattr(exc, "payload", None)
-        if isinstance(error_payload, dict):
-            return content(error_payload, is_error=True)
+    except (McpToolError, SessionNotFoundError, SessionRequestError) as exc:
+        return content({"error": str(exc)}, is_error=True)
+    except ClientError as exc:
+        if isinstance(exc.payload, dict):
+            return content(exc.payload, is_error=True)
         return content({"error": str(exc)}, is_error=True)
 
     raise McpProtocolError(-32602, f"Unknown tool: {name}")
@@ -439,42 +455,39 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
     params = request.get("params", {})
     if params is None:
         params = {}
-    try:
-        if method == "initialize":
-            return jsonrpc_result(
-                request_id,
-                {
-                    "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {"tools": {}},
-                    "instructions": (
-                        "Call agent_collab_guidance for full usage guidance. "
-                        "Resolve the intended project to an absolute workdir and call agent_collab_describe_options "
-                        "before every start selection; its cached probe is advisory and start revalidates freshly per backend policy. "
-                        "Use agent_collab_start with task, workdir, and workflow. "
-                        "Use agent_collab_wait_events with a cursor; do not make one blocking call. "
-                        "On validation errors, fix the named field paths instead of guessing."
-                    ),
-                    "serverInfo": {"name": "agent-collab", "version": "0.1"},
-                },
-            )
-        if method == "notifications/initialized":
-            return None
-        if method == "tools/list":
-            return jsonrpc_result(request_id, {"tools": TOOLS})
-        if method == "tools/call":
-            if not isinstance(params, dict):
-                return jsonrpc_error(request_id, -32602, "params must be an object")
-            arguments = params.get("arguments", {})
-            if arguments is None:
-                arguments = {}
-            try:
-                result = await handle_tool(params.get("name"), arguments, backend)
-            except McpProtocolError as exc:
-                return jsonrpc_error(request_id, exc.code, exc.message)
-            return jsonrpc_result(request_id, result)
-        return jsonrpc_error(request_id, -32601, f"method not found: {method}")
-    except Exception as exc:
-        return jsonrpc_error(request_id, -32000, str(exc))
+    if method == "initialize":
+        return jsonrpc_result(
+            request_id,
+            {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {"tools": {}},
+                "instructions": (
+                    "Call agent_collab_guidance for full usage guidance. "
+                    "Resolve the intended project to an absolute workdir and call agent_collab_describe_options "
+                    "before every start selection; its cached probe is advisory and start revalidates freshly per backend policy. "
+                    "Use agent_collab_start with task, workdir, and workflow. "
+                    "Use agent_collab_wait_events with a cursor; do not make one blocking call. "
+                    "On validation errors, fix the named field paths instead of guessing."
+                ),
+                "serverInfo": {"name": "agent-collab", "version": "0.1"},
+            },
+        )
+    if method == "notifications/initialized":
+        return None
+    if method == "tools/list":
+        return jsonrpc_result(request_id, {"tools": TOOLS})
+    if method == "tools/call":
+        if not isinstance(params, dict):
+            return jsonrpc_error(request_id, -32602, "params must be an object")
+        arguments = params.get("arguments", {})
+        if arguments is None:
+            arguments = {}
+        try:
+            result = await handle_tool(params.get("name"), arguments, backend)
+        except McpProtocolError as exc:
+            return jsonrpc_error(request_id, exc.code, exc.message)
+        return jsonrpc_result(request_id, result)
+    return jsonrpc_error(request_id, -32601, f"method not found: {method}")
 
 
 def handle_tool_sync(name: str, args: Dict[str, Any], backend: ToolBackend) -> Dict[str, Any]:
@@ -488,7 +501,7 @@ def handle_request_sync(request: Dict[str, Any], backend: ToolBackend) -> Option
 def _required_str(args: Dict[str, Any], key: str) -> str:
     value = args.get(key)
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{key} is required")
+        raise McpToolError(f"{key} is required")
     return value
 
 
@@ -497,7 +510,7 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
 
     unknown = sorted(set(args) - set(StartSessionRequestModel.WIRE_FIELDS))
     if unknown:
-        raise ValueError(f"unknown start field {unknown[0]!r}")
+        raise McpToolError(f"unknown start field {unknown[0]!r}")
     payload = {
         key: args[key]
         for key in (
@@ -516,35 +529,42 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
         if key in args
     }
     if not isinstance(payload.get("task"), str) or not payload["task"]:
-        raise ValueError("task is required")
+        raise McpToolError("task is required")
     if not isinstance(payload.get("workdir"), str) or not payload["workdir"].strip():
-        raise ValueError("workdir is required")
+        raise McpToolError("workdir is required")
     # Match StartSessionRequestModel: an explicit null backend means "no
     # override" (same as omitting it); only a present, non-null, non-string
     # backend is rejected. Keeps the /mcp path consistent with REST/from_wire.
     if payload.get("backend") is not None and not isinstance(payload["backend"], str):
-        raise ValueError("backend must be a string")
+        raise McpToolError("backend must be a string")
     return payload
 
 
 def _post_message_payload(args: Dict[str, Any]) -> Dict[str, Any]:
     payload = {key: args[key] for key in ("text", "source", "target") if key in args}
     if not isinstance(payload.get("text"), str) or not payload["text"]:
-        raise ValueError("text is required")
+        raise McpToolError("text is required")
     if "source" in payload and (not isinstance(payload["source"], str) or payload["source"] not in {"human", "referee"}):
-        raise ValueError("source must be 'human' or 'referee'")
+        raise McpToolError("source must be 'human' or 'referee'")
     if "target" in payload and not isinstance(payload["target"], str):
-        raise ValueError("target must be a string")
+        raise McpToolError("target must be a string")
     return payload
 
 
 def _describe_payload(args: Dict[str, Any]) -> Dict[str, Any]:
     payload = {key: args[key] for key in ("workdir", "health_refresh") if key in args}
     if not isinstance(payload.get("workdir"), str) or not payload["workdir"].strip():
-        raise ValueError("workdir is required")
+        raise McpToolError("workdir is required")
     if payload.get("health_refresh", "cached") not in {"cached", "fresh"}:
-        raise ValueError("health_refresh must be 'cached' or 'fresh'")
+        raise McpToolError("health_refresh must be 'cached' or 'fresh'")
     return payload
+
+
+def _parse_tool_request(parser: Callable[[Dict[str, Any]], Any], data: Dict[str, Any]) -> Any:
+    try:
+        return parser(data)
+    except ValueError as exc:
+        raise McpToolError(str(exc)) from exc
 
 
 def _is_jsonrpc_notification(request: Dict[str, Any]) -> bool:

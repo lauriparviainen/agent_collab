@@ -130,6 +130,12 @@ class AgentBackend(Protocol):
     id: str  # "cli", "sdk"
     agent_type: str  # "claude", "codex", "antigravity", "xai"
     capabilities: BackendCapabilities
+    # Registration-required policy and event metadata. These have no safe
+    # defaults: omitting a gating flag must never silently weaken preflight.
+    block_on_unavailable: bool
+    checks_credentials: bool
+    event_fidelity: str
+    provider_session_id_kind: Optional[str]
     # Provider brand hue (truecolor hex, e.g. "#D97757") — a static registry
     # fact like ``capabilities``. Identical across a provider's cli/sdk pair:
     # brand belongs to the provider, and hue must never encode the execution

@@ -180,6 +180,8 @@ class _GatingBackend:
     agent_type = "antigravity"
     capabilities = BackendCapabilities()
     brand_color = "#123456"
+    event_fidelity = "typed"
+    provider_session_id_kind = None
 
     def __init__(self, block_on_unavailable=True, checks_credentials=True):
         self.block_on_unavailable = block_on_unavailable

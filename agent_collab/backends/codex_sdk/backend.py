@@ -37,7 +37,13 @@ from ..base import (
     normalize_declared_options,
 )
 from ..common.health import codex_api_key_credentials, probe_sdk_backend
-from ..common.sdk import package_version, provider_session_event, sdk_error_event, stringify
+from ..common.sdk import (
+    close_async_stream,
+    package_version,
+    provider_session_event,
+    sdk_error_event,
+    stringify,
+)
 from ..common.options import configured_choices, resolve_codex_effort
 
 MODULE_NAME = "openai_codex"
@@ -169,9 +175,7 @@ class CodexSdkRunner(AgentRunner):
             # Explicitly close an injected/production async generator if the
             # consumer cancels before exhausting the transcript.  This unwinds
             # the production AsyncCodex context promptly.
-            close = getattr(stream, "aclose", None)
-            if callable(close):
-                await close()
+            await close_async_stream(stream)
 
         if self.verbose:
             yield Event.create("codex", "status", "codex sdk turn complete")
