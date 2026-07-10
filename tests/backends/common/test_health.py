@@ -42,6 +42,7 @@ class _CliProbeBackend:
     def __init__(self, which):
         self._which = which
         self.capabilities = BackendCapabilities()
+        self.brand_color = "#123456"
 
     def probe(self):
         return probe_cli_backend("agy", which=self._which, run_version=None, credentials=None)
@@ -178,6 +179,7 @@ class _GatingBackend:
     id = "cli"
     agent_type = "antigravity"
     capabilities = BackendCapabilities()
+    brand_color = "#123456"
 
     def __init__(self, block_on_unavailable=True, checks_credentials=True):
         self.block_on_unavailable = block_on_unavailable

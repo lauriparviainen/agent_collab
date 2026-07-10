@@ -113,6 +113,7 @@ class AntigravitySdkBackend:
 
     id = "sdk"
     agent_type = "antigravity"
+    brand_color = "#4285F4"
     event_fidelity = "typed"
     provider_session_id_kind = "conversation"
 

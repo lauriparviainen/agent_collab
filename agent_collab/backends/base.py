@@ -130,6 +130,12 @@ class AgentBackend(Protocol):
     id: str  # "cli", "sdk"
     agent_type: str  # "claude", "codex", "antigravity"
     capabilities: BackendCapabilities
+    # Provider brand hue (truecolor hex, e.g. "#D97757") — a static registry
+    # fact like ``capabilities``. Identical across a provider's cli/sdk pair:
+    # brand belongs to the provider, and hue must never encode the execution
+    # backend. Consumers (the TUI) fall back to their own accent for unknown
+    # or missing values, so this is display metadata, never gating detail.
+    brand_color: str
 
     def probe(self) -> BackendHealth:
         """Return a fresh, side-effect-free health snapshot (never a model call)."""

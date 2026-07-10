@@ -51,6 +51,7 @@ class _ContractBackend:
     id = "contract-test"
     agent_type = "claude"
     capabilities = BackendCapabilities()
+    brand_color = "#123456"
     checks_credentials = False
     block_on_unavailable = False
 

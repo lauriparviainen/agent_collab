@@ -20,6 +20,7 @@ OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 class CodexCliBackend:
     id = "cli"
     agent_type = "codex"
+    brand_color = "#10A37F"
     event_fidelity = "typed"
     provider_session_id_kind = "thread"
     capabilities = BackendCapabilities()

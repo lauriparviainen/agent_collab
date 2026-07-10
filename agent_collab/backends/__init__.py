@@ -73,6 +73,17 @@ def _validate_backend_contract(backend: AgentBackend) -> None:
     ):
         if not callable(getattr(backend, method, None)):
             raise TypeError(f"backend ({agent_type}, {backend_id}) is missing required method {method}()")
+    brand_color = getattr(backend, "brand_color", None)
+    if not (
+        isinstance(brand_color, str)
+        and len(brand_color) == 7
+        and brand_color.startswith("#")
+        and all(char in "0123456789abcdefABCDEF" for char in brand_color[1:])
+    ):
+        raise TypeError(
+            f"backend ({agent_type}, {backend_id}) must declare brand_color as '#RRGGBB' "
+            f"(the provider brand hue, identical across the provider's backends)"
+        )
 
 
 def unregister(agent_type: str, backend_id: str) -> None:

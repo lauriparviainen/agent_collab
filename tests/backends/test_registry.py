@@ -115,6 +115,7 @@ class _FakeBackend:
         self.agent_type = agent_type
         self.id = backend_id
         self.capabilities = BackendCapabilities()
+        self.brand_color = "#123456"
 
     def probe(self):  # pragma: no cover - not exercised here
         from agent_collab.backends.base import BackendHealth

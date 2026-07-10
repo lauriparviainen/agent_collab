@@ -968,6 +968,12 @@ def build_session_settings(
         if backend_id is not None:
             entry["backend"] = backend_id
             entry["capabilities"] = backend_registry.capabilities_for(agent.type, backend_id).to_dict()
+            # Provider brand hue, a backend-declared static fact; the TUI
+            # colors agent labels from this and falls back to its own accent
+            # when absent (mock agents, unknown providers).
+            brand_color = getattr(backend, "brand_color", None)
+            if brand_color:
+                entry["brand_color"] = brand_color
             summary = _backend_settings_summary(agent, backend_id, options)
             if summary is not None:
                 entry["backend_summary"] = summary

@@ -237,6 +237,39 @@ class SessionSettingsTests(unittest.TestCase):
         )
         self.assertNotIn("command_preview", settings["agents"]["claude"])
 
+    def test_settings_carry_backend_declared_brand_color(self):
+        config = _config()
+        normalized = normalize_start_options(config, "cross-review")
+        settings = build_session_settings(
+            config,
+            "cross-review",
+            normalized.backend_options,
+            agent_backends={"claude": "cli", "codex": "cli"},
+            agent_options=normalized.agent_options,
+            workdir=Path("."),
+        )
+        self.assertEqual(settings["agents"]["claude"]["brand_color"], "#D97757")
+        self.assertEqual(settings["agents"]["codex"]["brand_color"], "#10A37F")
+
+
+class BrandColorRegistryTests(unittest.TestCase):
+    def test_every_backend_declares_a_provider_uniform_brand_color(self):
+        import re
+
+        from agent_collab import backends as backend_registry
+
+        by_provider = {}
+        for agent_type in backend_registry.registered_agent_types():
+            for backend_id in backend_registry.registered_backends(agent_type):
+                backend = backend_registry.get_backend(agent_type, backend_id)
+                color = backend.brand_color
+                self.assertRegex(color, re.compile(r"^#[0-9A-Fa-f]{6}$"), (agent_type, backend_id))
+                by_provider.setdefault(agent_type, set()).add(color)
+        # Brand belongs to the provider: a provider's cli and sdk backends
+        # must declare the identical hue.
+        for provider, colors in by_provider.items():
+            self.assertEqual(len(colors), 1, f"{provider} declares {colors}")
+
 
 if __name__ == "__main__":
     unittest.main()

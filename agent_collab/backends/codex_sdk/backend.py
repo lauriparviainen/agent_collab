@@ -75,6 +75,7 @@ class CodexSdkBackend:
 
     id = "sdk"
     agent_type = "codex"
+    brand_color = "#10A37F"
     event_fidelity = "message_first"
     provider_session_id_kind = "thread"
 

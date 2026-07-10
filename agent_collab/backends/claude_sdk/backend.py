@@ -68,6 +68,7 @@ class ClaudeSdkBackend:
 
     id = "sdk"
     agent_type = "claude"
+    brand_color = "#D97757"
     event_fidelity = "typed"
     provider_session_id_kind = "session"
 

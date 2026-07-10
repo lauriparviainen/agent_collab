@@ -406,6 +406,7 @@ class AgentBackendConfigTests(unittest.TestCase):
             agent_type="claude",
             id="fake",
             capabilities=BackendCapabilities(),
+            brand_color="#123456",
             probe=lambda: BackendHealth(),
             option_schema=lambda agent: {},
             normalize_options=lambda agent, requested: dict(requested),

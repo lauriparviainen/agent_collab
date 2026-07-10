@@ -231,14 +231,20 @@ helpers. Full suite green (279) + an end-to-end socket round-trip check.
 solo-codex (`daemon-a147a57d9ff143cf`); verdict commit-safe, its one actionable
 non-blocking finding (`/mcp` `backend: null`) fixed + tested above.
 
-### Remaining Workstream A work (later slices)
+### Progress: slice 3 landed (typed client return values)
 
-- **Typed client return values ("slice 3")** — `AgentCollabClient` methods return
-  DTOs (`get_session -> SessionStateModel`, …), the deliverable the TUI consumes,
-  plus updating `HttpClientToolBackend` to `.to_dict()` the results. **Scheduled
-  into [stage-5.2 Stage 2](stage-5.2-calm-tui-cleanup/README.md#stage-2---implementation)**
-  (it lists this as an explicit build item) so the doomed dict-based
-  `tui.py`/`cli.py` call sites are migrated once, not churned twice.
+Landed 2026-07-10 as the first commit of the stage-5.2 Stage 2 pass, as
+scheduled. `AgentCollabClient` methods now return their `api_schema` DTOs
+(`get_session`/`start_session`/`stop_session -> SessionStateModel`,
+`list_sessions -> SessionListModel`, `read_events`/`wait_events`/
+`post_message -> EventBatchModel`, `health -> HealthModel`;
+`describe_options` deliberately stays a raw dict — the `/options` runtime
+authority owns that shape). `tui.py`/`cli.py` call sites moved off
+`session["status"]` / `.get(...)` to typed attributes; `tui_core` session
+helpers accept the DTO or a wire dict via `_value`; `HttpClientToolBackend`
+`.to_dict()`s DTO results before the MCP `content()` serializer.
+
+### Remaining Workstream A work (later slices)
 - **Table-driven `_dispatch` off `ROUTES`** — closes reverse route-completeness
   (server dispatch ⊆ `ROUTES`) fully; the current test only proves the forward
   direction.
