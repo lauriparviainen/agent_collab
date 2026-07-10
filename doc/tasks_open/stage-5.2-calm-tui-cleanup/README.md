@@ -237,9 +237,9 @@ render in [tui.py](../../../agent_collab/tui.py) so Stage 2 has a clear delta.
    -> default (following). Examples:
    `Enter send · Tab complete · Esc close` (palette);
    `↑↓ move · Enter open · Esc close` (picker);
-   `/new start · /help commands · q quit` (no session);
+   `/new start · /help commands · /quit exit` (no session);
    `↑↓ scroll · End follow` (scrollback);
-   `↑↓ scroll · q quit` (read-only/terminal).
+   `↑↓ scroll · /quit exit` (read-only/terminal).
 
 ### `/details` disposition
 
@@ -264,14 +264,13 @@ These are the only behavior changes in scope; everything else stays byte-for-byt
 - **`Esc` closes `/details`:** `Esc` dismisses the details panel/overlay, matching
   how `Esc` already closes the palette and picker. Today `/details` only toggles
   via the command.
-- **`q` is viewer-only (added 2026-07-10, post-implementation review):** in a
-  live interactive session every printable key — including `q` — types into
-  the rail; quitting is `/quit` or `Ctrl-C`. Single-key `q` quit remains only
-  where typing is meaningless: no session, or a session that cannot accept
-  referee input (terminal or non-interactive). Previously an empty rail meant
-  the first keystroke of any note starting with "q" quit the app. Hints drop
-  `· q` from interactive states accordingly; Stage 1a mockups showing `· q` on
-  interactive hint lines are superseded.
+- **`q` never quits (added 2026-07-10, post-implementation review; supersedes
+  the interim "viewer-only q"):** quitting is `/quit` or `Ctrl-C`, identically
+  in every state — a mode-dependent `q` proved confusing in live use, and
+  previously an empty rail meant the first keystroke of any note starting
+  with "q" quit the app. `q` is an ordinary printable key everywhere. Hints
+  advertise `/quit exit` in the no-session and read-only states; Stage 1a
+  mockups showing `q quit`/`· q` on hint lines are superseded.
 
 Mockups must tag each divergence from current behavior as one of: **faithful**
 (matches code), **target delta** (restyle only, no behavior change — e.g.

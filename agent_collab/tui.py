@@ -84,8 +84,7 @@ HELP_LINES = (
     "plain text               append a referee note",
     "",
     "keys",
-    "/quit or Ctrl-C exit  q quits read-only views  arrows/page keys scroll",
-    "End follow  Esc closes overlays",
+    "/quit or Ctrl-C exit  arrows/page keys scroll  End follow  Esc closes overlays",
 )
 
 SOURCE_LABEL_WIDTH = GUTTER_WIDTH + 1  # gutter column + separating space
@@ -482,9 +481,6 @@ class TuiApp:
                 self._accept_slash_completion(completion)
                 return
 
-        if key == ord("q") and self._q_quits():
-            self.done = True
-            return
         if key in (curses.KEY_UP,):
             self.scroll = scroll_by(self.scroll, len(self._active_body_lines()), self._body_height(), -1)
             return
@@ -513,20 +509,6 @@ class TuiApp:
             char = chr(key)
             if char.isprintable():
                 self._set_input_text(self.input_text + char)
-
-    def _q_quits(self) -> bool:
-        """Single-key ``q`` quits only where typing is meaningless.
-
-        In a live interactive session every printable key — including ``q`` —
-        belongs to the input rail (quit via /quit or Ctrl-C). ``q`` stays a
-        one-key exit for viewer states: no session, or a session that cannot
-        accept referee input (terminal or non-interactive).
-        """
-        if self.input_text or self.new_wizard:
-            return False
-        if not self.session:
-            return True
-        return not _session_accepts_input(self.session)
 
     def _submit_input(self) -> None:
         raw = self.input_text

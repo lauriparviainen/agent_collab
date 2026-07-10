@@ -954,9 +954,9 @@ def select_hint(
     if overlay_open:
         return "↑↓ scroll · Esc close"
     if not has_session:
-        return "/new start · /help commands · q quit"
+        return "/new start · /help commands · /quit exit"
     if read_only:
-        return "↑↓ scroll · q quit"
+        return "↑↓ scroll · /quit exit"
     if not following:
         return "↑↓ scroll · End follow"
     return "Enter send · / cmds"

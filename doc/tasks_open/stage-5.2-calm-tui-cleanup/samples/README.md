@@ -40,10 +40,10 @@ authoritative for styling where they differ from the Stage 1a ASCII frames
   fall back to the accent teal.
 - **Tool events:** one dim summary row per tool call (name + args digest +
   result size); the full payload is never rendered inline.
-- **`q` is viewer-only (post-implementation):** interactive-session hint lines
-  drop `· q` (quit is `/quit`/`Ctrl-C`; `q` types into the rail); `q quit`
-  remains in the no-session and read-only hints. Mockups showing `· q` on
-  interactive hints are superseded.
+- **`q` never quits (post-implementation):** quit is `/quit`/`Ctrl-C`
+  identically in every state; `q` is an ordinary printable key. Hints show
+  `/quit exit` in the no-session and read-only states. Mockups showing
+  `q quit`/`· q` on hint lines are superseded.
 
 ## Files (Stage 1a)
 

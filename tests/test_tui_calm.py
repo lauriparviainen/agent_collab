@@ -221,8 +221,8 @@ class HintPrecedenceTests(unittest.TestCase):
         self.assertEqual(select_hint(details_mode="narrow"), "↑↓ scroll · Esc close")
         self.assertEqual(select_hint(details_mode="wide"), "Enter send · / cmds · Esc close")
         self.assertEqual(select_hint(overlay_open=True), "↑↓ scroll · Esc close")
-        self.assertEqual(select_hint(has_session=False), "/new start · /help commands · q quit")
-        self.assertEqual(select_hint(read_only=True), "↑↓ scroll · q quit")
+        self.assertEqual(select_hint(has_session=False), "/new start · /help commands · /quit exit")
+        self.assertEqual(select_hint(read_only=True), "↑↓ scroll · /quit exit")
         self.assertEqual(select_hint(following=False), "↑↓ scroll · End follow")
         self.assertEqual(select_hint(), "Enter send · / cmds")
 
@@ -236,8 +236,8 @@ class StatusCompositionTests(unittest.TestCase):
 
     def test_empty_activity_leaves_hint_alone(self):
         self.assertEqual(
-            compose_status_right("", "/new start · /help commands · q quit"),
-            "/new start · /help commands · q quit",
+            compose_status_right("", "/new start · /help commands · /quit exit"),
+            "/new start · /help commands · /quit exit",
         )
 
     def test_message_classification_drives_left_color(self):
@@ -577,45 +577,37 @@ class InfoLineWidthTests(unittest.TestCase):
 
 
 class QKeyBehaviourTests(unittest.TestCase):
-    """``q`` quits only in viewer states; in a live interactive session it types."""
+    """q never quits — same behaviour in every state (quit is /quit or Ctrl-C)."""
 
     def _app(self):
         return TuiApp(_DummyScreen(), _DummyClient(), initial_session_id=None)
 
-    def test_q_types_into_the_rail_in_a_live_interactive_session(self):
+    def test_q_types_in_a_live_interactive_session(self):
         app = self._app()
-        app.session = _session()  # running + interactive
+        app.session = _session()
         app.session_id = "daemon-1"
         app._handle_key(ord("q"))
         self.assertFalse(app.done)
         self.assertEqual(app.input_text, "q")
 
-    def test_q_quits_with_no_session(self):
+    def test_q_types_with_no_session(self):
         app = self._app()
         app._handle_key(ord("q"))
-        self.assertTrue(app.done)
+        self.assertFalse(app.done)
+        self.assertEqual(app.input_text, "q")
 
-    def test_q_quits_a_read_only_terminal_session(self):
+    def test_q_types_in_a_read_only_terminal_session(self):
         app = self._app()
         session = _session().to_dict()
         session["status"] = "done"
         app.session = SessionStateModel.from_dict(session)
         app.session_id = "daemon-1"
         app._handle_key(ord("q"))
-        self.assertTrue(app.done)
+        self.assertFalse(app.done)
+        self.assertEqual(app.input_text, "q")
 
-    def test_q_quits_a_non_interactive_session(self):
+    def test_q_appends_mid_word(self):
         app = self._app()
-        session = _session().to_dict()
-        session["interactive"] = False
-        session["settings"] = {}
-        app.session = SessionStateModel.from_dict(session)
-        app.session_id = "daemon-1"
-        app._handle_key(ord("q"))
-        self.assertTrue(app.done)
-
-    def test_q_never_quits_while_the_rail_holds_text(self):
-        app = self._app()  # even with no session, mid-word q must type
         app.input_text = "status "
         app._handle_key(ord("q"))
         self.assertFalse(app.done)
