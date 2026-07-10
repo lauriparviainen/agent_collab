@@ -12,6 +12,11 @@ from .events import Event
 Parser = Callable[[str, bool], Optional[Event]]
 CommandBuilder = Callable[[Path], List[str]]
 
+# Provider CLIs emit one JSON object per line. Tool results and large diffs can
+# legitimately make one event much larger than asyncio's 64 KiB default, but
+# the daemon still needs a finite bound against a broken or hostile child.
+DEFAULT_STREAM_LIMIT_BYTES = 8 * 1024 * 1024
+
 
 class AgentRunner:
     name = "agent"
@@ -90,6 +95,7 @@ class SubprocessRunner(AgentRunner):
         env: Optional[Dict[str, str]] = None,
         cwd: Optional[str] = None,
         command_builder: Optional[CommandBuilder] = None,
+        stream_limit: int = DEFAULT_STREAM_LIMIT_BYTES,
     ):
         self.name = name
         self.command_prefix = command_prefix
@@ -98,6 +104,9 @@ class SubprocessRunner(AgentRunner):
         self.env = env or {}
         self.cwd = cwd
         self.command_builder = command_builder
+        if isinstance(stream_limit, bool) or not isinstance(stream_limit, int) or stream_limit <= 0:
+            raise ValueError("stream_limit must be a positive integer")
+        self.stream_limit = stream_limit
 
     async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
         run_dir = _resolve_run_dir(workdir, self.cwd)
@@ -119,6 +128,7 @@ class SubprocessRunner(AgentRunner):
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=self.stream_limit,
             )
         except FileNotFoundError as exc:
             yield Event.create("error", "error", f"{self.name} command not found: {argv[0]}", {"error": str(exc)})
@@ -126,9 +136,23 @@ class SubprocessRunner(AgentRunner):
 
         queue: asyncio.Queue[Optional[Event]] = asyncio.Queue()
 
+        async def read_line(reader: asyncio.StreamReader, stream: str) -> Optional[bytes]:
+            try:
+                return await reader.readuntil(b"\n")
+            except asyncio.IncompleteReadError as exc:
+                return exc.partial or None
+            except asyncio.LimitOverrunError as exc:
+                kind = "JSONL event" if stream == "stdout" else "line"
+                raise RuntimeError(
+                    f"{stream} {kind} exceeded the {self.stream_limit}-byte transport limit"
+                ) from exc
+
         async def read_stdout() -> None:
             assert process.stdout is not None
-            async for raw_line in process.stdout:
+            while True:
+                raw_line = await read_line(process.stdout, "stdout")
+                if raw_line is None:
+                    return
                 line = raw_line.decode("utf-8", errors="replace")
                 event = self.parser(line, self.verbose)
                 if event is not None:
@@ -136,7 +160,10 @@ class SubprocessRunner(AgentRunner):
 
         async def read_stderr() -> None:
             assert process.stderr is not None
-            async for raw_line in process.stderr:
+            while True:
+                raw_line = await read_line(process.stderr, "stderr")
+                if raw_line is None:
+                    return
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if line:
                     if _is_noisy_stderr(line):
@@ -145,14 +172,75 @@ class SubprocessRunner(AgentRunner):
                         continue
                     await queue.put(Event.create("error", "error", f"{self.name} stderr: {line}", {"line": line}))
 
+        async def terminate_process() -> None:
+            if process.returncode is not None:
+                return
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+
         async def wait_done() -> None:
             stdout_task = asyncio.create_task(read_stdout())
             stderr_task = asyncio.create_task(read_stderr())
-            code = await process.wait()
-            await stdout_task
-            await stderr_task
-            await queue.put(Event.create("referee", "status", f"{self.name} exited with code {code}", {"code": code}))
-            await queue.put(None)
+            process_task = asyncio.create_task(process.wait())
+            tasks = (stdout_task, stderr_task, process_task)
+            try:
+                done, _pending = await asyncio.wait(
+                    tasks,
+                    return_when=asyncio.FIRST_EXCEPTION,
+                )
+                # FIRST_EXCEPTION returns as soon as a reader fails, or after all
+                # tasks complete normally. Retrieving results propagates reader
+                # and parser failures into this supervisor.
+                for task in done:
+                    task.result()
+                code = process_task.result()
+                await queue.put(
+                    Event.create(
+                        "referee",
+                        "status",
+                        f"{self.name} exited with code {code}",
+                        {"code": code},
+                    )
+                )
+            except asyncio.CancelledError:
+                await terminate_process()
+                raise
+            except Exception as exc:
+                await queue.put(
+                    Event.create(
+                        "error",
+                        "error",
+                        f"{self.name} output transport failed: {exc}",
+                        {"error": str(exc), "stream_limit": self.stream_limit},
+                    )
+                )
+                await terminate_process()
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                # An over-limit read leaves bytes buffered in StreamReader.
+                # Once the child is reaped, drain both pipes so asyncio can
+                # close their transports before the owning event loop exits.
+                for stream in (process.stdout, process.stderr):
+                    if stream is None:
+                        continue
+                    try:
+                        await stream.read()
+                    except Exception:
+                        pass
+                await queue.put(None)
 
         done_task = asyncio.create_task(wait_done())
         try:
@@ -164,7 +252,7 @@ class SubprocessRunner(AgentRunner):
         finally:
             if not done_task.done():
                 done_task.cancel()
-                process.terminate()
+                await asyncio.gather(done_task, return_exceptions=True)
 
 
 def configured_runner(
