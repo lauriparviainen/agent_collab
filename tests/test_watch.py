@@ -7,8 +7,16 @@ from pathlib import Path
 from unittest import mock
 
 from agent_collab import cli
+from agent_collab.api_schema import EventBatchModel, SessionListModel, SessionStateModel
 from agent_collab.events import Event
 from agent_collab.watch import resolve_jsonl_path, watch_jsonl
+
+
+def _session_dict(session_id, **overrides):
+    """Minimal wire-shaped session dict for SessionStateModel.from_dict."""
+    data = {"session_id": session_id, "status": "running"}
+    data.update(overrides)
+    return data
 
 
 def _write_events(path, events):
@@ -165,16 +173,24 @@ class WatchTests(unittest.TestCase):
     def test_cli_watch_without_session_uses_latest_daemon_session(self):
         class FakeClient:
             def list_sessions(self):
-                return {
-                    "sessions": [
-                        {"session_id": "old", "updated_at": "2026-01-01T00:00:00+00:00"},
-                        {"session_id": "new", "updated_at": "2026-01-02T00:00:00+00:00"},
-                    ]
-                }
+                return SessionListModel.from_dict(
+                    {
+                        "sessions": [
+                            _session_dict("old", updated_at="2026-01-01T00:00:00+00:00"),
+                            _session_dict("new", updated_at="2026-01-02T00:00:00+00:00"),
+                        ]
+                    }
+                )
 
             def read_events(self, session_id, cursor):
                 self.session_id = session_id
-                return {"cursor": 1, "events": [Event.create("human", "message", f"from {session_id}").to_dict()]}
+                return EventBatchModel.from_dict(
+                    {
+                        "session_id": session_id,
+                        "cursor": 1,
+                        "events": [Event.create("human", "message", f"from {session_id}").to_dict()],
+                    }
+                )
 
         fake = FakeClient()
         output = io.StringIO()
@@ -192,22 +208,30 @@ class WatchTests(unittest.TestCase):
 
             def start_session(self, payload):
                 self.payload = payload
-                return {
-                    "session_id": "started",
-                    "status": "running",
-                    "workdir": payload["workdir"],
-                    "jsonl_path": "/tmp/started.jsonl",
-                    "markdown_path": "/tmp/started.md",
-                }
+                return SessionStateModel.from_dict(
+                    _session_dict(
+                        "started",
+                        status="running",
+                        workdir=payload["workdir"],
+                        jsonl_path="/tmp/started.jsonl",
+                        markdown_path="/tmp/started.md",
+                    )
+                )
 
             def wait_events(self, session_id, cursor, timeout_ms):
                 if self.sent:
-                    return {"cursor": cursor, "events": []}
+                    return EventBatchModel.from_dict({"session_id": session_id, "cursor": cursor, "events": []})
                 self.sent = True
-                return {"cursor": 1, "events": [Event.create("referee", "message", f"watching {session_id}").to_dict()]}
+                return EventBatchModel.from_dict(
+                    {
+                        "session_id": session_id,
+                        "cursor": 1,
+                        "events": [Event.create("referee", "message", f"watching {session_id}").to_dict()],
+                    }
+                )
 
             def get_session(self, session_id):
-                return {"session_id": session_id, "status": "done"}
+                return SessionStateModel.from_dict(_session_dict(session_id, status="done"))
 
         fake = FakeClient()
         output = io.StringIO()
@@ -235,13 +259,15 @@ class WatchTests(unittest.TestCase):
         class FakeClient:
             def start_session(self, payload):
                 self.payload = payload
-                return {
-                    "session_id": "started",
-                    "status": "running",
-                    "workdir": payload["workdir"],
-                    "jsonl_path": "/tmp/started.jsonl",
-                    "markdown_path": "/tmp/started.md",
-                }
+                return SessionStateModel.from_dict(
+                    _session_dict(
+                        "started",
+                        status="running",
+                        workdir=payload["workdir"],
+                        jsonl_path="/tmp/started.jsonl",
+                        markdown_path="/tmp/started.md",
+                    )
+                )
 
         fake = FakeClient()
         output = io.StringIO()

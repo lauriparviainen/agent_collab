@@ -214,30 +214,29 @@ def _watch_daemon_session(session_id: str, server_url, cursor: int, follow: bool
     client = _client(server_url)
     current = max(0, int(cursor))
     while True:
-        result = (
+        batch = (
             client.wait_events(session_id, current, wait_ms)
             if follow
             else client.read_events(session_id, current)
         )
-        for payload in result.get("events", []):
-            print_event(Event(**payload), color=color)
-        current = int(result.get("cursor", current))
+        for event in batch.events:
+            print_event(Event(**event.to_dict()), color=color)
+        current = int(batch.cursor)
         if not follow:
             return
         state = client.get_session(session_id)
-        if state.get("status") in {"done", "failed", "stopped", "interrupted"} and not result.get("events"):
+        if state.status in {"done", "failed", "stopped", "interrupted"} and not batch.events:
             return
 
 
 def _latest_daemon_session_id(server_url) -> str:
-    sessions = _client(server_url).list_sessions().get("sessions", [])
+    sessions = _client(server_url).list_sessions().sessions
     if not sessions:
         raise ValueError("no daemon sessions found")
-    latest = max(sessions, key=lambda item: (item.get("updated_at") or item.get("created_at") or "", item.get("session_id") or ""))
-    session_id = latest.get("session_id")
-    if not session_id:
+    latest = max(sessions, key=lambda item: (item.updated_at or item.created_at or "", item.session_id or ""))
+    if not latest.session_id:
         raise ValueError("latest daemon session did not include a session_id")
-    return str(session_id)
+    return str(latest.session_id)
 
 
 def _main_serve(argv) -> int:
@@ -285,7 +284,7 @@ def _main_start(argv) -> int:
         if args.watch:
             print("")
             _watch_daemon_session(
-                result["session_id"],
+                result.session_id,
                 server_url=args.server_url,
                 cursor=0,
                 follow=True,
@@ -433,13 +432,13 @@ def _main_list(argv) -> int:
     parser = build_client_parser("agent-collab list", "List daemon sessions.")
     args = parser.parse_args(argv)
     try:
-        sessions = _client(args.server_url).list_sessions().get("sessions", [])
+        sessions = _client(args.server_url).list_sessions().sessions
         print(f"{'SESSION_ID':<24} {'STATUS':<11} {'WORKFLOW':<14} {'WORKDIR':<40} AGENTS")
         for session in sessions:
             print(
-                f"{session.get('session_id', ''):<24} {session.get('status', ''):<11} "
-                f"{session.get('workflow', ''):<14} {session.get('workdir', ''):<40} "
-                f"{_format_agents_summary(session.get('settings'))}"
+                f"{session.session_id:<24} {session.status:<11} "
+                f"{session.workflow:<14} {session.workdir:<40} "
+                f"{_format_agents_summary(session.settings)}"
             )
     except Exception as exc:
         print(f"ERROR   {exc}", file=sys.stderr)
@@ -466,17 +465,17 @@ def _main_events(argv) -> int:
     args = parser.parse_args(argv)
     try:
         client = _client(args.server_url)
-        result = (
+        batch = (
             client.wait_events(args.session_id, args.cursor, args.timeout_ms)
             if args.wait
             else client.read_events(args.session_id, args.cursor)
         )
         if args.json:
-            print(json.dumps(result, indent=2))
+            print(json.dumps(batch.to_dict(), indent=2))
         else:
-            for payload in result.get("events", []):
-                print_event(Event(**payload), color=not args.no_color)
-            print(f"cursor: {result.get('cursor', args.cursor)}")
+            for event in batch.events:
+                print_event(Event(**event.to_dict()), color=not args.no_color)
+            print(f"cursor: {batch.cursor}")
     except Exception as exc:
         print(f"ERROR   {exc}", file=sys.stderr)
         return 1
@@ -495,10 +494,10 @@ def _main_stop(argv) -> int:
 
 
 def _print_session(session) -> None:
+    # ``session`` is a SessionStateModel from the typed client.
     for key in ("session_id", "status", "workflow", "workdir", "jsonl_path", "markdown_path"):
-        if key in session:
-            print(f"{key}: {session[key]}")
-    settings = session.get("settings") if isinstance(session, dict) else None
+        print(f"{key}: {getattr(session, key)}")
+    settings = session.settings
     if not settings:
         return
     sequence = (settings.get("workflow") or {}).get("sequence")

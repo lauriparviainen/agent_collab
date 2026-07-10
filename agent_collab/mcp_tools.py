@@ -210,26 +210,33 @@ class SessionManagerToolBackend:
 
 
 class HttpClientToolBackend:
+    """Adapts the typed ``AgentCollabClient`` to the dict-shaped ``ToolBackend``.
+
+    The client returns ``api_schema`` DTOs; the MCP ``content()`` serializer
+    wants JSON-ready dicts, so every DTO result is ``.to_dict()``-ed here.
+    ``describe_options`` is already a raw dict and passes through.
+    """
+
     def __init__(self, client_factory: Callable[[], Any]):
         self.client_factory = client_factory
 
     async def start_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self.client_factory().start_session(payload)
+        return self.client_factory().start_session(payload).to_dict()
 
     async def describe_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.client_factory().describe_options(payload)
 
     async def list_sessions(self) -> Dict[str, Any]:
-        return self.client_factory().list_sessions()
+        return self.client_factory().list_sessions().to_dict()
 
     async def get_session(self, session_id: str) -> Dict[str, Any]:
-        return self.client_factory().get_session(session_id)
+        return self.client_factory().get_session(session_id).to_dict()
 
     async def read_events(self, session_id: str, cursor: int) -> Dict[str, Any]:
-        return self.client_factory().read_events(session_id, cursor)
+        return self.client_factory().read_events(session_id, cursor).to_dict()
 
     async def wait_events(self, session_id: str, cursor: int, timeout_ms: int) -> Dict[str, Any]:
-        return self.client_factory().wait_events(session_id, cursor, timeout_ms)
+        return self.client_factory().wait_events(session_id, cursor, timeout_ms).to_dict()
 
     async def read_transcript(self, session_id: str) -> str:
         return self.client_factory().read_transcript(session_id)
@@ -240,10 +247,10 @@ class HttpClientToolBackend:
             _required_str(payload, "text"),
             source=str(payload.get("source", "referee")) if payload.get("source") is not None else "referee",
             target=payload.get("target"),
-        )
+        ).to_dict()
 
     async def stop_session(self, session_id: str) -> Dict[str, Any]:
-        return self.client_factory().stop_session(session_id)
+        return self.client_factory().stop_session(session_id).to_dict()
 
 
 def jsonrpc_result(request_id: Any, result: Any) -> Dict[str, Any]:

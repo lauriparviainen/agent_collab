@@ -69,7 +69,9 @@ class CursorState:
 
 @dataclass(frozen=True)
 class SessionPickerState:
-    sessions: Tuple[Mapping[str, Any], ...]
+    # Session entries are SessionStateModel DTOs from the typed client (plain
+    # wire dicts also work — helpers read both via ``_value``).
+    sessions: Tuple[Any, ...]
     index: int = 0
 
 
@@ -183,10 +185,10 @@ def format_slash_completion_lines(state: SlashCompletionState, max_items: int = 
 ACTIVITY_FRAMES = ("-", "\\", "|", "/")
 
 
-def format_activity_indicator(session: Optional[Mapping[str, Any]], tick: int = 0) -> str:
+def format_activity_indicator(session: Any, tick: int = 0) -> str:
     if not session:
         return "no session"
-    status = str(session.get("status") or "")
+    status = str(_value(session, "status", None) or "")
     if status_is_terminal(status):
         return f"read-only {status}"
     if status == "awaiting_input":
@@ -244,15 +246,21 @@ def wrap_plain_lines(lines: Sequence[str], width: int) -> Tuple[str, ...]:
     return tuple(wrapped)
 
 
-def format_session_details(session: Mapping[str, Any]) -> Tuple[str, ...]:
-    settings = session.get("settings") if isinstance(session.get("settings"), Mapping) else {}
+def format_session_details(session: Any) -> Tuple[str, ...]:
+    """Render the per-session detail block.
+
+    ``session`` is a ``SessionStateModel`` from the typed client (the TUI path)
+    or a plain wire dict — ``_value`` reads both.
+    """
+    raw_settings = _value(session, "settings", None)
+    settings = raw_settings if isinstance(raw_settings, Mapping) else {}
     workflow_settings = settings.get("workflow") if isinstance(settings.get("workflow"), Mapping) else {}
 
     lines = []
     for key in ("session_id", "status"):
         _append_present(lines, key, session)
 
-    workflow = workflow_settings.get("name") or session.get("workflow")
+    workflow = workflow_settings.get("name") or _value(session, "workflow", None)
     if workflow is not None:
         lines.append(f"workflow: {_display_value(workflow)}")
     sequence = workflow_settings.get("sequence")
@@ -311,56 +319,52 @@ def format_session_details(session: Mapping[str, Any]) -> Tuple[str, ...]:
     return tuple(lines)
 
 
-def session_workflow_name(session: Mapping[str, Any]) -> str:
-    settings = session.get("settings") if isinstance(session.get("settings"), Mapping) else {}
+def session_workflow_name(session: Any) -> str:
+    raw_settings = _value(session, "settings", None)
+    settings = raw_settings if isinstance(raw_settings, Mapping) else {}
     workflow = settings.get("workflow") if isinstance(settings.get("workflow"), Mapping) else {}
-    return str(workflow.get("name") or session.get("workflow") or "")
+    return str(workflow.get("name") or _value(session, "workflow", None) or "")
 
 
 def status_is_terminal(status: Any) -> bool:
     return str(status or "") in TERMINAL_STATUSES
 
 
-def session_is_terminal(session: Mapping[str, Any]) -> bool:
-    return status_is_terminal(session.get("status"))
+def session_is_terminal(session: Any) -> bool:
+    return status_is_terminal(_value(session, "status", None))
 
 
-def should_start_poller(session: Optional[Mapping[str, Any]]) -> bool:
+def should_start_poller(session: Any) -> bool:
     return bool(session) and not session_is_terminal(session)
 
 
-def select_latest_session_id(sessions: Sequence[Mapping[str, Any]]) -> str:
+def _session_sort_key(session: Any) -> Tuple[str, str]:
+    return (
+        str(_value(session, "updated_at", None) or _value(session, "created_at", None) or ""),
+        str(_value(session, "session_id", None) or ""),
+    )
+
+
+def select_latest_session_id(sessions: Sequence[Any]) -> str:
     if not sessions:
         raise ValueError("no daemon sessions found")
-    latest = max(
-        sessions,
-        key=lambda item: (str(item.get("updated_at") or item.get("created_at") or ""), str(item.get("session_id") or "")),
-    )
-    session_id = latest.get("session_id")
+    latest = max(sessions, key=_session_sort_key)
+    session_id = _value(latest, "session_id", None)
     if not session_id:
         raise ValueError("latest daemon session did not include a session_id")
     return str(session_id)
 
 
-def sort_sessions_latest_first(sessions: Sequence[Mapping[str, Any]]) -> Tuple[Mapping[str, Any], ...]:
-    return tuple(
-        sorted(
-            sessions,
-            key=lambda item: (
-                str(item.get("updated_at") or item.get("created_at") or ""),
-                str(item.get("session_id") or ""),
-            ),
-            reverse=True,
-        )
-    )
+def sort_sessions_latest_first(sessions: Sequence[Any]) -> Tuple[Any, ...]:
+    return tuple(sorted(sessions, key=_session_sort_key, reverse=True))
 
 
-def make_session_picker(sessions: Sequence[Mapping[str, Any]], current_session_id: Optional[str] = None) -> SessionPickerState:
+def make_session_picker(sessions: Sequence[Any], current_session_id: Optional[str] = None) -> SessionPickerState:
     ordered = sort_sessions_latest_first(sessions)
     index = 0
     if current_session_id:
         for candidate_index, session in enumerate(ordered):
-            if str(session.get("session_id") or "") == current_session_id:
+            if str(_value(session, "session_id", None) or "") == current_session_id:
                 index = candidate_index
                 break
     return SessionPickerState(sessions=ordered, index=index)
@@ -376,7 +380,7 @@ def move_session_picker(picker: SessionPickerState, delta: int) -> SessionPicker
 def selected_picker_session_id(picker: SessionPickerState) -> Optional[str]:
     if not picker.sessions:
         return None
-    session_id = picker.sessions[picker.index].get("session_id")
+    session_id = _value(picker.sessions[picker.index], "session_id", None)
     return str(session_id) if session_id else None
 
 
@@ -389,17 +393,18 @@ def format_session_picker_lines(picker: SessionPickerState) -> Tuple[str, ...]:
     for index, session in enumerate(picker.sessions):
         marker = ">" if index == picker.index else " "
         lines.append(
-            f"{marker} {str(session.get('session_id') or ''):<24} "
-            f"{str(session.get('status') or ''):<11} "
+            f"{marker} {str(_value(session, 'session_id', None) or ''):<24} "
+            f"{str(_value(session, 'status', None) or ''):<11} "
             f"{session_workflow_name(session):<14} "
-            f"{str(session.get('updated_at') or session.get('created_at') or ''):<25} "
-            f"{str(session.get('workdir') or '')}"
+            f"{str(_value(session, 'updated_at', None) or _value(session, 'created_at', None) or ''):<25} "
+            f"{str(_value(session, 'workdir', None) or '')}"
         )
     return tuple(lines)
 
 
-def agents_from_session(session: Mapping[str, Any]) -> Tuple[AgentRef, ...]:
-    settings = session.get("settings") if isinstance(session.get("settings"), Mapping) else {}
+def agents_from_session(session: Any) -> Tuple[AgentRef, ...]:
+    raw_settings = _value(session, "settings", None)
+    settings = raw_settings if isinstance(raw_settings, Mapping) else {}
     agents = settings.get("agents") if isinstance(settings.get("agents"), Mapping) else {}
     refs = []
     for agent_id, agent in agents.items():
@@ -533,9 +538,10 @@ def workflow_ids_from_options(options: Mapping[str, Any]) -> Tuple[str, ...]:
     return tuple(ids)
 
 
-def _append_present(lines: list[str], key: str, data: Mapping[str, Any]) -> None:
-    if key in data and data[key] is not None:
-        lines.append(f"{key}: {_display_value(data[key])}")
+def _append_present(lines: list[str], key: str, data: Any) -> None:
+    value = _value(data, key, None)
+    if value is not None:
+        lines.append(f"{key}: {_display_value(value)}")
 
 
 def _display_value(value: Any) -> str:

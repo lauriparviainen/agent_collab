@@ -2,12 +2,36 @@ import json
 import unittest
 from unittest import mock
 
+from agent_collab.api_schema import EventBatchModel, SessionListModel, SessionStateModel
 from agent_collab.client import ClientError
 from agent_collab.mcp_server import handle, handle_tool
 
 
 def _payload(result):
     return json.loads(result["content"][0]["text"])
+
+
+def _state(**fields):
+    """Typed client result: the session DTO the real AgentCollabClient returns."""
+    data = {"session_id": "s1", "status": "running"}
+    data.update(fields)
+    return SessionStateModel.from_dict(data)
+
+
+def _event(text):
+    return {
+        "timestamp": "2026-07-10T00:00:00+00:00",
+        "source": "referee",
+        "type": "message",
+        "text": text,
+        "raw": None,
+    }
+
+
+def _batch(session_id="s1", cursor=0, events=()):
+    return EventBatchModel.from_dict(
+        {"session_id": session_id, "cursor": cursor, "events": list(events)}
+    )
 
 
 def _assert_tool_result(testcase, result, payload, is_error=False):
@@ -84,12 +108,13 @@ class McpServerTests(unittest.TestCase):
         }
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
-            client.start_session.return_value = {"session_id": "s1", "status": "running"}
+            state = _state()
+            client.start_session.return_value = state
 
             result = handle_tool("agent_collab_start", args)
 
         client.start_session.assert_called_once_with(args)
-        _assert_tool_result(self, result, {"session_id": "s1", "status": "running"})
+        _assert_tool_result(self, result, state.to_dict())
 
     def test_start_maps_typed_options_to_client_start_session(self):
         args = {
@@ -102,12 +127,13 @@ class McpServerTests(unittest.TestCase):
         }
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
-            client.start_session.return_value = {"session_id": "s1", "status": "running"}
+            state = _state()
+            client.start_session.return_value = state
 
             result = handle_tool("agent_collab_start", args)
 
         client.start_session.assert_called_once_with(args)
-        _assert_tool_result(self, result, {"session_id": "s1", "status": "running"})
+        _assert_tool_result(self, result, state.to_dict())
 
     def test_start_rejects_missing_workdir(self):
         result = handle_tool("agent_collab_start", {"task": "mcp test"})
@@ -169,37 +195,41 @@ class McpServerTests(unittest.TestCase):
     def test_list_maps_to_client_list_sessions(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
-            client.list_sessions.return_value = {"sessions": [{"session_id": "s1"}]}
+            listing = SessionListModel(sessions=[_state()])
+            client.list_sessions.return_value = listing
 
             result = handle_tool("agent_collab_list_sessions", {})
 
         client.list_sessions.assert_called_once_with()
-        _assert_tool_result(self, result, {"sessions": [{"session_id": "s1"}]})
+        _assert_tool_result(self, result, listing.to_dict())
 
     def test_status_maps_to_client_get_session(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
-            client.get_session.return_value = {"session_id": "s1", "status": "done"}
+            state = _state(status="done")
+            client.get_session.return_value = state
 
             result = handle_tool("agent_collab_status", {"session_id": "s1"})
 
         client.get_session.assert_called_once_with("s1")
-        _assert_tool_result(self, result, {"session_id": "s1", "status": "done"})
+        _assert_tool_result(self, result, state.to_dict())
 
     def test_read_events_maps_to_client_read_events(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
-            client.read_events.return_value = {"cursor": 4, "events": [{"text": "hello"}]}
+            batch = _batch(cursor=4, events=[_event("hello")])
+            client.read_events.return_value = batch
 
             result = handle_tool("agent_collab_read_events", {"session_id": "s1", "cursor": 2})
 
         client.read_events.assert_called_once_with("s1", 2)
-        _assert_tool_result(self, result, {"cursor": 4, "events": [{"text": "hello"}]})
+        _assert_tool_result(self, result, batch.to_dict())
 
     def test_wait_events_maps_to_client_wait_events(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
-            client.wait_events.return_value = {"cursor": 4, "events": []}
+            batch = _batch(cursor=4)
+            client.wait_events.return_value = batch
 
             result = handle_tool(
                 "agent_collab_wait_events",
@@ -207,7 +237,7 @@ class McpServerTests(unittest.TestCase):
             )
 
         client.wait_events.assert_called_once_with("s1", 2, 30000)
-        _assert_tool_result(self, result, {"cursor": 4, "events": []})
+        _assert_tool_result(self, result, batch.to_dict())
 
     def test_transcript_maps_to_client_read_transcript_as_direct_text(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -222,7 +252,8 @@ class McpServerTests(unittest.TestCase):
     def test_post_message_maps_to_client_post_message(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
-            client.post_message.return_value = {"session_id": "s1", "cursor": 3, "events": [{"text": "hello"}]}
+            batch = _batch(cursor=3, events=[_event("hello")])
+            client.post_message.return_value = batch
 
             result = handle_tool(
                 "agent_collab_post_message",
@@ -230,17 +261,18 @@ class McpServerTests(unittest.TestCase):
             )
 
         client.post_message.assert_called_once_with("s1", "hello", source="referee", target="claude")
-        _assert_tool_result(self, result, {"session_id": "s1", "cursor": 3, "events": [{"text": "hello"}]})
+        _assert_tool_result(self, result, batch.to_dict())
 
     def test_stop_maps_to_client_stop_session(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
             client = client_cls.return_value
-            client.stop_session.return_value = {"session_id": "s1", "status": "stopped"}
+            state = _state(status="stopped")
+            client.stop_session.return_value = state
 
             result = handle_tool("agent_collab_stop", {"session_id": "s1"})
 
         client.stop_session.assert_called_once_with("s1")
-        _assert_tool_result(self, result, {"session_id": "s1", "status": "stopped"})
+        _assert_tool_result(self, result, state.to_dict())
 
     def test_client_error_returns_tool_content_error(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:

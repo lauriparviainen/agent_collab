@@ -7,7 +7,15 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .api_schema import API_VERSION, API_VERSION_HEADER
+from .api_schema import (
+    API_VERSION,
+    API_VERSION_HEADER,
+    EventBatchModel,
+    HealthModel,
+    SessionListModel,
+    SessionStateModel,
+    TranscriptModel,
+)
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8765"
@@ -25,34 +33,45 @@ def default_server_url() -> str:
 
 
 class AgentCollabClient:
+    """Typed HTTP client: every response parses into its ``api_schema`` DTO.
+
+    ``describe_options`` is the deliberate exception — the options payload is
+    the ``/options`` runtime authority's dynamic shape, so it stays a raw dict
+    (see stage-5.3 "What does NOT go into a static schema").
+    """
+
     def __init__(self, server_url: Optional[str] = None, timeout: float = 60.0):
         self.server_url = (server_url or default_server_url()).rstrip("/")
         self.timeout = timeout
 
-    def health(self) -> Dict[str, Any]:
-        return self._request("GET", "/health")
+    def health(self) -> HealthModel:
+        return HealthModel.from_dict(self._request("GET", "/health"))
 
-    def start_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._request("POST", "/sessions", payload)
+    def start_session(self, payload: Dict[str, Any]) -> SessionStateModel:
+        return SessionStateModel.from_dict(self._request("POST", "/sessions", payload))
 
     def describe_options(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self._request("POST", "/options", payload or {})
 
-    def list_sessions(self) -> Dict[str, Any]:
-        return self._request("GET", "/sessions")
+    def list_sessions(self) -> SessionListModel:
+        return SessionListModel.from_dict(self._request("GET", "/sessions"))
 
-    def get_session(self, session_id: str) -> Dict[str, Any]:
-        return self._request("GET", f"/sessions/{session_id}")
+    def get_session(self, session_id: str) -> SessionStateModel:
+        return SessionStateModel.from_dict(self._request("GET", f"/sessions/{session_id}"))
 
-    def read_events(self, session_id: str, cursor: int = 0) -> Dict[str, Any]:
-        return self._request("GET", f"/sessions/{session_id}/events", {"cursor": cursor})
+    def read_events(self, session_id: str, cursor: int = 0) -> EventBatchModel:
+        return EventBatchModel.from_dict(
+            self._request("GET", f"/sessions/{session_id}/events", {"cursor": cursor})
+        )
 
-    def wait_events(self, session_id: str, cursor: int = 0, timeout_ms: int = 30000) -> Dict[str, Any]:
-        return self._request(
-            "GET",
-            f"/sessions/{session_id}/events/wait",
-            {"cursor": cursor, "timeout_ms": timeout_ms},
-            timeout=max(self.timeout, (timeout_ms / 1000.0) + 5),
+    def wait_events(self, session_id: str, cursor: int = 0, timeout_ms: int = 30000) -> EventBatchModel:
+        return EventBatchModel.from_dict(
+            self._request(
+                "GET",
+                f"/sessions/{session_id}/events/wait",
+                {"cursor": cursor, "timeout_ms": timeout_ms},
+                timeout=max(self.timeout, (timeout_ms / 1000.0) + 5),
+            )
         )
 
     def post_message(
@@ -61,18 +80,20 @@ class AgentCollabClient:
         text: str,
         source: str = "referee",
         target: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> EventBatchModel:
         payload: Dict[str, Any] = {"source": source, "text": text}
         if target is not None:
             payload["target"] = target
-        return self._request("POST", f"/sessions/{session_id}/messages", payload)
+        return EventBatchModel.from_dict(
+            self._request("POST", f"/sessions/{session_id}/messages", payload)
+        )
 
     def read_transcript(self, session_id: str) -> str:
         result = self._request("GET", f"/sessions/{session_id}/transcript")
-        return str(result.get("transcript", ""))
+        return TranscriptModel.from_dict(result).transcript
 
-    def stop_session(self, session_id: str) -> Dict[str, Any]:
-        return self._request("POST", f"/sessions/{session_id}/stop")
+    def stop_session(self, session_id: str) -> SessionStateModel:
+        return SessionStateModel.from_dict(self._request("POST", f"/sessions/{session_id}/stop"))
 
     def _request(
         self,

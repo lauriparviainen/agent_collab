@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from .api_schema import SessionStateModel
 from .client import AgentCollabClient
 from .config import DEFAULT_WORKFLOW
 from .tui_core import (
@@ -97,7 +98,7 @@ class TuiApp:
         self.stdscr = stdscr
         self.client = client
         self.session_id: Optional[str] = None
-        self.session: Optional[Mapping[str, Any]] = None
+        self.session: Optional[SessionStateModel] = None
         self.transcript_lines = ()
         self.scroll = ScrollState()
         self.overlay_lines: Optional[Sequence[str]] = None
@@ -146,19 +147,19 @@ class TuiApp:
         cursor, _ = advance_cursor_state(
             cursor,
             session_id=session_id,
-            cursor=batch.get("cursor", 0),
+            cursor=batch.cursor,
             epoch=cursor.epoch,
         )
         self.cursor_state = cursor
         self.session_id = session_id
         self.session = session
-        self.transcript_lines = format_transcript_events(batch.get("events", []))
+        self.transcript_lines = format_transcript_events(batch.events)
         self.scroll = follow_scroll(len(self.transcript_lines), self._body_height())
         self.overlay_lines = None
         self.picker = None
         self.slash_completion_dismissed_for = None
         if session_is_terminal(session):
-            self.message = f"session is read-only ({session.get('status')})"
+            self.message = f"session is read-only ({session.status})"
         else:
             self.message = f"opened {session_id}" if _session_accepts_input(session) else "session is read-only (not interactive)"
             self._start_poller()
@@ -225,8 +226,8 @@ class TuiApp:
             if stop.is_set():
                 return
             self.events.put(("batch", epoch, session_id, batch))
-            current = int(batch.get("cursor", current))
-            if not batch.get("events"):
+            current = int(batch.cursor)
+            if not batch.events:
                 try:
                     session = self.client.get_session(session_id)
                 except Exception as exc:
@@ -250,12 +251,12 @@ class TuiApp:
                 self.cursor_state, accepted = advance_cursor_state(
                     self.cursor_state,
                     session_id=session_id,
-                    cursor=batch.get("cursor", self.cursor_state.cursor),
+                    cursor=batch.cursor,
                     epoch=epoch,
                 )
                 if not accepted:
                     continue
-                events = batch.get("events", [])
+                events = batch.events
                 if events:
                     self.transcript_lines = self.transcript_lines + format_transcript_events(events)
                     self.scroll = clamp_scroll(self.scroll, len(self.transcript_lines), self._body_height())
@@ -266,7 +267,7 @@ class TuiApp:
                     continue
                 self.session = session
                 if session_is_terminal(session):
-                    self.message = f"session is read-only ({session.get('status')})"
+                    self.message = f"session is read-only ({session.status})"
                     self._stop_poller()
             elif kind == "error":
                 _, epoch, session_id, message = item
@@ -470,7 +471,7 @@ class TuiApp:
                 self.message = "no active session"
                 return
             if self.session and session_is_terminal(self.session):
-                self.message = f"session already {self.session.get('status')}"
+                self.message = f"session already {self.session.status}"
                 return
             try:
                 self.session = self.client.stop_session(self.session_id)
@@ -489,7 +490,7 @@ class TuiApp:
             self.message = "no active session"
             return
         if not _session_accepts_input(self.session):
-            status = self.session.get("status")
+            status = self.session.status
             self.message = f"session is read-only ({status})" if session_is_terminal(self.session) else READ_ONLY_INPUT_MESSAGE
             return
         self._stop_poller()
@@ -497,15 +498,14 @@ class TuiApp:
             batch = self.client.post_message(self.session_id, text, source="referee", target=target)
             self.cursor_state = CursorState(
                 session_id=self.session_id,
-                cursor=max(0, int(batch.get("cursor", self.cursor_state.cursor))),
+                cursor=max(0, int(batch.cursor)),
                 epoch=self.cursor_state.epoch + 1,
             )
-            events = batch.get("events", [])
+            events = batch.events
             if events:
                 self.transcript_lines = self.transcript_lines + format_transcript_events(events)
                 self.scroll = follow_scroll(len(self.transcript_lines), self._body_height())
-            accepted = events[0] if events else {}
-            raw = accepted.get("raw") if isinstance(accepted, Mapping) else {}
+            raw = events[0].raw if events else None
             queued = isinstance(raw, Mapping) and bool(raw.get("queued"))
             resolved = raw.get("resolved_target") if isinstance(raw, Mapping) else None
             if resolved:
@@ -521,7 +521,7 @@ class TuiApp:
 
     def _open_session_picker(self) -> None:
         try:
-            sessions = self.client.list_sessions().get("sessions", [])
+            sessions = self.client.list_sessions().sessions
         except Exception as exc:
             self.message = str(exc)
             return
@@ -594,7 +594,7 @@ class TuiApp:
                 result = self.client.start_session(payload)
                 self.new_wizard = None
                 self.overlay_lines = None
-                self.activate_session(str(result["session_id"]))
+                self.activate_session(result.session_id)
             except Exception as exc:
                 self.message = str(exc)
 
@@ -610,8 +610,8 @@ class TuiApp:
         return workflows[0] if workflows else DEFAULT_WORKFLOW
 
     def _default_workdir(self) -> Path:
-        if self.session and self.session.get("workdir"):
-            return Path(str(self.session["workdir"])).expanduser().resolve()
+        if self.session and self.session.workdir:
+            return Path(self.session.workdir).expanduser().resolve()
         return Path(".").expanduser().resolve()
 
     def _render(self) -> None:
@@ -639,7 +639,7 @@ class TuiApp:
             separator_x = transcript_width
             for row in range(body_top, body_top + body_height):
                 self._add(row, separator_x, "|", 1, self._style("chrome"))
-            detail_lines = wrap_plain_lines(format_session_details(self.session or {}), details_width - 2)
+            detail_lines = wrap_plain_lines(format_session_details(self.session) if self.session else (), details_width - 2)
             for index, line in enumerate(detail_lines[:body_height]):
                 self._add(body_top + index, separator_x + 1, line, details_width - 2)
 
@@ -682,10 +682,10 @@ class TuiApp:
 
     def _render_header(self, width: int) -> None:
         if self.session:
-            session_id = str(self.session.get("session_id") or self.session_id or "")
-            status = str(self.session.get("status") or "")
+            session_id = self.session.session_id or self.session_id or ""
+            status = self.session.status
             workflow = session_workflow_name(self.session)
-            workdir = str(self.session.get("workdir") or "")
+            workdir = self.session.workdir
         else:
             session_id = self.session_id or "no-session"
             status = "read-only"
@@ -772,9 +772,9 @@ def _ui_line(text: str):
     return TranscriptLine(source="ui", text=text)
 
 
-def _session_accepts_input(session: Mapping[str, Any]) -> bool:
-    settings = session.get("settings") if isinstance(session.get("settings"), Mapping) else {}
-    interactive = bool(session.get("interactive") or settings.get("interactive"))
+def _session_accepts_input(session: SessionStateModel) -> bool:
+    settings = session.settings if isinstance(session.settings, Mapping) else {}
+    interactive = bool(session.interactive or settings.get("interactive"))
     return interactive and not session_is_terminal(session)
 
 
@@ -782,7 +782,7 @@ def run_tui(session_id: Optional[str] = None, server_url: Optional[str] = None) 
     client = AgentCollabClient(server_url)
     initial_message = ""
     if session_id is None:
-        sessions = client.list_sessions().get("sessions", [])
+        sessions = client.list_sessions().sessions
         if sessions:
             session_id = select_latest_session_id(sessions)
         else:
