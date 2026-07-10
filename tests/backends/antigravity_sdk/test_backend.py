@@ -386,10 +386,13 @@ class SdkCredentialsTests(unittest.TestCase):
         present = object()
         with mock.patch("importlib.util.find_spec", return_value=present):
             with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "abc"}):
-                self.assertEqual(AntigravitySdkBackend().probe().credentials, "ok")
+                self.assertEqual(
+                    AntigravitySdkBackend(libc_ver=lambda: ("glibc", "2.37")).probe().credentials,
+                    "ok",
+                )
             env_no_key = {k: v for k, v in os.environ.items() if k != "GEMINI_API_KEY"}
             with mock.patch.dict(os.environ, env_no_key, clear=True):
-                health = AntigravitySdkBackend().probe()
+                health = AntigravitySdkBackend(libc_ver=lambda: ("glibc", "2.37")).probe()
         self.assertEqual(health.status, "ok")
         self.assertEqual(health.credentials, "unknown")  # never "missing" -> never blocks
 

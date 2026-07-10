@@ -1,152 +1,272 @@
-# Stage 5.1.1: xAI provider (Grok CLI + xAI SDK)
+# Stage 5.1.1: xAI provider (`grok` CLI + `xai-sdk`)
+
+## Status
+
+Ready for implementation. Revised 2026-07-10 against the backend-package and
+backend-qualified option architecture delivered by Stage 5.1.
 
 ## Purpose
 
-Add `xai` as a fourth real provider `type`, with two backends:
+Add `xai` as a fourth real provider type with two first-class backends:
 
-- a `cli` backend for the installed `grok` command (Grok Build), and
-- an `sdk` backend for the xAI Python SDK (`xai-sdk`).
+- `xai_cli`: the installed Grok Build `grok` command in headless
+  `streaming-json` mode;
+- `xai_sdk`: the official `xai-sdk` Python package, initially message-only.
 
-This is split out of [Stage 5.1](../tasks_closed/stage-5.1-first-class-sdk-backends.md) on
-purpose. Stage 5.1 only adds a *second backend* (`sdk`) to providers that already
-exist (`claude`, `codex`, `antigravity`). xAI is different in kind: it adds a new
-provider request bucket and provider source, which still fan out across several
-API/config/event files even though backend option schemas are now self-owned.
-Two source-attribution edits fail **silently** if missed (see "Central lists and
-files to touch"). Doing
-it separately keeps 5.1 focused and low-risk, and lets the xAI CLI parser wait on
-a captured tool-using fixture without blocking the three SDK backends.
+This remains separate from Stage 5.1 because it adds a new provider identity,
+not merely another backend for an existing provider. Backend-specific behavior
+is now self-owned, but a new provider still has a small, intentional fan-out for
+event attribution and config type validation.
 
-## Depends on
+## Architectural baseline
 
-- **Stage 5.1 landed first.** 5.1 makes `sdk` a first-class, installed backend
-  and adds the Claude/Codex SDK runners; this stage reuses that machinery
-  (`AgentBackend`, `probe_sdk_backend`, `settings_summary`, fake-module test
-  pattern). Do not start this stage until 5.1's SDK backends are merged.
+[Stage 5.1 backend packages and test split](../tasks_closed/stage-5.1-backend-packages-and-integration-tests.md)
+and the
+[SDK/backend-contract remediation](../tasks_closed/stage-5.1-first-class-sdk-backends-remediation.md)
+are complete. This stage must use their landed contract rather than recreate
+the former provider-wide plumbing.
 
-## Current state (after Stage 5.1)
-
-Implemented by 5.1:
-
-- `cli` + `sdk` backends for `claude`, `codex`, and `antigravity`.
-- SDK dependencies install with the project; `requires-python >= 3.10`.
-- backend registry keyed by `(agent_type, backend_id)`, health probes, honest
-  all-false capabilities, session-id capture plumbing.
-
-Missing (this stage):
-
-- `xai` provider `type`,
-- `xai` CLI backend for the installed `grok` command + a `streaming-json` parser,
-- `xai` SDK backend (message-only),
-- `xai_options` threaded through the full start/validation/settings chain,
-- `solo-xai` workflow (in project config),
-- streaming-json fixtures (reasoning turn + a tool-using turn).
-
-## Source facts to verify during implementation
-
-These CLIs/SDKs are young; re-confirm before coding.
-
-- **xAI CLI** — the installed `grok` command from Grok Build. Verified locally as
-  `grok 0.2.93`. Confirmed against `grok --help` on this machine:
-  - headless single-turn: `-p, --single <PROMPT>` (prints response, exits),
-  - `--output-format` `[default: plain] [possible values: plain, json,
-    streaming-json]`; `streaming-json` is newline-delimited JSON events,
-  - `--permission-mode` `[possible values: default, acceptEdits, auto, dontAsk,
-    bypassPermissions, plan]`,
-  - `--model` / `-m`, `--sandbox <PROFILE>` (env `GROK_SANDBOX`; profile *values
-    not enumerated by help*), `--reasoning-effort` (alias `--effort`), `--cwd`,
-    `--always-approve`, `--system-prompt-override`, `--json-schema`,
-    `--max-turns`, `--no-subagents`, `--prompt-file`,
-  - ACP: `grok agent stdio` runs the agent over stdio (JSON-RPC; `session/new`,
-    `session/prompt`, `session/update` with `agent_message_chunk`, session ids),
-  - sessions under `~/.grok/sessions`; auth via `XAI_API_KEY` or `grok login`.
-  - References:
-    - https://docs.x.ai/build/overview
-    - https://docs.x.ai/build/cli/headless-scripting
-- **Observed `streaming-json` events** (real NDJSON runs — treat as authoritative
-  for the parser until re-captured):
-  - `{"type": "thought", "data": "..."}` — incremental reasoning,
-  - `{"type": "text", "data": "..."}` — assistant prose,
-  - `{"type": "end", "stopReason": "...", "sessionId": "...", "requestId": "..."}`.
-  - Prose lives under `data`, **not** `text`/`content`. Flags parse both before
-    and after the `-p` value in practice; tool-using event shapes are **not yet
-    observed** (only thought/text/end captured).
-- **xAI SDK** — `xai-sdk`, imported as `xai_sdk` (not the unrelated `xai`
-  explainability package). gRPC-based, sync + async clients, Python 3.10+, reads
-  `XAI_API_KEY`. Confirmed usage:
-  `from xai_sdk import Client`; `from xai_sdk.chat import user, system`;
-  `chat = client.chat.create(model="grok-4.5")`; `chat.append(user(...))`;
-  `chat.sample().content` (plus streaming). Supports server-side tools
-  (`web_search`, `x_search`, `code_execution` — executed remotely) and
-  client-side function calling (caller runs the tool loop). It is an API client,
-  not a local coding-agent runtime: no built-in local filesystem/shell/file-edit.
-  - References:
-    - https://docs.x.ai/overview
-    - https://github.com/xai-org/xai-sdk-python
-    - https://pypi.org/project/xai-sdk/
-
-## Packaging
-
-Stage 5.1 already bumped `requires-python >= 3.10` and installs the SDKs with the
-project. This stage adds one dependency:
-
-```toml
-[project]
-dependencies = [
-  # ... claude-agent-sdk, openai-codex, google-antigravity (from 5.1) ...
-  "xai-sdk>=1.17,<2",
-]
-```
-
-Confirm the compatible range against the tested version before landing; do not
-leave it unbounded. Credentials remain external and unmanaged by `agent-collab`
-(`XAI_API_KEY` or the local `grok login` flow).
-
-## Provider architecture
-
-Add the registry pairs:
+Two peer packages own the implementation:
 
 ```text
-(xai, cli)
-(xai, sdk)
+agent_collab/backends/xai_cli/
+  __init__.py
+  backend.py
+  parser.py
+  options.toml
+  README.md
+
+agent_collab/backends/xai_sdk/
+  __init__.py
+  backend.py
+  options.toml
+  README.md
 ```
 
-Add two standalone peer backend packages:
+The public request contract is already generic:
 
-```text
-agent_collab/backends/xai_cli/     # backend.py, parser.py, options.toml, README.md
-agent_collab/backends/xai_sdk/     # backend.py, options.toml, README.md
+```json
+{
+  "backend_options": {
+    "xai_cli": {"model": "grok-4.5", "thinking_level": "high"}
+  }
+}
 ```
 
-Provider `type` is `xai`; `grok` is the CLI command and model family. Keep the
-separation so model names like `grok-4.5` never leak into the provider layer.
+For an SDK-selected start, the selected canonical key is `xai_sdk` instead.
+Do not send both entries for `solo-xai`; the generic validator correctly rejects
+options for a backend the workflow did not select.
 
-## Config
+Consequences:
 
-Built-in default config ships the provider **disabled** with **no** workflow (a
-workflow referencing a disabled agent fails `validate_workflow` at load — this is
-why the built-in ships `antigravity` disabled with no `solo-antigravity`):
+- Do **not** add `xai_options`, `--xai-options`, an xAI wire field, an MCP input
+  field, a daemon field, or referee/TUI provider-option plumbing.
+- `backend_options.xai_cli` and `backend_options.xai_sdk` are discovered from
+  the registered backends and their colocated manifests.
+- The CLI parser belongs in `xai_cli/parser.py`, not `events.py`.
+- SDK runner and event mapping stay in `xai_sdk/backend.py`; imports stay lazy.
+- Backend-specific option rejection is declarative: an option absent from the
+  selected backend's `options.toml` fails with a
+  `backend_options.<canonical-backend>.<field>` path.
+- `agent_collab_describe_options`, settings summaries, dry-run, REST, MCP, and
+  CLI start all consume the existing backend contract. Add xAI-specific code to
+  those layers only if a focused test proves a remaining hard-coded provider
+  assumption.
+- No TUI-specific work is part of this stage. The TUI should receive xAI through
+  the same dynamic describe/start contract as every other backend.
+
+Adding a backend for an existing provider remains one package plus one registry
+entry. The three central provider lists below are needed only because `xai` is a
+new event/config provider identity.
+
+## Verified inputs and implementation gates
+
+These surfaces are young. Keep observed facts separate from facts that still
+need a checked-in fixture.
+
+### Grok Build CLI
+
+Re-verified locally on 2026-07-10 with `grok 0.2.93`:
+
+- headless single turn: `-p, --single <PROMPT>`;
+- output formats: `plain`, `json`, and newline-delimited `streaming-json`;
+- `--model`, `--permission-mode`, `--sandbox`, and
+  `--reasoning-effort`/`--effort`;
+- permission modes: `default`, `acceptEdits`, `auto`, `dontAsk`,
+  `bypassPermissions`, and `plan`;
+- sessions: `--session-id`, `--resume`, and `--continue`;
+- ACP: `grok agent stdio` (future work for this repository).
+
+The current official headless documentation recommends `--no-auto-update` for
+scripts and confirms that headless sessions live under `~/.grok/sessions`.
+`grok 0.2.93` accepts that flag even though its top-level help does not list it.
+
+Historical real `streaming-json` observations, to be recaptured as fixtures
+before parser assertions are landed:
+
+```json
+{"type":"thought","data":"..."}
+{"type":"text","data":"..."}
+{"type":"end","stopReason":"...","sessionId":"...","requestId":"..."}
+```
+
+`data`, not `text` or `content`, carries thought/text deltas. Tool-event shapes
+have not been captured. Do not infer them from Claude or Codex JSON.
+
+Primary references:
+
+- <https://docs.x.ai/build/cli/headless-scripting>
+- <https://docs.x.ai/build/overview>
+
+### xAI Python SDK
+
+Current primary documentation confirms:
+
+- distribution `xai-sdk`, import `xai_sdk`, Python 3.10+;
+- synchronous `Client` and asynchronous `AsyncClient`;
+- `client.chat.create(...)`, `chat.append(user(...))`, and
+  `await chat.sample()` on the async surface;
+- response prose at `.content` and response identity at `.id`;
+- `reasoning_effort` is a `chat.create(...)` parameter;
+- authentication defaults to `XAI_API_KEY`;
+- the API is stateless unless an explicit stateful-response flow is requested;
+- server-side tools execute at xAI, while client-side tools require the caller
+  to implement and run the tool loop.
+
+PyPI currently reports `xai-sdk 1.17.0`, but the package is not installed in
+this checkout's selected interpreter. Therefore `>=1.17,<2` is a **candidate**
+constraint, not a verified landing constraint.
+
+Before production SDK code is written:
+
+1. Install the candidate in the same Python 3.12 environment used by the
+   project.
+2. Record the installed distribution version and `python -m pip check` result.
+3. Import `xai_sdk` and introspect `AsyncClient`, chat creation, async sampling,
+   response fields, error types, and the client's close/context-manager
+   lifetime.
+4. Save non-secret facts in `tests/fixtures/xai/sdk-introspection.json`.
+5. Base the injectable fake-module/object graph on that capture.
+
+If the candidate cannot install, import, expose a non-blocking turn API, or be
+closed deterministically, do not register a guessed SDK backend. Record the
+failed version and split SDK support into a follow-up rather than landing a
+backend that cannot run.
+
+Primary references:
+
+- <https://github.com/xai-org/xai-sdk-python>
+- <https://docs.x.ai/developers/model-capabilities/text/reasoning>
+- <https://docs.x.ai/developers/tools/advanced-usage>
+- <https://pypi.org/project/xai-sdk/>
+
+## Scope
+
+Delivered by this stage:
+
+- provider source/type `xai`;
+- registered `(xai, cli)` and `(xai, sdk)` backends;
+- backend-owned option manifests, normalization, summaries, probes, runners,
+  docs, and tests;
+- a fixture-backed Grok `streaming-json` parser;
+- a message-only async xAI SDK runner;
+- uniform provider-session identity capture;
+- built-in disabled xAI config and project `solo-xai` opt-in;
+- hermetic and credentialed test coverage;
+- bounded `xai-sdk` packaging based on the verified installed version.
+
+Not delivered:
+
+- ACP transport;
+- provider resume, interrupt, or tool approval/denial;
+- a generic local client-side tool executor for chat SDKs;
+- SDK file-edit or shell-command parity with Grok Build;
+- TUI-specific provider handling.
+
+## Central provider identity edits
+
+Make these explicit new-provider edits and guard them with tests:
+
+1. `agent_collab/events.py`: add `"xai"` to `VALID_SOURCES`. Missing this
+   silently rewrites xAI events to `source="error"`.
+2. `agent_collab/runners.py`: add `"xai"` to `PROVIDER_SOURCES`. Missing this
+   misattributes subprocess stderr status and xAI-flavored mock events.
+3. `agent_collab/config.py`: add `"xai"` to `SUBPROCESS_AGENT_TYPES` (despite
+   the legacy name, this is the current real-provider type allowlist).
+4. `agent_collab/backends/__init__.py`: add `"xai_cli"` and `"xai_sdk"` to
+   `_BUILTIN_BACKENDS`.
+
+Then search for closed enumerations of the three existing real providers in
+tests, integration harnesses, docs, and snapshots. Update only enumerations
+that mean “all built-in real providers”; do not turn provider-neutral code into
+an xAI branch.
+
+No change is expected in `api_schema.py`, the start request dataclass, MCP's
+generic `backend_options` schema, or the CLI argument parser.
+
+## Backend option contracts
+
+Manifests are the shipped source of accepted options. Default config contains
+concrete agent values only; it does not declare `allowed` sets.
+
+### `xai_cli/options.toml`
+
+Declare:
+
+- `model`: string, CLI-inferred from `--model`, with no closed model allowlist;
+- `permission_mode`: string, CLI-inferred, allowed values exactly
+  `default`, `acceptEdits`, `auto`, `dontAsk`, `bypassPermissions`, `plan`;
+- `sandbox`: string, CLI-inferred, with no `allowed` list because Grok does not
+  enumerate profile names;
+- `thinking_level`: string, CLI-inferred, preferred cross-provider spelling;
+- `reasoning_effort`: string, CLI-inferred, xAI-native alias.
+
+### `xai_sdk/options.toml`
+
+Declare only:
+
+- `model`: string; use the verified live-test model as the default only after
+  the SDK/model access check;
+- `thinking_level`: string, preferred spelling;
+- `reasoning_effort`: string, xAI-native alias.
+
+For both backends, normalize `thinking_level` and `reasoning_effort` as aliases:
+
+- if one is provided, use it as the effective reasoning effort;
+- if both are provided with different values, raise `BackendOptionError` on
+  `reasoning_effort`;
+- map only one effective value to the provider;
+- keep supported values aligned with current xAI model documentation. The
+  current documented set is `low`, `medium`, `high`, plus model-specific
+  `xhigh` for the multi-agent model. If the installed CLI/SDK exposes a broader
+  set, capture that evidence before expanding the manifest.
+
+Do not put `permission_mode` or `sandbox` in the SDK manifest. Generic backend
+validation will then reject them before session creation. Conversely, do not
+invent SDK-only options until the installed API capture proves them.
+
+## Built-in and project config
+
+Ship one disabled CLI-default agent and no built-in workflow:
 
 ```toml
 # agent_collab/default_config.toml
 [agents.xai]
 type = "xai"
 command = "grok"
-args = ["--output-format", "streaming-json", "-p"]
+args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
+backend = "cli"
 enabled = false
-
-[agents.xai.options]
-# permission_mode values are grok-specific (NOT claude's set).
-permission_mode.allowed = ["default", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "plan"]
-# model.allowed / sandbox.allowed / reasoning_effort.allowed: fill from grok docs
-# before landing; do not invent value lists.
 ```
 
-`solo-xai` (and `enabled = true`) live in **project** config, mirroring how the
-repo opts into antigravity, so the built-in default stays load-valid:
+The built-in config must remain load-valid when Grok is absent. A workflow may
+not reference a disabled agent, so `solo-xai` belongs in the repository's
+project config:
 
 ```toml
 # .agent-collab/config.toml
+schema_version = 4
+
 [agents.xai]
 enabled = true
 
@@ -154,266 +274,359 @@ enabled = true
 sequence = ["xai"]
 ```
 
-Enable it (in project config) only once the installed `grok` CLI and credentials
-can be gated as reliably as Antigravity.
+Enable the project entry only after the local CLI health/auth check and live
+smoke pass, and update the existing project file's schema version to the current
+config schema while touching it. Keep `cli` as the configured/default backend;
+a solo start can select SDK through the existing `backend="sdk"` request
+override.
 
-## xAI CLI backend
+## `xai_cli` backend
 
-Use the installed `grok` command. **Initial transport: `--output-format
-streaming-json` via `-p`.** ACP (`grok agent stdio`) is explicitly future work
-(see Risks).
+### Command construction
 
-Option mapping (typed `xai_options`, explicit only):
+Use `SubprocessRunner` and an explicit command builder, matching the peer CLI
+packages.
 
-- `model` -> `--model`,
-- `permission_mode` -> `--permission-mode` (grok values:
-  default, acceptEdits, auto, dontAsk, bypassPermissions, plan),
-- `sandbox` -> `--sandbox` (profile names are grok-specific and not enumerated
-  by `--help`; leave `allowed` open until confirmed),
-- `reasoning_effort` / `thinking_level` -> `--reasoning-effort` (alias `--effort`;
-  confirm the allowed set from grok — do not copy codex/claude levels),
-- workdir -> **subprocess cwd only**. Do NOT inject `--cwd`; `SubprocessRunner`
-  already runs in `run_dir`, so `--cwd` would double-specify.
+Map normalized options as follows:
 
-Argument ordering (grounded in observed runs): flags parse both before and after
-the `-p` value in practice, so the conservative rule is not strictly required —
-**but insert flags before `-p` anyway**, because `SubprocessRunner` appends the
-prompt as the final argv element, so a mapped flag must stay ahead of the
-trailing `-p` (identical to the antigravity ordering). Extend the print-prompt
-sentinel used by `_insert_before_print_prompt` to include grok's long form
-`--single`, not just `-p`.
+- `model` -> `--model`;
+- `permission_mode` -> `--permission-mode`;
+- `sandbox` -> `--sandbox`;
+- effective reasoning effort -> `--reasoning-effort`.
 
-`permission_mode` and `sandbox` are **CLI-only**; reject them on the `xai` sdk
-backend at start validation (mirror `_reject_unsupported_antigravity_mode`).
+Use subprocess `cwd` as the working directory. Do not also inject Grok's
+`--cwd`, because `SubprocessRunner` already executes in the resolved run dir.
 
-Event mapping — a dedicated `parse_xai_line` (do NOT reuse `_first_text`; grok
-puts prose under `data`, which the shared walker's TEXT_KEYS does not include).
-Observed streaming-json NDJSON events:
+`SubprocessRunner` appends the prompt as the last argv item, while `-p` or
+`--single` consumes that item. Mapped flags must therefore be inserted before
+the print-prompt sentinel. Extend
+`backends/common/cli.py:insert_before_print_prompt()` to recognize `--single`
+in addition to the existing `-p`, `--print`, and `--prompt`, and cover both Grok
+spellings in its shared helper tests.
 
-```json
-{"type": "thought", "data": "..."}
-{"type": "text",    "data": "..."}
-{"type": "end", "stopReason": "...", "sessionId": "...", "requestId": "..."}
-```
+Do not fall back to plain output. The configured transport is
+`streaming-json`; a non-JSON stdout line is an unexpected verbose status (or is
+ignored when not verbose), never guessed assistant prose.
 
-- `type=="text"`  -> `source="xai", type="message"` (from `data`),
-- `type=="thought"` -> verbose `status` (reasoning text only; never displayed
-  by default), consistent with claude thinking / antigravity thoughts handling,
-- `type=="end"` -> verbose `status`; capture `sessionId`/`requestId` into
-  provider session state; map a failure/cancel `stopReason` to `source="error"`,
-- tool calls / shell / file edits -> `type="tool_call"|"command"|"file_change"`
-  **only once a tool-using fixture confirms the shape**. Until then, an unknown
-  `type` degrades to a verbose `status`, never a dropped or mis-sourced line,
-- non-JSON / partial lines -> tolerated (skip empty; never crash the reader).
+### Parser and event mapping
 
-Do not fall back to parsing human text unless `streaming-json` is unavailable.
+Implement `parse_xai_line` in `xai_cli/parser.py`. It must tolerate blank,
+malformed, scalar, unknown, and partial-final lines without crashing.
 
-Health: register with `probe_binary="grok"` and a `xai_credentials()` that returns
-`ok` when `XAI_API_KEY` is set or a cached `~/.grok/sessions` login exists, else
-`unknown` (never `missing` on uncertainty — mirrors `gemini_api_key_credentials`).
-Decide `block_on_unavailable` deliberately; antigravity's `True` (opt-in provider,
-fail-fast on a missing binary / definite sign-out) is the precedent.
+Fixture-backed minimum mapping:
 
-## xAI SDK backend
+- `type == "text"` with string `data` -> `source="xai"`, `type="message"`;
+- `type == "thought"` with string `data` -> verbose xAI `status` only;
+- explicit error event or a fixture-confirmed failing `stopReason` ->
+  `source="error"`, `type="error"`;
+- successful `type == "end"` -> xAI `status` emitted regardless of verbosity
+  when it carries a session ID;
+- unknown dict event -> verbose xAI `status` with compact raw data;
+- empty/non-JSON input -> no default message event and no exception.
 
-Use `xai_sdk`. It is a gRPC **chat API client**, not a local coding-agent runtime.
+Map tool, command, and file-change events only after the real tool-use fixture
+confirms their fields. Use `source="tool"` for those action events, consistent
+with the other CLI parsers. Until then, unknown tool-shaped events remain
+verbose status data and capabilities remain false.
 
-Option mapping (explicit only):
+### CLI session identity
 
-- `model` -> `client.chat.create(model=...)`,
-- `reasoning_effort` / `thinking_level` -> create() kwarg **only if the SDK
-  confirms one** for reasoning models,
-- system prompt -> `system(...)` message; prompt -> `user(...)` message,
-- `permission_mode` / `sandbox` -> **rejected** (CLI-only; no SDK equivalent).
-
-Event mapping — **message-only, by construction**:
-
-- `chat.sample().content` -> `source="xai", type="message"` (or streamed message
-  chunks if the SDK's streaming API is confirmed and mapped),
-- response id / metadata -> verbose `status` + `agent_sessions.xai.provider_response_id`,
-- errors -> `source="error", type="error"`.
-
-Why message-only (state honestly in the module docstring): xAI **server-side**
-tools (`web_search`, `x_search`, `code_execution`) execute *remotely inside xAI*
-and fold into the response — agent-collab never observes or gates them as local
-actions. **Client-side** function calling requires the caller to run a full
-tool-use loop, which agent-collab has no generic local executor for. So the SDK
-backend emits no `file_change`/`command`/`tool_call` events and does NOT reach
-Grok-CLI file-edit parity. Capabilities stay all-false. Fake-module tests drive
-the mapper without `XAI_API_KEY`.
-
-## Session identity and capabilities
-
-xAI session identity is backend-specific:
+The daemon persists only the uniform session-event keys:
 
 ```json
 {
-  "agent_sessions": {
-    "xai": {
-      "backend": "cli",
-      "provider_session_id": "...",
-      "provider_request_id": "..."
-    }
-  }
+  "provider_session_id": "...",
+  "provider_session_kind": "session",
+  "agent_id": "xai"
 }
 ```
 
-- the **cli** backend captures `sessionId`/`requestId` from the streaming-json
-  `end` event,
-- the **sdk** backend captures the response id (`provider_response_id`).
+An xAI `end` event's raw `sessionId` must be translated to those keys. Bind the
+workflow agent id in the backend (for example with a parser closure or partial),
+because the generic `Parser(line, verbose)` interface does not otherwise know
+it. Preserve Grok's `sessionId` and `requestId` in raw transcript data, but do
+not add xAI-only fields to persisted `SessionState`. `requestId` is request
+metadata, not the provider session identity.
 
-Record what each backend actually returns. `resume`/`interrupt`/`tool_gate` stay
-false until the runtime behavior is implemented and tested; do not infer them from
-provider brand or SDK marketing. The existing `summarize_session_capabilities`
-reducer needs no change — it already ANDs `cap.resume` with an actually-captured
-session id.
+Set `provider_session_id_kind = "session"`. Capturing an ID does not make the
+backend resumable; `BackendCapabilities()` stays all false.
 
-## Central lists and files to touch
+### CLI health and credentials
 
-Adding the `xai` type is a fan-out edit. Miss one and it fails *silently* (source
-rewritten to `error`, options dropped) rather than loudly. Do the first two
-first.
+Probe `grok` with `probe_cli_backend` and the common version runner. Add a
+side-effect-free credential helper that returns:
 
-1. `events.py` — `VALID_SOURCES` (**silent-fail**: `Event.create` rewrites an
-   unknown source to `"error"`, so xai messages render as errors). Also add
-   `parse_xai_line`.
-2. `runners.py` — `PROVIDER_SOURCES` (**silent-fail**: stderr-status attribution
-   + the mock-source fallback to `codex`).
-3. `config.py` — `SUBPROCESS_AGENT_TYPES` (drives `AGENT_TYPES`, config type
-   validation).
-4. Backend option declarations — put exact contracts/defaults in each package's
-   `options.toml`; keep normalization and argv/SDK mapping in that backend.
-5. Add `"xai_cli"` and `"xai_sdk"` to `_BUILTIN_BACKENDS`; the generic
-   `backend_options` request needs no new wire field or MCP schema entry.
-6. Add `xai_credentials()` to `backends/common/health.py`.
-7. Extend provider config validation and event-source attribution for `xai`.
-8. Add mirrored hermetic and integration test packages.
-12. `cli.py` — `--xai-options`.
-13. `default_config.toml` (+ project `.agent-collab/config.toml` for `solo-xai`,
-    `enabled=true`).
-14. `doc/mcp-guidance.md`, `doc/implementation-notes.md` (once implemented).
+- `ok` when `XAI_API_KEY` is non-empty;
+- `ok` when `~/.grok/auth.json` exists, parses, and contains a non-empty cached
+  auth entry;
+- `unknown` when the file is unreadable/malformed or neither signal is present.
 
-## Config and UX
+Never read credential values into events/logs/tests. A `~/.grok/sessions`
+directory is **not** proof of authentication and must not be used as the signal.
 
-Keep `cli` as the xai default backend until live SDK behavior is verified.
+Set `checks_credentials = true` and `block_on_unavailable = true`: this is an
+opt-in provider, and a definitely missing CLI should fail before session state
+is created. An `unknown` credential result is attempted; the first real turn
+remains authoritative.
 
-`agent_collab_describe_options` must show, for `xai`:
+## `xai_sdk` backend
 
-- both `cli` and `sdk` backend availability,
-- installed `xai-sdk` version and `grok` version when knowable,
-- credential status when safely knowable,
-- capability flags (all false),
-- the effective `xai_options` schema,
-- clear errors for an unavailable/misconfigured backend.
+The SDK is a remote chat API, not the Grok Build local coding runtime.
 
-Start validation must reject:
+### Runtime construction
 
-- `permission_mode` / `sandbox` on the xai `sdk` backend (CLI-only),
-- SDK-only options on the `cli` backend,
-- `--backend sdk` when the xai SDK backend is unavailable,
-- option values outside the configured allowed sets.
+- Import `xai_sdk` lazily inside the production factory/probe path.
+- Use the verified `AsyncClient` surface; never block the daemon loop with the
+  synchronous `Client`.
+- Keep the client alive until sampling and event mapping complete, and close it
+  using the lifetime mechanism captured from the installed version.
+- Create a chat with normalized `model` and effective `reasoning_effort` only.
+- Append the turn prompt as `user(prompt)`. There is no generic agent-collab
+  system-prompt start option to map in this stage.
+- Begin with `await chat.sample()` rather than streaming. The collected response
+  is the smallest stable message-first contract; streaming can follow once its
+  installed async shapes and cancellation behavior are fixture-backed.
+- Make the turn factory injectable so hermetic tests neither import the SDK nor
+  call xAI.
 
-## Implementation steps
+### SDK events and identity
 
-1. Add `"xai"` to `VALID_SOURCES` and `PROVIDER_SOURCES` **first** (the two
-   silent-fail lists), with a test that asserts their membership.
-2. Add `"xai"` to `SUBPROCESS_AGENT_TYPES`; confirm config type validation.
-3. Add backend-owned xAI `OptionSpec` declarations and normalization, the public
-   `xai_options` bucket, and explicit xAI CLI argv rendering. Discovery must
-   come automatically from the registered backend schemas.
-4. Thread `xai_options` end to end (api_schema `WIRE_FIELDS`, MCP inputSchema,
-   daemon dataclass, referee, cli) in **one commit** so the contract test passes.
-5. Add `parse_xai_line` (tolerant NDJSON) + capture streaming-json fixtures
-   (reasoning turn AND a tool-using turn) before asserting tool-event mapping.
-6. Register the Grok `CliBackend` + `xai_credentials()` health probe.
-7. Add `XaiSdkBackend` (message-only) with fake-module tests; rename the SDK
-   factory functions to avoid the import shadow.
-8. Declare CLI-only options only on the xAI CLI backend; generic validation must
-   reject them automatically when the SDK backend is selected.
-9. Add `xai` to `pyproject.toml` dependencies.
-10. Add `solo-xai` to the repo project config with `enabled = true`.
-11. Update `describe_options`, status, list, and session settings snapshots.
-12. Add live smoke commands guarded by env vars, skipped by default.
-13. Run full unit tests + a live smoke for each xai backend on a credentialed
-    machine before closing.
+Map only captured public fields:
 
-## Tests
+- non-empty `response.content` -> xAI `message`;
+- non-empty `response.id` -> `provider_session_event("xai", agent_id, id,
+  "response")`;
+- SDK/auth/turn exception -> `sdk_error_event("xai", exc)`;
+- optional response metadata -> verbose status only after its installed shape
+  is captured.
 
-Unit tests:
+Set `event_fidelity = "message_only"` and
+`provider_session_id_kind = "response"`. A response ID is useful correlation
+metadata but is not a resumable conversation by itself; capabilities remain all
+false.
 
-- add-a-provider guard: `"xai"` present in `VALID_SOURCES` and `PROVIDER_SOURCES`
-  (so xai events are not silently re-sourced to `error`/`codex`),
-- registry registers `(xai, cli)` and `(xai, sdk)`,
-- `parse_xai_line` fixtures: thought -> verbose status, text -> message,
-  end -> session-id capture + status, failure `stopReason` -> error, unknown
-  `type` -> tolerated verbose status, malformed/partial line -> no crash,
-- xAI CLI option mapping: grok-specific `permission_mode`/`sandbox`, flags
-  inserted before `-p`/`--single`, `--reasoning-effort` mapping, no `--cwd`,
-- CLI-only (`permission_mode`, `sandbox`) rejected on the xai sdk backend,
-- xAI SDK fake-module message mapping (content -> message, id -> status,
-  error -> error; asserts NO tool/command/file_change events emitted),
-- xai `probe()` reports a missing `grok` / missing `xai-sdk` without crashing
-  imports; installed versions appear in backend summaries when available,
-- provider session-id capture (cli `sessionId`/`requestId`, sdk `response.id`),
-- capability reducer remains honest for xai,
-- api-schema contract test still green with `xai_options` added,
-- MCP `describe_options` includes xai backend availability and its schema.
+Do not enable server-side or client-side tools in this stage. Server-side tools
+run remotely and are not local gated actions. Client-side tools would require a
+generic executor and a complete call/result loop that agent-collab does not
+have. The backend therefore emits no `tool_call`, `command`, or `file_change`
+events and makes no file-edit parity claim.
 
-Integration / live (must not run by default in CI or unit runs):
+### SDK health
 
-- `python3 -m unittest discover -s tests`, `./agent_collab.sh smoke`,
-- live xAI CLI one-turn smoke when `grok` is installed and authenticated or
-  `XAI_API_KEY` is present,
-- live xAI SDK one-turn smoke when `XAI_API_KEY` is present.
+Probe module `xai_sdk` with `probe_sdk_backend`, report the installed
+`xai-sdk` distribution version, and use a side-effect-free API-key helper:
 
-### xAI fixtures
+- `ok` when `XAI_API_KEY` is non-empty;
+- otherwise `unknown`, because per-agent environment/config may supply it.
 
-New `tests/fixtures/xai/` (mirror `tests/fixtures/antigravity/`):
+Set `checks_credentials = true` and `block_on_unavailable = true`. Missing SDK
+imports fail before session creation; unknown credentials are attempted.
 
-- `grok-version.txt` — `grok --version` output for the version-runner test.
-- `streaming-json-reasoning.ndjson` — a real thought+text+end turn; locks
-  message + verbose-status + session-id capture.
-- `streaming-json-tooluse.ndjson` — **the blocking one**: a turn with a file
-  edit and/or shell command, so command/file_change mapping is fixture-backed
-  (currently unobserved).
-- `streaming-json-error.ndjson` — an `end` with a failure/cancel `stopReason`
-  (and/or an error event).
-- `sdk-response-sample.json` — fake `chat.sample()` shape (`.content`,
-  response `.id`) for the message-only mapper.
-- `README.md` — provenance (grok version, command, date, real-vs-synthesized),
-  same honesty bar as the antigravity fixtures' README.
+## Packaging and backend documentation
+
+After the SDK introspection gate passes, add a bounded dependency based on the
+tested version. Candidate only:
+
+```toml
+dependencies = [
+  # existing first-class SDKs ...
+  "xai-sdk>=1.17,<2",
+]
+```
+
+Verify installation and import in the project interpreter:
+
+```bash
+python -m pip install -e .
+python -m pip check
+python -c "import xai_sdk; print(xai_sdk.__version__)"
+```
+
+The existing setuptools package-data glob already includes each backend's
+`README.md` and `options.toml`; no xAI-specific package-data entry is expected.
+Build a wheel and assert both xAI packages' data files are present.
+
+Each backend README must cover requirements, authentication, option mapping,
+event fidelity, provider identity, capabilities, security, limitations, and
+hermetic/live test commands. The SDK README must prominently distinguish remote
+chat from the local coding CLI.
+
+## Fixtures and tests
+
+### Fixtures
+
+Create `tests/fixtures/xai/README.md` recording capture date, exact version,
+command, real-versus-synthetic provenance, and any redaction. Never commit
+prompts, paths, IDs, or payloads that disclose secrets or private repository
+content.
+
+Required files:
+
+- `grok-version.txt`: real `grok --version` output;
+- `streaming-json-reasoning.ndjson`: real thought/text/end turn;
+- `streaming-json-tooluse.ndjson`: real disposable-workspace file edit and/or
+  shell command; this gates typed action mapping, not basic backend registration;
+- `streaming-json-error.ndjson`: real or clearly labeled synthesized error/end
+  shape based on captured fields;
+- `sdk-introspection.json`: installed public SDK signatures/lifetime facts;
+- `sdk-response-sample.json`: redacted illustrative values in the captured
+  response shape.
+
+### Hermetic backend tests
+
+Mirror the package layout:
+
+```text
+tests/backends/xai_cli/test_backend.py
+tests/backends/xai_sdk/test_backend.py
+```
+
+Cover:
+
+- registration of `(xai, cli)` and `(xai, sdk)` and canonical names;
+- xAI membership in all three central provider/source allowlists;
+- declarative option discovery and field-path rejection;
+- reasoning alias agreement/conflict behavior;
+- CLI inference and explicit flag rendering before both `-p` and `--single`;
+- no injected `--cwd` and correct subprocess run dir;
+- parser mappings, malformed/unknown tolerance, and fixture-backed tool mapping;
+- the CLI end-event translation into uniform daemon session state;
+- CLI/SDK health for missing dependencies, unknown credentials, and reported
+  versions without touching real home/credentials;
+- SDK fake response content, response identity, async lifetime/close, and error
+  mapping;
+- absence of SDK tool/command/file-change events;
+- all-false capability and non-resumable session summaries;
+- `describe_options`, settings, dry-run, and backend policy output through the
+  existing generic contract;
+- config validation for disabled built-in xAI and enabled project `solo-xai`;
+- exact built-in backend/schema sets and other intended all-provider loops.
+
+Add focused tests for `insert_before_print_prompt(..., "--single")` in the
+shared CLI helper suite. Do not add an API-schema test for `xai_options`; that
+field must not exist.
+
+### Credentialed integration tests
+
+Add:
+
+```text
+integration_tests/backends/xai_cli/test_live.py
+integration_tests/backends/xai_sdk/test_live.py
+```
+
+Extend `integration_tests/harness.py`:
+
+- add `xai` to `PROVIDERS`;
+- add economical explicit xAI live defaults confirmed by the account/model
+  list;
+- support `AGENT_COLLAB_IT_XAI_MODEL` and the existing thinking-level override
+  convention.
+
+The canonical selectors then work without changing the integration CLI:
+
+```bash
+./agent_collab.sh integration-test xai_cli --strict
+./agent_collab.sh integration-test xai_sdk --strict
+```
+
+Each live test uses the existing disposable workspace and isolated
+`AGENT_COLLAB_HOME`. The CLI test requires `grok` plus local auth or
+`XAI_API_KEY`; the SDK test requires `XAI_API_KEY`. Assert event kinds and
+identity, not response prose or raw credential-bearing data.
+
+## Documentation updates
+
+Once implementation passes, update:
+
+- `README.md`;
+- `doc/agent-configuration.md`;
+- `doc/development.md`;
+- `doc/implementation-notes.md`;
+- `integration_tests/README.md`.
+
+Document canonical selectors `xai_cli`/`xai_sdk`, generic
+`backend_options.xai_*`, the CLI/SDK capability asymmetry, credentials, and the
+message-only SDK limitation. Do not document provider-wide `xai_options`.
+
+## Implementation order
+
+1. Capture the CLI fixtures and complete the SDK install/import/introspection
+   gate. Fix the dependency range from evidence.
+2. Add `xai` to the three central provider/source sets with silent-failure guard
+   tests.
+3. Add the two standalone backend packages, manifests, READMEs, and registry
+   entries.
+4. Implement CLI option normalization, command construction, health, parser,
+   and uniform session event mapping.
+5. Implement the async message-only SDK backend from the introspection fixture.
+6. Add disabled built-in config and validate it without Grok installed.
+7. Extend hermetic all-provider sets/snapshots and run the full unit suite.
+8. Add the bounded dependency, verify editable install/import, and verify wheel
+   contents.
+9. Add integration harness/tests and run both canonical selectors on a
+   credentialed machine.
+10. Only after the CLI smoke succeeds, enable `xai` and add `solo-xai` in the
+    repository project config.
+11. Update current documentation and close this task with exact test/live-call
+    evidence.
+
+## Verification
+
+Hermetic and packaging checks:
+
+```bash
+python3 -m compileall -q agent_collab integration_tests tests
+./agent_collab.sh test
+./agent_collab.sh smoke
+python -m pip check
+python -c "from agent_collab import backends; print(backends.registered_backend_names())"
+```
+
+Credentialed, opt-in checks:
+
+```bash
+./agent_collab.sh integration-test xai_cli --strict
+./agent_collab.sh integration-test xai_sdk --strict
+```
 
 ## Acceptance criteria
 
-- A normal project install also installs `xai-sdk`.
-- `agent_collab_describe_options` reports both `cli` and `sdk` for `xai`, with
-  versions and capability flags (all false).
-- `agent_collab_start(..., workflow="solo-xai")` works with the Grok CLI backend
-  when `grok` is installed and authenticated (project config enables xai).
-- `agent_collab_start(..., workflow="solo-xai", backend="sdk")` works
-  message-only when `XAI_API_KEY` is present.
-- xai messages are attributed to `source="xai"` (not silently rewritten to
-  `error`), and mock/stderr attribution is correct.
-- `permission_mode`/`sandbox` on the sdk backend fail before session creation
-  with field-path details.
-- Session settings accurately show which xai backend ran and the applied options.
-- Capability flags remain false unless the runtime behavior is implemented.
+- A normal project install resolves the bounded, tested `xai-sdk` and imports
+  `xai_sdk` in the selected Python 3.10+ interpreter.
+- The registry exposes `xai_cli` and `xai_sdk`; `describe_options` reports their
+  dynamic schemas, versions/health, event fidelity, identity kind, and all-false
+  capabilities.
+- There is no xAI-specific public start field or CLI flag; starts use
+  `backend_options.xai_cli` / `backend_options.xai_sdk`.
+- Built-in config loads with xAI disabled and without `grok`; project
+  `solo-xai` is enabled only after its live CLI smoke passes.
+- `solo-xai` completes through Grok `streaming-json`, attributes messages to
+  `source="xai"`, and persists the translated session ID under the uniform
+  `agent_sessions` schema.
+- `solo-xai` with backend override `sdk` completes through `AsyncClient`, emits
+  message-only xAI events, and captures response identity as kind `response`.
+- CLI-only options are rejected on SDK with exact backend-qualified field paths.
+- Tool/command/file-change mapping is backed by a real Grok fixture; absent a
+  confirmed shape, it remains status-only rather than guessed.
+- Missing dependencies fail before session creation; indeterminate credentials
+  are attempted and real turn errors reach the transcript.
+- Session settings report the selected backend and exact normalized options.
+- Resume, interrupt, and tool-gate capabilities remain false.
+- Hermetic tests remain credential-free and cannot discover live tests; both
+  credentialed xAI backend selectors pass before the task is closed.
 
 ## Risks and follow-ups
 
-- xAI is the only provider adding a new `type`; the edit fans out across the
-  central lists above, and `VALID_SOURCES` / `PROVIDER_SOURCES` fail *silently*.
-  Land the two source-list edits and their guard test first.
-- Grok Build CLI (local coding agent with tools) and `xai-sdk` (remote chat
-  client) are genuinely asymmetric. SDK message-only is correct and permanent
-  until a local tool-executor exists — do not imply file-edit parity.
-- streaming-json tool-event shapes are unobserved so far (only thought/text/end
-  captured). Do not assert tool/command/file_change mapping or flip any
-  capability until a tool-using fixture exists.
-- Grok CLI exposes both headless `streaming-json` and ACP (`grok agent stdio`,
-  JSON-RPC: `session/new` · `session/prompt` · `session/update`). Prefer
-  `streaming-json` now; keep ACP as a follow-up with its different session
-  lifecycle, and adopt it only when it can be tested deterministically.
-- Grok's `--sandbox` profile names and `--reasoning-effort` allowed values are
-  not enumerated by `--help`; confirm from grok docs before pinning `allowed`
-  lists, or leave them open.
+- Grok Build and `xai-sdk` are intentionally asymmetric: one is a local coding
+  agent, the other a remote chat API. Do not imply parity.
+- CLI event shapes and SDK APIs can change quickly. Fixtures and bounded package
+  versions are the compatibility boundary.
+- `xhigh` reasoning is model-specific. Keep normalization honest and let the
+  provider reject unsupported model/effort combinations unless a stable local
+  compatibility table is captured.
+- ACP may eventually provide a stronger session/update protocol than headless
+  NDJSON, but it has a different lifecycle and is a separate stage.
+- Stateful SDK responses (`store_messages`/`previous_response_id`) do not make
+  agent-collab resumable until continuation is implemented and tested end to
+  end.

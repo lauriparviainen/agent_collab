@@ -1,6 +1,31 @@
 # Backend discovery and recommendation protocol
 
-**Status:** Design recommendation; analysis only.
+**Status: Complete — closed 2026-07-10.**
+
+## Post-implementation note
+
+Implemented in commit `49034bc` (`Implement backend discovery protocol`). The
+landed implementation keeps `agent_collab_describe_options` as the single
+workdir-scoped discovery operation and delivers the staged scope recommended by
+this document:
+
+- a versioned, canonical-name-keyed backend catalog with compatibility provider
+  projections;
+- effective agent/workflow backend selections and backend-qualified option
+  schemas;
+- cached or requested-fresh side-effect-free probes, freshness metadata,
+  readiness assessment, and structured remediation;
+- backend enablement policy in user config, protected from project override;
+- Antigravity SDK native-runtime/glibc compatibility evidence;
+- conservative `keep`/`remediate` recommendations without automatic failover;
+- per-backend fresh-start probe policy and structured pre-session rejection;
+- one shared response builder projected through REST, MCP, and the human/JSON
+  `agent-collab options` command.
+
+The richer ranking engine discussed below remains deliberately deferred: the
+current workflow model declares only an agent sequence and supplies no
+requirements or preferences against which alternatives could be meaningfully
+ranked. That is future scope, not unfinished work in this task.
 
 ## Decision
 
@@ -8,9 +33,10 @@ Keep `agent_collab_describe_options` as the single pre-start discovery
 operation. Do not add `agent_collab_list_backends` or
 `agent_collab_discover_backends` now.
 
-The baseline architecture is sound, but the current response is not yet a
-complete discovery protocol. Extend the shared `describe_options` builder so a
-single workdir-scoped response contains:
+The baseline architecture was sound, but the pre-implementation response was
+not yet a complete discovery protocol. The implementation therefore extended
+the shared `describe_options` builder so a single workdir-scoped response
+contains:
 
 - instructions and freshness semantics;
 - the registered canonical backend catalog;
@@ -37,12 +63,13 @@ materially better only if option schemas and backend discovery acquired
 different authorization, latency, pagination, or lifecycle requirements. None
 does today.
 
-## Current implementation findings
+## Pre-implementation findings (historical)
 
-The recommendation is grounded in the current implementation, including these
-important details:
+The recommendation was grounded in the implementation before commit `49034bc`.
+These findings explain the design choices below; they are not claims about the
+current completed implementation:
 
-- `agent_collab/backends/__init__.py` explicitly registers six packages in one
+- `agent_collab/backends/__init__.py` explicitly registered six packages in one
   flat list. The public identity is `<provider>_<backend>`, and resolution is
   `explicit start override > agents.<id>.backend > cli`.
 - Registry membership is a build fact. It says that code exists for a pair; it
@@ -51,19 +78,19 @@ important details:
 - `BackendHealth` has separate `status` (`ok`, `unknown`, `unavailable`) and
   `credentials` (`ok`, `unknown`, `missing`) axes. Its `available` property is
   only `status == ok`.
-- CLI probes check `PATH`, optionally run a bounded `--version`, and optionally
-  inspect credential files. SDK probes currently use `find_spec`, package
+- CLI probes checked `PATH`, optionally ran a bounded `--version`, and optionally
+  inspected credential files. SDK probes used `find_spec`, package
   metadata, and best-effort credential evidence. They do not import or execute
   the SDK runtime and never make a model call. Production SDK imports remain
   lazy.
 - `HealthCache` has a 60-second TTL. `describe_options` probes all registered
   backends through that cache.
-- Start health gating requests fresh results, but `_gate_backend_health`
-  currently skips a backend entirely when both `block_on_unavailable` and
+- Start health gating requested fresh results, but `_gate_backend_health`
+  skipped a backend entirely when both `block_on_unavailable` and
   `checks_credentials` are false. Consequently Claude CLI and Codex CLI are
   selected and option-validated at start, but they are not freshly health
   probed. A blanket `start_rechecks_fresh: true` would therefore overstate the
-  current behavior.
+  pre-implementation behavior.
 - Definite failure blocks only under backend policy. `unknown` warns where the
   policy applies. Claude and Codex CLI deliberately retain their legacy
   first-turn-error behavior; the SDK backends and both Antigravity backends opt
@@ -72,19 +99,19 @@ important details:
   config. It determines configured agents, workflows, backend selection,
   backend-owned static settings, and configured session-option defaults. Start
   also uses the workdir as execution cwd.
-- There is currently no backend-level `enabled` policy. Agents can be disabled,
-  but a registered canonical backend cannot be disabled independently of every
+- There was no backend-level `enabled` policy. Agents could be disabled,
+  but a registered canonical backend could not be disabled independently of every
   agent that might select it.
-- The current `describe_options` response lists raw `agent.backend`, which may
-  be null even though the effective backend is `cli`. Workflows list agent IDs
-  and provider types but not effective canonical backends. Callers must perform
+- The pre-implementation `describe_options` response listed raw `agent.backend`, which could
+  be null even though the effective backend was `cli`. Workflows listed agent IDs
+  and provider types but not effective canonical backends. Callers had to perform
   error-prone joins and reimplement fallback rules.
-- The current backend view is provider-grouped. It exposes health,
+- The pre-implementation backend view was provider-grouped. It exposed health,
   capabilities, and schemas, but not canonical entries, cache age/source,
   policy, native compatibility, structured remediation, readiness, or a
   recommendation.
-- The top-level backend option schemas are canonical-name keyed, while health
-  is provider/backend nested. This forces callers to translate between two
+- The top-level backend option schemas were canonical-name keyed, while health
+  was provider/backend nested. This forced callers to translate between two
   shapes.
 - Session status is intentionally post-start and reports the selected effective
   settings. It is not the place to discover unselected registered or configured
@@ -340,7 +367,7 @@ known.
 
 ## Backend enablement in home config
 
-Add a user-level `enabled` flag keyed by canonical backend name in
+The implementation adds a user-level `enabled` flag keyed by canonical backend name in
 `$AGENT_COLLAB_HOME/config.toml` (normally `~/.agent-collab/config.toml`):
 
 ```toml
@@ -544,7 +571,7 @@ and possibly cost or permissions.
 
 ## Freshness policy
 
-Retain lazy on-demand probing and the short TTL. Add an optional discovery input
+Retain lazy on-demand probing and the short TTL. The implementation adds an optional discovery input
 such as `health_refresh: "cached" | "fresh"`; default to `cached`. This keeps one
 operation while letting a caller request a newer advisory snapshot. Report
 cache hit, checked time, age, TTL, and staleness for every probed canonical
@@ -579,14 +606,12 @@ Acceptable staleness differs by use:
   exact distinct enabled selected backends fresh after reloading config and
   before session state or execution.
 
-The final bullet is a deliberate tightening of current behavior. Start should
-reject disabled selections and obtain a fresh snapshot for every enabled
-selected backend, then let backend policy decide block, warn, or defer to the
-first turn. This makes `fresh_probes_enabled_selected_backends: true` accurate
-without changing the rule that definite unavailability blocks only according
-to policy. If universal fresh probing is not adopted, discovery must instead expose
-`start_probe_policy: "fresh" | "not_probed"` per backend and must not use a
-blanket recheck claim.
+The final review deliberately chose per-policy disclosure instead of universal
+fresh probing. The landed implementation rejects disabled selections, then
+freshly probes selected backends whose policy can act on the result. Discovery
+exposes `start_probe_policy: "fresh" | "not_probed"` per backend and makes no
+blanket recheck claim. This avoids adding a bounded `--version` subprocess to
+the Claude/Codex CLI hot path when its result would not gate or warn.
 
 Do not add periodic background sweeps or transition notifications now. They
 consume resources when no caller needs the data, add synchronization and
@@ -604,7 +629,7 @@ the same snapshot schema, not health events mixed into session transcripts.
 | MCP initialization/guidance prose | Daemon-global instructions; document freshness | Low | Works on both MCP transports and is highly discoverable, but cannot contain live workdir facts and drifts if treated as data | Use only to require the protocol call and explain principles. |
 | Extended `agent_collab_describe_options` | Workdir, configured agent/workflow, and daemon runtime; cached or requested-fresh | Medium | Existing direct MCP and stdio-via-REST paths already converge here; the response can be noisy, so normalize and version it rather than duplicate it | Make this the primary operation. |
 | Dedicated list/discover tool | Would still need workdir and the same probes | Medium to high | Requires parallel MCP, REST, client, CLI, cache, and schema plumbing; creates a second caller choice and can contradict options | Do not add now. Reconsider only for pagination/auth/latency separation. |
-| CLI projection | Workdir; whatever refresh mode it requests | Low if it projects `/options` | Good for humans and `--json` scripts; becomes a second truth if it reads config or probes independently | Add an options/backends/doctor view backed by `/options`. |
+| CLI projection | Workdir; whatever refresh mode it requests | Low if it projects `/options` | Good for humans and `--json` scripts; becomes a second truth if it reads config or probes independently | Implemented as `agent-collab options`, backed by `/options`. |
 | Daemon startup diagnostics | Daemon runtime only unless given an arbitrary default workdir | Low to medium | Visible only to some humans, noisy in logs, absent from MCP/REST responses, stale, and potentially slow | Do not make primary or eager by default. Optional projection only. |
 | Session status | Session-specific effective selection after start | Medium if expanded | Consistent on current REST/MCP/CLI session surfaces, but too late and noisy for unselected catalog data | Keep as execution confirmation, not discovery catalog. |
 | Start errors/warnings | Exact workflow and fresh request-time facts | Low to medium | Already consistent through shared start errors and highly actionable, but purely reactive | Keep authoritative, with structured codes/remediation. |
@@ -626,8 +651,8 @@ checks could otherwise make startup visibly slow.
 
 ## Start errors and first-turn failures
 
-Start errors and warnings should preserve the existing `path` and `message`
-fields and add machine-readable detail:
+Start errors and warnings preserve the existing `path` and `message` fields and
+add machine-readable detail:
 
 ```json
 {
@@ -641,8 +666,8 @@ fields and add machine-readable detail:
 }
 ```
 
-The response should say that config, resolution, options, and fresh probes were
-completed before session creation. A start-time `ok` still means only that no
+The response states that config, resolution, options, and applicable fresh
+probes were completed before session creation. A start-time `ok` still means only that no
 checked precondition failed.
 
 When discovery or start says `ok` but the first real turn fails, the caller
@@ -714,10 +739,11 @@ Exclude initially:
    backend; request fresh discovery when useful.
 7. **Remediation:** follow structured backend-owned remediation and use only
    actionable workflow alternatives.
-8. **Start recheck:** start reloads and revalidates everything and should fresh
-   reject disabled selections, then probe every enabled selected backend before
-   creating state; policy controls the result. Until that tightening lands, the
-   response must disclose selective probing instead.
+8. **Start recheck:** start reloads and revalidates everything, rejects disabled
+   selections, and freshly probes selected backends whose policy can act on the
+   result before creating state. Discovery reports each backend's exact
+   `start_probe_policy`; legacy Claude/Codex CLI backends deliberately defer
+   runtime failure to the first turn.
 9. **Which backend distinction matters:** registry default selects only in the
    absence of config/override; configured backend expresses intent; probed and
    start-allowed describe evidence/policy; recommendation is advisory.
@@ -725,7 +751,7 @@ Exclude initially:
     remediate or deliberately fall back, and improve a probe only when the
     failed precondition can be checked safely without a model call.
 
-## Acceptance criteria for a later implementation
+## Acceptance criteria (delivered)
 
 - MCP initialization requires discovery with the intended absolute workdir.
 - One versioned builder serves direct Streamable HTTP MCP, stdio MCP through
@@ -752,16 +778,13 @@ Exclude initially:
   serving discovery for other backends.
 - No automatic backend switch occurs.
 
-## Review recommendation: staged delivery
+## Delivered staged scope
 
-The analysis above is accurate against the current code (`_gate_backend_health`
-does skip backends where both `block_on_unavailable` and `checks_credentials`
-are false; the registry is the flat six-package list; the CLI backends carry the
-legacy defer-to-turn policy). The core decision — extend `describe_options`
-rather than add a discovery tool — is sound and should stand.
+The analysis above was accurate against the pre-implementation code. The core
+decision — extend `describe_options` rather than add a discovery tool — was
+implemented and remains the current contract.
 
-Do not implement this as one undifferentiated change. Split it into four stages,
-lowest-risk first, each with its own acceptance criteria and tests.
+The implementation followed these reviewable slices, lowest-risk first.
 
 **Stage 1 — Normalize the response contract (cheap, high value, low risk).**
 Return the effective canonical backend and its selection source for each agent
@@ -794,7 +817,7 @@ latency on the hot path. Prefer per-backend disclosure (`start_probe_policy:
 true` claim. This inverts the preference stated in the freshness section above:
 disclosure is primary, universal probing is not adopted.
 
-**Defer — the recommendation engine.** Current workflows declare only a
+**Deferred by design — richer recommendation ranking.** Current workflows declare only a
 sequence and no requirements, and preference must not be inferred from brand,
 `cli`-vs-`sdk`, or capabilities. A recommender therefore can only ever emit
 "keep the configured backend unless it has a definite blocker" — a large ranking
