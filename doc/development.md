@@ -13,7 +13,7 @@ Source checkout helper:
 ```bash
 ./agent_collab.sh help
 ./agent_collab.sh test
-./agent_collab.sh integration-test [claude_cli|claude_sdk|codex_cli|codex_sdk|antigravity_cli|antigravity_sdk] [--strict]
+./agent_collab.sh integration-test [claude_cli|claude_sdk|codex_cli|codex_sdk|antigravity_cli|antigravity_sdk|xai_cli|xai_sdk] [--strict]
 ./agent_collab.sh smoke
 ```
 
@@ -31,7 +31,8 @@ failures return `1`.
 
 Live tests use cheap, fast defaults because they verify backend transport and
 event fidelity rather than model quality: Claude `sonnet`/low, Codex
-`gpt-5.6-luna`/low, and Antigravity `Gemini 3.5 Flash (Low)`. See
+`gpt-5.6-luna`/low, Antigravity `Gemini 3.5 Flash (Low)`, xAI CLI
+`grok-build`, and xAI SDK `grok-4.5`/low. See
 `integration_tests/README.md` for environment overrides.
 
 Run a one-shot mock session:
@@ -83,6 +84,10 @@ It currently configures Codex with:
 ```bash
 codex exec --json -c model_reasoning_effort="high"
 ```
+
+It opts into xAI's disabled built-in agent and adds `solo-xai`. Grok Build runs
+as `grok --no-auto-update --output-format streaming-json -p`; SDK starts require
+`backend="sdk"`, `XAI_API_KEY`, and an explicit `backend_options.xai_sdk.model`.
 
 `SubprocessRunner` closes child stdin with `DEVNULL`; keep this. It prevents `codex exec --json` from waiting on the server terminal for additional stdin.
 

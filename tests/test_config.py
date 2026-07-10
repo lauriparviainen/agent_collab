@@ -43,6 +43,7 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn("options", data["agents"]["claude"])
         self.assertNotIn("options", data["agents"]["codex"])
         self.assertNotIn("options", data["agents"]["antigravity"])
+        self.assertNotIn("options", data["agents"]["xai"])
         self.assertEqual(data["workflows"]["solo-claude"]["sequence"], ["claude"])
 
     def test_builtin_defaults(self):
@@ -65,6 +66,13 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.agents["antigravity"].command, "agy")
             self.assertFalse(config.agents["antigravity"].enabled)
             self.assertEqual(config.agents["antigravity"].options, {})
+            self.assertEqual(config.agents["xai"].command, "grok")
+            self.assertEqual(
+                config.agents["xai"].args,
+                ["--no-auto-update", "--output-format", "streaming-json", "-p"],
+            )
+            self.assertFalse(config.agents["xai"].enabled)
+            self.assertEqual(config.agents["xai"].options, {})
             self.assertEqual(config.workflows["solo-claude"].sequence, ["claude"])
             self.assertEqual(config.workflows["solo-codex"].sequence, ["codex"])
             self.assertEqual(config.workflows["cross-review"].sequence, ["claude", "codex", "claude"])

@@ -41,8 +41,8 @@ from Google. The SDK remains installed, discoverable, configured, and covered
 by constructor/event-mapping tests.
 
 Relevant follow-up commits include `ed5abac` for canonical integration backend
-names and `170c877` for the Antigravity glibc blocker note. xAI remains the
-separate open [Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md).
+names and `170c877` for the Antigravity glibc blocker note. xAI was completed in
+the separate [Stage 5.1.1](stage-5.1.1-xai-provider.md).
 
 ## Purpose
 
@@ -57,7 +57,7 @@ not delay the immediate packaging and runtime correctness fixes.
 
 This is a remediation plan for
 [Stage 5.1](stage-5.1-first-class-sdk-backends.md), not a new provider stage.
-xAI remains in [Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md).
+xAI was completed in [Stage 5.1.1](stage-5.1.1-xai-provider.md).
 
 ## Evidence levels
 

@@ -1,0 +1,24 @@
+schema_version = 1
+
+[options.model]
+type = "string"
+inferred = true
+
+[options.permission_mode]
+type = "string"
+allowed = ["default", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "plan"]
+inferred = true
+
+[options.sandbox]
+type = "string"
+inferred = true
+
+[options.thinking_level]
+type = "string"
+allowed = ["low", "medium", "high", "xhigh"]
+inferred = true
+
+[options.reasoning_effort]
+type = "string"
+allowed = ["low", "medium", "high", "xhigh"]
+inferred = true

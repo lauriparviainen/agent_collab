@@ -1,4 +1,4 @@
-"""Helpers shared by the first-class SDK backends (claude/codex/antigravity).
+"""Helpers shared by the first-class SDK backends (claude/codex/antigravity/xai).
 
 Every SDK backend maps a young, provider-specific API onto the one ``Event``
 contract and the one persisted session schema. The provider-specific *calls*

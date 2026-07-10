@@ -21,7 +21,9 @@ dependencies = [
     "claude-agent-sdk>=0.2.114,<0.3.0",
     "openai-codex>=0.1.0b3,<0.2.0",
     "google-antigravity>=0.1.5,<0.2.0",
-    # xai-sdk is added by Stage 5.1.1 (xAI provider).
+    # Verified on Python 3.12.13: AsyncClient/chat.sample and deterministic
+    # async context-manager cleanup in xai-sdk 1.17.0.
+    "xai-sdk>=1.17,<2",
 ]
 
 [project.scripts]

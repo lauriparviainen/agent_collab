@@ -1,6 +1,6 @@
 # agent-collab
 
-`agent-collab` is a terminal referee for supervised collaboration between Claude Code and Codex.
+`agent-collab` is a terminal referee for supervised collaboration between configured coding and chat agents.
 
 The prototype runs bounded turn-based sessions, streams visible agent/tool events as they arrive, writes JSONL and Markdown transcripts, and exposes sessions through both a CLI client and MCP tools.
 
@@ -20,7 +20,7 @@ Implemented:
 - Stdio MCP adapter that connects to the local server.
 - Cursor-based event reads and long-polling.
 - Backend-qualified `backend_options` with schemas/defaults owned by each backend package and pre-launch validation.
-- Pluggable agent backends: an agent's provider (`type`) is separate from its execution mechanism (`backend`). The default `cli` subprocess backend runs the provider CLI; a first-class `sdk` backend runs the provider SDK in-process. Claude, Codex, and Antigravity each register both `(cli)` and `(sdk)`; SDK imports are lazy so a missing wheel is an unavailable backend, not an import error. Backends, availability/health, and honest per-session capability flags are discoverable via `agent_collab_describe_options`.
+- Pluggable agent backends: an agent's provider (`type`) is separate from its execution mechanism (`backend`). The default `cli` subprocess backend runs the provider CLI; a first-class `sdk` backend runs the provider SDK in-process. Claude, Codex, Antigravity, and xAI each register both `(cli)` and `(sdk)`; SDK imports are lazy so a missing wheel is an unavailable backend, not an import error. Backends, availability/health, and honest per-session capability flags are discoverable via `agent_collab_describe_options`.
 - MCP option discovery through `agent_collab_describe_options` and usage guidance through `agent_collab_guidance`.
 - Start/status/list responses include the effective session settings: workflow sequence, per-agent typed options, and a prompt-free `command_preview`.
 - Centralized config schema migrations (`schema_version`, currently 4).
@@ -43,11 +43,11 @@ python3 -m pip install -e .
 
 A normal install (Python ≥ 3.10) brings the first-class `sdk` backends with it: the
 Claude Agent SDK (`claude-agent-sdk`), the Codex SDK (`openai-codex`), and the
-Antigravity SDK (`google-antigravity`) install as project dependencies. Every SDK
+Antigravity SDK (`google-antigravity`), and xAI SDK (`xai-sdk`) install as project dependencies. Every SDK
 import is lazy, so a missing wheel degrades to an unavailable backend rather than an
 import error, and the `cli` backends keep working with the provider CLIs regardless.
 Credentials are still never managed by agent-collab — provide the provider's own
-auth (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or each tool's local
+auth (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, or each tool's local
 sign-in) in the environment.
 
 ## Quick Start
@@ -205,7 +205,17 @@ claude -p --output-format stream-json --verbose --model opus --effort high "prom
 codex exec --json -c model_reasoning_effort="high" "prompt"
 ```
 
-This repo's `.agent-collab/config.toml` is intentionally small: it only opts this checkout into Antigravity and adds the local `solo-antigravity` workflow.
+This repo's `.agent-collab/config.toml` is intentionally small: it opts this
+checkout into Antigravity and xAI and adds local `solo-antigravity` and
+`solo-xai` workflows. Both providers remain disabled in built-in config.
+
+xAI exposes canonical `xai_cli` and `xai_sdk` backends through the same generic
+`backend_options` contract. The CLI uses Grok Build `streaming-json`, accepts
+Grok local sign-in or `XAI_API_KEY`, and captures session identity; its observed
+0.2.93 stream does not expose typed tool records. The SDK requires
+`XAI_API_KEY`, is remote message-only chat, and captures response identity. Use
+`backend_options.xai_cli` or `backend_options.xai_sdk`; there is no provider-wide
+`xai_options` field.
 
 The referee invokes agents as subprocesses. Agent prompts include guardrails telling them not to spawn Claude, Codex, `agent-collab`, or other agent subprocesses.
 
@@ -295,7 +305,7 @@ Important implementation files:
 - `agent_collab/daemon.py`: in-memory session manager and session lifecycle.
 - `agent_collab/referee.py`: bounded turn loop.
 - `agent_collab/runners.py`: runner primitives (subprocess/mock/dry-run) and the registry-backed `configured_runner`.
-- `agent_collab/backends/`: six standalone `<provider>_<backend>` packages, their option manifests, parsers/runners, and shared infrastructure.
+- `agent_collab/backends/`: eight standalone `<provider>_<backend>` packages, their option manifests, parsers/runners, and shared infrastructure.
 - `agent_collab/events.py`: normalized provider-neutral event model.
 - `agent_collab/client.py`: HTTP client used by CLI watch/start/list/status.
 - `agent_collab/daemon_supervisor.py`: background daemon PID/state/log lifecycle.

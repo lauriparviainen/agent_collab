@@ -16,9 +16,9 @@ The current Stage 4.9 backend registry already separates provider `type`
 with the project, adding real SDK runners for Claude and Codex, and refreshing
 Antigravity SDK support.
 
-Adding `xai` as a fourth real provider is split into its own focused sub-task,
-[Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md), and should land after
-this stage.
+Adding `xai` as a fourth real provider was split into its own focused sub-task,
+[Stage 5.1.1](stage-5.1.1-xai-provider.md), which was completed after this
+stage.
 xAI adds a new provider `type` — a wider, riskier fan-out than adding a second
 backend to an existing type — so it is kept separate to keep this stage focused.
 
@@ -82,8 +82,8 @@ are young and may change:
   References:
   - https://github.com/google-antigravity/antigravity-sdk-python
   - https://antigravity.google/product/antigravity-sdk
-- xAI (CLI `grok` + `xai-sdk`): out of scope here; see
-  [Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md) for the verified `grok 0.2.93`
+- xAI (CLI `grok` + `xai-sdk`): out of scope here; see the completed
+  [Stage 5.1.1](stage-5.1.1-xai-provider.md) for the verified `grok 0.2.93`
   flags, `streaming-json` event shapes, and SDK usage.
 
 ## Packaging plan
@@ -97,7 +97,7 @@ dependencies = [
   "claude-agent-sdk>=0.2.114,<0.3.0",
   "openai-codex>=0.1.0b3,<0.2.0",
   "google-antigravity>=0.1.5,<0.2.0",
-  # xai-sdk is added by Stage 5.1.1 (xAI provider).
+  # xai-sdk was added by Stage 5.1.1 (xAI provider).
 ]
 ```
 
@@ -161,8 +161,8 @@ here by either:
 - importing the module namespaces (`from . import claude_sdk` and calling
   `claude_sdk.build_sdk_backends()`).
 
-Pick one convention and apply it to all SDK modules so Stage 5.1.1 (xAI) only has
-to follow the pattern.
+Pick one convention and apply it to all SDK modules. Stage 5.1.1 (xAI)
+subsequently followed that pattern.
 
 Each SDK backend must implement:
 
@@ -178,9 +178,9 @@ Each SDK backend must implement:
 Do not pass unknown option keys through blindly. Unknown or unsupported SDK
 options should be rejected during start validation with field paths.
 
-When `xai` lands (Stage 5.1.1) it adds `(xai, cli)` + `(xai, sdk)` and a fourth
-SDK module; it simply follows the non-shadowing factory convention established
-above, so no rename is deferred to that stage.
+Stage 5.1.1 subsequently added `(xai, cli)` + `(xai, sdk)` and a fourth SDK
+module. It follows the non-shadowing factory convention established above, so
+no rename was deferred to that stage.
 
 ## Provider plans
 
@@ -371,8 +371,8 @@ CLI/MCP start validation must reject:
 12. Run full unit tests and at least one live smoke for each SDK on a credentialed
     development machine before closing the task.
 
-Adding the `xai` provider is tracked separately in
-[Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md).
+The `xai` provider was completed separately in
+[Stage 5.1.1](stage-5.1.1-xai-provider.md).
 
 ## Tests
 
@@ -435,6 +435,6 @@ Live tests must not run by default in CI or normal local unit test runs.
   summaries.
 - Resume, interrupt, and tool-gating are separate runtime features. Do not make
   them implicit side effects of adding SDK execution.
-- xAI is added separately in [Stage 5.1.1](../tasks_open/stage-5.1.1-xai-provider.md); see that
+- xAI was added separately in [Stage 5.1.1](stage-5.1.1-xai-provider.md); see that
   task for its provider-specific risks (new `type` fan-out with two silent-fail
   lists, Grok-CLI-vs-SDK asymmetry, unobserved tool-event shapes, ACP follow-up).

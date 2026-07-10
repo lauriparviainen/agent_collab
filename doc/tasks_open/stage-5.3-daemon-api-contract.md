@@ -249,32 +249,79 @@ helpers accept the DTO or a wire dict via `_value`; `HttpClientToolBackend`
   (server dispatch ⊆ `ROUTES`) fully; the current test only proves the forward
   direction.
 - **Malformed numeric/null request fields → `400`, not `500`.** `_parse` maps
-  only `ValueError`; a null/ill-typed `max_turns`/`timeout` reaches `int(None)` →
+  only `ValueError` (and `_handle_connection` already maps a bare `ValueError`
+  to `400` too — [server_http.py](../../agent_collab/server_http.py) ~L87 — so
+  malformed *string* numerics are already `400`); the actual `500` path is
+  `TypeError`: a null/ill-typed `max_turns`/`timeout` reaches `int(None)` →
   `TypeError` → generic `500` (pre-existing behavior, not a slice-2 regression).
-  If the contract wants all malformed request fields to be `400`, have the DTO
-  `from_dict` raise `ValueError` on those conversions.
+  Fix in the DTO `from_dict`: convert via a helper that raises `ValueError` on
+  `TypeError` too.
+- **Update [daemon-architecture.md](daemon-architecture.md) "Suggested
+  endpoints"** — this Deliverables-A item has **not landed** (re-verified
+  2026-07-10): the prose at ~L122 still omits `POST /sessions/{id}/messages`
+  and `GET /health`, and there is no pointer to `api_schema.ROUTES`/DTOs as the
+  source of truth. Listed here so it is not lost; fold into the table-driven
+  `_dispatch` slice.
 - **`doc/http-api.md` generator** — still deferred.
 - **Tool-output elision on read (`tool_output` parameter)** — requested
   2026-07-10: full tool payloads in `read_events`/`wait_events`/
   `read_transcript` responses bloat every reading agent's context (a 50-line
   `Read` result is replayed to the referee and to each cross-review turn),
   and the reader almost never needs the payload — only that the call happened.
-  Design:
+  Design (grounding re-verified 2026-07-10):
   - Storage keeps **full fidelity in the JSONL**; elision is strictly a
     read-time projection, never applied at write time.
   - Add `tool_output: "summary" | "full"` (default `summary`) to
-    `read_events`, `wait_events`, and `read_transcript`. Summary renders one
-    line per `tool`-source event: tool name, compact args digest, result size,
-    plus the **event id** so a caller can re-fetch that single event with
-    `full` when it genuinely needs the payload.
+    `read_events`, `wait_events`, and `read_transcript` (REST query param +
+    MCP tool arg + `AgentCollabClient` kwarg). Summary renders one line per
+    `tool`-source event: tool name, compact args digest, result size, plus the
+    **event id** so a caller can re-fetch that single event with `full` when
+    it genuinely needs the payload.
+  - **Event id = absolute index.** `Event`
+    ([events.py](../../agent_collab/events.py)) has **no id field**
+    (`timestamp`/`source`/`type`/`text`/`raw`); identity is positional in the
+    session's event list — the same index space the `cursor` already uses
+    (a batch's returned `cursor` is the index after its last event, so an
+    event's id is *request cursor + offset in batch*). The summary line
+    carries this index. No new id field on the wire.
+  - **Single-event re-fetch needs a new `limit` param.**
+    `read_events(session_id, cursor)` returns everything from cursor to end
+    ([daemon.py](../../agent_collab/daemon.py) `read_events`); there is no way
+    to fetch one event today, so `full` from a cursor would replay the whole
+    tail and reintroduce the bloat. Add an optional `limit` (REST query + MCP
+    arg) to `read_events` only; re-fetch is then
+    `read_events(cursor=id, limit=1, tool_output="full")`. `wait_events`
+    does not need it.
+  - **Elide both `text` and `raw`.** Tool events carry the payload in *both*
+    fields — parsers set `text` from `first_text(raw)`/`compact_json(raw)`
+    (often the full result text) and attach the entire provider message as
+    `raw`, which rides `to_dict()` ([backends/claude_cli/parser.py](../../agent_collab/backends/claude_cli/parser.py),
+    [events.py](../../agent_collab/events.py) `to_dict` = `asdict`). Summary
+    replaces `text` with the one-liner and nulls `raw`.
+  - **`read_transcript` summary re-renders from the JSONL.** The markdown file
+    is pre-rendered at *write time* with the full `event.text`
+    ([logging.py](../../agent_collab/logging.py) `SessionLogger.write`) and the
+    route returns the file verbatim
+    ([server_http.py](../../agent_collab/server_http.py) ~L184). So
+    `tool_output=summary` must re-render from the JSONL (same
+    `## SOURCE \`type\`` layout, tool events summarized); `full` keeps the
+    verbatim file read. If that re-render is not cheap to write, ship the
+    events-route elision first and defer the transcript variant to its own
+    slice.
   - Only `tool`-source events are elided — agent prose, referee notes, and
-    errors always stay full.
+    errors always stay full. (The ongoing stage-5.1 branch only adds `"xai"`
+    to `VALID_SOURCES` — no impact on this design.)
   - Even under `full`, byte-cap pathological outputs with a
     `+N bytes truncated, see transcript file` marker.
-  - The default flip is a behavior change for MCP callers; land it behind the
-    Workstream A API version (`summary` becomes the versioned default) and
-    call it out in the changelog. The TUI display side of the same problem
-    (one dim summary row per tool call) is owned by
+  - **Versioning the default flip:** bump `API_VERSION` **1 → 2** when the
+    `summary` default lands. Rationale: the REST clients are in-repo and ship
+    with the daemon, so the major-mismatch hard-fail
+    (`_assert_compatible_api`) only fires for a genuinely stale mixed install
+    — which is exactly what it is for. MCP callers never see the REST header,
+    so for them the flip is announced where they actually look: the
+    `read_events`/`wait_events`/`read_transcript` tool descriptions in `TOOLS`
+    plus the changelog. The TUI display side of the same problem (one dim
+    summary row per tool call) is owned by
     [stage-5.2](../tasks_closed/stage-5.2-calm-tui-cleanup/README.md), not here.
 
 ## Workstream B - Loopback Auth (rotating shared-secret token)
@@ -449,6 +496,29 @@ resolved into [Resolved Decisions](#resolved-decisions): A = DTOs + test only
 header; `Bearer` with open `/health` + mandatory `/mcp`; per-lifetime rotation;
 protected-route readiness probe; keep A+B in one doc as two PRs. Status flipped to
 **approved for implementation**.
+
+Fifth pass (implementation-readiness re-check, 2026-07-10, against the working
+tree with the ongoing stage-5.1 branch changes). All remaining-work and
+Workstream B grounding re-verified accurate: `_dispatch` is still hand-rolled
+(no `ROUTES` import in `server_http.py`); `GlobalDataPaths` still lacks
+`token_path`; `_wait_for_ready` is still socket-only; `_http_reason` still
+omits `401`; `run_server`/`serve` take no token path; the `/mcp`
+`Origin`/protocol checks are still optional (skipped when the header is
+absent); `state.json`/`pid` are still written default-perms by the supervisor;
+slice-3 claims (typed client returns, `_assert_compatible_api`,
+`HttpClientToolBackend` `.to_dict()`) all hold. The stage-5.1 branch touches
+none of the A/B files except a one-line `events.py` addition (`"xai"` source)
+— no conflict. Folded in: the daemon-architecture.md "Suggested endpoints"
+update was a Deliverables-A item missing from the remaining-work list (still
+stale — added); the malformed-numerics item refined (`ValueError` is already
+`400` at the connection level; the `500` path is `TypeError`); and the
+`tool_output` elision design got its three gaps specified — event id defined
+as the absolute cursor index (Events have no id field), a `limit` param on
+`read_events` for single-event re-fetch (impossible today), and the
+`read_transcript` summary path defined as a JSONL re-render (the markdown is
+pre-rendered at write time with full text) — plus a versioning decision
+(`API_VERSION` 1 → 2 with the default flip; MCP callers informed via tool
+descriptions since they never see the REST header).
 
 ## Resolved Decisions
 

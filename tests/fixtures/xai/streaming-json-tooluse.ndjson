@@ -1,0 +1,4 @@
+{"type":"thought","data":"[redacted real tool-use thought deltas]"}
+{"type":"text","data":"tool"}
+{"type":"text","data":"-fixture-ok"}
+{"type":"end","stopReason":"EndTurn","sessionId":"tool-session-redacted","requestId":"tool-request-redacted"}

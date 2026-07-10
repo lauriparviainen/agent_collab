@@ -1,0 +1,13 @@
+schema_version = 1
+
+[options.model]
+type = "string"
+required = true
+
+[options.thinking_level]
+type = "string"
+allowed = ["none", "low", "medium", "high"]
+
+[options.reasoning_effort]
+type = "string"
+allowed = ["none", "low", "medium", "high"]

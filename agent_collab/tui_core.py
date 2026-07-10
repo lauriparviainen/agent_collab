@@ -488,6 +488,11 @@ def selected_picker_session_id(picker: SessionPickerState) -> Optional[str]:
     return str(session_id) if session_id else None
 
 
+# Lines before the first session row in format_session_picker_lines' output:
+# title, blank, column header.
+PICKER_HEADER_LINES = 3
+
+
 def format_session_picker_lines(picker: SessionPickerState) -> Tuple[str, ...]:
     """Render the session picker as shared-overlay body lines.
 
@@ -588,6 +593,73 @@ def scroll_by(state: ScrollState, total_lines: int, viewport_height: int, delta:
 
 def follow_scroll(total_lines: int, viewport_height: int) -> ScrollState:
     return ScrollState(top=max_scroll_top(total_lines, viewport_height), follow=True)
+
+
+def ensure_scroll_visible(
+    state: ScrollState, row_start: int, row_end: int, total_lines: int, viewport_height: int
+) -> ScrollState:
+    """Minimally adjust ``state`` so display rows ``[row_start, row_end)`` are
+    on screen. Returns a non-following state: selection-anchored views scroll
+    with their selection, not the tail."""
+    viewport_height = max(1, int(viewport_height))
+    top = max(0, min(int(state.top), max_scroll_top(total_lines, viewport_height)))
+    if row_start < top:
+        top = row_start
+    elif row_end > top + viewport_height:
+        top = row_end - viewport_height
+    top = max(0, min(top, max_scroll_top(total_lines, viewport_height)))
+    return ScrollState(top=top, follow=False)
+
+
+def picker_scroll(
+    picker: SessionPickerState, state: ScrollState, width: int, viewport_height: int
+) -> ScrollState:
+    """Scroll state for the picker overlay that keeps the selected row visible.
+
+    Row spans are computed on the wrapped display lines because picker rows
+    (long workdir paths) can wrap on narrow terminals. Tail-follow is never
+    right here: it hides the title, the column header, and the latest-first
+    top rows — including the pre-selected current session.
+    """
+    if not picker.sessions:
+        return ScrollState(top=0, follow=False)
+    lines = format_session_picker_lines(picker)
+    selected = PICKER_HEADER_LINES + picker.index
+    row_start = len(wrap_plain_lines(lines[:selected], width))
+    row_end = row_start + len(wrap_plain_lines(lines[selected : selected + 1], width))
+    total_lines = row_end + len(wrap_plain_lines(lines[selected + 1 :], width))
+    return ensure_scroll_visible(state, row_start, row_end, total_lines, viewport_height)
+
+
+MENU_TITLE_SOURCE = "menu_title"
+MENU_HEADER_SOURCE = "menu_header"
+MENU_ROW_SOURCE = "menu_row"
+MENU_SELECTED_SOURCE = "menu_selected"
+
+
+def picker_menu_lines(lines: Sequence[str], width: int) -> Tuple[TranscriptLine, ...]:
+    """Wrap picker overlay lines and tag each wrapped row with a menu role.
+
+    The picker renders as a colored menu (matching the slash palette) rather
+    than plain overlay text: the hint line stays chrome-dim, the column header
+    reads muted on the menu fill, the selected row gets the selected bar —
+    wrapped continuations included — and every other row gets the menu fill.
+    Line positions follow format_session_picker_lines: hint, blank, column
+    header, then session rows.
+    """
+    tagged = []
+    for index, line in enumerate(lines):
+        if index == 0:
+            source = MENU_TITLE_SOURCE
+        elif index == PICKER_HEADER_LINES - 1:
+            source = MENU_HEADER_SOURCE
+        elif line.startswith(SLASH_SELECTED_MARKER):
+            source = MENU_SELECTED_SOURCE
+        else:
+            source = MENU_ROW_SOURCE
+        for wrapped_index, text in enumerate(wrap_plain_lines((line,), width)):
+            tagged.append(TranscriptLine(source=source, text=text, continuation=wrapped_index > 0))
+    return tuple(tagged)
 
 
 def reset_cursor_state(state: CursorState, session_id: str) -> CursorState:

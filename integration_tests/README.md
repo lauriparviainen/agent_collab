@@ -12,6 +12,8 @@ This suite is credentialed and may make paid model calls. It is structurally sep
 ./agent_collab.sh integration-test
 ./agent_collab.sh integration-test claude_sdk
 ./agent_collab.sh integration-test codex_cli --strict
+./agent_collab.sh integration-test xai_cli --strict
+./agent_collab.sh integration-test xai_sdk --strict
 ```
 
 Selection can also use comma-separated canonical names in
@@ -22,13 +24,19 @@ skips exit `0`.
 
 The paid calls default to economical, low-latency settings: Claude `sonnet` with
 low effort, Codex `gpt-5.6-luna` with low reasoning, and Antigravity
-`Gemini 3.5 Flash (Low)`. Override models with
+`Gemini 3.5 Flash (Low)`. xAI uses Grok Build's local `grok-build` model for the
+CLI and `grok-4.5` with low effort for the remote SDK. Override models with
 `AGENT_COLLAB_IT_CLAUDE_MODEL`, `AGENT_COLLAB_IT_CODEX_MODEL`, or
-`AGENT_COLLAB_IT_ANTIGRAVITY_MODEL`; override Claude/Codex effort with the
+`AGENT_COLLAB_IT_ANTIGRAVITY_MODEL`, or `AGENT_COLLAB_IT_XAI_MODEL`; override
+Claude/Codex/xAI effort with the
 corresponding `AGENT_COLLAB_IT_<PROVIDER>_THINKING_LEVEL`. Native provider
 authentication is used. Each turn runs in a fresh temporary workspace with an
 isolated `AGENT_COLLAB_HOME`; assertions log event kinds rather than raw SDK
 responses or transcripts.
+
+The xAI CLI accepts `XAI_API_KEY` or Grok's cached local sign-in. The xAI SDK
+test specifically requires `XAI_API_KEY`, emits message-only events, and asserts
+response identity rather than prose.
 
 The Antigravity SDK test uses Vertex when Google Application Default
 Credentials are available. It reads the credential path from

@@ -21,6 +21,15 @@ args = ["--mode", "accept-edits", "-p"]
 backend = "cli"
 enabled = false
 
+# xAI is opt-in. Grok Build uses newline-delimited streaming JSON in headless
+# single-turn mode; no built-in workflow references this disabled agent.
+[agents.xai]
+type = "xai"
+command = "grok"
+args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
+backend = "cli"
+enabled = false
+
 [workflows.solo-claude]
 sequence = ["claude"]
 

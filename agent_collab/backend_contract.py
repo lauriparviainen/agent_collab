@@ -21,6 +21,7 @@ class OptionSpec:
     maximum: Optional[float] = None
     default: Any = OPTION_UNSET
     inferred: bool = False
+    required: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {"type": self.type}
@@ -68,7 +69,15 @@ def load_option_schema(path: Path) -> Dict[str, OptionSpec]:
         label = f"{path}: options.{name}"
         if not isinstance(name, str) or not name or not isinstance(raw, Mapping):
             raise ConfigError(f"{label} must be a table")
-        extra = set(raw) - {"type", "allowed", "min", "max", "default", "inferred"}
+        extra = set(raw) - {
+            "type",
+            "allowed",
+            "min",
+            "max",
+            "default",
+            "inferred",
+            "required",
+        }
         if extra:
             raise ConfigError(f"{label}: unknown field {sorted(extra)[0]!r}")
         option_type = raw.get("type")
@@ -89,6 +98,9 @@ def load_option_schema(path: Path) -> Dict[str, OptionSpec]:
         inferred = raw.get("inferred", False)
         if not isinstance(inferred, bool):
             raise ConfigError(f"{label}.inferred must be a boolean")
+        required = raw.get("required", False)
+        if not isinstance(required, bool):
+            raise ConfigError(f"{label}.required must be a boolean")
         spec = OptionSpec(
             option_type,
             allowed=tuple(allowed) if allowed is not None else None,
@@ -96,6 +108,7 @@ def load_option_schema(path: Path) -> Dict[str, OptionSpec]:
             maximum=maximum,
             default=deepcopy(raw["default"]) if "default" in raw else OPTION_UNSET,
             inferred=inferred,
+            required=required,
         )
         _validate_manifest_value(spec.default, spec, f"{label}.default", ConfigError)
         if spec.allowed is not None:
@@ -145,6 +158,9 @@ def normalize_declared_options(
     for key, value in requested.items():
         if key in schema:
             result[key] = deepcopy(value)
+    for key, spec in schema.items():
+        if spec.required and key not in result:
+            raise BackendOptionError(key, "is required")
     return result
 
 

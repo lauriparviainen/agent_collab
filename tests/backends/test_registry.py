@@ -26,9 +26,9 @@ class RegistryResolutionTests(unittest.TestCase):
         self.assertTrue(backends.is_registered("claude", "cli"))
         self.assertTrue(backends.is_registered("codex", "cli"))
 
-    def test_all_six_real_provider_backend_pairs_are_registered(self):
+    def test_all_eight_real_provider_backend_pairs_are_registered(self):
         # Stage 5.1 makes `sdk` first-class for every real provider.
-        for agent_type in ("claude", "codex", "antigravity"):
+        for agent_type in ("claude", "codex", "antigravity", "xai"):
             self.assertTrue(backends.is_registered(agent_type, "cli"), agent_type)
             self.assertTrue(backends.is_registered(agent_type, "sdk"), agent_type)
 
@@ -36,6 +36,7 @@ class RegistryResolutionTests(unittest.TestCase):
         self.assertEqual(backends.registered_backends("claude"), ["cli", "sdk"])
         self.assertEqual(backends.registered_backends("codex"), ["cli", "sdk"])
         self.assertEqual(backends.registered_backends("antigravity"), ["cli", "sdk"])
+        self.assertEqual(backends.registered_backends("xai"), ["cli", "sdk"])
         self.assertEqual(backends.registered_backends("nonesuch"), [])
 
     def test_resolution_precedence_request_over_config_over_default(self):
@@ -101,7 +102,7 @@ class CapabilityReducerTests(unittest.TestCase):
         )
 
     def test_builtin_backend_capabilities_are_all_false(self):
-        for agent_type in ("claude", "codex"):
+        for agent_type in ("claude", "codex", "antigravity", "xai"):
             caps = backends.capabilities_for(agent_type, "cli")
             self.assertEqual(caps.to_dict(), {"resume": False, "interrupt": False, "tool_gate": False})
 

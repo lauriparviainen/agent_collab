@@ -175,6 +175,8 @@ _BUILTIN_BACKENDS = (
     "codex_sdk",
     "antigravity_cli",
     "antigravity_sdk",
+    "xai_cli",
+    "xai_sdk",
 )
 
 

@@ -53,10 +53,11 @@ def _info_text(segments):
 
 
 class BrandColorMappingTests(unittest.TestCase):
-    def test_three_known_brand_hexes_pin_to_expected_xterm256_cells(self):
+    def test_known_brand_hexes_pin_to_expected_xterm256_cells(self):
         self.assertEqual(xterm256_from_hex("#D97757"), 173)  # claude coral
         self.assertEqual(xterm256_from_hex("#10A37F"), 36)   # codex green
         self.assertEqual(xterm256_from_hex("#4285F4"), 69)   # antigravity blue
+        self.assertEqual(xterm256_from_hex("#A0A0A0"), 247)  # xAI neutral monochrome
 
     def test_hex_parsing_tolerates_missing_hash_and_rejects_bad_input(self):
         self.assertEqual(xterm256_from_hex("D97757"), 173)

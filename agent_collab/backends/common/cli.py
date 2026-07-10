@@ -41,7 +41,7 @@ def set_flag_value_before_print_prompt(command: Sequence[str], flag: str, value:
 def insert_before_print_prompt(command: Sequence[str], items: Sequence[str]) -> List[str]:
     result = list(command)
     for index, item in enumerate(result):
-        if item in {"-p", "--print", "--prompt"}:
+        if item in {"-p", "--print", "--prompt", "--single"}:
             return result[:index] + list(items) + result[index:]
     return result + list(items)
 

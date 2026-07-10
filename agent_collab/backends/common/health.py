@@ -249,6 +249,40 @@ def gemini_api_key_credentials(env: Optional[Mapping[str, str]] = None) -> str:
     return CREDENTIALS_UNKNOWN
 
 
+def xai_cli_credentials(
+    grok_home: Optional[Path] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> str:
+    """Best-effort Grok Build authentication evidence without reading secrets.
+
+    A non-empty ``XAI_API_KEY`` or cached entry in ``~/.grok/auth.json`` is
+    definite evidence. Missing or indeterminate local evidence stays
+    ``unknown`` because Grok may receive credentials through agent config.
+    """
+
+    environ = os.environ if env is None else env
+    if environ.get("XAI_API_KEY"):
+        return CREDENTIALS_OK
+    base = grok_home if grok_home is not None else Path.home() / ".grok"
+    auth_file = base / "auth.json"
+    if not auth_file.exists():
+        return CREDENTIALS_UNKNOWN
+    try:
+        data = json.loads(auth_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return CREDENTIALS_UNKNOWN
+    if isinstance(data, dict) and any(bool(value) for value in data.values()):
+        return CREDENTIALS_OK
+    return CREDENTIALS_UNKNOWN
+
+
+def xai_api_key_credentials(env: Optional[Mapping[str, str]] = None) -> str:
+    """Side-effect-free credential evidence for the remote xAI SDK."""
+
+    environ = os.environ if env is None else env
+    return CREDENTIALS_OK if environ.get("XAI_API_KEY") else CREDENTIALS_UNKNOWN
+
+
 @dataclass(frozen=True)
 class HealthObservation:
     health: BackendHealth

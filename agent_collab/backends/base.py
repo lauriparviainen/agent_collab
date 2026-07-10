@@ -1,6 +1,6 @@
 """Backend abstraction shared by every execution mechanism.
 
-A *provider* is an agent ``type`` (``claude``, ``codex``, ``antigravity``);
+A *provider* is an agent ``type`` (``claude``, ``codex``, ``antigravity``, ``xai``);
 a *backend* is *how* a turn is executed (``cli`` subprocess today, ``sdk``
 next). The registry in :mod:`agent_collab.backends` is keyed by
 ``(agent_type, backend_id)``; each entry is an :class:`AgentBackend` that knows
@@ -128,7 +128,7 @@ class AgentBackend(Protocol):
     """Self-describing execution contract for one backend pair."""
 
     id: str  # "cli", "sdk"
-    agent_type: str  # "claude", "codex", "antigravity"
+    agent_type: str  # "claude", "codex", "antigravity", "xai"
     capabilities: BackendCapabilities
     # Provider brand hue (truecolor hex, e.g. "#D97757") — a static registry
     # fact like ``capabilities``. Identical across a provider's cli/sdk pair:

@@ -6,7 +6,16 @@ import json
 from typing import Any, Dict, Optional
 
 
-VALID_SOURCES = {"human", "referee", "claude", "codex", "antigravity", "tool", "error"}
+VALID_SOURCES = {
+    "human",
+    "referee",
+    "claude",
+    "codex",
+    "antigravity",
+    "xai",
+    "tool",
+    "error",
+}
 VALID_TYPES = {"message", "tool_call", "command", "file_change", "status", "error"}
 
 

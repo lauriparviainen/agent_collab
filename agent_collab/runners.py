@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import AsyncIterator, Callable, Dict, List, Optional
+from typing import AsyncIterator, Callable, Dict, Iterable, List, Optional, Union
 
 from .config import AgentConfig, ConfigError
 from .events import Event
 
 
-Parser = Callable[[str, bool], Optional[Event]]
+ParserResult = Optional[Union[Event, Iterable[Event]]]
+Parser = Callable[[str, bool], ParserResult]
 CommandBuilder = Callable[[Path], List[str]]
 
 # Provider CLIs emit one JSON object per line. Tool results and large diffs can
@@ -149,14 +150,25 @@ class SubprocessRunner(AgentRunner):
 
         async def read_stdout() -> None:
             assert process.stdout is not None
+
+            async def queue_parsed(parsed: ParserResult) -> None:
+                if parsed is None:
+                    return
+                events = (parsed,) if isinstance(parsed, Event) else parsed
+                for event in events:
+                    if not isinstance(event, Event):
+                        raise TypeError("parser returned a non-Event value")
+                    await queue.put(event)
+
             while True:
                 raw_line = await read_line(process.stdout, "stdout")
                 if raw_line is None:
+                    finish = getattr(self.parser, "finish", None)
+                    if callable(finish):
+                        await queue_parsed(finish())
                     return
                 line = raw_line.decode("utf-8", errors="replace")
-                event = self.parser(line, self.verbose)
-                if event is not None:
-                    await queue.put(event)
+                await queue_parsed(self.parser(line, self.verbose))
 
         async def read_stderr() -> None:
             assert process.stderr is not None
@@ -173,20 +185,29 @@ class SubprocessRunner(AgentRunner):
                     await queue.put(Event.create("error", "error", f"{self.name} stderr: {line}", {"line": line}))
 
         async def terminate_process() -> None:
-            if process.returncode is not None:
-                return
-            try:
-                process.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            if process.returncode is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+            # A LimitOverrunError pauses the subprocess pipe transport. Waiting
+            # for process exit before consuming that buffered pipe can deadlock,
+            # so drain both pipes concurrently with reaping the child.
+            tasks = [asyncio.create_task(process.wait())]
+            tasks.extend(
+                asyncio.create_task(stream.read())
+                for stream in (process.stdout, process.stderr)
+                if stream is not None
+            )
+            _done, pending = await asyncio.wait(tasks, timeout=5.0)
+            if pending and process.returncode is None:
                 try:
                     process.kill()
                 except ProcessLookupError:
                     pass
-                await process.wait()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         async def wait_done() -> None:
             stdout_task = asyncio.create_task(read_stdout())
@@ -213,6 +234,10 @@ class SubprocessRunner(AgentRunner):
                     )
                 )
             except asyncio.CancelledError:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
                 await terminate_process()
                 raise
             except Exception as exc:
@@ -224,6 +249,10 @@ class SubprocessRunner(AgentRunner):
                         {"error": str(exc), "stream_limit": self.stream_limit},
                     )
                 )
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
                 await terminate_process()
             finally:
                 for task in tasks:
@@ -303,7 +332,7 @@ def _is_noisy_stderr(line: str) -> bool:
     )
 
 
-PROVIDER_SOURCES = {"claude", "codex", "antigravity"}
+PROVIDER_SOURCES = {"claude", "codex", "antigravity", "xai"}
 
 
 def _event_source(agent_name: str) -> str:

@@ -1,0 +1,5 @@
+{
+  "_note": "Illustrative values in the public xai_sdk.chat.Response shape; no model call was made.",
+  "content": "fixture response",
+  "id": "response-redacted"
+}

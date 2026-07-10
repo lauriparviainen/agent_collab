@@ -20,7 +20,7 @@ by hermetic tests plus a credentialed provider smoke test.
 
 ## Current state
 
-All six backends deliberately report these capabilities as false:
+All eight backends deliberately report these capabilities as false:
 
 ```json
 {"resume": false, "interrupt": false, "tool_gate": false}
@@ -33,6 +33,7 @@ The SDK backends already capture a uniform provider identity:
 | `claude_sdk` | session | `provider_session_id` |
 | `codex_sdk` | thread | `provider_session_id` |
 | `antigravity_sdk` | conversation | `provider_session_id` |
+| `xai_sdk` | response | `provider_session_id` |
 
 `SessionState.agent_sessions` persists those IDs and their provider-specific
 kind, but nothing feeds an ID back into a later turn. Each current SDK runner

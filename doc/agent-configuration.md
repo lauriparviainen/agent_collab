@@ -120,7 +120,7 @@ Avoid adding broad permission fields at first. Permission policy should remain e
 
 ## Backends
 
-An agent's `type` (the *provider*: `claude`, `codex`, `antigravity`) is separate
+An agent's `type` (the *provider*: `claude`, `codex`, `antigravity`, `xai`) is separate
 from its `backend` (the *execution mechanism*). The registry is keyed by
 `(type, backend)`:
 
@@ -129,6 +129,7 @@ from its `backend` (the *execution mechanism*). The registry is keyed by
 | `claude`          | ✅ (default)          | ✅ (`claude-agent-sdk`, typed)   |
 | `codex`           | ✅ (default)          | ✅ (`openai-codex`, message-first) |
 | `antigravity`     | ✅ (`agy`, plain text) | ✅ (`google-antigravity`, typed) |
+| `xai`             | ✅ (`grok`, streaming JSON) | ✅ (`xai-sdk`, message-only remote chat) |
 
 - `cli` runs the agent as a subprocess and parses its stdout. It is the default
   backend and runs the provider CLI.
@@ -236,19 +237,29 @@ under `agents.antigravity_sdk`, not MCP-call options. A backend entry is rejecte
 when it is not selected by the workflow. Configured session defaults live under
 `agents.<id>.options`; MCP values override them for that session.
 
+`backend_options.xai_cli` accepts `model`, `permission_mode`, `sandbox`, and the
+reasoning aliases. `backend_options.xai_sdk` accepts only `model` and the
+reasoning aliases; pass a model explicitly because no remote API model default
+is assumed without a credentialed account check. Its verified/current reasoning
+values are `none`, `low`, `medium`, and `high`. The SDK is remote message-only
+chat and does not provide the local coding/tool behavior of Grok Build.
+
 CLI callers can pass JSON option objects and select a backend:
 
 ```bash
 agent-collab start --backend-options '{"codex_cli":{"thinking_level":"medium"},"claude_cli":{"model":"opus"}}' "Task"
 agent-collab start --workflow solo-antigravity --backend sdk --backend-options '{"antigravity_sdk":{"model":"Gemini 3.1 Pro (High)"}}' "Task"
+agent-collab start --workflow solo-xai --backend-options '{"xai_cli":{"model":"grok-build"}}' "Task"
+agent-collab start --workflow solo-xai --backend sdk --backend-options '{"xai_sdk":{"model":"grok-4.5","thinking_level":"low"}}' "Task"
 ```
 
 The option-to-command mapping is explicit. Unknown option keys are never appended as arbitrary shell flags.
 
-Prefer `thinking_level` for both built-in agent types:
+Prefer `thinking_level` across providers:
 
 - Codex `thinking_level` accepts `minimal`, `low`, `medium`, `high`, or `xhigh` and maps to the Codex config override `model_reasoning_effort`.
 - Claude `thinking_level` accepts `low`, `medium`, `high`, `xhigh`, or `max` and maps to Claude Code `--effort`.
+- xAI CLI accepts `low`, `medium`, `high`, or model-specific `xhigh`; the SDK accepts `none`, `low`, `medium`, or `high`. Both map one effective value to `reasoning_effort`.
 - Codex `reasoning_effort` is kept as a provider-specific alias for compatibility. Claude `thinking_budget_tokens` is kept for advanced raw-token configurations, but should not be combined with `thinking_level`.
 
 ## Agent types
@@ -259,6 +270,7 @@ Start with a small set:
 claude
 codex
 antigravity   (opt-in, disabled by default)
+xai           (opt-in, disabled by default)
 mock
 ```
 
@@ -316,6 +328,24 @@ type = "antigravity"
 command = "agy"
 args = ["-p", "--mode", "accept-edits"]
 backend = "cli"        # or "sdk" for the google-antigravity SDK
+enabled = true
+```
+
+### `xai`
+
+xAI is disabled by default and available through two intentionally asymmetric
+backends. `xai_cli` runs Grok Build headlessly with `streaming-json`, attributes
+text/thought/end/error records, and captures the Grok session ID; the observed
+0.2.93 stream exposes no typed tool records. `xai_sdk` uses the remote async chat
+API, maps only response content and response identity, requires `XAI_API_KEY`,
+and does not enable tools. Both report resume, interrupt, and tool-gate as false.
+
+```toml
+[agents.xai]
+type = "xai"
+command = "grok"
+args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
+backend = "cli"
 enabled = true
 ```
 

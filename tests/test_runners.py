@@ -66,6 +66,40 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("stderr line exceeded the 1024-byte transport limit", errors[0].text)
 
+    async def test_parser_can_emit_multiple_events_for_one_line(self):
+        def parser(line, verbose):
+            return [
+                Event.create("claude", "message", "one"),
+                Event.create("claude", "message", "two"),
+            ]
+
+        runner = SubprocessRunner(
+            "multi-event",
+            [sys.executable, "-c", "print('fixture')"],
+            parser,
+        )
+        events = await self._events(runner)
+        self.assertEqual(
+            [event.text for event in events if event.source == "claude"],
+            ["one", "two"],
+        )
+
+    async def test_cancelling_runner_reaps_a_silent_child_promptly(self):
+        runner = SubprocessRunner(
+            "cancel-me",
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            _json_message_parser,
+        )
+
+        async def collect():
+            return [event async for event in runner.run("prompt", Path("."))]
+
+        task = asyncio.create_task(collect())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

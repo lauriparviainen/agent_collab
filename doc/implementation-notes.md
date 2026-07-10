@@ -25,7 +25,7 @@ Compatibility handling for old config shapes belongs in
 
 Orchestration is a `workflow`, not a `mode`. Built-ins include `solo-claude`,
 `solo-codex`, `cross-review` (default), and `compare`. This repository also
-opts into `solo-antigravity` through its small project config.
+opts into `solo-antigravity` and `solo-xai` through its small project config.
 
 Sessions persist in `data/session-index.json` across daemon restarts. Sessions
 that were running or awaiting input when the daemon died are marked
@@ -34,7 +34,7 @@ prompt-free `command_preview` per agent.
 
 ## Backend Model
 
-An agent's provider `type` (`claude`, `codex`, `antigravity`, `mock`) is
+An agent's provider `type` (`claude`, `codex`, `antigravity`, `xai`, `mock`) is
 separate from its execution `backend` (`cli` or an in-process `sdk`). SDK
 packages install with the project on Python >=3.10; their imports remain lazy.
 
@@ -74,6 +74,7 @@ Stage 5.1 A1 resolved all SDKs together under Python 3.12.13:
 - `openai-codex==0.1.0b3` with
   `openai-codex-cli-bin==0.137.0a4`,
 - `google-antigravity==0.1.5`.
+- `xai-sdk==1.17.0` (bounded by the project to `>=1.17,<2`).
 
 Codex's installed `AsyncCodex` initialized its bundled app-server and created
 and read an ephemeral thread without a model call. Antigravity's installed
@@ -105,6 +106,15 @@ shapes:
 Credentialed turns remain separate live-smoke evidence. The local environment
 currently has no `GEMINI_API_KEY`, so Antigravity's no-model API verification
 does not claim a successful chat.
+
+xAI is opt-in. Grok Build 0.2.93 passed a real headless CLI turn and exposed
+`thought`, `text`, `end`, and explicit `error` records. A disposable shell-tool
+turn emitted no typed action record, so `xai_cli` deliberately maps no tool
+events while capturing `end.sessionId` as provider identity kind `session`.
+The installed `xai-sdk` 1.17.0 confirmed async client context management,
+`chat.create`, `chat.append(user(...))`, `await chat.sample()`, and response
+`content`/`id`. `xai_sdk` is remote message-only chat and captures identity kind
+`response`; no SDK live call was made because this host has no `XAI_API_KEY`.
 
 ## Agent Safety Notes
 

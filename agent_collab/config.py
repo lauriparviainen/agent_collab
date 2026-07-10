@@ -59,7 +59,7 @@ DEFAULT_WORKFLOW = "cross-review"
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("default_config.toml")
 
 
-SUBPROCESS_AGENT_TYPES = {"claude", "codex", "antigravity"}
+SUBPROCESS_AGENT_TYPES = {"claude", "codex", "antigravity", "xai"}
 AGENT_TYPES = SUBPROCESS_AGENT_TYPES | {"mock"}
 
 

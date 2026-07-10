@@ -13,7 +13,7 @@ from agent_collab import backends
 from agent_collab.backends.base import CREDENTIALS_MISSING, HEALTH_UNAVAILABLE
 from agent_collab.config import AgentConfig, builtin_config
 
-PROVIDERS = {"claude", "codex", "antigravity"}
+PROVIDERS = {"claude", "codex", "antigravity", "xai"}
 BACKENDS = {"cli", "sdk"}
 BACKEND_NAMES = {f"{provider}_{backend}" for provider in PROVIDERS for backend in BACKENDS}
 _selected_backend_names: Set[str] = set(BACKEND_NAMES)
@@ -27,6 +27,7 @@ DEFAULT_LIVE_OPTIONS: Dict[str, Dict[str, Any]] = {
     "claude": {"model": "sonnet", "thinking_level": "low"},
     "codex": {"model": "gpt-5.6-luna", "thinking_level": "low"},
     "antigravity": {"model": "Gemini 3.5 Flash (Low)"},
+    "xai": {"model": "grok-4.5", "thinking_level": "low"},
 }
 
 
@@ -90,6 +91,11 @@ class LiveBackendTestCase(unittest.TestCase):
 
         return {}
 
+    def prepare_workdir(self, workdir: Path) -> None:
+        """Optionally prepare the disposable workspace before the provider turn."""
+
+        return None
+
     def run_live(self, prompt: Optional[str] = None) -> list:
         config = builtin_config()
         source = config.agents[self.provider]
@@ -115,6 +121,7 @@ class LiveBackendTestCase(unittest.TestCase):
             workdir = Path(tmp).resolve()
             self.assertNotEqual(workdir, REPO_ROOT)
             self.assertNotIn(REPO_ROOT, workdir.parents)
+            self.prepare_workdir(workdir)
             overrides = dict(self.environment_overrides())
             overrides["AGENT_COLLAB_HOME"] = home
             previous = {key: os.environ.get(key) for key in overrides}

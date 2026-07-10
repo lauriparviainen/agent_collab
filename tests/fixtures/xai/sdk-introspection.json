@@ -1,0 +1,26 @@
+{
+  "capture_date": "2026-07-10",
+  "distribution": "xai-sdk",
+  "distribution_version": "1.17.0",
+  "module": "xai_sdk",
+  "module_version": "1.17.0",
+  "python": "3.12.13",
+  "pip_check": "No broken requirements found.",
+  "AsyncClient": {
+    "signature": "(api_key: Optional[str] = None, management_api_key: Optional[str] = None, *, api_host: str = 'api.x.ai', management_api_host: str = 'management-api.x.ai', metadata: Optional[tuple[tuple[str, str], ...]] = None, channel_options: Optional[list[tuple[str, Any]]] = None, timeout: Optional[float] = None, use_insecure_channel: bool = False) -> None",
+    "async_context_manager": true,
+    "close": "async def close(self) -> None"
+  },
+  "chat_create": {
+    "required": ["model"],
+    "mapped_optional": ["reasoning_effort"],
+    "reasoning_effort_literal": ["none", "low", "medium", "high"]
+  },
+  "chat_append": "(message) -> Self",
+  "chat_sample": "async () -> xai_sdk.chat.Response",
+  "user": "xai_sdk.chat.user(*args) -> Message",
+  "Response": {
+    "confirmed_properties": ["content", "id"],
+    "other_installed_properties_not_mapped": ["reasoning_content", "tool_calls", "usage"]
+  }
+}

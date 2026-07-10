@@ -9,6 +9,11 @@ from agent_collab import cli
 from agent_collab.daemon import SessionManager, StartSessionRequest
 from agent_collab.events import Event
 from agent_collab.tui_core import (
+    MENU_HEADER_SOURCE,
+    MENU_ROW_SOURCE,
+    MENU_SELECTED_SOURCE,
+    MENU_TITLE_SOURCE,
+    PICKER_HEADER_LINES,
     AgentRef,
     CursorState,
     ScrollState,
@@ -18,6 +23,7 @@ from agent_collab.tui_core import (
     agents_from_session,
     build_new_session_payload,
     clamp_scroll,
+    ensure_scroll_visible,
     filter_slash_commands,
     format_activity_indicator,
     follow_scroll,
@@ -31,6 +37,8 @@ from agent_collab.tui_core import (
     move_session_picker,
     move_slash_completion,
     parse_input,
+    picker_menu_lines,
+    picker_scroll,
     render_transcript_lines,
     reset_cursor_state,
     resolve_agent_selector,
@@ -223,6 +231,91 @@ class TuiCoreTests(unittest.TestCase):
         state = scroll_by(state, 100, 10, 999)
         self.assertEqual(state, ScrollState(top=90, follow=True))
         self.assertEqual(clamp_scroll(state, 120, 10), ScrollState(top=110, follow=True))
+
+    def test_ensure_scroll_visible_adjusts_minimally_and_never_follows(self):
+        state = ScrollState(top=10, follow=False)
+        # Row already on screen: unchanged.
+        self.assertEqual(ensure_scroll_visible(state, 12, 13, 100, 10), ScrollState(top=10, follow=False))
+        # Row above the viewport: scroll up to it.
+        self.assertEqual(ensure_scroll_visible(state, 4, 5, 100, 10), ScrollState(top=4, follow=False))
+        # Row below the viewport: scroll down just enough.
+        self.assertEqual(ensure_scroll_visible(state, 25, 26, 100, 10), ScrollState(top=16, follow=False))
+        # A following (tail-pinned) state is re-anchored to the row.
+        self.assertEqual(
+            ensure_scroll_visible(follow_scroll(100, 10), 0, 1, 100, 10), ScrollState(top=0, follow=False)
+        )
+
+    def test_picker_scroll_opens_at_top_and_tracks_selection(self):
+        sessions = [
+            {
+                "session_id": f"s{index:02d}",
+                "status": "done",
+                "workflow": "solo-codex",
+                "updated_at": f"2026-07-08T00:00:{index:02d}+00:00",
+                "workdir": "/w",
+            }
+            for index in range(20)
+        ]
+
+        # Opening pins the top: title, column header, and the latest-first rows
+        # (including the pre-selected newest session) are all visible.
+        picker = make_session_picker(sessions)
+        state = picker_scroll(picker, ScrollState(top=0, follow=False), 200, 10)
+        self.assertEqual(state, ScrollState(top=0, follow=False))
+
+        # Moving the selection below the fold scrolls it into view (width 200:
+        # no wrapping, so rows map 1:1 to display lines).
+        picker = move_session_picker(picker, 15)
+        state = picker_scroll(picker, state, 200, 10)
+        self.assertEqual(state, ScrollState(top=PICKER_HEADER_LINES + 15 + 1 - 10, follow=False))
+
+        # Moving back up scrolls the selection back into view.
+        picker = move_session_picker(picker, -15)
+        state = picker_scroll(picker, state, 200, 10)
+        self.assertEqual(state, ScrollState(top=PICKER_HEADER_LINES, follow=False))
+
+        # An empty picker pins to the top even from a following state.
+        self.assertEqual(
+            picker_scroll(make_session_picker([]), follow_scroll(30, 10), 200, 10),
+            ScrollState(top=0, follow=False),
+        )
+
+    def test_picker_menu_lines_tag_roles_and_wrapped_continuations(self):
+        sessions = [
+            {
+                "session_id": "one",
+                "status": "done",
+                "workflow": "solo-codex",
+                "updated_at": "2026-07-08T00:00:01+00:00",
+                "workdir": "/short",
+            },
+            {
+                "session_id": "two",
+                "status": "running",
+                "workflow": "solo-xai",
+                "updated_at": "2026-07-08T00:00:02+00:00",
+                "workdir": "/home/devel/projects/agent_collab",
+            },
+        ]
+        picker = make_session_picker(sessions)  # newest ("two") preselected
+        lines = format_session_picker_lines(picker)
+
+        tagged = picker_menu_lines(lines, 200)
+        self.assertEqual(tagged[0].source, MENU_TITLE_SOURCE)
+        self.assertEqual(tagged[1].source, MENU_ROW_SOURCE)  # blank spacer
+        self.assertEqual(tagged[1].text, "")
+        self.assertEqual(tagged[2].source, MENU_HEADER_SOURCE)
+        self.assertEqual(tagged[3].source, MENU_SELECTED_SOURCE)
+        self.assertTrue(tagged[3].text.startswith("▸"))
+        self.assertEqual(tagged[4].source, MENU_ROW_SOURCE)
+
+        # Narrow width: the selected row wraps and its continuations keep the
+        # selected-bar role so the highlight spans the whole logical row.
+        narrow = picker_menu_lines(lines, 40)
+        selected = [line for line in narrow if line.source == MENU_SELECTED_SOURCE]
+        self.assertGreater(len(selected), 1)
+        self.assertFalse(selected[0].continuation)
+        self.assertTrue(all(line.continuation for line in selected[1:]))
 
     def test_cursor_state_resets_and_drops_stale_batches(self):
         state = reset_cursor_state(CursorState(), "s1")

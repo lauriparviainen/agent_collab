@@ -9,6 +9,7 @@ from pathlib import Path
 from agent_collab import backends
 from agent_collab.backends.base import (
     HEALTH_OK,
+    BackendOptionError,
     BackendCapabilities,
     BackendHealth,
     OptionSpec,
@@ -216,9 +217,22 @@ class BuiltinBackendContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "options.toml"):
                 load_option_schema(path)
 
+    def test_required_manifest_field_is_declarative_and_enforced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "options.toml"
+            path.write_text(
+                'schema_version = 1\n[options.model]\ntype = "string"\nrequired = true\n',
+                encoding="utf-8",
+            )
+            schema = load_option_schema(path)
+            self.assertTrue(schema["model"].required)
+            with self.assertRaises(BackendOptionError) as ctx:
+                normalize_declared_options({}, schema)
+            self.assertEqual(ctx.exception.field, "model")
+
     def test_every_builtin_backend_has_well_formed_declarative_schema(self):
         config = builtin_config()
-        for agent_type in ("claude", "codex", "antigravity"):
+        for agent_type in ("claude", "codex", "antigravity", "xai"):
             agent = config.agents[agent_type]
             for backend_id in ("cli", "sdk"):
                 with self.subTest(agent_type=agent_type, backend=backend_id):
@@ -226,7 +240,12 @@ class BuiltinBackendContractTests(unittest.TestCase):
                     schema = backend.option_schema(agent)
                     self.assertTrue(schema)
                     self.assertTrue(all(isinstance(value, OptionSpec) for value in schema.values()))
-                    normalized = backend.normalize_options(agent, {})
+                    requested = {
+                        name: (spec.allowed[0] if spec.allowed else "fixture")
+                        for name, spec in schema.items()
+                        if spec.required
+                    }
+                    normalized = backend.normalize_options(agent, requested)
                     self.assertFalse(set(normalized) - set(schema))
                     self.assertIsInstance(backend.settings_summary(agent, normalized), dict)
 

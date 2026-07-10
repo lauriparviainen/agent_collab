@@ -27,6 +27,10 @@ class IntegrationHarnessOptionTests(unittest.TestCase):
             self.assertEqual(
                 self._options("antigravity"), {"model": "Gemini 3.5 Flash (Low)"}
             )
+            self.assertEqual(
+                self._options("xai"),
+                {"model": "grok-4.5", "thinking_level": "low"},
+            )
 
     def test_environment_can_override_model_and_thinking_level(self):
         with mock.patch.dict(

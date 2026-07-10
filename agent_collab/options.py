@@ -1085,11 +1085,15 @@ def _representative_agent(
 
 
 def _option_object_schema(schema: Mapping[str, OptionSpec]) -> Dict[str, Any]:
-    return {
+    result = {
         "type": "object",
         "additionalProperties": False,
         "properties": {key: spec.to_dict() for key, spec in sorted(schema.items())},
     }
+    required = sorted(key for key, spec in schema.items() if spec.required)
+    if required:
+        result["required"] = required
+    return result
 
 
 def _workflow_agent_types(config: CollaborationConfig, sequence: Iterable[str]) -> Set[str]:

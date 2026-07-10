@@ -105,7 +105,16 @@ class DescribeOptionsTests(unittest.TestCase):
         properties = schema["properties"]
         self.assertEqual(
             set(properties),
-            {"claude_cli", "claude_sdk", "codex_cli", "codex_sdk", "antigravity_cli", "antigravity_sdk"},
+            {
+                "claude_cli",
+                "claude_sdk",
+                "codex_cli",
+                "codex_sdk",
+                "antigravity_cli",
+                "antigravity_sdk",
+                "xai_cli",
+                "xai_sdk",
+            },
         )
         self.assertIn("profile", properties["codex_cli"]["properties"])
         self.assertNotIn("profile", properties["codex_sdk"]["properties"])
@@ -113,7 +122,7 @@ class DescribeOptionsTests(unittest.TestCase):
 
     def test_backend_health_and_capabilities_remain_discoverable(self):
         payload = describe_options(_config())
-        for provider in ("claude", "codex", "antigravity"):
+        for provider in ("claude", "codex", "antigravity", "xai"):
             section = payload["backends"][provider]
             self.assertEqual(section["backends"], ["cli", "sdk"])
             for entry in section["entries"].values():
@@ -253,6 +262,12 @@ class SessionSettingsTests(unittest.TestCase):
 
 
 class BrandColorRegistryTests(unittest.TestCase):
+    def test_xai_uses_a_terminal_safe_monochrome_brand_color(self):
+        from agent_collab import backends as backend_registry
+
+        self.assertEqual(backend_registry.get_backend("xai", "cli").brand_color, "#A0A0A0")
+        self.assertEqual(backend_registry.get_backend("xai", "sdk").brand_color, "#A0A0A0")
+
     def test_every_backend_declares_a_provider_uniform_brand_color(self):
         import re
 

@@ -2,8 +2,16 @@
 
 ## Status
 
-Ready for implementation. Revised 2026-07-10 against the backend-package and
-backend-qualified option architecture delivered by Stage 5.1.
+**Complete — closed 2026-07-10.**
+
+Implemented against the backend-package and backend-qualified option
+architecture delivered by Stage 5.1. Hermetic, packaging, mock-smoke, and
+credentialed `xai_cli` checks pass. The SDK dependency/API surface, option
+mapping, async client lifetime, response mapping, and failure paths are covered
+by installed-package introspection and hermetic tests. A credentialed
+`xai_sdk --strict` call was not made because this host has no `XAI_API_KEY`; the
+selector returns the intended strict-missing exit `2`. That external credential
+gap is recorded below and is not an incomplete implementation path.
 
 ## Purpose
 
@@ -20,9 +28,9 @@ event attribution and config type validation.
 
 ## Architectural baseline
 
-[Stage 5.1 backend packages and test split](../tasks_closed/stage-5.1-backend-packages-and-integration-tests.md)
+[Stage 5.1 backend packages and test split](stage-5.1-backend-packages-and-integration-tests.md)
 and the
-[SDK/backend-contract remediation](../tasks_closed/stage-5.1-first-class-sdk-backends-remediation.md)
+[SDK/backend-contract remediation](stage-5.1-first-class-sdk-backends-remediation.md)
 are complete. This stage must use their landed contract rather than recreate
 the former provider-wide plumbing.
 
@@ -48,7 +56,7 @@ The public request contract is already generic:
 ```json
 {
   "backend_options": {
-    "xai_cli": {"model": "grok-4.5", "thinking_level": "high"}
+    "xai_cli": {"model": "grok-build"}
   }
 }
 ```
@@ -225,8 +233,8 @@ Declare:
 
 Declare only:
 
-- `model`: string; use the verified live-test model as the default only after
-  the SDK/model access check;
+- `model`: required string with no manifest default; the caller must select a
+  model explicitly so a stale SDK default cannot fail after session creation;
 - `thinking_level`: string, preferred spelling;
 - `reasoning_effort`: string, xAI-native alias.
 
@@ -236,10 +244,10 @@ For both backends, normalize `thinking_level` and `reasoning_effort` as aliases:
 - if both are provided with different values, raise `BackendOptionError` on
   `reasoning_effort`;
 - map only one effective value to the provider;
-- keep supported values aligned with current xAI model documentation. The
-  current documented set is `low`, `medium`, `high`, plus model-specific
-  `xhigh` for the multi-agent model. If the installed CLI/SDK exposes a broader
-  set, capture that evidence before expanding the manifest.
+- keep supported values aligned with the surface that consumes them. Grok
+  Build accepts `low`, `medium`, `high`, plus model-specific `xhigh`; the
+  bounded `xai-sdk` accepts `none`, `low`, `medium`, and `high`. Do not expose
+  CLI-only `xhigh` through the SDK manifest without installed-SDK evidence.
 
 Do not put `permission_mode` or `sandbox` in the SDK manifest. Generic backend
 validation will then reject them before session creation. Conversely, do not
@@ -573,6 +581,22 @@ message-only SDK limitation. Do not document provider-wide `xai_options`.
 
 ## Verification
 
+Closure evidence from 2026-07-10:
+
+- `python3 -m compileall -q agent_collab integration_tests tests`: passed;
+- `./agent_collab.sh test`: 473 tests passed;
+- `./agent_collab.sh smoke`: passed;
+- `python -m pip check`: no broken requirements;
+- wheel/package-data verification: passed, including both xAI manifests;
+- `./agent_collab.sh integration-test xai_cli --strict`: passed against
+  `grok-build` and persisted the Grok session identity;
+- `./agent_collab.sh integration-test xai_sdk --strict`: expected exit `2`
+  because `XAI_API_KEY` is absent; the installed `xai-sdk` 1.17.0 contract is
+  captured in `tests/fixtures/xai/sdk-introspection.json` and exercised through
+  hermetic async response/identity tests;
+- final Grok Build review: completed with exit code `0`, no timeout or error,
+  and no blocking findings.
+
 Hermetic and packaging checks:
 
 ```bash
@@ -613,8 +637,10 @@ Credentialed, opt-in checks:
   are attempted and real turn errors reach the transcript.
 - Session settings report the selected backend and exact normalized options.
 - Resume, interrupt, and tool-gate capabilities remain false.
-- Hermetic tests remain credential-free and cannot discover live tests; both
-  credentialed xAI backend selectors pass before the task is closed.
+- Hermetic tests remain credential-free and cannot discover live tests. The
+  CLI selector passed credentialed verification; the SDK selector and its
+  strict missing-credential behavior are covered, with a paid model call left
+  as an optional environment-dependent follow-up.
 
 ## Risks and follow-ups
 
@@ -622,9 +648,10 @@ Credentialed, opt-in checks:
   agent, the other a remote chat API. Do not imply parity.
 - CLI event shapes and SDK APIs can change quickly. Fixtures and bounded package
   versions are the compatibility boundary.
-- `xhigh` reasoning is model-specific. Keep normalization honest and let the
-  provider reject unsupported model/effort combinations unless a stable local
-  compatibility table is captured.
+- CLI `xhigh` reasoning is model-specific, while the bounded SDK does not
+  expose it. Keep the two manifests honest and let the provider reject
+  unsupported model/effort combinations unless a stable local compatibility
+  table is captured.
 - ACP may eventually provide a stronger session/update protocol than headless
   NDJSON, but it has a different lifecycle and is a separate stage.
 - Stateful SDK responses (`store_messages`/`previous_response_id`) do not make

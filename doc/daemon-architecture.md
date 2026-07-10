@@ -31,7 +31,7 @@ The prototype has:
 
 - `agent_collab.events`: normalized event model and stream parsers.
 - `agent_collab.runners`: runner primitives (subprocess, dry-run, mock) and the registry-backed `configured_runner`.
-- `agent_collab.backends`: backend registry keyed by `(agent_type, backend_id)`, capabilities, live health probes, the `cli` subprocess backend, and the first-class Claude/Codex/Antigravity `sdk` backends (lazy-imported). An agent's provider (`type`) is separate from its execution mechanism (`backend`); the resolved per-agent backend map is computed once at start validation and threaded into execution.
+- `agent_collab.backends`: backend registry keyed by `(agent_type, backend_id)`, capabilities, live health probes, the `cli` subprocess backends, and the first-class Claude/Codex/Antigravity/xAI `sdk` backends (lazy-imported). An agent's provider (`type`) is separate from its execution mechanism (`backend`); the resolved per-agent backend map is computed once at start validation and threaded into execution.
 - `agent_collab.referee`: bounded turn loop.
 - `agent_collab.logging`: JSONL and Markdown session logs.
 - `agent_collab.cli`: one-shot runner plus foreground server/client commands.

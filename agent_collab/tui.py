@@ -36,7 +36,6 @@ from .tui_core import (
     format_details_overlay_lines,
     follow_scroll,
     format_session_details,
-    format_session_picker_lines,
     format_slash_completion_lines,
     format_transcript_events,
     git_branch,
@@ -46,8 +45,14 @@ from .tui_core import (
     make_session_picker,
     move_session_picker,
     move_slash_completion,
+    MENU_HEADER_SOURCE,
+    MENU_ROW_SOURCE,
+    MENU_SELECTED_SOURCE,
+    MENU_TITLE_SOURCE,
     overlay_body_lines,
     parse_input,
+    picker_menu_lines,
+    picker_scroll,
     reset_cursor_state,
     scroll_by,
     select_hint,
@@ -431,13 +436,16 @@ class TuiApp:
             if self.new_wizard:
                 self.new_wizard = None
                 self.overlay_lines = None
+                self.scroll = follow_scroll(len(self._active_body_lines()), self._body_height())
                 self.message = "new session cancelled"
                 return
             if self.picker is not None:
                 self.picker = None
+                self.scroll = follow_scroll(len(self._active_body_lines()), self._body_height())
                 return
             if self.overlay_lines is not None:
                 self.overlay_lines = None
+                self.scroll = follow_scroll(len(self._active_body_lines()), self._body_height())
                 return
             if self.details_visible:
                 # Approved interaction change: Esc dismisses /details, matching
@@ -446,16 +454,16 @@ class TuiApp:
             return
         if self.picker is not None:
             if key in (curses.KEY_UP, ord("k")):
-                self.picker = move_session_picker(self.picker, -1)
+                self._move_picker(-1)
                 return
             if key in (curses.KEY_DOWN, ord("j")):
-                self.picker = move_session_picker(self.picker, 1)
+                self._move_picker(1)
                 return
             if key in (curses.KEY_NPAGE,):
-                self.picker = move_session_picker(self.picker, max(1, self._body_height()))
+                self._move_picker(max(1, self._body_height()))
                 return
             if key in (curses.KEY_PPAGE,):
-                self.picker = move_session_picker(self.picker, -max(1, self._body_height()))
+                self._move_picker(-max(1, self._body_height()))
                 return
             if key in (10, 13):
                 selected = selected_picker_session_id(self.picker)
@@ -564,7 +572,8 @@ class TuiApp:
         command = parsed.command
         if command == "help":
             self.overlay_lines = HELP_LINES
-            self.scroll = follow_scroll(len(HELP_LINES), self._body_height())
+            # Overlays read top-down; tail-follow would open long help at its end.
+            self.scroll = ScrollState(top=0, follow=False)
         elif command == "sessions":
             self._open_session_picker()
         elif command == "session":
@@ -653,7 +662,15 @@ class TuiApp:
             return
         self.picker = make_session_picker(sessions, self.session_id)
         self.overlay_lines = None
-        self.scroll = follow_scroll(len(format_session_picker_lines(self.picker)), self._body_height())
+        # Anchor the picker to its top (title + column header + latest-first
+        # rows), then bring the pre-selected current session into view.
+        self.scroll = picker_scroll(
+            self.picker, ScrollState(top=0, follow=False), self._transcript_width(), self._body_height()
+        )
+
+    def _move_picker(self, delta: int) -> None:
+        self.picker = move_session_picker(self.picker, delta)
+        self.scroll = picker_scroll(self.picker, self.scroll, self._transcript_width(), self._body_height())
 
     def _start_new_wizard(self) -> None:
         self.new_wizard = {"step": "task", "task": "", "workflow": "", "workdir": ""}
@@ -792,6 +809,20 @@ class TuiApp:
             self._add(body_top + index, separator_x + 1, line, details_width - 2, self._style("muted"))
 
     def _render_body_line(self, row: int, line, width: int) -> None:
+        if line.source in (MENU_TITLE_SOURCE, MENU_HEADER_SOURCE, MENU_ROW_SOURCE, MENU_SELECTED_SOURCE):
+            # Session picker: a colored menu block, like the slash palette.
+            if line.source == MENU_TITLE_SOURCE:
+                self._add(row, 0, line.text, width, self._style("dim"))
+                return
+            if line.source == MENU_SELECTED_SOURCE:
+                style = self._style("menu_selected")
+            elif line.source == MENU_HEADER_SOURCE:
+                style = self._style("menu_desc")
+            else:
+                style = self._style("menu")
+            self._add(row, 0, " " * width, width, style)
+            self._add(row, 0, line.text, width, style)
+            return
         if line.source == "ui":
             # Shared scrollable overlay (picker / help / narrow details): the
             # first line is a title/hint, the rest is body content.
@@ -859,7 +890,12 @@ class TuiApp:
         for segment in segments:
             if x >= width - 1:
                 break
-            attr = self._info_segment_style(segment.role, segment.brand_color)
+            # While the picker menu is open, the background session's info line
+            # recedes to chrome-dim so the menu reads as the focused layer.
+            if self.picker is not None:
+                attr = self._style("dim")
+            else:
+                attr = self._info_segment_style(segment.role, segment.brand_color)
             self._add(y, x, segment.text, width - 1 - x, attr)
             x += len(segment.text)
 
@@ -975,6 +1011,9 @@ class TuiApp:
             details_overlay=details_overlay,
         )
         if overlay is not None:
+            if self.picker is not None:
+                # The picker renders as a colored menu, not plain overlay text.
+                return picker_menu_lines(overlay, width)
             return tuple(_ui_line(line) for line in wrap_plain_lines(overlay, width))
         return wrap_transcript_lines(self.transcript_lines, width)
 
