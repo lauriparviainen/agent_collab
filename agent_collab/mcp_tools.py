@@ -200,7 +200,7 @@ class SessionManagerToolBackend:
         return state.to_dict()
 
     async def describe_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self.manager.describe_options(
+        return await self.manager.describe_options_async(
             Path(_required_str(payload, "workdir")),
             health_refresh=str(payload.get("health_refresh", "cached")),
         )
@@ -214,8 +214,10 @@ class SessionManagerToolBackend:
     async def read_events(
         self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
     ) -> Dict[str, Any]:
-        return self.manager.read_events(
-            session_id, cursor, limit=limit, tool_output=tool_output
+        return (
+            await self.manager.read_events_async(
+                session_id, cursor, limit=limit, tool_output=tool_output
+            )
         ).to_dict()
 
     async def wait_events(
@@ -228,7 +230,7 @@ class SessionManagerToolBackend:
         ).to_dict()
 
     async def read_transcript(self, session_id: str, tool_output: str) -> str:
-        return self.manager.read_transcript(session_id, tool_output=tool_output)
+        return await self.manager.read_transcript_async(session_id, tool_output=tool_output)
 
     async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return (

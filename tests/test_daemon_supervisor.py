@@ -9,6 +9,10 @@ from urllib.error import HTTPError
 
 from agent_collab.daemon_supervisor import (
     DaemonSupervisorError,
+    IDENTITY_UNKNOWN,
+    _daemon_identity_matches,
+    _daemon_identity_status,
+    _daemon_start_lock,
     _wait_for_ready,
     daemon_status,
     start_daemon,
@@ -54,6 +58,12 @@ class _Response:
 
 
 class DaemonSupervisorTests(unittest.TestCase):
+    PROCESS_IDENTITY = {
+        "source": "procfs",
+        "start_time": "123456",
+        "argv": ["python", "-m", "agent_collab.cli", "serve"],
+    }
+
     def _paths(self, tmp: str) -> GlobalDataPaths:
         return GlobalDataPaths.resolve(env={"AGENT_COLLAB_HOME": tmp})
 
@@ -61,7 +71,12 @@ class DaemonSupervisorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._paths(tmp)
 
-            with mock.patch("agent_collab.daemon_supervisor.subprocess.Popen", return_value=FakeProcess()) as popen:
+            with mock.patch(
+                "agent_collab.daemon_supervisor.subprocess.Popen", return_value=FakeProcess()
+            ) as popen, mock.patch(
+                "agent_collab.daemon_supervisor._read_process_identity",
+                return_value=self.PROCESS_IDENTITY,
+            ):
                 state = start_daemon(paths, host="127.0.0.1", port=8765)
 
             self.assertEqual(state["pid"], 4242)
@@ -70,6 +85,7 @@ class DaemonSupervisorTests(unittest.TestCase):
             self.assertEqual(state["data_dir"], str(paths.data_dir))
             self.assertEqual(state["session_dir"], str(paths.session_dir))
             self.assertEqual(state["token_path"], str(paths.token_path))
+            self.assertEqual(state["process_identity"], self.PROCESS_IDENTITY)
             self.assertEqual(paths.pid_path.read_text(encoding="utf-8").strip(), "4242")
             self.assertEqual(json.loads(paths.state_path.read_text(encoding="utf-8"))["pid"], 4242)
             argv = popen.call_args.args[0]
@@ -93,7 +109,12 @@ class DaemonSupervisorTests(unittest.TestCase):
             workdir = Path(tmp) / "project"
             workdir.mkdir()
 
-            with mock.patch("agent_collab.daemon_supervisor.subprocess.Popen", return_value=FakeProcess()) as popen:
+            with mock.patch(
+                "agent_collab.daemon_supervisor.subprocess.Popen", return_value=FakeProcess()
+            ) as popen, mock.patch(
+                "agent_collab.daemon_supervisor._read_process_identity",
+                return_value=self.PROCESS_IDENTITY,
+            ):
                 state = start_daemon(paths, default_workdir=workdir)
 
             argv = popen.call_args.args[0]
@@ -162,9 +183,28 @@ class DaemonSupervisorTests(unittest.TestCase):
             paths.state_path.write_text(json.dumps({"pid": 4242}), encoding="utf-8")
             paths.token_path.write_text("stale", encoding="utf-8")
 
-            with mock.patch("agent_collab.daemon_supervisor.os.kill", return_value=None):
+            with mock.patch(
+                "agent_collab.daemon_supervisor.os.kill", return_value=None
+            ), mock.patch(
+                "agent_collab.daemon_supervisor._daemon_identity_status",
+                return_value="match",
+            ):
                 with self.assertRaises(DaemonSupervisorError):
                     start_daemon(paths)
+
+    def test_start_refuses_while_start_lock_is_held(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+
+            with _daemon_start_lock(paths), mock.patch(
+                "agent_collab.daemon_supervisor.subprocess.Popen"
+            ) as popen:
+                with self.assertRaisesRegex(DaemonSupervisorError, "start already in progress"):
+                    start_daemon(paths)
+
+            popen.assert_not_called()
+            self.assertEqual(paths.daemon_start_lock_path.stat().st_mode & 0o777, 0o600)
 
     def test_status_cleans_stale_pid_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -210,13 +250,132 @@ class DaemonSupervisorTests(unittest.TestCase):
                     raise ProcessLookupError()
                 return None
 
-            with mock.patch("agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill):
+            with mock.patch(
+                "agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill
+            ), mock.patch(
+                "agent_collab.daemon_supervisor._daemon_identity_status",
+                return_value="match",
+            ):
                 status = stop_daemon(paths, grace_seconds=0.1)
 
             self.assertFalse(status.running)
             self.assertIn(signal.SIGTERM, signals)
             self.assertFalse(paths.pid_path.exists())
             self.assertFalse(paths.state_path.exists())
+
+    def test_stop_refuses_to_signal_recycled_pid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            paths.pid_path.write_text("4242\n", encoding="utf-8")
+            paths.state_path.write_text(
+                json.dumps({"pid": 4242, "process_identity": self.PROCESS_IDENTITY}),
+                encoding="utf-8",
+            )
+            signals = []
+
+            def fake_kill(_pid, sig):
+                signals.append(sig)
+
+            replacement = dict(self.PROCESS_IDENTITY, start_time="999999")
+            with mock.patch(
+                "agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill
+            ), mock.patch(
+                "agent_collab.daemon_supervisor._read_process_identity",
+                return_value=replacement,
+            ):
+                status = stop_daemon(paths)
+
+            self.assertFalse(status.running)
+            self.assertIn("refused to signal", status.message)
+            self.assertEqual(signals, [0])
+            self.assertFalse(paths.pid_path.exists())
+            self.assertFalse(paths.state_path.exists())
+
+    def test_stop_preserves_state_when_live_pid_cannot_be_attributed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            paths.pid_path.write_text("4242\n", encoding="utf-8")
+            paths.state_path.write_text(
+                json.dumps({"pid": 4242, "process_identity": self.PROCESS_IDENTITY}),
+                encoding="utf-8",
+            )
+            signals = []
+
+            def fake_kill(_pid, sig):
+                signals.append(sig)
+
+            with mock.patch(
+                "agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill
+            ), mock.patch(
+                "agent_collab.daemon_supervisor._read_process_identity",
+                return_value=None,
+            ):
+                with self.assertRaisesRegex(DaemonSupervisorError, "refusing to signal"):
+                    stop_daemon(paths)
+
+            self.assertEqual(signals, [0])
+            self.assertTrue(paths.pid_path.exists())
+            self.assertTrue(paths.state_path.exists())
+
+    def test_stop_rechecks_identity_before_sigkill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            paths.pid_path.write_text("4242\n", encoding="utf-8")
+            paths.state_path.write_text(
+                json.dumps({"pid": 4242, "process_identity": self.PROCESS_IDENTITY}),
+                encoding="utf-8",
+            )
+            signals = []
+
+            def fake_kill(_pid, sig):
+                signals.append(sig)
+
+            with mock.patch(
+                "agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill
+            ), mock.patch(
+                "agent_collab.daemon_supervisor._daemon_identity_status",
+                side_effect=["match", "mismatch"],
+            ):
+                status = stop_daemon(paths, grace_seconds=0)
+
+            self.assertFalse(status.running)
+            self.assertIn("recycled pid", status.message)
+            self.assertIn(signal.SIGTERM, signals)
+            self.assertNotIn(signal.SIGKILL, signals)
+
+    def test_process_identity_requires_exact_match_and_supports_legacy_argv(self):
+        actual = self.PROCESS_IDENTITY
+        with mock.patch(
+            "agent_collab.daemon_supervisor._read_process_identity",
+            return_value=actual,
+        ):
+            self.assertTrue(
+                _daemon_identity_matches(4242, {"process_identity": dict(actual)})
+            )
+            self.assertFalse(
+                _daemon_identity_matches(
+                    4242,
+                    {"process_identity": dict(actual, start_time="different")},
+                )
+            )
+            self.assertTrue(_daemon_identity_matches(4242, {"argv": actual["argv"]}))
+
+        ps_identity = {
+            "source": "ps",
+            "start_time": "Thu Jul 10 20:00:00 2026",
+            "command": "python -m agent_collab.cli serve",
+        }
+        with mock.patch(
+            "agent_collab.daemon_supervisor._read_process_identity",
+            return_value=ps_identity,
+        ):
+            self.assertEqual(
+                _daemon_identity_status(4242, {"process_identity": actual}),
+                IDENTITY_UNKNOWN,
+            )
 
     def test_tail_daemon_log_reads_last_lines(self):
         with tempfile.TemporaryDirectory() as tmp:

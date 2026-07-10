@@ -28,6 +28,12 @@ from .mcp_tools import SUPPORTED_PROTOCOL_VERSIONS, SessionManagerToolBackend, h
 from .options import StartOptionsError
 
 
+MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
+MAX_REQUEST_HEADER_BYTES = 64 * 1024
+MAX_REQUEST_HEADERS = 100
+_HEADER_NAME_PUNCTUATION = frozenset("!#$%&'*+-.^_`|~")
+
+
 class HttpError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -104,7 +110,10 @@ class AgentCollabHttpServer:
             await writer.wait_closed()
 
     async def _read_request(self, reader: asyncio.StreamReader) -> Tuple[str, str, Dict[str, str], bytes]:
-        request_line = await reader.readline()
+        try:
+            request_line = await reader.readline()
+        except ValueError as exc:
+            raise HttpError(400, "request line too long") from exc
         if not request_line:
             raise HttpError(400, "empty request")
         parts = request_line.decode("iso-8859-1").strip().split()
@@ -113,17 +122,58 @@ class AgentCollabHttpServer:
         method, target, _version = parts
 
         headers: Dict[str, str] = {}
+        header_bytes = 0
+        header_count = 0
         while True:
-            line = await reader.readline()
+            try:
+                line = await reader.readline()
+            except ValueError as exc:
+                raise HttpError(431, "request headers too large") from exc
             if line in {b"\r\n", b"\n", b""}:
                 break
+            header_bytes += len(line)
+            header_count += 1
+            if header_bytes > MAX_REQUEST_HEADER_BYTES or header_count > MAX_REQUEST_HEADERS:
+                raise HttpError(431, "request headers too large")
             key, sep, value = line.decode("iso-8859-1").partition(":")
             if not sep:
                 raise HttpError(400, "invalid header")
-            headers[key.strip().lower()] = value.strip()
+            if not _is_valid_header_name(key):
+                raise HttpError(400, "invalid header name")
+            normalized_key = key.lower()
+            if normalized_key in {"content-length", "transfer-encoding"} and normalized_key in headers:
+                label = (
+                    "Content-Length"
+                    if normalized_key == "content-length"
+                    else "Transfer-Encoding"
+                )
+                raise HttpError(400, f"duplicate {label} header")
+            headers[normalized_key] = value.strip()
 
-        content_length = int(headers.get("content-length", "0"))
-        body = await reader.readexactly(content_length) if content_length else b""
+        if "transfer-encoding" in headers:
+            raise HttpError(400, "Transfer-Encoding is not supported")
+
+        raw_content_length = headers.get("content-length")
+        if raw_content_length is None:
+            content_length = 0
+        elif not raw_content_length.isascii() or not raw_content_length.isdigit():
+            raise HttpError(400, "invalid Content-Length header")
+        else:
+            normalized_length = raw_content_length.lstrip("0") or "0"
+            maximum = str(MAX_REQUEST_BODY_BYTES)
+            if len(normalized_length) > len(maximum) or (
+                len(normalized_length) == len(maximum)
+                and normalized_length > maximum
+            ):
+                raise HttpError(
+                    413,
+                    f"request body exceeds {MAX_REQUEST_BODY_BYTES}-byte limit",
+                )
+            content_length = int(normalized_length)
+        try:
+            body = await reader.readexactly(content_length) if content_length else b""
+        except asyncio.IncompleteReadError as exc:
+            raise HttpError(400, "incomplete request body") from exc
         return method.upper(), target, headers, body
 
     async def _dispatch(self, method: str, target: str, headers: Dict[str, str], body: bytes) -> Any:
@@ -170,7 +220,7 @@ class AgentCollabHttpServer:
     ) -> Any:
         data = _decode_json_object(body) if route.method == "POST" else query
         options_request = _parse(OptionsRequestModel.from_dict, data)
-        return self.manager.describe_options(
+        return await self.manager.describe_options_async(
             Path(options_request.workdir),
             health_refresh=options_request.health_refresh,
         )
@@ -195,11 +245,13 @@ class AgentCollabHttpServer:
         self, _route: Route, path: Dict[str, str], query: Dict[str, str], _body: bytes
     ) -> Any:
         request = _parse(ReadEventsRequestModel.from_dict, query)
-        return self.manager.read_events(
-            path["session_id"],
-            request.cursor,
-            limit=request.limit,
-            tool_output=request.tool_output,
+        return (
+            await self.manager.read_events_async(
+                path["session_id"],
+                request.cursor,
+                limit=request.limit,
+                tool_output=request.tool_output,
+            )
         ).to_dict()
 
     async def _route_wait_events(
@@ -233,7 +285,7 @@ class AgentCollabHttpServer:
     ) -> Any:
         request = _parse(TranscriptRequestModel.from_dict, query)
         return {
-            "transcript": self.manager.read_transcript(
+            "transcript": await self.manager.read_transcript_async(
                 path["session_id"], tool_output=request.tool_output
             )
         }
@@ -313,6 +365,12 @@ def _decode_json_object(body: bytes) -> Dict[str, Any]:
     return data
 
 
+def _is_valid_header_name(name: str) -> bool:
+    return bool(name) and name.isascii() and all(
+        char.isalnum() or char in _HEADER_NAME_PUNCTUATION for char in name
+    )
+
+
 def _parse(parser: Any, data: Dict[str, Any]) -> Any:
     """Run a DTO `from_dict`/`from_wire` parser, mapping its validation
     `ValueError` to a 400 `HttpError` so request-shape errors keep the REST
@@ -377,6 +435,8 @@ def _http_reason(status: int) -> str:
         403: "Forbidden",
         404: "Not Found",
         405: "Method Not Allowed",
+        413: "Payload Too Large",
+        431: "Request Header Fields Too Large",
         500: "Internal Server Error",
     }.get(status, "Error")
 

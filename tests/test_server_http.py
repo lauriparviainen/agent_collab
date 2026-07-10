@@ -2,16 +2,240 @@ import asyncio
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from agent_collab.backends.base import BackendHealth, HEALTH_UNAVAILABLE
 from agent_collab.daemon import SessionManager
 from agent_collab.options import StartOptionsError
-from agent_collab.server_http import AgentCollabHttpServer, HttpError, HttpResponse
+from agent_collab.server_http import (
+    MAX_REQUEST_BODY_BYTES,
+    MAX_REQUEST_HEADER_BYTES,
+    MAX_REQUEST_HEADERS,
+    AgentCollabHttpServer,
+    HttpError,
+    HttpResponse,
+)
+
+
+class _CaptureWriter:
+    def __init__(self):
+        self.buffer = bytearray()
+        self.closed = False
+
+    def write(self, data):
+        self.buffer.extend(data)
+
+    async def drain(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+    async def wait_closed(self):
+        pass
+
+
+def _request_reader(data: bytes, *, limit: int = 2**16) -> asyncio.StreamReader:
+    reader = asyncio.StreamReader(limit=limit)
+    reader.feed_data(data)
+    reader.feed_eof()
+    return reader
+
+
+class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.server = AgentCollabHttpServer(manager=SessionManager())
+
+    async def test_request_body_limit_is_16_mib_and_accepts_boundary(self):
+        self.assertEqual(MAX_REQUEST_BODY_BYTES, 16 * 1024 * 1024)
+        reader = _request_reader(
+            b"POST /mcp HTTP/1.1\r\nContent-Length: 4\r\n\r\ntest"
+        )
+        with mock.patch("agent_collab.server_http.MAX_REQUEST_BODY_BYTES", 4):
+            method, target, _headers, body = await self.server._read_request(reader)
+
+        self.assertEqual((method, target, body), ("POST", "/mcp", b"test"))
+
+    async def test_oversized_body_is_rejected_before_body_read(self):
+        for value in (b"5", b"9" * 5000):
+            with self.subTest(length_digits=len(value)):
+                reader = _request_reader(
+                    b"POST /mcp HTTP/1.1\r\nContent-Length: "
+                    + value
+                    + b"\r\n\r\n"
+                )
+                with mock.patch("agent_collab.server_http.MAX_REQUEST_BODY_BYTES", 4):
+                    with self.assertRaises(HttpError) as ctx:
+                        await asyncio.wait_for(self.server._read_request(reader), timeout=0.1)
+
+                self.assertEqual(ctx.exception.status, 413)
+                self.assertIn("4-byte limit", ctx.exception.message)
+
+    async def test_malformed_content_lengths_are_bad_requests(self):
+        for value in (b"", b"-1", b"+1", b"1.0", b"one", b"1, 1"):
+            with self.subTest(value=value):
+                reader = _request_reader(
+                    b"POST /mcp HTTP/1.1\r\nContent-Length: "
+                    + value
+                    + b"\r\n\r\n"
+                )
+                with self.assertRaises(HttpError) as ctx:
+                    await self.server._read_request(reader)
+                self.assertEqual(ctx.exception.status, 400)
+                self.assertEqual(ctx.exception.message, "invalid Content-Length header")
+
+    async def test_duplicate_content_length_is_a_bad_request(self):
+        reader = _request_reader(
+            b"POST /mcp HTTP/1.1\r\n"
+            b"Content-Length: 4\r\n"
+            b"content-length: 4\r\n\r\ntest"
+        )
+        with self.assertRaises(HttpError) as ctx:
+            await self.server._read_request(reader)
+
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(ctx.exception.message, "duplicate Content-Length header")
+
+    async def test_header_count_and_aggregate_bytes_are_bounded(self):
+        self.assertEqual(MAX_REQUEST_HEADERS, 100)
+        self.assertEqual(MAX_REQUEST_HEADER_BYTES, 64 * 1024)
+        cases = (
+            (
+                b"GET /health HTTP/1.1\r\nX-1: a\r\nX-2: b\r\nX-3: c\r\n\r\n",
+                {"MAX_REQUEST_HEADERS": 2},
+            ),
+            (
+                b"GET /health HTTP/1.1\r\nX-Long: abcdef\r\n\r\n",
+                {"MAX_REQUEST_HEADER_BYTES": 8},
+            ),
+        )
+        for request, limits in cases:
+            with self.subTest(limits=limits), mock.patch.multiple(
+                "agent_collab.server_http", **limits
+            ):
+                with self.assertRaises(HttpError) as ctx:
+                    await self.server._read_request(_request_reader(request))
+                self.assertEqual(ctx.exception.status, 431)
+                self.assertEqual(ctx.exception.message, "request headers too large")
+
+    async def test_stream_reader_line_limits_map_to_controlled_errors(self):
+        cases = (
+            (b"G" * 17 + b"\n", 400, "request line too long"),
+            (
+                b"GET / HTTP/1.1\r\nX-Long: " + b"a" * 17 + b"\r\n\r\n",
+                431,
+                "request headers too large",
+            ),
+        )
+        for request, status, message in cases:
+            with self.subTest(status=status):
+                with self.assertRaises(HttpError) as ctx:
+                    await self.server._read_request(_request_reader(request, limit=16))
+                self.assertEqual(ctx.exception.status, status)
+                self.assertEqual(ctx.exception.message, message)
+
+    async def test_invalid_header_name_whitespace_is_rejected(self):
+        for header in (b"Content-Length : 4", b" Content-Length: 4", b"Bad Name: value"):
+            with self.subTest(header=header):
+                reader = _request_reader(b"POST /mcp HTTP/1.1\r\n" + header + b"\r\n\r\n")
+                with self.assertRaises(HttpError) as ctx:
+                    await self.server._read_request(reader)
+                self.assertEqual(ctx.exception.status, 400)
+                self.assertEqual(ctx.exception.message, "invalid header name")
+
+    async def test_transfer_encoding_is_explicitly_rejected(self):
+        for extra in (b"", b"Content-Length: 4\r\n"):
+            with self.subTest(has_content_length=bool(extra)):
+                reader = _request_reader(
+                    b"POST /mcp HTTP/1.1\r\n"
+                    b"Transfer-Encoding: chunked\r\n"
+                    + extra
+                    + b"\r\n4\r\ntest\r\n0\r\n\r\n"
+                )
+                with self.assertRaises(HttpError) as ctx:
+                    await self.server._read_request(reader)
+                self.assertEqual(ctx.exception.status, 400)
+                self.assertEqual(ctx.exception.message, "Transfer-Encoding is not supported")
+
+    async def test_incomplete_request_body_is_a_bad_request(self):
+        reader = _request_reader(
+            b"POST /mcp HTTP/1.1\r\nContent-Length: 5\r\n\r\nabc"
+        )
+        with self.assertRaises(HttpError) as ctx:
+            await self.server._read_request(reader)
+
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(ctx.exception.message, "incomplete request body")
+
+    async def test_oversized_connection_gets_structured_413_response(self):
+        reader = _request_reader(
+            b"POST /mcp HTTP/1.1\r\nContent-Length: 5\r\n\r\n"
+        )
+        writer = _CaptureWriter()
+        with mock.patch("agent_collab.server_http.MAX_REQUEST_BODY_BYTES", 4):
+            await self.server._handle_connection(reader, writer)
+
+        head, body = bytes(writer.buffer).split(b"\r\n\r\n", 1)
+        self.assertIn(b"HTTP/1.1 413 Payload Too Large", head)
+        self.assertEqual(json.loads(body), {"error": "request body exceeds 4-byte limit"})
+        self.assertTrue(writer.closed)
+
+    async def test_excessive_headers_get_structured_431_response(self):
+        reader = _request_reader(
+            b"GET /health HTTP/1.1\r\nX-1: a\r\nX-2: b\r\n\r\n"
+        )
+        writer = _CaptureWriter()
+        with mock.patch("agent_collab.server_http.MAX_REQUEST_HEADERS", 1):
+            await self.server._handle_connection(reader, writer)
+
+        head, body = bytes(writer.buffer).split(b"\r\n\r\n", 1)
+        self.assertIn(b"HTTP/1.1 431 Request Header Fields Too Large", head)
+        self.assertEqual(json.loads(body), {"error": "request headers too large"})
 
 
 class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_slow_start_probe_does_not_block_sessions_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager(default_workdir=root)
+            server = AgentCollabHttpServer(manager=manager)
+            entered = threading.Event()
+            release = threading.Event()
+
+            def slow_unavailable_probe(*_args):
+                entered.set()
+                release.wait(2.0)
+                return BackendHealth(status=HEALTH_UNAVAILABLE, reason="test probe unavailable")
+
+            body = json.dumps(
+                {"task": "slow probe", "workdir": str(root), "backend": "sdk"}
+            ).encode("utf-8")
+            with mock.patch.dict(
+                os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}
+            ), mock.patch.object(
+                manager,
+                "_backend_health",
+                side_effect=slow_unavailable_probe,
+            ):
+                started_at = time.monotonic()
+                start_task = asyncio.create_task(
+                    server._dispatch("POST", "/sessions", {}, body)
+                )
+                self.assertTrue(await asyncio.to_thread(entered.wait, 1.0))
+                try:
+                    listed = await server._dispatch("GET", "/sessions", {}, b"")
+                finally:
+                    release.set()
+
+                self.assertLess(time.monotonic() - started_at, 0.5)
+                self.assertEqual(listed, {"sessions": []})
+                with self.assertRaises(StartOptionsError):
+                    await start_task
+
     async def test_start_status_and_events_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

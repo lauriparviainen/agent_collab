@@ -233,7 +233,8 @@ def format_activity_indicator(session: Any, tick: int = 0, *, utf8: bool = True)
         return "no session"
     status = str(_value(session, "status", None) or "")
     if status_is_terminal(status):
-        return f"read-only {status}"
+        # Just the status: the input-box chip already carries "read-only".
+        return status
     if status == "awaiting_input":
         return "awaiting input"
     if status == "running":
@@ -502,11 +503,11 @@ def format_session_picker_lines(picker: SessionPickerState) -> Tuple[str, ...]:
     """
     if not picker.sessions:
         return (
-            "sessions · Esc close",
+            "    sessions · Esc close",
             "",
             "    no daemon sessions found — /new to start one",
         )
-    lines = ["sessions · ↑↓ choose · Enter switch · Esc close", ""]
+    lines = ["    sessions · ↑↓ choose · Enter switch · Esc close", ""]
     lines.append(f"    {'session':<24} {'status':<15} {'workflow':<14} {'updated':<25} workdir")
     for index, session in enumerate(picker.sessions):
         marker = SLASH_SELECTED_MARKER if index == picker.index else " "
@@ -731,7 +732,6 @@ def workflow_ids_from_options(options: Mapping[str, Any]) -> Tuple[str, ...]:
 # degrade sanely and the three known brand hexes are pinned by test.
 # ---------------------------------------------------------------------------
 
-DEFAULT_BACKEND = "cli"
 ACCENT_XTERM256 = 37
 ACCENT_ANSI8 = 6  # curses.COLOR_CYAN
 
@@ -839,66 +839,95 @@ def _ellipsize(text: str, width: int) -> str:
     return text[: width - 1] + "…"
 
 
+def _segments_width(segments: Sequence[InfoSegment]) -> int:
+    return sum(len(segment.text) for segment in segments)
+
+
+def _agent_chip_segments(agent: AgentInfo) -> Tuple[InfoSegment, ...]:
+    """One agent chip: canonical backend name, then model (``codex_cli: gpt-5``).
+
+    ``{type}_{backend}`` is the registry's canonical backend name and doubles
+    as the agent label in the common case where the agent id equals its type.
+    A custom agent id stays in front so workflow identity is never lost
+    (``reviewer codex_cli: gpt-5``); agents without a backend (mock) fall back
+    to the bare id.
+    """
+    segments: list = []
+    if agent.type and agent.backend:
+        canonical = f"{agent.type}_{agent.backend}"
+        if agent.name and agent.name != agent.type:
+            segments.append(InfoSegment(agent.name, "agent", agent.brand_color))
+            segments.append(InfoSegment(f" {canonical}", "backend"))
+        else:
+            segments.append(InfoSegment(canonical, "agent", agent.brand_color))
+    else:
+        segments.append(InfoSegment(agent.name, "agent", agent.brand_color))
+    if agent.model:
+        segments.append(InfoSegment(f": {agent.model}", "model"))
+    return tuple(segments)
+
+
+def build_context_agent_segments(
+    agents: Sequence[AgentInfo], width: int
+) -> Tuple[InfoSegment, ...]:
+    """Compose the agent cluster shown right-aligned on the context line.
+
+    Each agent renders as ``{type}_{backend}: {model}`` — the canonical
+    backend name is always shown so the session's backend is never ambiguous.
+    On overflow the
+    right-most agents drop first (the lead survives longest); if even the lead
+    alone does not fit the cluster disappears rather than ellipsizing, keeping
+    the context row calm.
+    """
+    keep = list(agents)
+    while keep:
+        segments: list = []
+        for agent in keep:
+            if segments:
+                segments.append(InfoSegment(INFO_SEPARATOR, "sep"))
+            segments.extend(_agent_chip_segments(agent))
+        if _segments_width(segments) <= width:
+            return tuple(segments)
+        keep.pop()
+    return ()
+
+
 def build_info_line_segments(
     task: Any,
-    agents: Sequence[AgentInfo],
     workflow: Any,
     width: int,
-    *,
-    default_backend: str = DEFAULT_BACKEND,
 ) -> Tuple[InfoSegment, ...]:
-    """Compose the session-info line as styled segments with truncation.
+    """Compose the session-info line (task · workflow) with truncation.
 
-    Truncation priority when overflowing (drop right-most first): workflow ->
-    secondary agents (keep the lead) -> ellipsize the task (never dropped). The
-    inline backend id travels with its agent token and is shown only when it
-    differs from ``default_backend``. Workdir/project (the next priority) lives
-    on the separate context line and is truncated there.
+    The agent cluster lives on the context line (see
+    ``build_context_agent_segments``), leaving this row to the task. On
+    overflow the workflow drops first, then the task ellipsizes (never
+    dropped). Workdir/project lives on the context line and is truncated there.
     """
     task = str(task or "")
-    agents = list(agents)
     workflow = str(workflow or "")
-    if not task and not agents and not workflow:
+    if not task and not workflow:
         return (InfoSegment("no active session", "placeholder"),)
 
-    def _assemble(include_workflow: bool, keep_agents: Sequence[AgentInfo], task_text: str) -> list:
+    def _assemble(include_workflow: bool, task_text: str) -> list:
         segments: list = []
         if task_text:
             segments.append(InfoSegment(task_text, "task"))
-        for agent in keep_agents:
-            if segments:
-                segments.append(InfoSegment(INFO_SEPARATOR, "sep"))
-            segments.append(InfoSegment(agent.name, "agent", agent.brand_color))
-            if agent.model:
-                segments.append(InfoSegment(f":{agent.model}", "model"))
-            if agent.backend and agent.backend != default_backend:
-                segments.append(InfoSegment(f" {agent.backend}", "backend"))
         if include_workflow and workflow:
             if segments:
                 segments.append(InfoSegment(INFO_SEPARATOR, "sep"))
             segments.append(InfoSegment(workflow, "workflow"))
         return segments
 
-    def _total(segments: Sequence[InfoSegment]) -> int:
-        return sum(len(segment.text) for segment in segments)
-
-    segments = _assemble(True, agents, task)
-    if _total(segments) <= width:
+    segments = _assemble(True, task)
+    if _segments_width(segments) <= width:
         return tuple(segments)
 
-    segments = _assemble(False, agents, task)
-    if _total(segments) <= width:
+    segments = _assemble(False, task)
+    if _segments_width(segments) <= width or not task:
         return tuple(segments)
 
-    lead = agents[:1]
-    segments = _assemble(False, lead, task)
-    if _total(segments) <= width or not task:
-        return tuple(segments)
-
-    fixed = _assemble(False, lead, "")
-    sep_width = len(INFO_SEPARATOR) if fixed else 0
-    available = width - _total(fixed) - sep_width
-    return tuple(_assemble(False, lead, _ellipsize(task, available)))
+    return tuple(_assemble(False, _ellipsize(task, width)))
 
 
 # ---------------------------------------------------------------------------
@@ -919,11 +948,12 @@ def abbreviate_path(path: Any) -> str:
 
 
 def format_context_line(workdir: Any, branch: Any = None) -> str:
+    """``workdir: <path> (<branch>)`` — explicit label; branch only when known."""
     path = abbreviate_path(workdir)
     if not path:
         return "agent-collab"
     branch = str(branch or "").strip()
-    return f"{branch}  {path}" if branch else path
+    return f"workdir: {path} ({branch})" if branch else f"workdir: {path}"
 
 
 def git_branch(workdir: Any) -> Optional[str]:

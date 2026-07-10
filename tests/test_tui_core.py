@@ -193,7 +193,8 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(format_activity_indicator({"status": "running"}, tick=0, utf8=False), ". running")
         self.assertEqual(format_activity_indicator({"status": "running"}, tick=2, utf8=False), "... running")
         self.assertEqual(format_activity_indicator({"status": "awaiting_input"}, tick=2), "awaiting input")
-        self.assertEqual(format_activity_indicator({"status": "done"}, tick=3), "read-only done")
+        # Terminal sessions show just the status — the input chip carries "read-only".
+        self.assertEqual(format_activity_indicator({"status": "done"}, tick=3), "done")
 
     def test_agent_resolution_uses_active_session_settings(self):
         session = {

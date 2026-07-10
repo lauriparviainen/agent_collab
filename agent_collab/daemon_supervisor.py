@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -8,7 +10,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -27,6 +29,11 @@ class DaemonSupervisorError(RuntimeError):
     pass
 
 
+IDENTITY_MATCH = "match"
+IDENTITY_MISMATCH = "mismatch"
+IDENTITY_UNKNOWN = "unknown"
+
+
 def start_daemon(
     paths: Optional[GlobalDataPaths] = None,
     host: str = "127.0.0.1",
@@ -35,12 +42,32 @@ def start_daemon(
 ) -> Dict[str, Any]:
     paths = paths or GlobalDataPaths.resolve()
     paths.ensure_dirs()
+    with _daemon_start_lock(paths):
+        return _start_daemon_locked(paths, host, port, default_workdir)
+
+
+def _start_daemon_locked(
+    paths: GlobalDataPaths,
+    host: str,
+    port: int,
+    default_workdir: Optional[Path],
+) -> Dict[str, Any]:
     state = _read_state(paths)
     pid = _state_pid(state) or _read_pid(paths)
     if pid is not None:
         if _is_running(pid):
-            raise DaemonSupervisorError(f"global agent-collab daemon already running on {host}:{port} with pid {pid}")
-        _remove_pid_state(paths)
+            identity = _daemon_identity_status(pid, state)
+            if identity == IDENTITY_MATCH:
+                raise DaemonSupervisorError(
+                    f"global agent-collab daemon already running on {host}:{port} with pid {pid}"
+                )
+            if identity == IDENTITY_UNKNOWN:
+                raise DaemonSupervisorError(
+                    f"live pid {pid} cannot be attributed; refusing to start a second daemon"
+                )
+            _remove_pid_state(paths)
+        else:
+            _remove_pid_state(paths)
     try:
         paths.token_path.unlink()
     except FileNotFoundError:
@@ -98,7 +125,21 @@ def daemon_status(paths: Optional[GlobalDataPaths] = None) -> DaemonStatus:
     if pid is None:
         return DaemonStatus(False, state, "global agent-collab daemon is not running")
     if _is_running(pid):
-        return DaemonStatus(True, state, f"global agent-collab daemon is running with pid {pid}")
+        identity = _daemon_identity_status(pid, state)
+        if identity == IDENTITY_MATCH:
+            return DaemonStatus(True, state, f"global agent-collab daemon is running with pid {pid}")
+        if identity == IDENTITY_UNKNOWN:
+            return DaemonStatus(
+                False,
+                state,
+                f"live pid {pid} cannot be attributed to the daemon; state was preserved",
+            )
+        _remove_pid_state(paths)
+        return DaemonStatus(
+            False,
+            state,
+            f"removed stale agent-collab daemon state; live pid {pid} belongs to another process",
+        )
     _remove_pid_state(paths)
     return DaemonStatus(False, state, f"removed stale agent-collab daemon state for pid {pid}")
 
@@ -113,22 +154,62 @@ def stop_daemon(paths: Optional[GlobalDataPaths] = None, grace_seconds: float = 
         _remove_pid_state(paths)
         return DaemonStatus(False, state, f"removed stale agent-collab daemon state for pid {pid}")
 
+    identity = _daemon_identity_status(pid, state)
+    if identity == IDENTITY_UNKNOWN:
+        raise DaemonSupervisorError(
+            f"live pid {pid} cannot be attributed; refusing to signal it"
+        )
+    if identity == IDENTITY_MISMATCH:
+        _remove_pid_state(paths)
+        return DaemonStatus(
+            False,
+            state,
+            f"refused to signal unattributed live pid {pid}; removed stale daemon state",
+        )
+
     os.kill(pid, signal.SIGTERM)
     deadline = time.monotonic() + grace_seconds
     while time.monotonic() < deadline:
         if not _is_running(pid):
             _remove_pid_state(paths)
             return DaemonStatus(False, state, f"agent-collab daemon stopped pid {pid}")
+        identity = _daemon_identity_status(pid, state)
+        if identity == IDENTITY_MISMATCH:
+            _remove_pid_state(paths)
+            return DaemonStatus(False, state, f"agent-collab daemon stopped pid {pid}")
+        if identity == IDENTITY_UNKNOWN:
+            raise DaemonSupervisorError(
+                f"identity for pid {pid} became unavailable after SIGTERM; refusing further signals"
+            )
         time.sleep(0.05)
 
     if _is_running(pid):
+        identity = _daemon_identity_status(pid, state)
+        if identity == IDENTITY_MISMATCH:
+            _remove_pid_state(paths)
+            return DaemonStatus(
+                False,
+                state,
+                f"agent-collab daemon stopped; recycled pid {pid} was not signaled",
+            )
+        if identity == IDENTITY_UNKNOWN:
+            raise DaemonSupervisorError(
+                f"identity for pid {pid} is unavailable; refusing SIGKILL"
+            )
         os.kill(pid, signal.SIGKILL)
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline:
         if not _is_running(pid):
             break
+        identity = _daemon_identity_status(pid, state)
+        if identity == IDENTITY_MISMATCH:
+            break
+        if identity == IDENTITY_UNKNOWN:
+            raise DaemonSupervisorError(
+                f"identity for pid {pid} became unavailable after SIGKILL"
+            )
         time.sleep(0.05)
-    if _is_running(pid):
+    if _is_running(pid) and _daemon_identity_status(pid, state) == IDENTITY_MATCH:
         raise DaemonSupervisorError(f"failed to stop agent-collab daemon pid {pid}")
     _remove_pid_state(paths)
     return DaemonStatus(False, state, f"agent-collab daemon killed pid {pid}")
@@ -168,7 +249,27 @@ def _build_state(
         "mcp_url": f"http://{host}:{port}/mcp",
         "started_at": utc_timestamp(),
         "argv": list(argv),
+        "process_identity": _read_process_identity(pid),
     }
+
+
+@contextmanager
+def _daemon_start_lock(paths: GlobalDataPaths) -> Iterator[None]:
+    """Serialize the full daemon check/spawn/readiness/state transaction."""
+
+    fd = os.open(paths.daemon_start_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise DaemonSupervisorError("global agent-collab daemon start already in progress") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _read_state(paths: GlobalDataPaths) -> Dict[str, Any]:
@@ -204,6 +305,90 @@ def _state_pid(state: Dict[str, Any]) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return pid if pid > 0 else None
+
+
+def _daemon_identity_matches(pid: int, state: Dict[str, Any]) -> bool:
+    """Return true only when the live PID is attributable to the stored daemon."""
+
+    return _daemon_identity_status(pid, state) == IDENTITY_MATCH
+
+
+def _daemon_identity_status(pid: int, state: Dict[str, Any]) -> str:
+    """Classify a live PID as the daemon, another process, or unverifiable."""
+
+    actual = _read_process_identity(pid)
+    if actual is None:
+        return IDENTITY_UNKNOWN
+
+    expected = state.get("process_identity")
+    if isinstance(expected, dict):
+        expected_source = expected.get("source")
+        actual_source = actual.get("source")
+        if expected_source != actual_source:
+            # Evidence from procfs and ps uses different clocks and command
+            # representations. It cannot prove either a match or a mismatch.
+            return IDENTITY_UNKNOWN
+        return IDENTITY_MATCH if expected == actual else IDENTITY_MISMATCH
+
+    # Compatibility for daemon state written before process identities were
+    # persisted. Exact argv verification is sufficient to reject an unrelated
+    # process that inherited a recycled PID.
+    expected_argv = state.get("argv")
+    if not isinstance(expected_argv, list) or not all(
+        isinstance(part, str) for part in expected_argv
+    ):
+        return IDENTITY_UNKNOWN
+    actual_argv = actual.get("argv")
+    if not isinstance(actual_argv, list):
+        return IDENTITY_UNKNOWN
+    return IDENTITY_MATCH if actual_argv == expected_argv else IDENTITY_MISMATCH
+
+
+def _read_process_identity(pid: int) -> Optional[Dict[str, Any]]:
+    """Read a stable process identity from procfs, with a portable ps fallback."""
+
+    proc_root = Path("/proc") / str(pid)
+    try:
+        stat = (proc_root / "stat").read_text(encoding="utf-8", errors="replace")
+        fields = stat.rsplit(")", 1)[1].strip().split()
+        start_time = fields[19]
+        raw_argv = (proc_root / "cmdline").read_bytes().split(b"\0")
+        argv = [os.fsdecode(part) for part in raw_argv if part]
+        if argv:
+            return {
+                "source": "procfs",
+                "start_time": start_time,
+                "argv": argv,
+            }
+    except (IndexError, OSError):
+        pass
+
+    try:
+        started = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "lstart="],
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+        command = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    started_text = started.stdout.strip() if started.returncode == 0 else ""
+    command_text = command.stdout.strip() if command.returncode == 0 else ""
+    if not started_text or not command_text:
+        return None
+    return {
+        "source": "ps",
+        "start_time": started_text,
+        "command": command_text,
+    }
 
 
 def _is_running(pid: int) -> bool:

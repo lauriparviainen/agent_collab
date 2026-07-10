@@ -31,6 +31,7 @@ class GlobalDataPaths:
     session_dir: Path
     tmp_dir: Path
     session_index_path: Path
+    daemon_start_lock_path: Path
     pid_path: Path
     state_path: Path
     token_path: Path
@@ -48,6 +49,7 @@ class GlobalDataPaths:
             session_dir=data_dir / "sessions",
             tmp_dir=data_dir / "tmp",
             session_index_path=data_dir / "session-index.json",
+            daemon_start_lock_path=daemon_dir / "start.lock",
             pid_path=daemon_dir / "pid",
             state_path=daemon_dir / "state.json",
             token_path=daemon_dir / "token",

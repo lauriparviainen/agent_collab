@@ -18,6 +18,7 @@ from agent_collab.tui_core import (
     ScrollState,
     ansi8_from_hex,
     ascii_fallback,
+    build_context_agent_segments,
     build_info_line_segments,
     classify_message,
     clip_with_marker,
@@ -75,70 +76,79 @@ class BrandColorMappingTests(unittest.TestCase):
 
 
 class InfoLineTests(unittest.TestCase):
-    def test_full_line_lists_task_agents_and_workflow(self):
-        segments = build_info_line_segments(
-            "review the poller race", [CLAUDE, CODEX], "cross-review", 100
-        )
-        self.assertEqual(
-            _info_text(segments),
-            "review the poller race · claude:opus-4.8 · codex:gpt-5 · cross-review",
-        )
+    def test_full_line_lists_task_and_workflow(self):
+        segments = build_info_line_segments("review the poller race", "cross-review", 100)
+        self.assertEqual(_info_text(segments), "review the poller race · cross-review")
         roles = {(seg.role, seg.text) for seg in segments}
-        self.assertIn(("agent", "claude"), roles)
-        self.assertIn(("model", ":opus-4.8"), roles)
+        self.assertIn(("task", "review the poller race"), roles)
         self.assertIn(("workflow", "cross-review"), roles)
 
-    def test_agent_segment_carries_brand_color(self):
-        segments = build_info_line_segments("t", [CLAUDE], "wf", 100)
-        agent = next(seg for seg in segments if seg.role == "agent")
-        self.assertEqual(agent.brand_color, "#D97757")
-
-    def test_inline_backend_shown_only_when_it_differs_from_default_cli(self):
-        default = build_info_line_segments("t", [CODEX], "wf", 100)
-        self.assertNotIn("sdk", _info_text(default))
-
-        sdk = build_info_line_segments("t", [CODEX_SDK], "wf", 100)
-        self.assertIn("codex:gpt-5 sdk", _info_text(sdk))
-        backend_seg = next(seg for seg in sdk if seg.role == "backend")
-        self.assertEqual(backend_seg.text, " sdk")
-
-    def test_truncation_priority_drops_workflow_then_secondary_agent_then_task(self):
+    def test_truncation_drops_workflow_then_ellipsizes_task(self):
         task = "review the poller race"
-        agents = [CLAUDE, CODEX]
 
         # 1. Workflow drops first.
         self.assertEqual(
-            _info_text(build_info_line_segments(task, agents, "cross-review", 60)),
-            "review the poller race · claude:opus-4.8 · codex:gpt-5",
+            _info_text(build_info_line_segments(task, "cross-review", 30)),
+            "review the poller race",
         )
-        # 2. Then the secondary agent (lead + task survive).
-        self.assertEqual(
-            _info_text(build_info_line_segments(task, agents, "cross-review", 48)),
-            "review the poller race · claude:opus-4.8",
-        )
-        # 3. Finally the task ellipsizes but is never dropped; the lead survives.
-        narrow = _info_text(build_info_line_segments(task, agents, "cross-review", 30))
-        self.assertIn("claude:opus-4.8", narrow)
+        # 2. Then the task ellipsizes but is never dropped.
+        narrow = _info_text(build_info_line_segments(task, "cross-review", 12))
         self.assertIn("…", narrow)
-        self.assertLessEqual(len(narrow), 30)
-
-    def test_sdk_backend_chip_travels_with_its_agent_on_overflow(self):
-        # When workflow has dropped, the lead's backend chip stays attached.
-        text = _info_text(
-            build_info_line_segments(
-                "review the poller race",
-                [CLAUDE, CODEX_SDK],
-                "cross-review",
-                60,
-            )
-        )
-        self.assertEqual(text, "review the poller race · claude:opus-4.8 · codex:gpt-5 sdk")
+        self.assertLessEqual(len(narrow), 12)
 
     def test_no_session_placeholder(self):
-        segments = build_info_line_segments("", [], "", 40)
+        segments = build_info_line_segments("", "", 40)
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0].role, "placeholder")
         self.assertEqual(segments[0].text, "no active session")
+
+
+class ContextAgentClusterTests(unittest.TestCase):
+    def test_cluster_shows_canonical_backend_name_then_model(self):
+        segments = build_context_agent_segments([CLAUDE, CODEX_SDK], 100)
+        self.assertEqual(_info_text(segments), "claude_cli: opus-4.8 · codex_sdk: gpt-5")
+        roles = {(seg.role, seg.text) for seg in segments}
+        self.assertIn(("agent", "claude_cli"), roles)
+        self.assertIn(("model", ": opus-4.8"), roles)
+
+    def test_agent_segment_carries_brand_color(self):
+        segments = build_context_agent_segments([CLAUDE], 100)
+        agent = next(seg for seg in segments if seg.role == "agent")
+        self.assertEqual(agent.brand_color, "#D97757")
+
+    def test_backend_always_shown(self):
+        default = build_context_agent_segments([CODEX], 100)
+        self.assertIn("codex_cli: gpt-5", _info_text(default))
+
+        sdk = build_context_agent_segments([CODEX_SDK], 100)
+        self.assertIn("codex_sdk: gpt-5", _info_text(sdk))
+
+    def test_custom_agent_id_stays_in_front_of_canonical_name(self):
+        reviewer = AgentInfo("reviewer", "codex", "gpt-5", "cli", "#10A37F")
+        segments = build_context_agent_segments([reviewer], 100)
+        self.assertEqual(_info_text(segments), "reviewer codex_cli: gpt-5")
+
+    def test_agent_without_backend_falls_back_to_bare_id(self):
+        mock = AgentInfo("mock", "mock", "", "")
+        segments = build_context_agent_segments([mock], 100)
+        self.assertEqual(_info_text(segments), "mock")
+
+    def test_overflow_drops_rightmost_agents_then_disappears(self):
+        # Both fit at 40 ("claude_cli: opus-4.8 · codex_sdk: gpt-5" = 39).
+        self.assertEqual(
+            _info_text(build_context_agent_segments([CLAUDE, CODEX_SDK], 40)),
+            "claude_cli: opus-4.8 · codex_sdk: gpt-5",
+        )
+        # The secondary drops first.
+        self.assertEqual(
+            _info_text(build_context_agent_segments([CLAUDE, CODEX_SDK], 30)),
+            "claude_cli: opus-4.8",
+        )
+        # No room for even the lead: the cluster disappears, never ellipsizes.
+        self.assertEqual(build_context_agent_segments([CLAUDE, CODEX_SDK], 10), ())
+
+    def test_no_agents_yields_empty_cluster(self):
+        self.assertEqual(build_context_agent_segments([], 40), ())
 
     def test_info_agents_read_from_session_settings(self):
         session = {
@@ -160,13 +170,15 @@ class ContextLineTests(unittest.TestCase):
         import os
 
         home = os.path.expanduser("~")
-        self.assertEqual(format_context_line(f"{home}/projects/x", "main"), "main  ~/projects/x")
+        self.assertEqual(
+            format_context_line(f"{home}/projects/x", "main"), "workdir: ~/projects/x (main)"
+        )
 
     def test_no_workdir_yields_app_name(self):
         self.assertEqual(format_context_line("", None), "agent-collab")
 
     def test_path_without_branch(self):
-        self.assertEqual(format_context_line("/srv/repo", None), "/srv/repo")
+        self.assertEqual(format_context_line("/srv/repo", None), "workdir: /srv/repo")
 
 
 class PaletteFormatterTests(unittest.TestCase):
@@ -423,18 +435,53 @@ class RenderIntegrationTests(unittest.TestCase):
     """Headless end-to-end render smoke tests over a FakeScreen (not curses)."""
 
     def test_main_layout_regions_render(self):
-        app, screen = _app_with_transcript(24, 80)
+        app, screen = _app_with_transcript(24, 100)
         app._render()
         out = screen.text()
         context = out.splitlines()[0]
-        self.assertIn("main", context)  # branch on the context line
-        self.assertIn("agent_collab", context)  # project/workdir
-        # Info line: inline sdk backend chip on codex, workflow present.
-        self.assertIn("claude:opus-4.8 · codex:gpt-5 sdk · cross-review", out)
+        self.assertIn("workdir: /home/dev/agent_collab (main)", context)
+        # Agent cluster right-aligned on the context line, canonical backend names.
+        self.assertIn("claude_cli: opus-4.8 · codex_sdk: gpt-5", context)
+        # Info line: task and workflow.
+        self.assertIn("review the poller race · cross-review", out)
         self.assertIn("╭", out)  # bordered input box
         self.assertIn("> ", out)
         self.assertIn("referee note", out)  # mode chip
         self.assertIn("running · Enter send · / cmds", out)  # status/hint
+
+    def test_band_covers_every_wrapped_row_of_human_and_referee_messages(self):
+        class _AttrScreen(_FakeScreen):
+            def _reset(self):
+                super()._reset()
+                self.attrs = [[0] * self.width for _ in range(self.height)]
+
+            def addnstr(self, y, x, text, width, attr=0):
+                super().addnstr(y, x, text, width, attr)
+                for i in range(len(str(text)[:width])):
+                    if 0 <= x + i < self.width:
+                        self.attrs[y][x + i] = attr
+
+        from agent_collab.tui_core import follow_scroll
+
+        screen = _AttrScreen(24, 60)
+        app = TuiApp(screen, _DummyClient(), initial_session_id=None)
+        app.session = _session()
+        app.session_id = "daemon-1"
+        app.branch = "main"
+        app.styles = {"band": 7}
+        app.utf8 = True
+        long_text = "verify the worker threads never touch live session state " * 3
+        app.transcript_lines = format_transcript_event(
+            Event.create("human", "message", long_text)
+        )
+        app.scroll = follow_scroll(len(app.transcript_lines), app._body_height())
+        app._render()
+
+        rows = [y for y in range(screen.height) if "verify the worker" in "".join(screen.grid[y])]
+        self.assertGreater(len(rows), 1)  # the message wraps
+        for y in rows:
+            # The raised band fills the whole row, wrapped rows included.
+            self.assertEqual(set(screen.attrs[y]), {7}, f"row {y} not fully banded")
 
     def test_wide_details_keeps_transcript_left_and_panel_right(self):
         app, screen = _app_with_transcript(24, 120)
@@ -457,13 +504,16 @@ class RenderIntegrationTests(unittest.TestCase):
         self.assertIn("details · ↑↓ scroll · Esc close", out)  # overlay title
         self.assertIn("↑↓ scroll · Esc close", out)  # narrow-details hint
 
-    def test_narrow_main_truncates_info_line_to_lead_agent(self):
+    def test_narrow_main_drops_agent_cluster_before_branch_workdir(self):
         app, screen = _app_with_transcript(20, 48)
         app._render()
         lines = screen.text().splitlines()
-        info = lines[1]
-        self.assertIn("claude:opus-4.8", info)
-        self.assertNotIn("cross-review", info)  # workflow dropped first
+        # No room next to branch/workdir: the cluster disappears (details
+        # panel still carries the full per-agent record).
+        self.assertIn("main", lines[0])
+        self.assertNotIn("claude:opus-4.8", lines[0])
+        # The info line keeps task and workflow.
+        self.assertIn("review the poller race · cross-review", lines[1])
 
     def test_sub_minimum_frame_shows_too_small(self):
         app, screen = _app_with_transcript(4, 12)
@@ -571,7 +621,7 @@ class InfoLineWidthTests(unittest.TestCase):
     def test_ellipsized_info_line_keeps_its_last_character(self):
         # At narrow widths the task ellipsizes; the trailing char (often the
         # ellipsis itself) must survive the x=1 draw offset (review finding).
-        app, screen = _app_with_transcript(24, 30)
+        app, screen = _app_with_transcript(24, 20)
         app._render()
         info_row = screen.text().splitlines()[1]
         self.assertIn("…", info_row)

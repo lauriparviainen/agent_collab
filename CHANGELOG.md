@@ -13,6 +13,23 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Bound HTTP request bodies to 16 MiB and request headers to 100 fields/64 KiB;
+  return structured client errors for oversized, malformed, ambiguous-framing,
+  and incomplete requests before they can trigger unbounded daemon allocation.
+- Polish the TUI chrome: move the per-agent cluster to the top row as
+  `{type}_{backend}: {model}` with the backend always shown, label the context
+  line `workdir: <path> (<branch>)`, extend the referee/human band to wrapped
+  lines, give the session-picker title a raised band and aligned indent,
+  de-duplicate the read-only indicators to one per region, and give all body
+  text the chrome's one-column left margin.
+- Keep the daemon responsive during session preflight, backend health probes,
+  option discovery, restored-event replay, and transcript reads by moving
+  blocking work off the asyncio event loop and snapshotting session events
+  before worker-thread projection.
+- Prevent daemon lifecycle races by verifying stored process identity before
+  shutdown signals, rechecking before forced termination, and serializing the
+  complete daemon-start transaction with a private cross-process lock.
+
 ## [0.2] - 2026-07-10 - First-class backends and daemon hardening
 
 - Promote the Claude Code, Codex, and Antigravity SDK integrations to packaged,

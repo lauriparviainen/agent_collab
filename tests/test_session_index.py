@@ -2,6 +2,8 @@ import asyncio
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -168,6 +170,57 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
                 [event["text"] for event in live_events.events],
             )
             self.assertEqual(waited.events, [])
+
+    async def test_restored_event_and_transcript_reads_do_not_block_loop(self):
+        import agent_collab.daemon as daemon_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "home" / "data" / "session-index.json"
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                manager = SessionManager(index_path=index_path)
+                final = await self._run_session_to_done(manager, root)
+                restarted = SessionManager(index_path=index_path)
+                real_loader = daemon_module._load_events_from_jsonl
+
+                for operation in ("events", "transcript"):
+                    with self.subTest(operation=operation):
+                        entered = threading.Event()
+                        release = threading.Event()
+
+                        def slow_loader(path):
+                            entered.set()
+                            release.wait(2.0)
+                            return real_loader(path)
+
+                        with mock.patch.object(
+                            daemon_module,
+                            "_load_events_from_jsonl",
+                            side_effect=slow_loader,
+                        ):
+                            started_at = time.monotonic()
+                            if operation == "events":
+                                read_task = asyncio.create_task(
+                                    restarted.read_events_async(final.session_id, 0)
+                                )
+                            else:
+                                read_task = asyncio.create_task(
+                                    restarted.read_transcript_async(final.session_id)
+                                )
+                            self.assertTrue(await asyncio.to_thread(entered.wait, 1.0))
+                            try:
+                                listed = restarted.list_sessions()
+                            finally:
+                                release.set()
+
+                            self.assertLess(time.monotonic() - started_at, 0.5)
+                            self.assertEqual(listed[0].session_id, final.session_id)
+                            result = await read_task
+                            if operation == "events":
+                                self.assertGreater(result.cursor, 0)
+                            else:
+                                self.assertIn("# agent-collab session", result)
 
     async def test_restored_session_id_cannot_be_reused(self):
         with tempfile.TemporaryDirectory() as tmp:

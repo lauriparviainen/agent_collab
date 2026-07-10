@@ -150,6 +150,19 @@ class _ManagedSession:
     task: Optional[asyncio.Task] = None
 
 
+@dataclass(frozen=True)
+class _PreparedSessionStart:
+    workdir: Path
+    log_dir: Path
+    collab_config: CollaborationConfig
+    normalized_options: Dict[str, Dict[str, Any]]
+    agent_options: Dict[str, Dict[str, Any]]
+    agent_backends: Dict[str, str]
+    settings: Dict[str, Any]
+    capabilities: Dict[str, bool]
+    interactive_idle_timeout: float
+
+
 class SessionManager:
     def __init__(
         self,
@@ -208,6 +221,56 @@ class SessionManager:
             self._log_lifecycle(f"failed to persist session index for {state.session_id}: {exc}")
 
     async def start_session(self, request: StartSessionRequest) -> SessionState:
+        prepared = await asyncio.to_thread(self._prepare_session_start, request)
+        workdir = prepared.workdir
+        log_dir = prepared.log_dir
+        request.backend_options = prepared.normalized_options
+        request.agent_options = prepared.agent_options
+        request.resolved_backends = prepared.agent_backends
+        request.collab_config = prepared.collab_config
+        request.interactive = bool(request.interactive)
+        request.interactive_idle_timeout = prepared.interactive_idle_timeout
+
+        session_id = request.session_id or self._new_session_id()
+        self._validate_new_session_id(session_id)
+
+        created_at = utc_timestamp()
+        state = SessionState(
+            session_id=session_id,
+            status=RUNNING,
+            task=request.task,
+            workflow=request.workflow,
+            workdir=str(workdir),
+            jsonl_path=str(log_dir / f"{session_id}.jsonl"),
+            markdown_path=str(log_dir / f"{session_id}.md"),
+            created_at=created_at,
+            updated_at=created_at,
+            max_turns=int(request.max_turns),
+            timeout=int(request.timeout),
+            mock=bool(request.mock),
+            dry_run=bool(request.dry_run),
+            interactive=bool(request.interactive),
+            interactive_idle_timeout=float(request.interactive_idle_timeout),
+            settings=prepared.settings,
+            capabilities=prepared.capabilities,
+        )
+        managed = _ManagedSession(
+            request=request,
+            state=state,
+            events=[],
+            condition=asyncio.Condition(),
+        )
+        self._sessions[session_id] = managed
+        self._persist(state)
+        managed.task = asyncio.create_task(self._run_session(managed), name=f"agent-collab-session-{session_id}")
+        self._log_lifecycle(
+            f"session {session_id} started workflow={state.workflow} max_turns={state.max_turns} "
+            f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
+        )
+        return self._copy_state(state)
+
+    def _prepare_session_start(self, request: StartSessionRequest) -> _PreparedSessionStart:
+        """Load and validate start inputs outside the daemon event loop."""
         workdir = Path(request.workdir).expanduser().resolve()
         if str(request.workdir) == ".":
             workdir = self.default_workdir
@@ -231,12 +294,8 @@ class SessionManager:
             agent_backends=selection.agent_backends,
         )
         normalized_options = normalized.backend_options
-        request.backend_options = normalized_options
-        request.agent_options = dict(normalized.agent_options)
-        request.resolved_backends = dict(selection.agent_backends)
-        request.collab_config = collab_config
-        request.interactive = bool(request.interactive)
-        request.interactive_idle_timeout = self._normalize_idle_timeout(request.interactive_idle_timeout)
+        interactive = bool(request.interactive)
+        interactive_idle_timeout = self._normalize_idle_timeout(request.interactive_idle_timeout)
         settings = build_session_settings(
             collab_config,
             request.workflow,
@@ -244,48 +303,22 @@ class SessionManager:
             agent_backends=selection.agent_backends,
             agent_options=normalized.agent_options,
             warnings=selection.warnings,
-            interactive=request.interactive,
-            interactive_idle_timeout=request.interactive_idle_timeout,
+            interactive=interactive,
+            interactive_idle_timeout=interactive_idle_timeout,
             workdir=workdir,
         )
         capabilities = self._session_capabilities(collab_config, selection.agent_backends)
-        session_id = request.session_id or self._new_session_id()
-        self._validate_new_session_id(session_id)
-
-        created_at = utc_timestamp()
-        state = SessionState(
-            session_id=session_id,
-            status=RUNNING,
-            task=request.task,
-            workflow=request.workflow,
-            workdir=str(workdir),
-            jsonl_path=str(log_dir / f"{session_id}.jsonl"),
-            markdown_path=str(log_dir / f"{session_id}.md"),
-            created_at=created_at,
-            updated_at=created_at,
-            max_turns=int(request.max_turns),
-            timeout=int(request.timeout),
-            mock=bool(request.mock),
-            dry_run=bool(request.dry_run),
-            interactive=bool(request.interactive),
-            interactive_idle_timeout=float(request.interactive_idle_timeout),
+        return _PreparedSessionStart(
+            workdir=workdir,
+            log_dir=log_dir,
+            collab_config=collab_config,
+            normalized_options=normalized_options,
+            agent_options=dict(normalized.agent_options),
+            agent_backends=dict(selection.agent_backends),
             settings=settings,
             capabilities=capabilities,
+            interactive_idle_timeout=interactive_idle_timeout,
         )
-        managed = _ManagedSession(
-            request=request,
-            state=state,
-            events=[],
-            condition=asyncio.Condition(),
-        )
-        self._sessions[session_id] = managed
-        self._persist(state)
-        managed.task = asyncio.create_task(self._run_session(managed), name=f"agent-collab-session-{session_id}")
-        self._log_lifecycle(
-            f"session {session_id} started workflow={state.workflow} max_turns={state.max_turns} "
-            f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
-        )
-        return self._copy_state(state)
 
     def _session_capabilities(self, config: Any, agent_backends: Dict[str, str]) -> Dict[str, bool]:
         from . import backends as backend_registry
@@ -313,6 +346,18 @@ class SessionManager:
     ) -> Dict[str, Any]:
         root = Path(workdir).expanduser().resolve() if workdir else self.default_workdir
         return describe_options(load_config(root), root, health_refresh=health_refresh)
+
+    async def describe_options_async(
+        self,
+        workdir: Optional[Union[str, Path]] = None,
+        *,
+        health_refresh: str = "cached",
+    ) -> Dict[str, Any]:
+        return await asyncio.to_thread(
+            self.describe_options,
+            workdir,
+            health_refresh=health_refresh,
+        )
 
     async def stop_session(self, session_id: str) -> SessionState:
         managed = self._get_managed(session_id)
@@ -379,15 +424,49 @@ class SessionManager:
         managed = self._get_managed(session_id)
         if managed.request is None and not managed.events:
             managed.events = _load_events_from_jsonl(Path(managed.state.jsonl_path))
-        cursor = min(self._normalize_cursor(cursor), len(managed.events))
+        events = managed.events[:]
+        cursor = min(self._normalize_cursor(cursor), len(events))
         limit = self._normalize_limit(limit)
         tool_output = self._normalize_tool_output(tool_output)
-        end = len(managed.events) if limit is None else min(len(managed.events), cursor + limit)
-        events = [
-            _project_event(event, event_id, tool_output)
-            for event_id, event in enumerate(managed.events[cursor:end], start=cursor)
-        ]
-        return EventBatch(session_id=session_id, cursor=end, events=events)
+        return _event_batch_from_snapshot(
+            session_id, events, cursor, limit, tool_output
+        )
+
+    async def read_events_async(
+        self,
+        session_id: str,
+        cursor: int = 0,
+        *,
+        limit: Optional[int] = None,
+        tool_output: str = "summary",
+    ) -> EventBatch:
+        managed = self._get_managed(session_id)
+        await self._load_restored_events(managed)
+        # Session state belongs to the event-loop thread. Only a detached list
+        # snapshot crosses into the worker used for potentially expensive event
+        # projection/deep-copying; recorded event dicts are append-only.
+        events = managed.events[:]
+        cursor = min(self._normalize_cursor(cursor), len(events))
+        limit = self._normalize_limit(limit)
+        tool_output = self._normalize_tool_output(tool_output)
+        return await asyncio.to_thread(
+            _event_batch_from_snapshot,
+            session_id,
+            events,
+            cursor,
+            limit,
+            tool_output,
+        )
+
+    async def _load_restored_events(self, managed: _ManagedSession) -> None:
+        if managed.request is not None or managed.events:
+            return
+        path = Path(managed.state.jsonl_path)
+        events = await asyncio.to_thread(_load_events_from_jsonl, path)
+        # Another concurrent reader may have populated the cache while this
+        # thread was reading. Never overwrite the event-loop-owned list then.
+        if not managed.events:
+            managed.events = events
 
     async def wait_events(
         self,
@@ -398,8 +477,7 @@ class SessionManager:
         tool_output: str = "summary",
     ) -> EventBatch:
         managed = self._get_managed(session_id)
-        if managed.request is None and not managed.events:
-            managed.events = _load_events_from_jsonl(Path(managed.state.jsonl_path))
+        await self._load_restored_events(managed)
         cursor = min(self._normalize_cursor(cursor), len(managed.events))
         timeout = max(0, int(timeout_ms)) / 1000.0
         tool_output = self._normalize_tool_output(tool_output)
@@ -417,27 +495,42 @@ class SessionManager:
                     except asyncio.TimeoutError:
                         pass
 
-        return self.read_events(session_id, cursor, tool_output=tool_output)
+        return await self.read_events_async(
+            session_id, cursor, tool_output=tool_output
+        )
 
     def read_transcript(self, session_id: str, *, tool_output: str = "summary") -> str:
         managed = self._get_managed(session_id)
         tool_output = self._normalize_tool_output(tool_output)
         if tool_output == "full":
-            path = Path(managed.state.markdown_path)
-            text = path.read_text(encoding="utf-8") if path.exists() else ""
-            return _truncate_text(text, MAX_FULL_TRANSCRIPT_BYTES)
+            return _read_full_transcript(Path(managed.state.markdown_path))
 
         events = _load_events_from_jsonl(Path(managed.state.jsonl_path))
         if not events:
-            events = [copy.deepcopy(event) for event in managed.events]
-        parts = [f"# agent-collab session {session_id}\n\n"]
-        for event_id, event in enumerate(events):
-            projected = _project_event(event, event_id, tool_output)
-            label = str(projected.get("source", "error")).upper()
-            event_type = str(projected.get("type", "status"))
-            text = str(projected.get("text", ""))
-            parts.append(f"## {label} `{event_type}`\n\n{text}\n\n")
-        return "".join(parts)
+            events = managed.events[:]
+        return _render_transcript(session_id, events, tool_output)
+
+    async def read_transcript_async(
+        self, session_id: str, *, tool_output: str = "summary"
+    ) -> str:
+        managed = self._get_managed(session_id)
+        tool_output = self._normalize_tool_output(tool_output)
+        if tool_output == "full":
+            path = Path(managed.state.markdown_path)
+            return await asyncio.to_thread(_read_full_transcript, path)
+
+        path = Path(managed.state.jsonl_path)
+        events = await asyncio.to_thread(_load_events_from_jsonl, path)
+        if not events:
+            # Snapshot on the event loop; the worker never touches managed
+            # session state or its live event list.
+            events = managed.events[:]
+        return await asyncio.to_thread(
+            _render_transcript,
+            session_id,
+            events,
+            tool_output,
+        )
 
     async def _run_session(self, managed: _ManagedSession) -> None:
         request = managed.request
@@ -719,6 +812,41 @@ def _load_events_from_jsonl(path: Path) -> List[Dict[str, Any]]:
         if isinstance(payload, dict):
             events.append(payload)
     return events
+
+
+def _event_batch_from_snapshot(
+    session_id: str,
+    events: List[Dict[str, Any]],
+    cursor: int,
+    limit: Optional[int],
+    tool_output: str,
+) -> EventBatch:
+    end = len(events) if limit is None else min(len(events), cursor + limit)
+    projected = [
+        _project_event(event, event_id, tool_output)
+        for event_id, event in enumerate(events[cursor:end], start=cursor)
+    ]
+    return EventBatch(session_id=session_id, cursor=end, events=projected)
+
+
+def _read_full_transcript(path: Path) -> str:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    return _truncate_text(text, MAX_FULL_TRANSCRIPT_BYTES)
+
+
+def _render_transcript(
+    session_id: str,
+    events: List[Dict[str, Any]],
+    tool_output: str,
+) -> str:
+    parts = [f"# agent-collab session {session_id}\n\n"]
+    for event_id, event in enumerate(events):
+        projected = _project_event(event, event_id, tool_output)
+        label = str(projected.get("source", "error")).upper()
+        event_type = str(projected.get("type", "status"))
+        text = str(projected.get("text", ""))
+        parts.append(f"## {label} `{event_type}`\n\n{text}\n\n")
+    return "".join(parts)
 
 
 def _project_event(event: Dict[str, Any], event_id: int, tool_output: str) -> Dict[str, Any]:

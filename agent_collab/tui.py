@@ -24,6 +24,7 @@ from .tui_core import (
     advance_cursor_state,
     ansi8_from_hex,
     ascii_fallback,
+    build_context_agent_segments,
     build_info_line_segments,
     build_new_session_payload,
     clamp_scroll,
@@ -34,6 +35,7 @@ from .tui_core import (
     format_activity_indicator,
     format_context_line,
     format_details_overlay_lines,
+    InfoSegment,
     follow_scroll,
     format_session_details,
     format_slash_completion_lines,
@@ -190,7 +192,9 @@ class TuiApp:
         self.picker = None
         self.slash_completion_dismissed_for = None
         if session_is_terminal(session):
-            self.message = f"session is read-only ({session.status})"
+            # Plain confirmation — the chip and status line carry the
+            # read-only mode; repeating it here (in red) reads as a failure.
+            self.message = f"opened {session_id} ({session.status})"
         else:
             self.message = f"opened {session_id}" if _session_accepts_input(session) else "session is read-only (not interactive)"
             self._start_poller()
@@ -383,7 +387,8 @@ class TuiApp:
                     continue
                 self.session = session
                 if session_is_terminal(session):
-                    self.message = f"session is read-only ({session.status})"
+                    # Announce the event; mode is visible in chip + status.
+                    self.message = f"session ended ({session.status})"
                     self._stop_poller()
             elif kind == "error":
                 _, epoch, session_id, message = item
@@ -665,12 +670,12 @@ class TuiApp:
         # Anchor the picker to its top (title + column header + latest-first
         # rows), then bring the pre-selected current session into view.
         self.scroll = picker_scroll(
-            self.picker, ScrollState(top=0, follow=False), self._transcript_width(), self._body_height()
+            self.picker, ScrollState(top=0, follow=False), self._body_text_width(), self._body_height()
         )
 
     def _move_picker(self, delta: int) -> None:
         self.picker = move_session_picker(self.picker, delta)
-        self.scroll = picker_scroll(self.picker, self.scroll, self._transcript_width(), self._body_height())
+        self.scroll = picker_scroll(self.picker, self.scroll, self._body_text_width(), self._body_height())
 
     def _start_new_wizard(self) -> None:
         self.new_wizard = {"step": "task", "task": "", "workflow": "", "workdir": ""}
@@ -775,7 +780,7 @@ class TuiApp:
 
         body_top = 3
         body_height = self._body_height()
-        body_lines = self._active_body_lines(transcript_width)
+        body_lines = self._active_body_lines(max(1, transcript_width - 1))
         self.scroll = clamp_scroll(self.scroll, len(body_lines), body_height)
         start = visible_scroll_top(self.scroll, len(body_lines), body_height)
         for row, line in enumerate(body_lines[start : start + body_height], start=body_top):
@@ -809,10 +814,17 @@ class TuiApp:
             self._add(body_top + index, separator_x + 1, line, details_width - 2, self._style("muted"))
 
     def _render_body_line(self, row: int, line, width: int) -> None:
+        # Body text shares the chrome's 1-column left margin (context/info draw
+        # at x=1); background fills still bleed to the terminal edge. Lines are
+        # wrapped to width-1 so the margin never clips the last character.
+        text_width = max(0, width - 1)
         if line.source in (MENU_TITLE_SOURCE, MENU_HEADER_SOURCE, MENU_ROW_SOURCE, MENU_SELECTED_SOURCE):
             # Session picker: a colored menu block, like the slash palette.
             if line.source == MENU_TITLE_SOURCE:
-                self._add(row, 0, line.text, width, self._style("dim"))
+                # Raised band caps the menu: one shade lighter than the row
+                # fill, matching the referee/human band tone.
+                self._add(row, 0, " " * width, width, self._style("band"))
+                self._add(row, 1, line.text, text_width, self._style("band"))
                 return
             if line.source == MENU_SELECTED_SOURCE:
                 style = self._style("menu_selected")
@@ -821,36 +833,37 @@ class TuiApp:
             else:
                 style = self._style("menu")
             self._add(row, 0, " " * width, width, style)
-            self._add(row, 0, line.text, width, style)
+            self._add(row, 1, line.text, text_width, style)
             return
         if line.source == "ui":
             # Shared scrollable overlay (picker / help / narrow details): the
             # first line is a title/hint, the rest is body content.
             style = self._style("dim") if row == 3 else self._style("text")
-            self._add(row, 0, line.text, width, style)
+            self._add(row, 1, line.text, text_width, style)
             return
-        if line.continuation:
-            self._add(row, 0, line.text, width, self._style("text"))
-            return
-
-        band = line.source in ("referee", "human")
-        attr = self._style_for_source(line.source)
-        if band:
-            # Raised band for referee/human, right-aligned timestamp.
+        if line.source in ("referee", "human"):
+            # Raised band for referee/human covering every wrapped row of the
+            # message (a first-row-only band reads as two different voices);
+            # right-aligned timestamp on the first row.
             self._add(row, 0, " " * width, width, self._style("band"))
-            self._add(row, 0, line.text, width, self._style("band"))
+            self._add(row, 1, line.text, text_width, self._style("band"))
             if line.timestamp and width > len(line.timestamp) + 1:
                 self._add(row, width - len(line.timestamp), line.timestamp, len(line.timestamp), self._style("band"))
             return
-        if len(line.text) <= SOURCE_LABEL_WIDTH:
-            self._add(row, 0, line.text, width, attr)
+        if line.continuation:
+            self._add(row, 1, line.text, text_width, self._style("text"))
             return
-        label_width = min(width, SOURCE_LABEL_WIDTH)
-        self._add(row, 0, line.text[:label_width], label_width, attr)
-        if width > SOURCE_LABEL_WIDTH:
+
+        attr = self._style_for_source(line.source)
+        if len(line.text) <= SOURCE_LABEL_WIDTH:
+            self._add(row, 1, line.text, text_width, attr)
+            return
+        label_width = min(text_width, SOURCE_LABEL_WIDTH)
+        self._add(row, 1, line.text[:label_width], label_width, attr)
+        if text_width > SOURCE_LABEL_WIDTH:
             # Tool summaries stay dim across the whole row; other bodies read in text.
             body_attr = self._style("dim") if line.source == "tool" else self._style("text")
-            self._add(row, SOURCE_LABEL_WIDTH, line.text[SOURCE_LABEL_WIDTH:], width - SOURCE_LABEL_WIDTH, body_attr)
+            self._add(row, 1 + SOURCE_LABEL_WIDTH, line.text[SOURCE_LABEL_WIDTH:], text_width - SOURCE_LABEL_WIDTH, body_attr)
 
     def _render_slash_completion(self, body_top: int, body_height: int, width: int) -> None:
         completion = self._current_slash_completion()
@@ -865,32 +878,41 @@ class TuiApp:
             fill = self._style("menu_selected") if selected else self._style("menu")
             self._add(y, 0, " " * width, width, fill)
             if selected:
-                self._add(y, 0, line, width, fill)
+                self._add(y, 1, line, max(0, width - 1), fill)
             else:
                 # marker + name in accent, description in muted, on the gray fill.
-                self._add(y, 0, line, width, self._style("menu_name"))
+                self._add(y, 1, line, max(0, width - 1), self._style("menu_name"))
 
     def _render_context_line(self, y: int, width: int) -> None:
         workdir = self.session.workdir if self.session else ""
         text = format_context_line(workdir, self.branch)
         self._add(y, 1, text, max(0, width - 1), self._style("dim"))
+        # Agent cluster right-aligned into the otherwise-empty context row,
+        # with a 2-cell gap so it never crowds the branch/workdir text.
+        agents = info_agents_from_session(self.session) if self.session else ()
+        available = width - 1 - (1 + len(text) + 2)
+        segments = build_context_agent_segments(agents, max(0, available))
+        cluster = sum(len(segment.text) for segment in segments)
+        self._render_info_segments(y, width - 1 - cluster, width, segments)
 
     def _render_info_line(self, y: int, width: int) -> None:
         if self.session:
             task = self.session.task
-            agents = info_agents_from_session(self.session)
             workflow = session_workflow_name(self.session)
         else:
             task = ""
-            agents = ()
             workflow = ""
         # Drawable columns run from x=1 to width-2 inclusive: width-2 cells.
-        segments = build_info_line_segments(task, agents, workflow, max(1, width - 2))
-        x = 1
+        segments = build_info_line_segments(task, workflow, max(1, width - 2))
+        self._render_info_segments(y, 1, width, segments)
+
+    def _render_info_segments(
+        self, y: int, x: int, width: int, segments: Sequence[InfoSegment]
+    ) -> None:
         for segment in segments:
             if x >= width - 1:
                 break
-            # While the picker menu is open, the background session's info line
+            # While the picker menu is open, the background session's chrome
             # recedes to chrome-dim so the menu reads as the focused layer.
             if self.picker is not None:
                 attr = self._style("dim")
@@ -1000,7 +1022,7 @@ class TuiApp:
 
     def _active_body_lines(self, width: Optional[int] = None):
         if width is None:
-            width = self._transcript_width()
+            width = self._body_text_width()
         _, screen_width = self.stdscr.getmaxyx()
         details_overlay = None
         if self._details_mode(screen_width) == "narrow" and self.session:
@@ -1027,6 +1049,11 @@ class TuiApp:
         _, width = self.stdscr.getmaxyx()
         details_width = self._details_width(width)
         return max(1, width - details_width - (1 if details_width else 0))
+
+    def _body_text_width(self) -> int:
+        # Wrap width for body text: the transcript region minus the 1-column
+        # left margin (_render_body_line draws text at x=1).
+        return max(1, self._transcript_width() - 1)
 
     def _details_mode(self, width: int) -> Optional[str]:
         if not self.details_visible or not self.session:
