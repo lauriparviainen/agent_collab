@@ -523,6 +523,20 @@ def _main_config(argv) -> int:
             command = " ".join([agent.command or ""] + list(agent.args)).strip()
             enabled = "" if agent.enabled else " (disabled)"
             print(f"agent {agent_id}: type={agent.type} command={command!r}{enabled}")
+            details = []
+            if agent.name:
+                details.append(f"name={agent.name!r}")
+            if agent.cwd:
+                details.append(f"cwd={agent.cwd!r}")
+            if agent.timeout is not None:
+                details.append(f"timeout={agent.timeout}")
+            if agent.env:
+                # Env values may carry credentials; show only the key names.
+                details.append(f"env keys={','.join(sorted(agent.env))}")
+            if details:
+                print(f"  {' '.join(details)}")
+            for name, value in sorted(agent.backend_config.items()):
+                print(f"  backend {agent.backend or 'cli'} config {name} = {value!r}")
             for option, value in sorted(agent.options.items()):
                 print(f"  backend {agent.backend or 'cli'} option {option} = {value!r}")
         from .backends import registered_backend_names

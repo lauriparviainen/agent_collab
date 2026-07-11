@@ -249,6 +249,46 @@ thinking_level = "high"
             self.assertIn("backend cli option model = 'opus'", text)
             self.assertIn("backend cli option thinking_level = 'high'", text)
 
+    def test_cli_config_show_prints_all_agent_fields_and_redacts_env_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_config(
+                root,
+                """
+[agents.claude]
+name = "primary-reviewer"
+cwd = "/tmp/claude-cwd"
+timeout = 600
+env = { ANTHROPIC_API_KEY = "sk-secret-value" }
+
+[agents.gemini]
+type = "antigravity"
+backend = "sdk"
+enabled = true
+vertex = true
+project = "example-project"
+location = "us-central1"
+""",
+            )
+
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, _env(home)):
+                with contextlib.redirect_stdout(output):
+                    code = cli.main(["config", "show", "--workdir", str(root)])
+
+            text = output.getvalue()
+            self.assertEqual(code, 0)
+            self.assertIn("name='primary-reviewer'", text)
+            self.assertIn("cwd='/tmp/claude-cwd'", text)
+            self.assertIn("timeout=600", text)
+            self.assertIn("env keys=ANTHROPIC_API_KEY", text)
+            self.assertNotIn("sk-secret-value", text)
+            self.assertIn("backend sdk config vertex = True", text)
+            self.assertIn("backend sdk config project = 'example-project'", text)
+            self.assertIn("backend sdk config location = 'us-central1'", text)
+
     def test_cli_config_show_handles_migrated_schema_3_user_config_with_options(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
