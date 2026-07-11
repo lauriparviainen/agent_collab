@@ -16,9 +16,10 @@ into a detailed work log.
 - Fix `config show` crashing with `'str' object has no attribute 'items'`
   when any agent has configured options; option values now print as
   `option = value` lines (#3).
-- Print the previously omitted agent fields in `config show` — `name`,
-  `cwd`, `timeout`, `env` (key names only, values never echoed), and static
-  backend config such as antigravity_sdk's vertex/project/location (#7).
+- Print the previously omitted agent fields in `config show` — the effective
+  `backend`, `name`, `cwd`, `timeout`, `env` (key names only, values never
+  echoed), and static backend config such as antigravity_sdk's
+  vertex/project/location (#7).
 
 ## [0.3.0] - 2026-07-11 - Daemon hardening, CI, and project process
 

@@ -522,7 +522,10 @@ def _main_config(argv) -> int:
         for agent_id, agent in sorted(config.agents.items()):
             command = " ".join([agent.command or ""] + list(agent.args)).strip()
             enabled = "" if agent.enabled else " (disabled)"
-            print(f"agent {agent_id}: type={agent.type} command={command!r}{enabled}")
+            print(
+                f"agent {agent_id}: type={agent.type} backend={agent.backend or 'cli'} "
+                f"command={command!r}{enabled}"
+            )
             details = []
             if agent.name:
                 details.append(f"name={agent.name!r}")
@@ -532,7 +535,7 @@ def _main_config(argv) -> int:
                 details.append(f"timeout={agent.timeout}")
             if agent.env:
                 # Env values may carry credentials; show only the key names.
-                details.append(f"env keys={','.join(sorted(agent.env))}")
+                details.append(f"env_keys={','.join(sorted(agent.env))}")
             if details:
                 print(f"  {' '.join(details)}")
             for name, value in sorted(agent.backend_config.items()):

@@ -261,7 +261,12 @@ thinking_level = "high"
 name = "primary-reviewer"
 cwd = "/tmp/claude-cwd"
 timeout = 600
-env = { ANTHROPIC_API_KEY = "sk-secret-value" }
+env = { ZZZ_LAST = "other-value", ANTHROPIC_API_KEY = "sk-secret-value" }
+
+[agents.bare_sdk]
+type = "claude"
+backend = "sdk"
+enabled = true
 
 [agents.gemini]
 type = "antigravity"
@@ -280,11 +285,14 @@ location = "us-central1"
 
             text = output.getvalue()
             self.assertEqual(code, 0)
+            self.assertIn("agent claude: type=claude backend=cli", text)
+            self.assertIn("agent bare_sdk: type=claude backend=sdk", text)
             self.assertIn("name='primary-reviewer'", text)
             self.assertIn("cwd='/tmp/claude-cwd'", text)
             self.assertIn("timeout=600", text)
-            self.assertIn("env keys=ANTHROPIC_API_KEY", text)
+            self.assertIn("env_keys=ANTHROPIC_API_KEY,ZZZ_LAST", text)
             self.assertNotIn("sk-secret-value", text)
+            self.assertNotIn("other-value", text)
             self.assertIn("backend sdk config vertex = True", text)
             self.assertIn("backend sdk config project = 'example-project'", text)
             self.assertIn("backend sdk config location = 'us-central1'", text)
