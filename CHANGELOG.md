@@ -13,6 +13,12 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Replace the per-daemon-lifetime minted bearer token with one permanent
+  `[daemon].token` in the user config, auto-generated on first daemon start,
+  so MCP and remote clients stay authenticated across daemon restarts.
+  The token is accepted only from the user config (a project copy is stripped
+  with a warning), generation refuses group/world-readable config files, and
+  `data/daemon/token` is no longer written (#8).
 - Fix `config show` crashing with `'str' object has no attribute 'items'`
   when any agent has configured options; option values now print as
   `option = value` lines (#3).

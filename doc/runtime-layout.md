@@ -12,12 +12,11 @@ Global user-owned state (root overridable with `AGENT_COLLAB_HOME`):
 
 ```text
 ~/.agent-collab/
-  config.toml
+  config.toml        (also holds [daemon].token — a credential; keep 0600)
   data/
     daemon/
       pid
       state.json
-      token
       daemon.log
       daemon.stderr.log
     sessions/
@@ -29,16 +28,27 @@ Global user-owned state (root overridable with `AGENT_COLLAB_HOME`):
 
 `tmp/` is reserved for future temp review workdirs. `session-index.json` is the persistent session index that lets `list`/`status` survive daemon restarts.
 
-The daemon directory is mode `0700`; `pid`, `state.json`, and `token` are
-atomically replaced with mode `0600`. The serving process mints a new `token`
-for every daemon lifetime before it accepts protected requests. Local clients
-read it automatically; `AGENT_COLLAB_TOKEN` overrides it for manual or remote
-clients. `GET /health` remains unauthenticated, while every other REST route and
-`/mcp` require `Authorization: Bearer <token>`.
+The daemon directory is mode `0700`; `pid` and `state.json` are atomically
+replaced with mode `0600`. The daemon's permanent bearer token lives in the
+user config as `[daemon].token`. On first start the daemon generates one and
+persists it into `~/.agent-collab/config.toml` (creating the file owner-only,
+or appending a `[daemon]` section without rewriting existing content); every
+later start reuses the stored value, so the token survives daemon restarts.
+Local clients read it automatically; `AGENT_COLLAB_TOKEN` overrides it for
+manual or remote clients. `GET /health` remains unauthenticated, while every
+other REST route and `/mcp` require `Authorization: Bearer <token>`.
+
+Because the user config now holds a credential, keep it owner-only
+(`chmod 600`) and never commit or share it. The daemon refuses to generate a
+token into a group/world-readable config and warns when loading one. A
+`[daemon]` section in a project config is ignored with a warning, so a shared
+repository can never inject or read daemon credentials. To rotate the token,
+edit or delete the `token` line and restart the daemon (a deleted token is
+regenerated).
 
 The token prevents other local users from casually controlling the loopback
 daemon. It does not isolate the daemon from processes running as the same OS
-user, which can read the owner-owned token file.
+user, which can read the owner-owned config file.
 
 Project-owned config:
 

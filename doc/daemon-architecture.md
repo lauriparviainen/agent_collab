@@ -141,17 +141,20 @@ GET  /mcp  -> 405 until SSE is implemented
 
 `/mcp` implements the Streamable HTTP JSON POST path for `initialize`, `tools/list`, and `tools/call`. It accepts MCP notifications and client responses with HTTP `202`, validates non-local `Origin` headers on all `/mcp` methods, validates supported `MCP-Protocol-Version` headers, and returns `405 Method Not Allowed` for `GET /mcp` because SSE is not implemented yet.
 
-All HTTP routes except `GET /health` require the per-daemon-lifetime bearer
-token stored in the global daemon directory. `GET /health` is intentionally an
-open liveness probe and exposes only status, session count, and API version.
-The supervisor verifies readiness against authenticated `GET /sessions`, so a
-stale token or an unrelated listener cannot satisfy startup. The token and
-daemon state files are owner-only, and the daemon directory is owner-only.
+All HTTP routes except `GET /health` require the permanent bearer token stored
+as `[daemon].token` in the user config; the daemon generates and persists it on
+first start and reuses it afterwards, so it stays valid across daemon restarts
+(see [Runtime layout](runtime-layout.md) for the file semantics and rotation).
+`GET /health` is intentionally an open liveness probe and exposes only status,
+session count, and API version. The supervisor verifies readiness against
+authenticated `GET /sessions`, so a missing token or an unrelated listener
+cannot satisfy startup. The config and daemon state files are owner-only, and
+the daemon directory is owner-only.
 
 This is a loopback, cross-user safety measure, not a sandbox against other
-processes running as the same OS user: same-user processes can read the token
-file. Non-loopback clients must supply `AGENT_COLLAB_TOKEN`; the client does not
-reuse a local daemon token for a remote server URL.
+processes running as the same OS user: same-user processes can read the
+owner-owned config file. Non-loopback clients must supply `AGENT_COLLAB_TOKEN`;
+the client does not send the local config token to a remote server URL.
 
 Optional later session event stream:
 
@@ -194,7 +197,7 @@ This makes it useful even without a running server.
 
 ## MCP shape
 
-Recommended local MCP shape (the adapter reads the rotating token file):
+Recommended local MCP shape (the adapter reads the config token automatically):
 
 ```text
 MCP client
@@ -203,7 +206,8 @@ MCP client
   -> SessionManager
 ```
 
-Direct MCP shape (client must refresh the bearer token after daemon restart):
+Direct MCP shape (configure the client with the permanent `[daemon].token`
+value, or `AGENT_COLLAB_TOKEN` for remote servers):
 
 ```text
 MCP client
@@ -247,7 +251,7 @@ The server keeps the existing guardrails:
 Server-level controls in place:
 
 - Localhost bind by default.
-- A mandatory per-daemon-lifetime bearer token on every route except
+- A mandatory permanent bearer token on every route except
   `GET /health` (see [Local API](#local-api)).
 - Per-session stop support.
 - No automatic broad shell permissions.

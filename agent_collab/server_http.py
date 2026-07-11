@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
-import secrets
 from dataclasses import dataclass
 from ipaddress import ip_address
 from pathlib import Path
@@ -28,7 +27,7 @@ from .daemon import (
     SessionRequestError,
     StartSessionRequest,
 )
-from .paths import GlobalDataPaths, atomic_write_private_text
+from .paths import GlobalDataPaths
 from .mcp_tools import (
     SUPPORTED_PROTOCOL_VERSIONS,
     SessionManagerToolBackend,
@@ -492,16 +491,18 @@ def run_server(
     *,
     default_workdir: Path = Path("."),
     session_log_dir: Optional[Path] = None,
-    token_path: Optional[Path] = None,
 ) -> None:
+    from .config import ensure_daemon_token
+
     paths = GlobalDataPaths.resolve()
     paths.ensure_dirs()
-    resolved_token_path = (
-        Path(token_path).expanduser().resolve() if token_path else paths.token_path
-    )
-    resolved_token_path.parent.mkdir(parents=True, exist_ok=True)
-    resolved_token_path.parent.chmod(0o700)
-    token = mint_auth_token(resolved_token_path)
+    # The permanent token lives in the user config; the legacy per-lifetime
+    # token file is no longer written, so drop a stale copy.
+    try:
+        paths.token_path.unlink()
+    except FileNotFoundError:
+        pass
+    token = ensure_daemon_token()
     asyncio.run(
         AgentCollabHttpServer(
             default_workdir=default_workdir,
@@ -509,9 +510,3 @@ def run_server(
             auth_token=token,
         ).serve(host, port)
     )
-
-
-def mint_auth_token(token_path: Path) -> str:
-    token = secrets.token_urlsafe(32)
-    atomic_write_private_text(token_path, token + "\n")
-    return token

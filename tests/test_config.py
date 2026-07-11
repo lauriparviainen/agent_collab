@@ -15,9 +15,12 @@ from agent_collab.config import (
     AgentConfig,
     ConfigError,
     _parse_toml_subset,
+    ensure_daemon_token,
     load_config,
+    load_daemon_token,
     validate_agent,
 )
+from agent_collab.paths import AgentCollabHome
 
 
 def _write_config(root: Path, text: str) -> None:
@@ -161,10 +164,15 @@ command = "user-claude"
             with mock.patch.dict(os.environ, _env(Path(tmp) / "home")):
                 with contextlib.redirect_stdout(output):
                     code = cli.main(["config", "init"])
-            text = (Path(tmp) / "home" / "config.toml").read_text(encoding="utf-8")
+            config_path = Path(tmp) / "home" / "config.toml"
+            text = config_path.read_text(encoding="utf-8")
             self.assertEqual(code, 0)
             for name in backends.registered_backend_names():
                 self.assertIn(f"[backends.{name}]", text)
+            self.assertIn("[daemon]", text)
+            self.assertIn("token = ", text)
+            self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+            self.assertIn("holds the daemon bearer token", output.getvalue())
 
     def test_shell_cwd_does_not_affect_project_config(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -584,6 +592,137 @@ backend = "cli"
             config = load_config(root, env=_env(home))
 
             self.assertEqual(config.agents["codex"].backend, "cli")
+
+
+class DaemonTokenTests(unittest.TestCase):
+    def _home(self, tmp: str) -> AgentCollabHome:
+        root = Path(tmp) / "home"
+        return AgentCollabHome(root=root, config_path=root / "config.toml")
+
+    def test_ensure_creates_private_config_and_is_stable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home(tmp)
+            first = ensure_daemon_token(home)
+            second = ensure_daemon_token(home)
+
+            self.assertEqual(first, second)
+            self.assertEqual(home.config_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(load_daemon_token(home), first)
+            self.assertIn(f'token = "{first}"', home.config_path.read_text(encoding="utf-8"))
+
+    def test_ensure_appends_to_existing_config_without_rewriting_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home(tmp)
+            existing = "# my notes\nschema_version = 4\n\n[agents.claude]\nname = 'x'\n"
+            home.root.mkdir(parents=True)
+            home.config_path.write_text(existing, encoding="utf-8")
+            home.config_path.chmod(0o600)
+
+            token = ensure_daemon_token(home)
+
+            text = home.config_path.read_text(encoding="utf-8")
+            self.assertTrue(text.startswith(existing))
+            self.assertIn("[daemon]", text)
+            self.assertEqual(load_daemon_token(home), token)
+            self.assertEqual(home.config_path.stat().st_mode & 0o777, 0o600)
+
+    def test_ensure_refuses_group_or_world_readable_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home(tmp)
+            home.root.mkdir(parents=True)
+            home.config_path.write_text("schema_version = 4\n", encoding="utf-8")
+            home.config_path.chmod(0o644)
+
+            with self.assertRaisesRegex(ConfigError, "chmod 600"):
+                ensure_daemon_token(home)
+            self.assertNotIn("[daemon]", home.config_path.read_text(encoding="utf-8"))
+
+    def test_ensure_rejects_daemon_section_without_usable_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home(tmp)
+            home.root.mkdir(parents=True)
+            home.config_path.write_text('[daemon]\ntoken = ""\n', encoding="utf-8")
+            home.config_path.chmod(0o600)
+
+            with self.assertRaisesRegex(ConfigError, "without a usable token"):
+                ensure_daemon_token(home)
+
+    def test_load_returns_none_when_missing_and_warns_when_permissive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home(tmp)
+            self.assertIsNone(load_daemon_token(home))
+
+            home.root.mkdir(parents=True)
+            home.config_path.write_text('[daemon]\ntoken = "abc"\n', encoding="utf-8")
+            home.config_path.chmod(0o644)
+            with self.assertLogs("agent_collab.config", level="WARNING") as logs:
+                self.assertEqual(load_daemon_token(home), "abc")
+            self.assertIn("chmod 600", logs.output[0])
+
+    def test_user_daemon_token_loads_and_never_prints_in_config_show(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_user_config(
+                home,
+                """
+schema_version = 4
+
+[daemon]
+token = "user-config-secret"
+""",
+            )
+
+            config = load_config(root, env=_env(home))
+            self.assertEqual(config.daemon_token, "user-config-secret")
+
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, _env(home)):
+                with contextlib.redirect_stdout(output):
+                    code = cli.main(["config", "show", "--workdir", str(root)])
+            self.assertEqual(code, 0)
+            self.assertNotIn("user-config-secret", output.getvalue())
+
+    def test_project_daemon_section_is_stripped_with_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_config(
+                root,
+                """
+schema_version = 4
+
+[daemon]
+token = "project-injected"
+""",
+            )
+
+            with self.assertLogs("agent_collab.config", level="WARNING") as logs:
+                config = load_config(root, env=_env(home))
+
+            self.assertIsNone(config.daemon_token)
+            self.assertIn("[daemon]", logs.output[0])
+
+    def test_unknown_daemon_field_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_user_config(
+                home,
+                """
+schema_version = 4
+
+[daemon]
+token = "abc"
+port = 9999
+""",
+            )
+
+            with self.assertRaisesRegex(ConfigError, "unknown field daemon.port"):
+                load_config(root, env=_env(home))
 
 
 if __name__ == "__main__":

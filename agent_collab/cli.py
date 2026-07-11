@@ -106,7 +106,6 @@ def build_serve_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--workdir", type=Path, default=Path("."), help=argparse.SUPPRESS)
     parser.add_argument("--session-log-dir", type=Path, help=argparse.SUPPRESS)
-    parser.add_argument("--token-path", type=Path, help=argparse.SUPPRESS)
     return parser
 
 
@@ -335,7 +334,6 @@ def _main_serve(argv) -> int:
             args.port,
             default_workdir=args.workdir,
             session_log_dir=args.session_log_dir,
-            token_path=args.token_path,
         )
     except KeyboardInterrupt:
         return 130
@@ -503,13 +501,23 @@ def _main_config(argv) -> int:
     try:
         home = AgentCollabHome.resolve()
         if args.action == "init":
+            import secrets
+
+            from .paths import atomic_write_private_text
+
             if home.config_path.exists() and not args.force:
                 raise ValueError(
                     f"user config already exists: {home.config_path} (pass --force to replace it)"
                 )
             home.root.mkdir(parents=True, exist_ok=True)
-            home.config_path.write_text(render_user_config(), encoding="utf-8")
+            atomic_write_private_text(
+                home.config_path, render_user_config(token=secrets.token_urlsafe(32))
+            )
             print(f"created user config: {home.config_path}")
+            print(
+                "note: this file now holds the daemon bearer token; keep it owner-only "
+                "and never commit or share it"
+            )
             return 0
         workdir = args.workdir.expanduser().resolve()
         config = load_config(workdir, home=home)

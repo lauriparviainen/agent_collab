@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import ast
+import logging
+import secrets
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 from .config_migrations import migrate_config_data
-from .paths import AgentCollabHome, project_config_path, user_config_path
+from .paths import AgentCollabHome, atomic_write_private_text, project_config_path, user_config_path
+
+_logger = logging.getLogger("agent_collab.config")
 
 
 class ConfigError(ValueError):
@@ -52,6 +56,7 @@ class CollaborationConfig:
     agents: Dict[str, AgentConfig] = field(default_factory=dict)
     workflows: Dict[str, WorkflowConfig] = field(default_factory=dict)
     backends: Dict[str, BackendPolicyConfig] = field(default_factory=dict)
+    daemon_token: Optional[str] = None
     loaded_paths: List[Path] = field(default_factory=list)
 
 
@@ -119,7 +124,7 @@ def load_config(
     return config
 
 
-KNOWN_TOP_LEVEL_KEYS = {"schema_version", "agents", "workflows", "backends"}
+KNOWN_TOP_LEVEL_KEYS = {"schema_version", "agents", "workflows", "backends", "daemon"}
 
 
 def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> None:
@@ -164,6 +169,18 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
                 raise ConfigError(f"unknown field backends.{name}.{unknown[0]}")
             enabled = _expect_bool(values.get("enabled", True), f"backends.{name}.enabled")
             config.backends[name] = BackendPolicyConfig(name, enabled, "user_config")
+
+    daemon = data.get("daemon", {})
+    if daemon is not None and daemon != {}:
+        if not isinstance(daemon, Mapping):
+            raise ConfigError("[daemon] must be a table")
+        unknown = sorted(set(daemon) - {"token"})
+        if unknown:
+            raise ConfigError(f"unknown field daemon.{unknown[0]}")
+        token = _expect_str(daemon.get("token", ""), "daemon.token").strip()
+        if not token:
+            raise ConfigError("daemon.token must be a non-empty string")
+        config.daemon_token = token
 
 
 def _merge_agent(
@@ -257,7 +274,7 @@ def backend_policy(config: CollaborationConfig, canonical_backend: str) -> Backe
     )
 
 
-def render_user_config() -> str:
+def render_user_config(token: Optional[str] = None) -> str:
     """Generate a user config with explicit policy for every registered backend."""
 
     from .backends import registered_backend_names
@@ -266,7 +283,84 @@ def render_user_config() -> str:
     lines = [f"schema_version = {CURRENT_CONFIG_SCHEMA}", ""]
     for name in registered_backend_names():
         lines.extend((f"[backends.{name}]", "enabled = true", ""))
+    if token is not None:
+        lines.extend(
+            (
+                "# The daemon bearer token. This file holds a credential: keep it",
+                "# owner-only (chmod 600) and never commit or share it.",
+                "[daemon]",
+                f'token = "{token}"',
+                "",
+            )
+        )
     return "\n".join(lines)
+
+
+def _config_is_permissive(path: Path) -> bool:
+    try:
+        return bool(path.stat().st_mode & 0o077)
+    except OSError:
+        return False
+
+
+def load_daemon_token(
+    home: Optional[AgentCollabHome] = None, env: Optional[Mapping[str, str]] = None
+) -> Optional[str]:
+    """Read ``[daemon].token`` from the user config, or None when unset."""
+
+    config_path = (home or AgentCollabHome.resolve(env)).config_path
+    if not config_path.exists():
+        return None
+    daemon = load_toml_file(config_path).get("daemon")
+    if not isinstance(daemon, Mapping):
+        return None
+    token = daemon.get("token")
+    if not isinstance(token, str) or not token.strip():
+        return None
+    if _config_is_permissive(config_path):
+        _logger.warning(
+            "%s holds the daemon token but is group/world-readable; run: chmod 600 %s",
+            config_path,
+            config_path,
+        )
+    return token.strip()
+
+
+def ensure_daemon_token(
+    home: Optional[AgentCollabHome] = None, env: Optional[Mapping[str, str]] = None
+) -> str:
+    """Return the permanent daemon token, generating and persisting it once.
+
+    The token lives in the user config only. A missing config file is created
+    owner-only; an existing file gets a ``[daemon]`` section appended without
+    rewriting its content. Generation refuses a group/world-readable file.
+    """
+
+    resolved_home = home or AgentCollabHome.resolve(env)
+    config_path = resolved_home.config_path
+    existing = load_daemon_token(resolved_home)
+    if existing:
+        return existing
+    token = secrets.token_urlsafe(32)
+    if not config_path.exists():
+        atomic_write_private_text(config_path, render_user_config(token=token))
+        return token
+    if _config_is_permissive(config_path):
+        raise ConfigError(
+            f"refusing to write the daemon token into group/world-readable {config_path}; "
+            f"run: chmod 600 {config_path}"
+        )
+    if "daemon" in load_toml_file(config_path):
+        raise ConfigError(
+            f"{config_path} has a [daemon] section without a usable token; "
+            "set daemon.token to a non-empty string or remove the section"
+        )
+    text = config_path.read_text(encoding="utf-8")
+    if text and not text.endswith("\n"):
+        text += "\n"
+    text += f'\n[daemon]\ntoken = "{token}"\n'
+    atomic_write_private_text(config_path, text)
+    return token
 
 
 def validate_agent(agent: AgentConfig) -> None:

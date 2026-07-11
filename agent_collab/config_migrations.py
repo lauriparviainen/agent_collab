@@ -58,6 +58,12 @@ def migrate_config_data(
             label,
         )
         result.pop("backends", None)
+    if scope == "project" and "daemon" in result:
+        _logger.warning(
+            "%s: ignoring project [daemon] section; the daemon token is allowed only in the user config",
+            label,
+        )
+        result.pop("daemon", None)
     return result
 
 

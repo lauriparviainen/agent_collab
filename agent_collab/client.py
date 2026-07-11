@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from ipaddress import ip_address
-from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -18,7 +17,6 @@ from .api_schema import (
     SessionStateModel,
     TranscriptModel,
 )
-from .paths import GlobalDataPaths
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8765"
@@ -48,11 +46,9 @@ class AgentCollabClient:
         self,
         server_url: Optional[str] = None,
         timeout: float = 60.0,
-        token_path: Optional[Path] = None,
     ):
         self.server_url = (server_url or default_server_url()).rstrip("/")
         self.timeout = timeout
-        self.token_path = Path(token_path) if token_path else GlobalDataPaths.resolve().token_path
         self._token: Optional[str] = None
         self._token_loaded = False
 
@@ -189,8 +185,10 @@ class AgentCollabClient:
         if override is not None:
             token = override.strip()
         elif _is_loopback_server(self.server_url):
+            from .config import load_daemon_token
+
             try:
-                token = self.token_path.read_text(encoding="utf-8").strip()
+                token = load_daemon_token() or ""
             except OSError:
                 token = ""
         else:
