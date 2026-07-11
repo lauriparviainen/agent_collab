@@ -13,10 +13,14 @@ it out.
 
 `agent-collab` is the bandaid I use: it gives agents from different vendors
 bounded turns to inspect the same work, streams what they do, and leaves a
-transcript a human can audit. I have no proof this yields better reviews; the
-bet is that different vendors' blind spots overlap less than one model's do
-with itself, and that their disagreement is worth reading. It does not make
-AI review sufficient.
+transcript a human can audit. In my experience, agents from different vendors
+approach the same code from different angles and find different issues, making
+the combined review more useful. Their disagreements also expose assumptions
+worth checking. Research on
+[diverse-model collaboration](https://aclanthology.org/2024.acl-long.381/) and
+[aggregating independent code reviews](https://arxiv.org/abs/2509.01494) points
+in the same direction, though it does not prove that this particular workflow
+is generally better. It does not make AI review sufficient.
 
 > The bet is simple: coverage comes from disagreement, not just more passes.
 
