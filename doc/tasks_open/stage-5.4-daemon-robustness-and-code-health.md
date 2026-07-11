@@ -5,12 +5,15 @@ low-priority code-health items remain open. Findings originated in a full-repo
 review at v0.2 (2026-07-10).
 
 **Issue:** [#6](https://github.com/lauriparviainen/agent_collab/issues/6)
-(milestone 0.3.0)
+(milestone 0.3.1)
 
-**Release gate:** this stage gates the **0.3.0** release. When this document's
-acceptance criteria hold and it closes to `doc/tasks_closed/`, version 0.3.0 is
-bumped, tagged, and published following
-`.claude/skills/release/SKILL.md`.
+**Release gate:** this stage gates the **0.3.1** patch release (0.3.0 shipped
+2026-07-11 as an intermediate release; the remaining scope here is fixes and
+code health only). When this document's acceptance criteria hold and it closes
+to `doc/tasks_closed/`, version 0.3.1 is bumped, tagged, and published
+following `.claude/skills/release/SKILL.md`. It becomes 0.4.0 instead only if
+a behavior or packaging change (for example per-provider optional
+dependencies) lands in this stage.
 
 ## Purpose
 
