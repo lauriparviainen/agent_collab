@@ -77,7 +77,7 @@ def render_systemd_unit(
     port: int = 8765,
     default_workdir: Optional[Path] = None,
 ) -> str:
-    interpreter = interpreter.expanduser().resolve()
+    interpreter = _absolute_path(interpreter)
     command = [
         str(interpreter),
         "-m",
@@ -138,7 +138,7 @@ def enable_autostart(
     environ = dict(os.environ if env is None else env)
     paths = paths or GlobalDataPaths.resolve(environ)
     path = unit_path or systemd_unit_path(environ)
-    interpreter = (interpreter or Path(sys.executable)).expanduser().resolve()
+    interpreter = _absolute_path(interpreter or Path(sys.executable))
     _ensure_supported()
     _ensure_systemd_user_manager()
     _ensure_durable_install(interpreter)
@@ -243,7 +243,7 @@ def autostart_status(
     _ensure_systemd_user_manager()
     enabled = _systemctl_truth("is-enabled", SERVICE_NAME)
     active = _systemctl_truth("is-active", SERVICE_NAME)
-    expected_interpreter = (interpreter or Path(sys.executable)).expanduser().resolve()
+    expected_interpreter = _absolute_path(interpreter or Path(sys.executable))
     recorded_interpreter = _recorded_interpreter(path)
     definition_current = bool(
         recorded_interpreter
@@ -406,8 +406,14 @@ def _recorded_interpreter(path: Path) -> Optional[Path]:
     content = _read_optional(path) or ""
     for line in content.splitlines():
         if line.startswith(INTERPRETER_MARKER):
-            return Path(line[len(INTERPRETER_MARKER) :]).expanduser().resolve()
+            return _absolute_path(Path(line[len(INTERPRETER_MARKER) :]))
     return None
+
+
+def _absolute_path(path: Path) -> Path:
+    """Make a path absolute without resolving a venv interpreter symlink."""
+
+    return Path(os.path.abspath(os.fspath(path.expanduser())))
 
 
 def _state(paths: GlobalDataPaths) -> Mapping[str, object]:

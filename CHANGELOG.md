@@ -17,6 +17,9 @@ into a detailed work log.
   `agent-collab` console command outside an activated venv, plus Linux systemd
   user-service registration with coherent daemon lifecycle routing, health,
   logs, safe manual-daemon migration, and reversible autostart (#9).
+- Preserve the selected venv interpreter symlink during autostart registration
+  so durability checks and generated units use the installed environment
+  instead of incorrectly falling through to the system Python (#9).
 
 ## [0.4.0] - 2026-07-12 - Permanent daemon token
 

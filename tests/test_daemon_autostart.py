@@ -67,6 +67,12 @@ class DaemonAutostartTests(unittest.TestCase):
             root = Path(tmp)
             paths = self._paths(root)
             unit = root / "config" / SERVICE_NAME
+            interpreter = root / "venv" / "bin" / "python"
+            interpreter.parent.mkdir(parents=True)
+            real_python = root / "system" / "python"
+            real_python.parent.mkdir()
+            real_python.touch()
+            interpreter.symlink_to(real_python)
             expected_status = AutostartStatus(True, True, True, True, True, unit, "healthy")
             commands = []
 
@@ -77,7 +83,7 @@ class DaemonAutostartTests(unittest.TestCase):
             with (
                 mock.patch("agent_collab.daemon_autostart._ensure_supported"),
                 mock.patch("agent_collab.daemon_autostart._ensure_systemd_user_manager"),
-                mock.patch("agent_collab.daemon_autostart._ensure_durable_install"),
+                mock.patch("agent_collab.daemon_autostart._ensure_durable_install") as durable,
                 mock.patch("agent_collab.daemon_autostart._systemctl", side_effect=systemctl),
                 mock.patch("agent_collab.daemon_autostart._systemctl_truth", return_value=False),
                 mock.patch(
@@ -93,12 +99,14 @@ class DaemonAutostartTests(unittest.TestCase):
                 result = enable_autostart(
                     paths=paths,
                     unit_path=unit,
-                    interpreter=root / "venv" / "bin" / "python",
+                    interpreter=interpreter,
                     env={"PATH": "/usr/bin"},
                 )
 
             self.assertEqual(result, expected_status)
             self.assertTrue(managed_unit_installed(unit))
+            durable.assert_called_once_with(interpreter)
+            self.assertIn(f"# Agent-Collab-Interpreter: {interpreter}", unit.read_text())
             self.assertEqual(
                 commands,
                 [("daemon-reload",), ("enable", SERVICE_NAME), ("start", SERVICE_NAME)],

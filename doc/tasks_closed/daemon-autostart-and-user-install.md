@@ -1,6 +1,6 @@
 # User installation and daemon autostart
 
-**Status:** Closed on 2026-07-12.
+**Status:** Closed on 2026-07-12 after installed-venv regression remediation.
 
 **Created:** 2026-07-12
 
@@ -217,6 +217,14 @@ the Linux-specific code isolated enough to add one later.
   changelog documentation describe the final behavior and boundaries.
 
 ## Verification
+
+Post-completion regression: a valid durable installation was rejected because
+autostart resolved the venv's `bin/python` symlink to the system interpreter
+before probing imports. The system interpreter correctly lacked the installed
+package. The fix preserves an absolute venv interpreter path without resolving
+the final symlink, with a regression test using the same symlink layout. The
+complete 598-test gate, API artifact check, durability probe, and native systemd
+unit verification pass after the fix.
 
 - `./agent_collab.sh test`: Ruff and format checks pass; all 598 hermetic tests
   pass.
