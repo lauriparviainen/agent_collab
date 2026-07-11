@@ -20,4 +20,4 @@ Every non-empty stdout line becomes `antigravity/message`. Tool structure and pr
 
 ## Testing
 
-Hermetic: `./agent_collab.sh test -k antigravity_cli`. Live: `./agent_collab.sh integration-test antigravity cli`.
+Hermetic: `./agent_collab.sh test -k antigravity_cli`. Live: `./agent_collab.sh integration-test antigravity_cli`.

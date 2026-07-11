@@ -1,12 +1,12 @@
 # Local server architecture
 
-## Goal
+## Shape
 
-Move `agent-collab` from a one-shot process model to a joinable session model.
+`agent-collab` uses a joinable session model rather than a one-shot process model: a local server owns sessions, and clients attach to them.
 
-The implementation has both a foreground local server and a global background daemon lifecycle. `agent-collab serve` remains the foreground debugging path; `agent-collab daemon start` starts the same server model in the background as the single global daemon.
+The implementation has both a foreground local server and a global background daemon lifecycle. `agent-collab serve` is the foreground debugging path; `agent-collab daemon start` starts the same server model in the background as the single global daemon.
 
-The desired shape is:
+The shape is:
 
 ```text
 agent-collab serve
@@ -25,9 +25,7 @@ MCP interface
 
 This keeps the human terminal UI and the agent tool API separate while letting both observe the same collaboration through a shared `session_id`.
 
-## Current state
-
-The prototype has:
+## Components
 
 - `agent_collab.events`: normalized event model and stream parsers.
 - `agent_collab.runners`: runner primitives (subprocess, dry-run, mock) and the registry-backed `configured_runner`.
@@ -41,9 +39,9 @@ The prototype has:
 - `agent_collab.mcp_tools`: shared MCP tool schemas and dispatch.
 - `agent_collab.mcp_server`: stdio MCP adapter that connects to the local server.
 
-The current MCP process no longer owns live referee execution. MCP clients can connect directly to `agent-collab serve` at `/mcp`, and the stdio adapter remains available for clients that launch servers as subprocesses.
+The MCP process does not own live referee execution. MCP clients can connect directly to `agent-collab serve` at `/mcp`, and the stdio adapter remains available for clients that launch servers as subprocesses.
 
-## Target state
+## Ownership model
 
 The foreground server or global daemon owns live collaboration sessions. CLI and MCP connect to whichever local server is running. Each session carries its own `workdir`; the daemon's location never decides which project a session works on.
 
@@ -64,8 +62,8 @@ Human terminal -----------------> CLI client
 MCP client / Codex ---- MCP tools ----+
 ```
 
-Agent availability should come from an `agent-collab` config file instead of
-being hardcoded to exactly one Claude runner and one Codex runner. See
+Agent availability comes from `agent-collab` config rather than being
+hardcoded to exactly one Claude runner and one Codex runner. See
 [Agent configuration](agent-configuration.md).
 
 ## Session lifecycle
@@ -165,7 +163,7 @@ That endpoint can use Server-Sent Events for CLI watch mode, but cursor-based lo
 
 ## CLI shape
 
-Keep one-shot mode for convenience:
+One-shot mode remains for convenience:
 
 ```bash
 agent-collab --mock --workdir /repo "task"
@@ -186,7 +184,7 @@ agent-collab stop SESSION_ID
 agent-collab config show --workdir /repo
 ```
 
-`watch` should also support direct file watching:
+`watch` also supports direct file watching:
 
 ```bash
 agent-collab watch ~/.agent-collab/data/sessions/SESSION.jsonl
@@ -246,30 +244,30 @@ The server keeps the existing guardrails:
 - Command paths remain configurable.
 - Timeouts and max turns are enforced by the referee.
 
-Add server-level controls:
+Server-level controls in place:
 
 - Localhost bind by default.
-- Optional auth token for HTTP access.
+- A mandatory per-daemon-lifetime bearer token on every route except
+  `GET /health` (see [Local API](#local-api)).
 - Per-session stop support.
-- Explicit allowlist for workdir roots if this becomes shared or long-running.
 - No automatic broad shell permissions.
+
+A possible later control is an explicit allowlist for workdir roots if the
+daemon becomes shared or long-running.
 
 ## Dependency choice
 
-Start with the Python standard library if possible:
+The core uses the Python standard library:
 
 - `asyncio` for session tasks.
-- `http.server` or a small custom server for local HTTP.
+- A small custom server on stdlib primitives for local HTTP.
 - `urllib.request` for CLI client calls.
 
-If the stdlib server becomes awkward, add one focused dependency:
-
-- `aiohttp` for async HTTP server and client.
-
-Avoid adding a larger stack until the API shape is proven.
+If the stdlib server becomes awkward, the planned escape hatch is one focused
+dependency (`aiohttp` for async HTTP server and client), not a larger stack.
 
 Backend dependencies follow a lazy rule. The provider SDKs (`claude-agent-sdk`,
-`openai-codex`, `google-antigravity`) install with the project (Python ≥ 3.10),
+`openai-codex`, `google-antigravity`, `xai-sdk`) install with the project (Python ≥ 3.10),
 but every SDK import is lazy — done only inside a backend's `probe()`/runner — so
 a missing wheel degrades to an *unavailable* backend rather than an import error,
 and the default `cli` path never needs any SDK to import, register, or run.

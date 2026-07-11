@@ -13,6 +13,20 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Adopt GitHub issues for discrete task tracking alongside `doc/tasks_open/`
+  design documents, with the conventions captured in a project skill
+  (`.claude/skills/github-issues/SKILL.md`) linked from `AGENTS.md`.
+- Adopt three-part SemVer with annotated `vX.Y.Z` tags, GitHub Releases fed
+  from changelog sections, and milestones for version planning; retro-tag
+  v0.1.0 and v0.2.0, normalize the declared package version to `0.2.0`, and
+  capture the procedure in `.claude/skills/release/SKILL.md`.
+- Revise the user-facing documentation for public-release readiness: split
+  human (CLI/TUI) and agent (MCP) access paths in the README architecture
+  diagram, describe the in-progress David AI daemon-linking integration,
+  state the missing-license status, retire stale planning language in the
+  design docs, correct backend README live-test commands to canonical
+  `integration-test <provider>_<backend>` names, and fix the described
+  contents of the tracked project config.
 - Honor configured CLI arguments ahead of manifest defaults and use the final
   repeated flag/config occurrence; validate final effective options and expand
   Claude, Codex, Antigravity, and subprocess stderr/failure contract coverage.
@@ -49,7 +63,7 @@ into a detailed work log.
   shutdown signals, rechecking before forced termination, and serializing the
   complete daemon-start transaction with a private cross-process lock.
 
-## [0.2] - 2026-07-10 - First-class backends and daemon hardening
+## [0.2.0] - 2026-07-10 - First-class backends and daemon hardening
 
 - Promote the Claude Code, Codex, and Antigravity SDK integrations to packaged,
   self-describing backends; add backend-qualified configuration, automatic
@@ -71,7 +85,7 @@ into a detailed work log.
   daemon REST API artifacts under `doc/daemon_api_doc/`; `setup --check`
   provides a non-writing drift gate.
 
-## [0.1] - 2026-07-09 - Initial release
+## [0.1.0] - 2026-07-09 - Initial release
 
 First tagged version of the agent-collab prototype: a local terminal referee
 that runs bounded, turn-based collaboration sessions between Claude Code, Codex,

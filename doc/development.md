@@ -33,8 +33,8 @@ Source checkout helper:
 ./agent_collab.sh smoke
 ```
 
-The source helper prefers the persistent Python 3.12 environment at
-`~/.agent-collab/venv`. Override its interpreter with `AGENT_COLLAB_PYTHON` or
+The source helper prefers a persistent virtual environment at
+`~/.agent-collab/venv` when one exists. Override its interpreter with `AGENT_COLLAB_PYTHON` or
 its environment directory with `AGENT_COLLAB_VENV`. Startup rejects any selected
 interpreter older than Python 3.10. Without a configured environment it tries
 `python3.12`, `python3.11`, `python3.10`, then `python3` in that order.
@@ -82,29 +82,16 @@ Start and inspect the daemon:
 
 The server binds to `127.0.0.1:8765` by default.
 
-When launching real Claude/Codex subprocesses, the server may need to run outside a restricted sandbox so the child CLIs can see normal user credentials.
+When launching real provider subprocesses, the server may need to run outside a
+restricted sandbox so the child CLIs can see normal user credentials.
 
-This repository currently includes project config at:
-
-```text
-.agent-collab/config.toml
-```
-
-It currently configures Claude with:
-
-```bash
-claude -p --output-format stream-json --verbose --model opus --effort high
-```
-
-It currently configures Codex with:
-
-```bash
-codex exec --json -c model_reasoning_effort="high"
-```
-
-It opts into xAI's disabled built-in agent and adds `solo-xai`. Grok Build runs
-as `grok --no-auto-update --output-format streaming-json -p`; SDK starts require
-`backend="sdk"`, `XAI_API_KEY`, and an explicit `backend_options.xai_sdk.model`.
+This repository tracks a small project config at `.agent-collab/config.toml`.
+It only opts into the disabled-by-default `antigravity` and `xai` agents and
+adds the `solo-antigravity` and `solo-xai` workflows; Claude and Codex run with
+the built-in defaults unless your user config overrides them. Grok Build runs
+as `grok --no-auto-update --output-format streaming-json -p`; xAI SDK starts
+require `backend="sdk"`, `XAI_API_KEY`, and an explicit
+`backend_options.xai_sdk.model`.
 
 `SubprocessRunner` closes child stdin with `DEVNULL`; keep this. It prevents `codex exec --json` from waiting on the server terminal for additional stdin.
 

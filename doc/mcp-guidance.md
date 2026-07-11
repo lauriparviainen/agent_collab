@@ -7,8 +7,9 @@ with `overview`) returns this whole document.
 
 ## Overview
 
-agent-collab runs supervised collaboration sessions between subprocess
-coding agents (Claude Code and Codex). One global daemon owns all sessions;
+agent-collab runs supervised collaboration sessions between coding agents
+(Claude Code and Codex by default; other providers can be configured). One
+global daemon owns all sessions;
 sessions for any number of projects can run side by side.
 
 A session is one supervised run of a task:

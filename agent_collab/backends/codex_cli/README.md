@@ -20,4 +20,4 @@ Agent messages, commands, file changes, tools, errors, and verbose statuses are 
 
 ## Testing
 
-Hermetic: `./agent_collab.sh test -k codex_cli`. Live: `./agent_collab.sh integration-test codex cli`.
+Hermetic: `./agent_collab.sh test -k codex_cli`. Live: `./agent_collab.sh integration-test codex_cli`.

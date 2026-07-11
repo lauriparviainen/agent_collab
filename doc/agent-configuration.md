@@ -2,16 +2,16 @@
 
 ## Purpose
 
-`agent-collab` needs its own config file for registering which agents are available and how to run them.
+`agent-collab` has its own config file for registering which agents are available and how to run them.
 
-This is separate from Codex configuration:
+This is separate from provider configuration such as Codex's:
 
 ```text
 agent-collab config -> external agents available to the referee
 Codex config        -> how Codex itself runs, loads MCP servers, and applies sandbox policy
 ```
 
-The referee should not assume there is exactly one Claude command and one Codex command. Users may have several variants:
+The referee does not assume there is exactly one Claude command and one Codex command. Users may have several variants:
 
 - Claude Code default.
 - Codex default.
@@ -374,30 +374,23 @@ This removes hardcoded orchestration logic from the referee. Built-in workflows 
 
 ## CLI commands
 
-Add later:
-
 ```bash
-agent-collab config init
-agent-collab agents list
-agent-collab agents doctor
+agent-collab config show --workdir PROJECT   # effective merged config
+agent-collab config init                     # user config with explicit backend policy
+agent-collab options --workdir PROJECT      # workflows, backends, health, remediation
 ```
 
-`agents doctor` should check:
-
-- Agent is enabled.
-- Command exists on `PATH` or at the configured absolute path.
-- Required output parser exists for `type`.
-- Workflow references only known enabled agents.
+`options` asks the running daemon for its workdir-scoped discovery snapshot and
+covers the doctor duties: it reports whether agents are enabled,
+whether commands and SDK wheels resolve, backend health and credential
+evidence, and which workflows reference which agents — all without a model
+call.
 
 ## Implementation notes
 
-Use Python 3.11 `tomllib` when available. The current host uses Python 3.9, so the prototype needs either:
-
-- a tiny minimal TOML reader for the subset above,
-- optional `tomli` for Python < 3.11,
-- or JSON config until the package formally requires Python 3.11.
-
-Given the project goal is Python 3.11+, the clean long-term design is TOML with `tomllib`.
+Config files are TOML. On Python 3.11+ they are parsed with the standard-library
+`tomllib`; on Python 3.10 a bundled minimal parser covers the config subset used
+here, so no TOML dependency is required.
 
 ## Safety considerations
 
@@ -408,7 +401,7 @@ Given the project goal is Python 3.11+, the clean long-term design is TOML with 
 - Keep recursive-agent guardrails in generated prompts.
 - Keep `--workdir` as the session root even when an agent has a custom command path.
 
-## Acceptance criteria
+## Guarantees
 
 - Users can define multiple agents of the same type.
 - Workflows can reference configured agent IDs.

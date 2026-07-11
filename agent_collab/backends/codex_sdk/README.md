@@ -20,4 +20,4 @@ The stable final response is message-first; known command/file/reasoning items a
 
 ## Testing
 
-Hermetic: `./agent_collab.sh test -k codex_sdk`. Live: `./agent_collab.sh integration-test codex sdk`.
+Hermetic: `./agent_collab.sh test -k codex_sdk`. Live: `./agent_collab.sh integration-test codex_sdk`.

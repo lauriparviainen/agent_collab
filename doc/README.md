@@ -1,26 +1,27 @@
 # agent-collab design docs
 
-This folder tracks the planned move from the current one-shot CLI/MCP prototype to a session-oriented collaboration service that humans and agents can both join.
-
-Start here:
+Design and reference documentation for agent-collab. [README.md](../README.md)
+is the user-facing overview; these documents hold the detail.
 
 - [Agent entrypoint](../AGENTS.md)
-- [Implementation notes](implementation-notes.md)
-- [Daemon architecture](daemon-architecture.md)
-- [Agent configuration](agent-configuration.md)
-- [Runtime layout](runtime-layout.md)
-- [MCP guidance](mcp-guidance.md)
+- [Implementation notes](implementation-notes.md) — current runtime, backend,
+  and handoff notes
+- [Daemon architecture](daemon-architecture.md) — server, sessions, CLI, and
+  MCP design
+- [Agent configuration](agent-configuration.md) — agents, workflows, backends,
+  and typed start options
+- [Runtime layout](runtime-layout.md) — global runtime files and config
+  precedence
+- [MCP guidance](mcp-guidance.md) — usage guidance served to MCP agents
 - [Generated daemon REST API](daemon_api_doc/http-api.md)
-- [Development notes](development.md)
+- [Development notes](development.md) — commands, tests, and coding constraints
 
-Task folders:
+Task folders record planning and implementation history. They are not
+maintained documentation and may describe superseded designs:
 
 - [Open tasks](tasks_open/)
 - [Closed tasks](tasks_closed/)
 
-The current implementation already has the core event model, runners, referee loop, log writing, foreground server, global daemon lifecycle with per-session workdirs, a persistent session index, workflow-based orchestration, centralized config migrations, effective session settings confirmations, CLI client commands, interactive TUI, live referee input, stdio MCP adapter, Streamable HTTP MCP endpoint, typed validated start options, and eight installed first-class backend packages (`cli` and `sdk` for Claude, Codex, Antigravity, and xAI) with workdir-scoped discovery, user enablement policy, live health/readiness evidence, remediation, and honest per-session capability flags. Remaining architecture work is tracked in the open task folder.
-
-Backends are standalone `<provider>_<backend>` packages with colocated option
-manifests and READMEs; static backend configuration is also colocated where
-needed. Hermetic and credentialed integration tests are separate top-level
-suites.
+The current implementation state is summarized in
+[implementation-notes.md](implementation-notes.md); remaining architecture work
+is tracked in the open task folder.

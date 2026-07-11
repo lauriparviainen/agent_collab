@@ -6,12 +6,17 @@
 is the bottleneck.**
 
 My coding agents produce more code than I can reliably review. I stopped
-pretending that another pass from the same model solves that problem.
+pretending that another pass from the same model solves that problem. So I
+spend my limited human attention on the critical paths — and, only half
+joking, close my eyes on the rest and let agents from different vendors fight
+it out.
 
 `agent-collab` is the bandaid I use: it gives agents from different vendors
 bounded turns to inspect the same work, streams what they do, and leaves a
-transcript a human can audit. It does not make AI review sufficient. It makes
-the review less dependent on one model's blind spots.
+transcript a human can audit. I have no proof this yields better reviews; the
+bet is that different vendors' blind spots overlap less than one model's do
+with itself, and that their disagreement is worth reading. It does not make
+AI review sufficient.
 
 > The bet is simple: coverage comes from disagreement, not just more passes.
 
@@ -19,8 +24,8 @@ the review less dependent on one model's blind spots.
 
 ```mermaid
 flowchart LR
-    U["You or your coding agent"]
-    C["CLI / TUI / MCP"]
+    H["You<br>(CLI / TUI)"]
+    M["Your coding agent<br>(MCP)"]
     D["Local agent-collab daemon"]
     W["Bounded review workflow"]
     A["Claude"]
@@ -28,17 +33,22 @@ flowchart LR
     O["Other configured agents"]
     T["Live events + auditable transcripts"]
 
-    U --> C --> D --> W
+    H --> D
+    M --> D
+    D --> W
     W --> A
     W --> B
     W --> O
     A --> T
     B --> T
     O --> T
-    T --> C
+    T --> H
+    T --> M
 ```
 
-The daemon owns each session and runs the selected workflow. Provider backends
+There are two ways in: you drive the daemon from the terminal with the CLI and
+TUI, and your coding agent reaches the same daemon through MCP. Either way the
+daemon owns each session and runs the selected workflow. Provider backends
 launch the configured agents, while every result returns through one event
 stream and is saved as JSONL and readable Markdown. See the
 [architecture guide](doc/daemon-architecture.md) for the detailed design.
@@ -54,6 +64,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 ```
+
+A Docker image is planned but not available yet.
 
 ## Give your coding agent a second opinion
 
@@ -159,13 +171,22 @@ which selects project configuration and becomes the agents' working directory.
 
 ## Integrations and backends
 
-Integrations cover Claude, Codex, the Google Antigravity harness, and xAI, with
-CLI and SDK backends for each. Claude and Codex are enabled in the built-in
-workflows; Antigravity and xAI are opt-in so a clean install does not pretend
-credentials or local runtimes exist.
+Each provider is supported through two backends: `cli` runs the provider's own
+command-line tool as a subprocess, and `sdk` calls its Python SDK in-process.
+
+| Provider | CLI backend | SDK backend | Enabled by default |
+| --- | --- | --- | --- |
+| Claude (Claude Code) | `claude_cli` | `claude_sdk` | yes |
+| Codex | `codex_cli` | `codex_sdk` | yes |
+| Google Antigravity (a harness, not a model vendor) | `antigravity_cli` | `antigravity_sdk` | opt-in |
+| xAI (Grok Build CLI, remote chat SDK) | `xai_cli` | `xai_sdk` | opt-in |
+
+Claude and Codex power the built-in workflows; Antigravity and xAI are opt-in
+so a clean install does not pretend credentials or local runtimes exist.
 
 See [agent configuration](doc/agent-configuration.md) for provider setup,
-backend selection, typed options, custom agents, and custom workflows.
+backend selection, typed options, custom agents, and custom workflows. Each
+backend also documents itself in `agent_collab/backends/<provider>_<backend>/README.md`.
 
 ## Cost, privacy, and honest limits
 
@@ -184,6 +205,9 @@ backend selection, typed options, custom agents, and custom workflows.
   cross-vendor.
 - This is an active prototype. Capability flags and health checks are reported
   conservatively rather than inferred from a provider name.
+- The repository does not yet carry an open-source license. Until one is
+  added, treat the code as source-available for evaluation rather than open
+  source.
 
 Configuration can be global or project-specific. The daemon's `options` command
 reports effective workflows, selected backends, accepted values, health
@@ -202,9 +226,14 @@ company actually runs—tickets, knowledge, cloud, and infrastructure—while
 credentials, scopes, risky-action approvals, and audit trails stay under human
 control.
 
-They are separate projects and do not integrate. They share the same starting
-point: models are increasingly capable; the difficult part is building the
-control, review, and trust around them.
+They share the same starting point: models are increasingly capable; the
+difficult part is building the control, review, and trust around them.
+
+`agent-collab` stands on its own and does not require David AI. In the other
+direction an integration is in progress: David AI is gaining the ability to
+link running agent-collab daemons — eventually several — so its users can call
+their review tools from the governed platform. Until that ships, treat the two
+as separate projects.
 
 Built by [Lauri Parviainen](https://github.com/lauriparviainen).
 

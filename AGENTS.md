@@ -29,6 +29,15 @@ MCP access to the same live session state.
 For commands, test expectations, and live-agent cautions, use
 [doc/development.md](doc/development.md).
 
+Work tracking uses GitHub issues for discrete tasks and `doc/tasks_open/` task
+documents for larger design work. The conventions — including the
+public-content guardrail for issues — live in
+[.claude/skills/github-issues/SKILL.md](.claude/skills/github-issues/SKILL.md);
+versioning and the release procedure live in
+[.claude/skills/release/SKILL.md](.claude/skills/release/SKILL.md). Follow
+both for any issue, task-document, or release change regardless of which
+agent harness you run under.
+
 Backend implementations live in peer `agent_collab/backends/<provider>_<backend>/`
 packages. Each package owns an `options.toml` and README. Hermetic tests belong
 under `tests/`; credentialed model calls belong only under `integration_tests/`.
