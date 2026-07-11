@@ -1,6 +1,10 @@
 # Daemon permanent token in user config
 
-**Status:** Open — design agreed, not implemented.
+**Status:** Closed — implemented, verified, and shipped in 0.4.0 (2026-07-12).
+The open questions below were resolved as: hard error when generating into a
+permissive config, warning when loading one; no minted-token transition
+handling (both sides shipped together); `config init` generates the token and
+prints a credential notice.
 
 **Created:** 2026-07-11
 
