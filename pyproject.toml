@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-collab"
-version = "0.3.0"
+version = "0.4.0"
 description = "Terminal referee for Claude Code and Codex collaboration."
 readme = "README.md"
 # Stage 5.1 makes the `sdk` backends first-class: the SDKs install with the

@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-12 - Permanent daemon token
+
 - Replace the per-daemon-lifetime minted bearer token with one permanent
   `[daemon].token` in the user config, auto-generated on first daemon start,
   so MCP and remote clients stay authenticated across daemon restarts.
