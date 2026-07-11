@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-11 - Daemon hardening, CI, and project process
+
 - Adopt GitHub issues for discrete task tracking alongside `doc/tasks_open/`
   design documents, with the conventions captured in a project skill
   (`.claude/skills/github-issues/SKILL.md`) linked from `AGENTS.md`.
