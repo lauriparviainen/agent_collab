@@ -47,14 +47,19 @@ Track process metadata:
 
 ## Log retention
 
-Add optional retention controls:
+The focused design is tracked in
+[session-retention-and-pruning.md](session-retention-and-pruning.md) and issue
+#5. Completed sessions are retained for 30 days by default, with user-owned
+configuration to change or disable automatic pruning and a manual preview/apply
+command:
 
 ```text
-agent-collab sessions prune --older-than 7d
-agent-collab sessions prune --keep 100
+agent-collab sessions prune --dry-run
+agent-collab sessions prune --older-than 7d --keep 100 --apply
 ```
 
-Never delete logs by default.
+Never prune active sessions or automatically delete transcripts outside the
+global managed session directory.
 
 ## Observability
 
