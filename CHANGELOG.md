@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add an explicit source-checkout user installer that exposes the existing
+  `agent-collab` console command outside an activated venv, plus Linux systemd
+  user-service registration with coherent daemon lifecycle routing, health,
+  logs, safe manual-daemon migration, and reversible autostart (#9).
+
 ## [0.4.0] - 2026-07-12 - Permanent daemon token
 
 - Replace the per-daemon-lifetime minted bearer token with one permanent

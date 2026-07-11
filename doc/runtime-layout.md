@@ -26,6 +26,29 @@ Global user-owned state (root overridable with `AGENT_COLLAB_HOME`):
     session-index.json
 ```
 
+A source-helper user installation defaults to a separate durable environment
+and command link:
+
+```text
+~/.agent-collab/venv/
+~/.local/bin/agent-collab -> ~/.agent-collab/venv/bin/agent-collab
+```
+
+The link makes `agent-collab tui` and the rest of the CLI available without
+activating the venv. Neither location contains daemon registration state.
+
+On Linux, `agent-collab daemon autostart enable` additionally writes the
+owner-managed unit below (respecting `XDG_CONFIG_HOME`):
+
+```text
+~/.config/systemd/user/agent-collab.service
+```
+
+The unit contains an absolute interpreter path, PATH for provider executable
+discovery, and non-secret daemon options. Tokens and provider credentials stay
+in their existing owner-only stores. `autostart disable` removes only this
+unit; it preserves the venv, command link, config, daemon logs, and sessions.
+
 `tmp/` is reserved for future temp review workdirs. `session-index.json` is the persistent session index that lets `list`/`status` survive daemon restarts.
 
 The daemon directory is mode `0700`; `pid` and `state.json` are atomically

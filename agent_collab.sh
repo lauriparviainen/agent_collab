@@ -44,11 +44,13 @@ agent_collab.sh - source checkout helper for agent-collab
 
 Usage:
   ./agent_collab.sh help
+  ./agent_collab.sh install [--editable] [--force] [--bin-dir DIR]
   ./agent_collab.sh serve
   ./agent_collab.sh daemon start [--workdir DIR]
   ./agent_collab.sh daemon status
   ./agent_collab.sh daemon logs [--tail N]
   ./agent_collab.sh daemon stop
+  ./agent_collab.sh daemon autostart enable|status|disable
   ./agent_collab.sh start --mock --watch --workdir . "Task"
   ./agent_collab.sh watch [SESSION_ID]
   ./agent_collab.sh list
@@ -60,6 +62,7 @@ Usage:
   ./agent_collab.sh smoke
 
 Examples:
+  ./agent_collab.sh install
   ./agent_collab.sh smoke
   ./agent_collab.sh serve
   ./agent_collab.sh daemon start
@@ -83,6 +86,12 @@ EOF
 case "${1:-help}" in
   help|-h|--help)
     print_help
+    ;;
+  install)
+    shift
+    cd "$repo_root"
+    exec "$python_bin" -m agent_collab.user_install \
+      --repo-root "$repo_root" --venv "$default_venv" "$@"
     ;;
   test)
     shift

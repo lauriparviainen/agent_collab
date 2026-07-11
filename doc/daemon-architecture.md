@@ -180,12 +180,37 @@ agent-collab daemon start
 agent-collab daemon status
 agent-collab daemon logs --tail 100
 agent-collab daemon stop
+agent-collab daemon autostart enable
+agent-collab daemon autostart status
+agent-collab daemon autostart disable
 agent-collab start --mock --workdir /repo "task"
 agent-collab watch SESSION_ID
 agent-collab status SESSION_ID
 agent-collab stop SESSION_ID
 agent-collab config show --workdir /repo
 ```
+
+### Linux user-service ownership
+
+`daemon autostart enable` installs a generated systemd user unit and starts it
+immediately. The unit runs the internal foreground `agent-collab daemon run`
+entry point; it never wraps `daemon start`, because that path already detaches a
+child. Runtime state records `manager = "systemd"`, but systemd and the
+authenticated readiness probe are authoritative for the managed process.
+
+While the generated unit is installed, the ordinary `daemon start`, `stop`,
+and `restart` commands delegate to `systemctl --user`. This prevents raw PID
+signals from fighting systemd's restart policy and prevents a detached daemon
+from competing for the same port. The managed foreground process redirects to
+the same owner-only daemon log files used by the detached supervisor, so
+`daemon logs` keeps one contract.
+
+The unit records the absolute installed Python interpreter and a snapshot of
+PATH for provider CLI discovery. It never records the daemon token, provider
+keys, or the rest of the caller's environment. Re-running `autostart enable`
+refreshes a stale interpreter or PATH. The registration targets
+`default.target`, which starts with the user's login session; boot-before-login
+requires the user to opt into systemd lingering separately.
 
 `watch` also supports direct file watching:
 

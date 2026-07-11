@@ -64,10 +64,26 @@ You need Python 3.10 or newer.
 ```bash
 git clone https://github.com/lauriparviainen/agent_collab.git
 cd agent_collab
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
+./agent_collab.sh install
 ```
+
+This installs the current checkout into `~/.agent-collab/venv` and exposes the
+existing `agent-collab` console command through `~/.local/bin`. If that
+directory is not on `PATH`, the installer prints the change you need to make;
+it never edits shell startup files. It also refuses to replace an unrelated
+command unless you explicitly pass `--force`.
+
+You can now run the TUI or other commands from any directory:
+
+```bash
+agent-collab tui
+agent-collab --help
+```
+
+Re-run `./agent_collab.sh install` to update a source-based installation. Use
+`--editable` when you deliberately want the installed command to follow edits
+in this checkout. As a standard packaging alternative, `pipx install .` also
+installs the declared console commands in an isolated environment.
 
 A Docker image is planned but not available yet.
 
@@ -81,6 +97,29 @@ Start the local daemon:
 ```bash
 agent-collab daemon start
 ```
+
+On Linux with a systemd user manager, you can instead register the daemon to
+start with your login session:
+
+```bash
+agent-collab daemon autostart enable
+agent-collab daemon autostart status
+```
+
+The service uses the durable installed command, so run
+`./agent_collab.sh install` first. Enabling autostart is a separate opt-in step:
+installation alone never starts or registers a service. Disable it without
+removing configuration or transcripts:
+
+```bash
+agent-collab daemon autostart disable
+```
+
+This is login-time startup. The command deliberately does not enable systemd
+"lingering," which would run the user manager from boot before login. Users who
+need that machine-level policy can enable it separately with
+`loginctl enable-linger "$USER"` after considering credential availability and
+resource use. macOS LaunchAgent registration is not yet supported.
 
 On first start the daemon generates a permanent bearer token into
 `~/.agent-collab/config.toml`; it stays valid across daemon restarts (see

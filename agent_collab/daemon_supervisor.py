@@ -46,6 +46,60 @@ def start_daemon(
         return _start_daemon_locked(paths, host, port, default_workdir)
 
 
+def run_managed_daemon(
+    paths: Optional[GlobalDataPaths] = None,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    default_workdir: Optional[Path] = None,
+    *,
+    redirect_logs: bool = True,
+) -> None:
+    """Run a foreground daemon whose process lifecycle is owned by systemd."""
+
+    paths = paths or GlobalDataPaths.resolve()
+    paths.ensure_dirs()
+    pid = os.getpid()
+    argv = [sys.executable, *sys.argv]
+    with _daemon_start_lock(paths):
+        state = _read_state(paths)
+        existing_pid = _state_pid(state) or _read_pid(paths)
+        if existing_pid is not None and existing_pid != pid and _is_running(existing_pid):
+            identity = _daemon_identity_status(existing_pid, state)
+            if identity != IDENTITY_MISMATCH:
+                raise DaemonSupervisorError(
+                    f"global agent-collab daemon already running with pid {existing_pid}"
+                )
+        _remove_pid_state(paths)
+        state = _build_state(
+            paths,
+            pid,
+            host,
+            port,
+            argv,
+            default_workdir,
+            manager="systemd",
+        )
+        _write_state(paths, state)
+        atomic_write_private_text(paths.pid_path, f"{pid}\n")
+
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, _managed_sigterm)
+    try:
+        if redirect_logs:
+            _redirect_managed_logs(paths)
+        from .server_http import run_server
+
+        run_server(
+            host,
+            port,
+            default_workdir=default_workdir or paths.home,
+            session_log_dir=paths.session_dir,
+        )
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        _remove_owned_pid_state(paths, pid, manager="systemd")
+
+
 def _start_daemon_locked(
     paths: GlobalDataPaths,
     host: str,
@@ -150,6 +204,13 @@ def stop_daemon(
     paths = paths or GlobalDataPaths.resolve()
     state = _read_state(paths)
     pid = _state_pid(state) or _read_pid(paths)
+    if state.get("manager") == "systemd":
+        if pid is not None and _is_running(pid):
+            raise DaemonSupervisorError(
+                "daemon process is owned by systemd; stop it through systemctl --user"
+            )
+        _remove_pid_state(paths)
+        return DaemonStatus(False, state, "removed stale systemd-owned daemon state")
     if pid is None:
         return DaemonStatus(False, state, "global agent-collab daemon is not running")
     if not _is_running(pid):
@@ -230,6 +291,7 @@ def _build_state(
     port: int,
     argv: Any,
     default_workdir: Optional[Path] = None,
+    manager: str = "detached",
 ) -> Dict[str, Any]:
     return {
         "pid": pid,
@@ -247,9 +309,35 @@ def _build_state(
         "server_url": f"http://{host}:{port}",
         "mcp_url": f"http://{host}:{port}/mcp",
         "started_at": utc_timestamp(),
+        "manager": manager,
         "argv": list(argv),
         "process_identity": _read_process_identity(pid),
     }
+
+
+def _managed_sigterm(_signum: int, _frame: Any) -> None:
+    raise KeyboardInterrupt
+
+
+def _redirect_managed_logs(paths: GlobalDataPaths) -> None:
+    """Redirect foreground-service output after ensuring private log paths exist."""
+
+    for stream_fd, path in (
+        (sys.stdout.fileno(), paths.daemon_log_path),
+        (sys.stderr.fileno(), paths.daemon_stderr_path),
+    ):
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            os.dup2(fd, stream_fd)
+        finally:
+            os.close(fd)
+
+
+def _remove_owned_pid_state(paths: GlobalDataPaths, pid: int, *, manager: str) -> None:
+    state = _read_state(paths)
+    if _state_pid(state) == pid and state.get("manager") == manager:
+        _remove_pid_state(paths)
 
 
 @contextmanager

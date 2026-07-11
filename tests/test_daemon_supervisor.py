@@ -15,6 +15,7 @@ from agent_collab.daemon_supervisor import (
     _daemon_start_lock,
     _wait_for_ready,
     daemon_status,
+    run_managed_daemon,
     start_daemon,
     stop_daemon,
     tail_daemon_log,
@@ -103,6 +104,50 @@ class DaemonSupervisorTests(unittest.TestCase):
             self.assertEqual(paths.pid_path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(paths.state_path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(paths.daemon_dir.stat().st_mode & 0o777, 0o700)
+
+    def test_managed_foreground_daemon_writes_systemd_state_and_cleans_up(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            observed = {}
+
+            def fake_run_server(*_args, **_kwargs):
+                observed.update(json.loads(paths.state_path.read_text(encoding="utf-8")))
+
+            with (
+                mock.patch("agent_collab.daemon_supervisor.os.getpid", return_value=4242),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._read_process_identity",
+                    return_value=self.PROCESS_IDENTITY,
+                ),
+                mock.patch("agent_collab.daemon_supervisor.signal.signal"),
+                mock.patch("agent_collab.server_http.run_server", side_effect=fake_run_server),
+            ):
+                run_managed_daemon(paths, redirect_logs=False)
+
+            self.assertEqual(observed["pid"], 4242)
+            self.assertEqual(observed["manager"], "systemd")
+            self.assertEqual(observed["session_dir"], str(paths.session_dir))
+            self.assertFalse(paths.pid_path.exists())
+            self.assertFalse(paths.state_path.exists())
+
+    def test_managed_foreground_daemon_refuses_existing_live_daemon(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            paths.state_path.write_text(
+                json.dumps({"pid": 9999, "process_identity": self.PROCESS_IDENTITY}),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch("agent_collab.daemon_supervisor.os.getpid", return_value=4242),
+                mock.patch("agent_collab.daemon_supervisor._is_running", return_value=True),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._daemon_identity_status",
+                    return_value="match",
+                ),
+            ):
+                with self.assertRaisesRegex(DaemonSupervisorError, "already running"):
+                    run_managed_daemon(paths, redirect_logs=False)
 
     def test_start_passes_default_workdir_to_serve_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -285,6 +330,36 @@ class DaemonSupervisorTests(unittest.TestCase):
             self.assertIn(signal.SIGTERM, signals)
             self.assertFalse(paths.pid_path.exists())
             self.assertFalse(paths.state_path.exists())
+
+    def test_stop_refuses_to_signal_systemd_owned_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            paths.state_path.write_text(
+                json.dumps({"pid": 4242, "manager": "systemd"}), encoding="utf-8"
+            )
+            with mock.patch("agent_collab.daemon_supervisor.os.kill") as kill:
+                with self.assertRaisesRegex(DaemonSupervisorError, "owned by systemd"):
+                    stop_daemon(paths)
+
+            self.assertEqual(kill.call_args_list, [mock.call(4242, 0)])
+
+    def test_stop_cleans_stale_systemd_owned_state_without_signaling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            paths.state_path.write_text(
+                json.dumps({"pid": 4242, "manager": "systemd"}), encoding="utf-8"
+            )
+            with (
+                mock.patch("agent_collab.daemon_supervisor._is_running", return_value=False),
+                mock.patch("agent_collab.daemon_supervisor.os.kill") as kill,
+            ):
+                status = stop_daemon(paths)
+
+            self.assertFalse(status.running)
+            self.assertFalse(paths.state_path.exists())
+            kill.assert_not_called()
 
     def test_stop_refuses_to_signal_recycled_pid(self):
         with tempfile.TemporaryDirectory() as tmp:

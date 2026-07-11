@@ -183,6 +183,26 @@ def build_daemon_parser() -> argparse.ArgumentParser:
     logs.add_argument(
         "--stderr", action="store_true", help="Read daemon.stderr.log instead of daemon.log."
     )
+
+    run = subparsers.add_parser("run", help=argparse.SUPPRESS)
+    _add_daemon_default_workdir(run)
+    run.add_argument("--host", default="127.0.0.1")
+    run.add_argument("--port", type=int, default=8765)
+
+    autostart = subparsers.add_parser(
+        "autostart", help="Manage automatic daemon startup for the current user."
+    )
+    autostart_actions = autostart.add_subparsers(dest="autostart_action", required=True)
+    enable = autostart_actions.add_parser(
+        "enable", help="Install, enable, and start the user service."
+    )
+    _add_daemon_default_workdir(enable)
+    enable.add_argument("--host", default="127.0.0.1")
+    enable.add_argument("--port", type=int, default=8765)
+    autostart_actions.add_parser("status", help="Show registration and service health.")
+    autostart_actions.add_parser(
+        "disable", help="Stop and unregister the user service without deleting data."
+    )
     return parser
 
 
@@ -420,9 +440,20 @@ def _main_options(argv) -> int:
 
 
 def _main_daemon(argv) -> int:
+    from .daemon_autostart import (
+        AutostartError,
+        autostart_status,
+        disable_autostart,
+        enable_autostart,
+        restart_systemd_daemon,
+        start_systemd_daemon,
+        stop_systemd_daemon,
+        systemd_owns_daemon,
+    )
     from .daemon_supervisor import (
         DaemonSupervisorError,
         daemon_status,
+        run_managed_daemon,
         start_daemon,
         stop_daemon,
         tail_daemon_log,
@@ -434,7 +465,39 @@ def _main_daemon(argv) -> int:
         args.workdir.expanduser().resolve() if getattr(args, "workdir", None) else None
     )
     try:
+        if args.action == "run":
+            try:
+                run_managed_daemon(
+                    host=args.host,
+                    port=args.port,
+                    default_workdir=default_workdir,
+                )
+            except KeyboardInterrupt:
+                pass
+            return 0
+        if args.action == "autostart":
+            if args.autostart_action == "enable":
+                status = enable_autostart(
+                    host=args.host,
+                    port=args.port,
+                    default_workdir=default_workdir,
+                )
+                _print_autostart_status(status)
+                return 0
+            if args.autostart_action == "status":
+                status = autostart_status()
+                _print_autostart_status(status)
+                return 0 if status.enabled and status.active and status.healthy else 1
+            if args.autostart_action == "disable":
+                status = disable_autostart()
+                _print_autostart_status(status)
+                return 0
+        systemd_managed = systemd_owns_daemon()
         if args.action == "start":
+            if systemd_managed:
+                status = start_systemd_daemon()
+                _print_autostart_status(status)
+                return 0
             state = start_daemon(host=args.host, port=args.port, default_workdir=default_workdir)
             print(f"started agent-collab daemon pid {state['pid']}")
             print(f"server_url: {state['server_url']}")
@@ -442,6 +505,10 @@ def _main_daemon(argv) -> int:
             print(f"data_dir: {state['data_dir']}")
             return 0
         if args.action == "status":
+            if systemd_managed:
+                status = autostart_status()
+                _print_autostart_status(status)
+                return 0 if status.active and status.healthy else 1
             status = daemon_status()
             print(status.message)
             if status.state:
@@ -456,9 +523,17 @@ def _main_daemon(argv) -> int:
                         print(f"{key}: {status.state[key]}")
             return 0 if status.running else 1
         if args.action == "stop":
+            if systemd_managed:
+                status = stop_systemd_daemon()
+                _print_autostart_status(status)
+                return 0
             print(stop_daemon().message)
             return 0
         if args.action == "restart":
+            if systemd_managed:
+                status = restart_systemd_daemon()
+                _print_autostart_status(status)
+                return 0
             stop_daemon()
             state = start_daemon(host=args.host, port=args.port, default_workdir=default_workdir)
             print(f"restarted agent-collab daemon pid {state['pid']}")
@@ -470,13 +545,24 @@ def _main_daemon(argv) -> int:
             if text:
                 print(text)
             return 0
-    except DaemonSupervisorError as exc:
+    except (AutostartError, DaemonSupervisorError) as exc:
         print(f"ERROR   {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
         print(f"ERROR   {exc}", file=sys.stderr)
         return 1
     return 1
+
+
+def _print_autostart_status(status) -> None:
+    print(f"unit: {status.unit_path}")
+    print(f"installed: {str(status.installed).lower()}")
+    print(f"enabled: {str(status.enabled).lower()}")
+    print(f"active: {str(status.active).lower()}")
+    print(f"healthy: {str(status.healthy).lower()}")
+    print(f"definition_current: {str(status.definition_current).lower()}")
+    if status.detail:
+        print(f"detail: {status.detail}")
 
 
 def _main_config(argv) -> int:

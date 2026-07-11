@@ -22,8 +22,26 @@ class ShellWrapperTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("./agent_collab.sh smoke", result.stdout)
+        self.assertIn("./agent_collab.sh install", result.stdout)
         self.assertIn("./agent_collab.sh daemon start", result.stdout)
         self.assertIn("-m agent_collab.cli", result.stdout)
+
+    def test_install_dispatches_to_user_installer(self):
+        result, captured = self._run_with_fake_python(["install", "--editable"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            captured["args"],
+            [
+                "-m",
+                "agent_collab.user_install",
+                "--repo-root",
+                str(ROOT),
+                "--venv",
+                str(Path.home() / ".agent-collab" / "venv"),
+                "--editable",
+            ],
+        )
 
     def test_rejects_selected_python_older_than_310(self):
         with tempfile.TemporaryDirectory() as tmp:
