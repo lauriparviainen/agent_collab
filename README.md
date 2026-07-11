@@ -1,333 +1,215 @@
 # agent-collab
 
-`agent-collab` is a terminal referee for supervised collaboration between configured coding and chat agents.
+[![CI](https://github.com/lauriparviainen/agent_collab/actions/workflows/ci.yml/badge.svg)](https://github.com/lauriparviainen/agent_collab/actions/workflows/ci.yml)
 
-The prototype runs bounded turn-based sessions, streams visible agent/tool events as they arrive, writes JSONL and Markdown transcripts, and exposes sessions through both a CLI client and MCP tools.
+**Cross-vendor review loops for AI-generated code. Generation is cheap. Review
+is the bottleneck.**
 
-## Current Status
+My coding agents produce more code than I can reliably review. I stopped
+pretending that another pass from the same model solves that problem.
 
-Implemented:
+`agent-collab` is the bandaid I use: it gives agents from different vendors
+bounded turns to inspect the same work, streams what they do, and leaves a
+transcript a human can audit. It does not make AI review sufficient. It makes
+the review less dependent on one model's blind spots.
 
-- One-shot CLI runner.
-- Mock and dry-run runners.
-- Configurable agent commands and collaboration workflows.
-- One global local daemon with runtime state under `~/.agent-collab/data/` (override with `AGENT_COLLAB_HOME`).
-- Per-session `workdir` that selects the project config and the subprocess cwd, so one daemon serves sessions across projects.
-- Persistent session index; `list`/`status` survive daemon restarts, and sessions that were running or awaiting input when the daemon died are marked `interrupted`.
-- Foreground local session server at `127.0.0.1:8765`.
-- CLI client commands: `serve`, `daemon`, `options`, `start`, `list`, `status`, `events`, `watch`, `stop`, `config init`, `config show`; source-checkout `setup` validates config and regenerates the daemon API docs.
-- Authenticated MCP Streamable HTTP endpoint at `http://127.0.0.1:8765/mcp`.
-- Stdio MCP adapter that reads the rotating local token and connects to the
-  local server.
-- Cursor-based event reads and long-polling.
-- Backend-qualified `backend_options` with schemas/defaults owned by each backend package and pre-launch validation.
-- Pluggable agent backends: an agent's provider (`type`) is separate from its execution mechanism (`backend`). The default `cli` subprocess backend runs the provider CLI; a first-class `sdk` backend runs the provider SDK in-process. Claude, Codex, Antigravity, and xAI each register both `(cli)` and `(sdk)`; SDK imports are lazy so a missing wheel is an unavailable backend, not an import error. Backends, availability/health, and honest per-session capability flags are discoverable via `agent_collab_describe_options`.
-- MCP option discovery through `agent_collab_describe_options` and usage guidance through `agent_collab_guidance`.
-- Start/status/list responses include the effective session settings: workflow sequence, per-agent typed options, and a prompt-free `command_preview`.
-- Centralized config schema migrations (`schema_version`, currently 4).
-- JSONL and Markdown session logs under `~/.agent-collab/data/sessions/`.
+> The bet is simple: coverage comes from disagreement, not just more passes.
 
-Current transition:
+## Install
 
-- `agent-collab serve` is the long-running foreground process that owns sessions.
-- `agent-collab daemon start` runs the same server model in the background as the global daemon.
-- MCP clients can connect directly to `agent-collab serve` over Streamable HTTP.
-- The stdio MCP adapter remains available for clients that launch MCP servers as subprocesses.
-- Project-local `.agent-collab/data/` and `.agent-collab/sessions/` directories are legacy; `watch --workdir` still falls back to them for old logs.
-- TUI watch remains planned as an additive mode.
-
-## Install Locally
+You need Python 3.10 or newer.
 
 ```bash
-python3 -m pip install -e .
+git clone https://github.com/lauriparviainen/agent_collab.git
+cd agent_collab
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
 ```
 
-A normal install (Python ≥ 3.10) brings the first-class `sdk` backends with it: the
-Claude Agent SDK (`claude-agent-sdk`), the Codex SDK (`openai-codex`), and the
-Antigravity SDK (`google-antigravity`), and xAI SDK (`xai-sdk`) install as project dependencies. Every SDK
-import is lazy, so a missing wheel degrades to an unavailable backend rather than an
-import error, and the `cli` backends keep working with the provider CLIs regardless.
-Credentials are still never managed by agent-collab — provide the provider's own
-auth (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, or each tool's local
-sign-in) in the environment.
+## Give your coding agent a second opinion
 
-## Quick Start
+The most useful setup is MCP: your current coding agent can ask another vendor's
+agent to inspect its work before it finishes.
 
-From a source checkout, the thin shell wrapper is the easiest entrypoint:
+Start the local daemon:
 
 ```bash
-./agent_collab.sh help
-./agent_collab.sh smoke
-```
-
-The wrapper sets `PYTHONPATH` to the repo root and passes normal commands through to `python3 -m agent_collab.cli`.
-
-Run a mock one-shot session without Claude or Codex installed:
-
-```bash
-python3 -m agent_collab.cli --mock --workdir . "Review this repository"
-```
-
-Run the foreground server:
-
-```bash
-python3 -m agent_collab.cli serve
-```
-
-Or start the global background daemon:
-
-```bash
-./agent_collab.sh daemon start
-```
-
-From another terminal, start and watch a mock server-owned session:
-
-```bash
-./agent_collab.sh start --mock --watch --workdir . "Smoke test"
-```
-
-Watch the latest server-owned session:
-
-```bash
-./agent_collab.sh watch
-```
-
-## CLI Commands
-
-One-shot mode:
-
-```bash
-agent-collab --mock "Review this repository and suggest the smallest next improvement"
-agent-collab --workflow compare --workdir /path/to/project "Implement the task"
-agent-collab --dry-run --workdir /path/to/project "Task"
-```
-
-Foreground server and client mode:
-
-```bash
-./agent_collab.sh serve
-./agent_collab.sh daemon start
-./agent_collab.sh daemon status
-./agent_collab.sh daemon logs --tail 100
-./agent_collab.sh daemon stop
-./agent_collab.sh smoke
-agent-collab serve
 agent-collab daemon start
-agent-collab daemon status
-agent-collab daemon logs --tail 100
-agent-collab daemon stop
-agent-collab start --mock --watch --workdir /path/to/project "Task"
-agent-collab options --workdir /path/to/project
-agent-collab options --workdir /path/to/project --fresh --json
-agent-collab list
-agent-collab status SESSION_ID
-agent-collab events SESSION_ID --cursor 0
-agent-collab watch SESSION_ID
-agent-collab stop SESSION_ID
-agent-collab config show --workdir /path/to/project
-agent-collab config init
 ```
 
-The daemon is global: one daemon serves sessions for any number of projects, and each session's `--workdir` decides which project config applies and where agent subprocesses run. `daemon start --workdir DIR` only sets the default workdir for sessions that do not pass one; it never changes where daemon state lives.
-
-Useful options:
-
-- `--workflow solo-claude | solo-codex | cross-review | compare` (default `cross-review`)
-- `--max-turns 3`
-- `--timeout 900`
-- `--workdir /path/to/project`
-- `--log-dir /path/to/logs`
-- `--server-url http://127.0.0.1:8765`
-- `--backend-options '{"codex_cli":{"thinking_level":"medium"},"claude_cli":{"model":"opus"}}'`
-- `--backend sdk` (only when every selected agent's type registers it)
-
-`agent-collab start` and `agent-collab status` print the effective session settings: the workflow sequence, each agent's model/thinking settings, and a prompt-free `command_preview` of the exact subprocess command. `agent-collab list` shows sessions across all projects with their workflow and agents.
-
-`agent-collab watch` without a session id watches the latest server-owned session. `agent-collab watch --workdir /path/to/project` resolves JSONL logs from the global `~/.agent-collab/data/sessions/` first, then falls back to the legacy project-local `.agent-collab/data/sessions/` and `.agent-collab/sessions/` directories.
-
-## Runtime layout
-
-All runtime state is global and user-owned (override the root with `AGENT_COLLAB_HOME`):
-
-```text
-~/.agent-collab/
-  config.toml            user config
-  data/
-    daemon/
-      pid
-      state.json
-      daemon.log
-      daemon.stderr.log
-    sessions/
-      SESSION.jsonl
-      SESSION.md
-    tmp/
-    session-index.json   persistent session index
-```
-
-Project directories only carry config, which can be tracked in git as shared project policy:
-
-```text
-PROJECT/.agent-collab/config.toml
-```
-
-Nothing is written under project `.agent-collab/` by default. If you have a stale project-local daemon from an older checkout (`PROJECT/.agent-collab/data/daemon/pid`), stop it manually once; the global daemon commands do not manage it.
-
-Each session writes:
-
-- `SESSION.jsonl`
-- `SESSION.md`
-
-The JSONL file preserves normalized events and raw agent payloads. The Markdown file is a readable transcript. Daemon operational logs do not dump full transcript events by default.
-
-## Agent Configuration
-
-Agent commands are configured through (highest precedence first):
-
-```text
-explicit session/start options
-SESSION_WORKDIR/.agent-collab/config.toml
-~/.agent-collab/config.toml        (or $AGENT_COLLAB_HOME/config.toml)
-built-in defaults
-```
-
-The built-in defaults live in [agent_collab/default_config.toml](agent_collab/default_config.toml). Project config comes from the session `workdir`, never from the caller's shell directory. Config files carry a `schema_version` (currently 4); known old shapes are migrated in memory at load time by a centralized migration layer, and unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir /path/to/project`. See [doc/agent-configuration.md](doc/agent-configuration.md).
-
-The user config may disable any registered execution backend globally with
-`[backends.<provider>_<backend>] enabled = false`. Project config cannot
-re-enable it. `agent-collab config init` generates explicit entries for the
-backends registered in the current build; absent entries remain enabled for
-backward compatibility.
-
-The built-in defaults include Claude Opus with high effort and Codex high reasoning effort:
-
-```bash
-claude -p --output-format stream-json --verbose --model opus --effort high "prompt"
-codex exec --json -c model_reasoning_effort="high" "prompt"
-```
-
-This repo's `.agent-collab/config.toml` is intentionally small: it opts this
-checkout into Antigravity and xAI and adds local `solo-antigravity` and
-`solo-xai` workflows. Both providers remain disabled in built-in config.
-
-xAI exposes canonical `xai_cli` and `xai_sdk` backends through the same generic
-`backend_options` contract. The CLI uses Grok Build `streaming-json`, accepts
-Grok local sign-in or `XAI_API_KEY`, and captures session identity; its observed
-0.2.93 stream does not expose typed tool records. The SDK requires
-`XAI_API_KEY`, is remote message-only chat, and captures response identity. Use
-`backend_options.xai_cli` or `backend_options.xai_sdk`; there is no provider-wide
-`xai_options` field.
-
-The referee invokes agents as subprocesses. Agent prompts include guardrails telling them not to spawn Claude, Codex, `agent-collab`, or other agent subprocesses.
-
-## MCP
-
-Recommended local MCP shape:
-
-```text
-MCP client -> stdio agent_collab.mcp_server -> authenticated local daemon
-```
-
-Start the foreground server first:
-
-```bash
-python3 -m agent_collab.cli serve
-```
-
-Configure a subprocess-based MCP client to run:
-
-```bash
-python3 -m agent_collab.mcp_server
-```
-
-The adapter reads the current owner-only daemon token automatically, including
-after a daemon restart. This avoids embedding a per-lifetime secret in MCP
-configuration.
-
-Compatibility Codex stdio config:
+Then configure your MCP client to launch the stdio adapter. For example, in
+Codex configuration:
 
 ```toml
 [mcp_servers.agent_collab]
-command = "python3"
+command = "/absolute/path/to/agent_collab/.venv/bin/python"
 args = ["-m", "agent_collab.mcp_server"]
-cwd = "/home/devel/projects/agent_collab"
-env = { PYTHONPATH = "/home/devel/projects/agent_collab", AGENT_COLLAB_SERVER = "http://127.0.0.1:8765" }
+cwd = "/absolute/path/to/agent_collab"
 startup_timeout_sec = 10
 tool_timeout_sec = 60
 enabled = true
 ```
 
-Direct Streamable HTTP shape:
+Now ask your coding agent:
 
-```text
-MCP client -> authenticated http://127.0.0.1:8765/mcp -> SessionManager
-```
+> Use agent-collab to get a second opinion on the current diff. Have the
+> reviewers focus on correctness, security, regressions, and missing tests.
 
-The `/mcp` endpoint implements JSON POST for `initialize`, `tools/list`, and
-`tools/call`; accepts notifications and client responses with `202 Accepted`;
-validates non-local `Origin` and supported `MCP-Protocol-Version` headers; and
-returns `405 Method Not Allowed` for `GET` because SSE is not implemented. It
-requires `Authorization: Bearer <token>` from the daemon token file. Direct HTTP
-clients must refresh that header after every daemon restart; use the stdio
-adapter when the client cannot read or refresh the rotating token safely.
+The agent can discover the configured reviewers, start the session, follow its
+events, and bring the findings back into the conversation you already have.
+You do not need to learn a second interactive tool to use it.
 
-For a one-process manual client invocation, export the current token without
-writing it into persistent MCP config:
+## See it work without provider accounts
+
+Run a simulated session from the terminal. This makes no model call:
 
 ```bash
-export AGENT_COLLAB_TOKEN="$(cat ~/.agent-collab/data/daemon/token)"
+agent-collab --mock --workdir . \
+  "Review this repository and identify the highest-risk change"
 ```
 
-Exposed tools:
+You will see the referee hand the task between agents and print each event as
+it happens. A readable Markdown transcript and the original JSONL events are
+written under `~/.agent-collab/data/sessions/`.
 
-- `agent_collab_guidance`
-- `agent_collab_describe_options`
-- `agent_collab_start`
-- `agent_collab_list_sessions`
-- `agent_collab_status`
-- `agent_collab_read_events`
-- `agent_collab_wait_events`
-- `agent_collab_read_transcript`
-- `agent_collab_stop`
+## Run a real cross-review
 
-Agents can call `agent_collab_guidance` for full Markdown usage guidance (source: [doc/mcp-guidance.md](doc/mcp-guidance.md)), and should call `agent_collab_describe_options` with the intended absolute `workdir` before selecting a workflow or backend. The response is a versioned discovery snapshot with canonical backends, effective per-agent/workflow selections, enablement policy, probe freshness, readiness, remediation, and backend-qualified option schemas. `health_refresh` accepts `cached` (default) or `fresh`; either result is advisory. Start reloads the same workdir config, rejects disabled selections, validates options, and freshly probes only selected backends whose policy acts on health. Prefer `thinking_level` over provider-specific raw fields: Codex accepts `minimal`, `low`, `medium`, `high`, or `xhigh`; Claude accepts `low`, `medium`, `high`, `xhigh`, or `max`.
+The default `cross-review` workflow is:
+
+```text
+Claude drafts/reviews → Codex challenges → Claude revises
+```
+
+Install and sign in to the Claude Code and Codex CLIs, then point the session at
+code you care about:
+
+```bash
+agent-collab --workflow cross-review --workdir /path/to/project \
+  "Review the current git diff. Prioritize correctness, security, and missing tests."
+```
+
+The agents run in the selected project directory. They can inspect the actual
+repository rather than receiving a pasted excerpt, and the bounded workflow
+ends after the configured turns.
+
+Already use only one provider? The built-in `solo-claude` and `solo-codex`
+workflows are useful for supervised runs, but the cross-vendor review idea is
+the reason this project exists.
+
+## Keep sessions running
+
+One-shot mode is the shortest path. The local daemon adds persistent sessions,
+an interactive terminal UI, and access from MCP clients:
+
+```bash
+agent-collab daemon start
+
+agent-collab start --watch --workdir /path/to/project \
+  "Review the current changes and call out anything I should not ship"
+
+agent-collab tui
+```
+
+One daemon can serve many projects. Every session carries its own `workdir`,
+which selects project configuration and becomes the agents' working directory.
+
+## What you get
+
+- **Different reviewers, one bounded session.** Workflows define exactly which
+  agents run and in what order.
+- **Visible execution.** Messages, tool calls, commands, status, and errors are
+  normalized into one event stream.
+- **Evidence after the terminal closes.** Every session writes JSONL and
+  Markdown transcripts.
+- **Local session control.** The daemon binds to loopback by default and keeps
+  its state under `~/.agent-collab/`.
+- **CLI, TUI, and MCP access.** Humans and editor agents can observe the same
+  daemon-owned sessions.
+- **Provider choice without a central hard-coded option table.** Each backend
+  owns its option schema, validation, health checks, and command preview.
+
+## Integrations and backends
+
+Integrations cover Claude, Codex, the Google Antigravity harness, and xAI, with
+CLI and SDK backends for each. Claude and Codex are enabled in the built-in
+workflows; Antigravity and xAI are opt-in so a clean install does not pretend
+credentials or local runtimes exist.
+
+See [agent configuration](doc/agent-configuration.md) for provider setup,
+backend selection, typed options, custom agents, and custom workflows.
+
+## Cost, privacy, and honest limits
+
+- `agent-collab` does not provide or broker model accounts. Each provider CLI
+  or SDK needs its own credentials.
+- A workflow with three agent turns consumes roughly three turns' worth of
+  provider usage. Start with Claude and Codex before adding more reviewers.
+- The daemon is local, but the provider tools it launches may send prompts and
+  repository content to their vendors. Their data policies still apply.
+- Agent review is advisory. It does not replace understanding critical code,
+  tests, security review, or human accountability.
+- Different vendors can still make the same mistake. This project makes the
+  disagreement inspectable; it does not guarantee it.
+- Antigravity is a harness, not a model vendor. It can run Gemini, Claude, or
+  other supported models, so check the selected model before calling a workflow
+  cross-vendor.
+- This is an active prototype. Capability flags and health checks are reported
+  conservatively rather than inferred from a provider name.
+
+Configuration can be global or project-specific. The daemon's `options` command
+reports effective workflows, selected backends, accepted values, health
+evidence, and remediation without making a model call. See
+[agent configuration](doc/agent-configuration.md) and
+[MCP guidance](doc/mcp-guidance.md) for the complete setup and tool contract.
+
+## Built alongside David AI
+
+`agent-collab` is a small, inspectable project about one problem: how to get
+more useful review when agents produce more code than a person can read.
+
+I also build [David AI](https://ai.david.fi/), its larger sister project. David
+AI is a governed, self-hosted platform for connecting agents to the systems a
+company actually runs—tickets, knowledge, cloud, and infrastructure—while
+credentials, scopes, risky-action approvals, and audit trails stay under human
+control.
+
+They are separate projects and do not integrate. They share the same starting
+point: models are increasingly capable; the difficult part is building the
+control, review, and trust around them.
+
+Built by [Lauri Parviainen](https://github.com/lauriparviainen).
+
+## Documentation
+
+The README is deliberately short. Detailed behavior lives here:
+
+- [Agent and backend configuration](doc/agent-configuration.md)
+- [Runtime files and config precedence](doc/runtime-layout.md)
+- [Daemon, sessions, CLI, and MCP architecture](doc/daemon-architecture.md)
+- [MCP tool guidance](doc/mcp-guidance.md)
+- [Generated HTTP API reference](doc/daemon_api_doc/http-api.md)
+- [Development and verification](doc/development.md)
+- [Current implementation notes](doc/implementation-notes.md)
+- [Design and task index](doc/README.md)
 
 ## Development
 
-Validate the effective repository config and regenerate the REST API artifacts
-under [`doc/daemon_api_doc/`](doc/daemon_api_doc/http-api.md):
-
-```bash
-./agent_collab.sh setup
-./agent_collab.sh setup --check
-```
-
-The check form performs no writes and fails when generated output is stale.
-
-Run tests:
+From a source checkout:
 
 ```bash
 ./agent_collab.sh test
-./agent_collab.sh integration-test claude_sdk  # live, credentialed, opt-in
+./agent_collab.sh setup --check
 ```
 
-Important implementation files:
+Two additional checks serve different purposes:
 
-- `agent_collab/cli.py`: CLI entrypoint and client command routing.
-- `agent_collab/server_http.py`: foreground HTTP server.
-- `agent_collab/daemon.py`: in-memory session manager and session lifecycle.
-- `agent_collab/referee.py`: bounded turn loop.
-- `agent_collab/runners.py`: runner primitives (subprocess/mock/dry-run) and the registry-backed `configured_runner`.
-- `agent_collab/backends/`: eight standalone `<provider>_<backend>` packages, their option manifests, parsers/runners, and shared infrastructure.
-- `agent_collab/events.py`: normalized provider-neutral event model.
-- `agent_collab/client.py`: HTTP client used by CLI watch/start/list/status.
-- `agent_collab/daemon_supervisor.py`: background daemon PID/state/log lifecycle.
-- `agent_collab/options.py`: generic backend-option validation and session settings metadata.
-- `agent_collab/paths.py`: global home (`AGENT_COLLAB_HOME`) and session log path helpers.
-- `agent_collab/config_migrations.py`: centralized config schema migrations.
-- `agent_collab/session_index.py`: persistent session index for daemon restarts.
-- `agent_collab/mcp_server.py`: current stdio MCP adapter.
-- `agent_collab/mcp_tools.py`: shared MCP tool schemas, guidance tool, and dispatch.
+```bash
+./agent_collab.sh smoke
+./agent_collab.sh integration-test claude_cli
+```
 
-For coding-agent handoff, start with [AGENTS.md](AGENTS.md); detailed current
-implementation notes live in [doc/implementation-notes.md](doc/implementation-notes.md).
+`smoke` is a fast mock session: no credentials, no model call. `integration-test`
+runs a real provider/backend transport check and may require credentials or
+incur provider usage. See [development notes](doc/development.md) before running
+live integrations.
