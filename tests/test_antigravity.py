@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_collab.config import ConfigError, builtin_config, load_config
+from agent_collab.config import builtin_config, load_config
 from agent_collab.backends.antigravity_cli import AntigravityCliBackend, parse_antigravity_line
 from agent_collab.options import (
     StartOptionsError,
@@ -14,7 +14,7 @@ from agent_collab.options import (
     validate_start_options,
 )
 from agent_collab.referee import Referee, RefereeConfig
-from agent_collab.runners import DryRunRunner, MockRunner, SubprocessRunner, _mock_source
+from agent_collab.runners import MockRunner, _mock_source
 
 FIXTURES = Path(__file__).parent / "fixtures" / "antigravity"
 

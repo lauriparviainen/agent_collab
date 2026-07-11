@@ -5,7 +5,7 @@ import sys
 from typing import Any, Dict, Optional
 
 from .client import AgentCollabClient
-from .mcp_tools import HttpClientToolBackend, TOOLS, handle_request_sync, handle_tool_sync
+from .mcp_tools import HttpClientToolBackend, handle_request_sync, handle_tool_sync
 
 
 def _backend() -> HttpClientToolBackend:

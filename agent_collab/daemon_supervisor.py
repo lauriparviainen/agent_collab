@@ -127,7 +127,9 @@ def daemon_status(paths: Optional[GlobalDataPaths] = None) -> DaemonStatus:
     if _is_running(pid):
         identity = _daemon_identity_status(pid, state)
         if identity == IDENTITY_MATCH:
-            return DaemonStatus(True, state, f"global agent-collab daemon is running with pid {pid}")
+            return DaemonStatus(
+                True, state, f"global agent-collab daemon is running with pid {pid}"
+            )
         if identity == IDENTITY_UNKNOWN:
             return DaemonStatus(
                 False,
@@ -144,7 +146,9 @@ def daemon_status(paths: Optional[GlobalDataPaths] = None) -> DaemonStatus:
     return DaemonStatus(False, state, f"removed stale agent-collab daemon state for pid {pid}")
 
 
-def stop_daemon(paths: Optional[GlobalDataPaths] = None, grace_seconds: float = 3.0) -> DaemonStatus:
+def stop_daemon(
+    paths: Optional[GlobalDataPaths] = None, grace_seconds: float = 3.0
+) -> DaemonStatus:
     paths = paths or GlobalDataPaths.resolve()
     state = _read_state(paths)
     pid = _state_pid(state) or _read_pid(paths)
@@ -156,9 +160,7 @@ def stop_daemon(paths: Optional[GlobalDataPaths] = None, grace_seconds: float = 
 
     identity = _daemon_identity_status(pid, state)
     if identity == IDENTITY_UNKNOWN:
-        raise DaemonSupervisorError(
-            f"live pid {pid} cannot be attributed; refusing to signal it"
-        )
+        raise DaemonSupervisorError(f"live pid {pid} cannot be attributed; refusing to signal it")
     if identity == IDENTITY_MISMATCH:
         _remove_pid_state(paths)
         return DaemonStatus(
@@ -193,9 +195,7 @@ def stop_daemon(paths: Optional[GlobalDataPaths] = None, grace_seconds: float = 
                 f"agent-collab daemon stopped; recycled pid {pid} was not signaled",
             )
         if identity == IDENTITY_UNKNOWN:
-            raise DaemonSupervisorError(
-                f"identity for pid {pid} is unavailable; refusing SIGKILL"
-            )
+            raise DaemonSupervisorError(f"identity for pid {pid} is unavailable; refusing SIGKILL")
         os.kill(pid, signal.SIGKILL)
     deadline = time.monotonic() + 1.0
     while time.monotonic() < deadline:
@@ -205,9 +205,7 @@ def stop_daemon(paths: Optional[GlobalDataPaths] = None, grace_seconds: float = 
         if identity == IDENTITY_MISMATCH:
             break
         if identity == IDENTITY_UNKNOWN:
-            raise DaemonSupervisorError(
-                f"identity for pid {pid} became unavailable after SIGKILL"
-            )
+            raise DaemonSupervisorError(f"identity for pid {pid} became unavailable after SIGKILL")
         time.sleep(0.05)
     if _is_running(pid) and _daemon_identity_status(pid, state) == IDENTITY_MATCH:
         raise DaemonSupervisorError(f"failed to stop agent-collab daemon pid {pid}")
@@ -215,7 +213,9 @@ def stop_daemon(paths: Optional[GlobalDataPaths] = None, grace_seconds: float = 
     return DaemonStatus(False, state, f"agent-collab daemon killed pid {pid}")
 
 
-def tail_daemon_log(paths: Optional[GlobalDataPaths] = None, tail: int = 100, stderr: bool = False) -> str:
+def tail_daemon_log(
+    paths: Optional[GlobalDataPaths] = None, tail: int = 100, stderr: bool = False
+) -> str:
     paths = paths or GlobalDataPaths.resolve()
     path = paths.daemon_stderr_path if stderr else paths.daemon_log_path
     if not path.exists():
@@ -238,7 +238,9 @@ def _build_state(
         "host": host,
         "port": port,
         "home": str(paths.home),
-        "default_workdir": str(Path(default_workdir).expanduser().resolve()) if default_workdir else None,
+        "default_workdir": str(Path(default_workdir).expanduser().resolve())
+        if default_workdir
+        else None,
         "data_dir": str(paths.data_dir),
         "daemon_dir": str(paths.daemon_dir),
         "token_path": str(paths.token_path),
@@ -263,7 +265,9 @@ def _daemon_start_lock(paths: GlobalDataPaths) -> Iterator[None]:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise DaemonSupervisorError("global agent-collab daemon start already in progress") from exc
+            raise DaemonSupervisorError(
+                "global agent-collab daemon start already in progress"
+            ) from exc
         try:
             yield
         finally:
@@ -283,9 +287,7 @@ def _read_state(paths: GlobalDataPaths) -> Dict[str, Any]:
 
 
 def _write_state(paths: GlobalDataPaths, state: Dict[str, Any]) -> None:
-    atomic_write_private_text(
-        paths.state_path, json.dumps(state, indent=2, sort_keys=True) + "\n"
-    )
+    atomic_write_private_text(paths.state_path, json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
 def _read_pid(paths: GlobalDataPaths) -> Optional[int]:
@@ -416,7 +418,9 @@ def _is_zombie(pid: int) -> bool:
     return state == "Z"
 
 
-def _wait_for_ready(process: subprocess.Popen, host: str, port: int, paths: GlobalDataPaths, timeout: float = 3.0) -> None:
+def _wait_for_ready(
+    process: subprocess.Popen, host: str, port: int, paths: GlobalDataPaths, timeout: float = 3.0
+) -> None:
     poll = getattr(process, "poll", None)
     if not callable(poll):
         return
@@ -448,12 +452,16 @@ def _wait_for_ready(process: subprocess.Popen, host: str, port: int, paths: Glob
             code = poll()
             if code is None:
                 return
-            raise DaemonSupervisorError(f"agent-collab daemon exited during startup with code {code}")
+            raise DaemonSupervisorError(
+                f"agent-collab daemon exited during startup with code {code}"
+            )
         except (OSError, HTTPError, URLError) as exc:
             last_error = exc
             time.sleep(0.05)
     suffix = f": {last_error}" if last_error else ""
-    raise DaemonSupervisorError(f"agent-collab daemon did not become ready at {host}:{port}{suffix}")
+    raise DaemonSupervisorError(
+        f"agent-collab daemon did not become ready at {host}:{port}{suffix}"
+    )
 
 
 def _terminate_process(process: subprocess.Popen) -> None:

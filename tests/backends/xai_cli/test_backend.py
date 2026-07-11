@@ -58,9 +58,7 @@ class XaiCliBackendTests(unittest.TestCase):
         self.assertIsNone(schema["sandbox"].allowed)
 
     def test_reasoning_alias_is_canonical_and_conflicts_on_native_field(self):
-        options = self.backend.normalize_options(
-            self.agent(), {"reasoning_effort": "high"}
-        )
+        options = self.backend.normalize_options(self.agent(), {"reasoning_effort": "high"})
         self.assertEqual(options, {"thinking_level": "high"})
         self.assertEqual(
             self.backend.normalize_options(
@@ -131,7 +129,9 @@ class XaiCliBackendTests(unittest.TestCase):
             False,
         )
         self.assertEqual(len(events), 2)
-        self.assertEqual((events[0].source, events[0].type, events[0].text), ("xai", "message", "hello world"))
+        self.assertEqual(
+            (events[0].source, events[0].type, events[0].text), ("xai", "message", "hello world")
+        )
         self.assertEqual(events[0].raw["delta_count"], 2)
         self.assertEqual(events[1].raw["provider_session_id"], "sess")
 
@@ -143,9 +143,7 @@ class XaiCliBackendTests(unittest.TestCase):
         self.assertEqual(events[0].text, "partial")
 
     def test_probe_reports_missing_dependency_and_observed_version(self):
-        with mock.patch(
-            "agent_collab.backends.xai_cli.backend.probe_cli_backend"
-        ) as probe:
+        with mock.patch("agent_collab.backends.xai_cli.backend.probe_cli_backend") as probe:
             probe.return_value.status = "unavailable"
             self.assertEqual(self.backend.probe().status, "unavailable")
             probe.return_value.status = "ok"
@@ -207,7 +205,9 @@ class XaiParserFixtureTests(unittest.TestCase):
     def test_real_tooluse_fixture_does_not_guess_typed_action_events(self):
         events = self.fixture_events("streaming-json-tooluse.ndjson", verbose=True)
         self.assertFalse(any(event.source == "tool" for event in events))
-        self.assertFalse(any(event.type in {"tool_call", "command", "file_change"} for event in events))
+        self.assertFalse(
+            any(event.type in {"tool_call", "command", "file_change"} for event in events)
+        )
 
     def test_real_error_fixture_maps_explicit_error(self):
         events = self.fixture_events("streaming-json-error.ndjson")

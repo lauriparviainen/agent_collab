@@ -60,7 +60,9 @@ class XaiCliBackend:
     def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
         return dict(OPTION_SCHEMA)
 
-    def normalize_options(self, agent: AgentConfig, requested: Mapping[str, Any]) -> Mapping[str, Any]:
+    def normalize_options(
+        self, agent: AgentConfig, requested: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
         inferred: Dict[str, Any] = {}
         for field, flag in (
             ("model", "--model"),
@@ -92,9 +94,7 @@ class XaiCliBackend:
         effort = options.get("thinking_level")
         if effort is not None:
             command = remove_flag(command, "--effort", has_value=True)
-            command = set_flag_value_before_print_prompt(
-                command, "--reasoning-effort", str(effort)
-            )
+            command = set_flag_value_before_print_prompt(command, "--reasoning-effort", str(effort))
         return command
 
     def command_preview(
@@ -105,7 +105,9 @@ class XaiCliBackend:
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
         return {"backend": "cli", "options": dict(options)}
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
+    def create_runner(
+        self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
+    ) -> AgentRunner:
         if not agent.command:
             raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
         parser = XaiStreamingParser(agent.id)

@@ -75,7 +75,9 @@ class RouteRegistryTests(unittest.TestCase):
     def test_only_documented_routes_are_server_only(self):
         # Pin exactly which routes may lack a client method, so a route that
         # silently loses its client_method (or a new server-only route) is caught.
-        server_only = {(route.method, route.path) for route in ROUTES if route.client_method is None}
+        server_only = {
+            (route.method, route.path) for route in ROUTES if route.client_method is None
+        }
         self.assertEqual(server_only, set(SERVER_ONLY_ROUTES))
 
     def test_routes_are_unique(self):
@@ -229,7 +231,10 @@ class ModelRoundTripTests(unittest.TestCase):
     def test_request_models_are_idempotent(self):
         cases = [
             (StartSessionRequestModel, {"task": "t", "workdir": "/w"}),
-            (StartSessionRequestModel, {"task": "t", "workdir": "/w", "backend": "cli", "max_turns": 2}),
+            (
+                StartSessionRequestModel,
+                {"task": "t", "workdir": "/w", "backend": "cli", "max_turns": 2},
+            ),
             (OptionsRequestModel, {"workdir": "/w"}),
             (PostMessageRequestModel, {"text": "go"}),
             (PostMessageRequestModel, {"text": "go", "source": "human", "target": "codex"}),
@@ -268,7 +273,13 @@ class LiveWireFidelityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(options_get, dict)
 
                 start_body = json.dumps(
-                    {"task": "contract", "workdir": str(root), "mock": True, "max_turns": 1, "timeout": 5}
+                    {
+                        "task": "contract",
+                        "workdir": str(root),
+                        "mock": True,
+                        "max_turns": 1,
+                        "timeout": 5,
+                    }
                 ).encode("utf-8")
                 state = await server._dispatch("POST", "/sessions", {}, start_body)
                 self.assertEqual(SessionStateModel.from_dict(state).to_dict(), state)
@@ -284,11 +295,16 @@ class LiveWireFidelityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(EventBatchModel.from_dict(events).to_dict(), events)
 
                 waited = await server._dispatch(
-                    "GET", f"/sessions/{session_id}/events/wait?cursor=1000000&timeout_ms=0", {}, b""
+                    "GET",
+                    f"/sessions/{session_id}/events/wait?cursor=1000000&timeout_ms=0",
+                    {},
+                    b"",
                 )
                 self.assertEqual(EventBatchModel.from_dict(waited).to_dict(), waited)
 
-                transcript = await server._dispatch("GET", f"/sessions/{session_id}/transcript", {}, b"")
+                transcript = await server._dispatch(
+                    "GET", f"/sessions/{session_id}/transcript", {}, b""
+                )
                 self.assertEqual(TranscriptModel.from_dict(transcript).to_dict(), transcript)
 
                 stopped = await server._dispatch("POST", f"/sessions/{session_id}/stop", {}, b"")

@@ -34,16 +34,22 @@ class CodexCliBackend:
     def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
         return dict(OPTION_SCHEMA)
 
-    def normalize_options(self, agent: AgentConfig, requested: Mapping[str, Any]) -> Mapping[str, Any]:
+    def normalize_options(
+        self, agent: AgentConfig, requested: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
         inferred: Dict[str, Any] = {}
         for field, flag in (
-            ("model", "--model"), ("profile", "--profile"), ("sandbox", "--sandbox"),
+            ("model", "--model"),
+            ("profile", "--profile"),
+            ("sandbox", "--sandbox"),
             ("approval_policy", "--approval-policy"),
         ):
             value = flag_value(agent.args, flag)
             if value is not None:
                 inferred[field] = value
-        effort = config_value(agent.args, "model_reasoning_effort") or flag_value(agent.args, "--reasoning-effort")
+        effort = config_value(agent.args, "model_reasoning_effort") or flag_value(
+            agent.args, "--reasoning-effort"
+        )
         if effort is not None:
             inferred.update({"thinking_level": effort, "reasoning_effort": effort})
         if "--search" in agent.args:
@@ -61,7 +67,9 @@ class CodexCliBackend:
             command = remove_flag(command, "--reasoning-effort", has_value=True)
             command = set_config_value(command, "model_reasoning_effort", str(effort))
         for key, flag in (
-            ("model", "--model"), ("profile", "--profile"), ("sandbox", "--sandbox"),
+            ("model", "--model"),
+            ("profile", "--profile"),
+            ("sandbox", "--sandbox"),
             ("approval_policy", "--approval-policy"),
         ):
             if key in options:
@@ -80,7 +88,9 @@ class CodexCliBackend:
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
         return {"backend": "cli", "options": dict(options)}
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
+    def create_runner(
+        self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
+    ) -> AgentRunner:
         if not agent.command:
             raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
         return SubprocessRunner(

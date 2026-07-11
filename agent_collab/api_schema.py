@@ -205,7 +205,9 @@ class SessionListModel:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionListModel":
-        return cls(sessions=[SessionStateModel.from_dict(item) for item in data.get("sessions", [])])
+        return cls(
+            sessions=[SessionStateModel.from_dict(item) for item in data.get("sessions", [])]
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {"sessions": [item.to_dict() for item in self.sessions]}
@@ -550,9 +552,24 @@ class Route:
 # client method, so a route silently losing its client method is caught.
 ROUTES: Tuple[Route, ...] = (
     Route("GET", "/health", "health", "health", None, HealthModel),
-    Route("POST", "/options", "options", "describe_options", OptionsRequestModel, None, dynamic_response=True),
+    Route(
+        "POST",
+        "/options",
+        "options",
+        "describe_options",
+        OptionsRequestModel,
+        None,
+        dynamic_response=True,
+    ),
     Route("GET", "/options", "options", None, OptionsRequestModel, None, dynamic_response=True),
-    Route("POST", "/sessions", "start_session", "start_session", StartSessionRequestModel, SessionStateModel),
+    Route(
+        "POST",
+        "/sessions",
+        "start_session",
+        "start_session",
+        StartSessionRequestModel,
+        SessionStateModel,
+    ),
     Route("GET", "/sessions", "list_sessions", "list_sessions", None, SessionListModel),
     Route("GET", "/sessions/{session_id}", "get_session", "get_session", None, SessionStateModel),
     Route(
@@ -587,7 +604,14 @@ ROUTES: Tuple[Route, ...] = (
         TranscriptRequestModel,
         TranscriptModel,
     ),
-    Route("POST", "/sessions/{session_id}/stop", "stop_session", "stop_session", None, SessionStateModel),
+    Route(
+        "POST",
+        "/sessions/{session_id}/stop",
+        "stop_session",
+        "stop_session",
+        None,
+        SessionStateModel,
+    ),
 )
 
 # REST routes that legitimately have no typed-client method (server/manual-curl

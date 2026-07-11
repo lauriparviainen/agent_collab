@@ -1,6 +1,6 @@
 # Stage 5.4: Daemon robustness and code health
 
-**Status:** Open. H1-H6 and M1 are resolved and verified; M2-M5 and the
+**Status:** Open. H1-H6 and M1-M2 are resolved and verified; M3-M5 and the
 low-priority code-health items remain open. Findings originated in a full-repo
 review at v0.2 (2026-07-10).
 
@@ -243,12 +243,45 @@ were inspected and removed.
 
 ### M2. Add CI and static tooling
 
-There is no `.github/workflows`, no ruff/mypy/pyright configuration.
+**Resolved and independently reviewed (2026-07-11).** The repository now has a
+least-privilege GitHub Actions CI workflow for every push and pull request,
+matrixed across Python 3.10, 3.11, and 3.12. Each matrix job runs Ruff lint,
+Ruff format verification, the hermetic unit suite, and `setup --check`.
 
-- Add a minimal CI job: `python -m unittest discover -s tests -t .`,
-  `./agent_collab.sh setup --check`, and a linter.
-- Add ruff (lint + format check) config to `pyproject.toml`; adopt a type
-  checker incrementally if desired.
+- `actions/checkout` and `actions/setup-python` use immutable full commit SHAs;
+  the workflow grants only `contents: read` and does not persist checkout
+  credentials.
+- Ruff 0.15.20 is pinned in the `dev` optional dependency and the CI install.
+  `pyproject.toml` defines a Python 3.10 target, 100-column formatting, LF line
+  endings, and the stable `E4`, `E7`, `E9`, and `F` lint baseline.
+- The existing Python source and tests were mechanically formatted once to
+  establish a repository-wide Ruff format baseline. Small lint-only cleanups
+  remove unused bindings/imports, preserve intentional backend-contract
+  re-exports explicitly, and replace assigned test lambdas with named helpers.
+- `tests/test_ci_tooling.py` fails if the Ruff pin/configuration, supported
+  Python matrix, required CI gates, least-privilege settings, or immutable
+  action pinning drift or disappear. Every action reference is checked without
+  constraining future workflows to an exact action count.
+- `./agent_collab.sh test` runs Ruff lint and format verification before unit
+  discovery, so the standard local test command enforces the same static gates;
+  shell-wrapper regression coverage proves the checks run first and in order.
+
+Focused CI/tooling, setup, and shell-wrapper coverage passes (14 tests). Ruff
+lint and format checks pass across all 118 discovered files. The full hermetic
+suite passes (543 tests), `./agent_collab.sh setup --check` passes, and
+`git diff --check` passes.
+
+Three concurrent two-reviewer loops used Gemini 3.1 Pro (High) and Gemini 3.5
+Flash (High), the highest Flash option advertised by local discovery because
+`Flash 4 High` was not available. The first loop identified a brittle exact
+action-count assertion and the missing supported-Python matrix; both were
+addressed. One initial claim that Ruff 0.15.20 did not exist was rejected after
+direct installation and execution proved the published pin. The second loop
+independently reran Ruff, the full suite, and setup validation; both reviewers
+returned the explicit verdict **SHIP-READY / NO BLOCKERS**. After the local
+test wrapper gained automatic Ruff gates, a third loop verified failure
+propagation, argument forwarding, portability, and the command-order regression;
+both reviewers again returned **SHIP-READY / NO BLOCKERS**.
 
 ### M3. Even out backend test coverage
 

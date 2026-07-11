@@ -165,7 +165,9 @@ class WatchTests(unittest.TestCase):
 
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                code = cli.main(["watch", "--workdir", str(root), "--session-id", "mcp-1", "--no-follow"])
+                code = cli.main(
+                    ["watch", "--workdir", str(root), "--session-id", "mcp-1", "--no-follow"]
+                )
 
             self.assertEqual(code, 0)
             self.assertIn("CODEX   from cli", output.getvalue())
@@ -188,7 +190,9 @@ class WatchTests(unittest.TestCase):
                     {
                         "session_id": session_id,
                         "cursor": 1,
-                        "events": [Event.create("human", "message", f"from {session_id}").to_dict()],
+                        "events": [
+                            Event.create("human", "message", f"from {session_id}").to_dict()
+                        ],
                     }
                 )
 
@@ -220,13 +224,17 @@ class WatchTests(unittest.TestCase):
 
             def wait_events(self, session_id, cursor, timeout_ms):
                 if self.sent:
-                    return EventBatchModel.from_dict({"session_id": session_id, "cursor": cursor, "events": []})
+                    return EventBatchModel.from_dict(
+                        {"session_id": session_id, "cursor": cursor, "events": []}
+                    )
                 self.sent = True
                 return EventBatchModel.from_dict(
                     {
                         "session_id": session_id,
                         "cursor": 1,
-                        "events": [Event.create("referee", "message", f"watching {session_id}").to_dict()],
+                        "events": [
+                            Event.create("referee", "message", f"watching {session_id}").to_dict()
+                        ],
                     }
                 )
 
@@ -238,17 +246,19 @@ class WatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch("agent_collab.cli._client", return_value=fake):
                 with contextlib.redirect_stdout(output):
-                    code = cli.main([
-                        "start",
-                        "--mock",
-                        "--watch",
-                        "--watch-wait-ms",
-                        "1",
-                        "--no-color",
-                        "--workdir",
-                        tmp,
-                        "task",
-                    ])
+                    code = cli.main(
+                        [
+                            "start",
+                            "--mock",
+                            "--watch",
+                            "--watch-wait-ms",
+                            "1",
+                            "--no-color",
+                            "--workdir",
+                            tmp,
+                            "task",
+                        ]
+                    )
 
         self.assertEqual(code, 0)
         text = output.getvalue()

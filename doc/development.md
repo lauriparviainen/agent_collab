@@ -2,7 +2,14 @@
 
 ## Commands
 
-Run tests:
+Run the complete local gate (Ruff lint, Ruff format verification, then the
+hermetic unit suite):
+
+```bash
+./agent_collab.sh test
+```
+
+Run only the hermetic unit suite:
 
 ```bash
 python3 -m unittest discover -s tests -t .
@@ -32,11 +39,12 @@ its environment directory with `AGENT_COLLAB_VENV`. Startup rejects any selected
 interpreter older than Python 3.10. Without a configured environment it tries
 `python3.12`, `python3.11`, `python3.10`, then `python3` in that order.
 
-`test` is hermetic and discovers only `tests/`. `integration-test` discovers
-only `integration_tests/`, may make paid model calls, and uses native provider
-credentials. Missing dependencies/credentials skip by default; `--strict`
-returns exit `2` when an explicitly selected provider cannot run. Behavioral
-failures return `1`.
+`test` runs Ruff lint and format checks before the hermetic suite, which
+discovers only `tests/`; install the `dev` extra to provide the pinned Ruff
+version. `integration-test` discovers only `integration_tests/`, may make paid
+model calls, and uses native provider credentials. Missing
+dependencies/credentials skip by default; `--strict` returns exit `2` when an
+explicitly selected provider cannot run. Behavioral failures return `1`.
 
 Live tests use cheap, fast defaults because they verify backend transport and
 event fidelity rather than model quality: Claude `sonnet`/low, Codex

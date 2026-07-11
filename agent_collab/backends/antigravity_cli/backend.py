@@ -9,7 +9,12 @@ from ...backend_contract import OptionSpec, load_option_schema, normalize_declar
 from ...config import AgentConfig, ConfigError
 from ...runners import AgentRunner, SubprocessRunner
 from ..base import BackendCapabilities, BackendHealth
-from ..common.cli import flag_value, has_flag, insert_before_print_prompt, set_flag_value_before_print_prompt
+from ..common.cli import (
+    flag_value,
+    has_flag,
+    insert_before_print_prompt,
+    set_flag_value_before_print_prompt,
+)
 from ..common.health import antigravity_credentials, default_version_runner, probe_cli_backend
 from .parser import parse_antigravity_line
 
@@ -34,7 +39,9 @@ class AntigravityCliBackend:
     def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
         return dict(OPTION_SCHEMA)
 
-    def normalize_options(self, agent: AgentConfig, requested: Mapping[str, Any]) -> Mapping[str, Any]:
+    def normalize_options(
+        self, agent: AgentConfig, requested: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
         inferred: Dict[str, Any] = {}
         for field, flag in (("model", "--model"), ("mode", "--mode")):
             value = flag_value(agent.args, flag)
@@ -73,7 +80,9 @@ class AntigravityCliBackend:
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
         return {"backend": "cli", "options": dict(options)}
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
+    def create_runner(
+        self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
+    ) -> AgentRunner:
         if not agent.command:
             raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
         return SubprocessRunner(

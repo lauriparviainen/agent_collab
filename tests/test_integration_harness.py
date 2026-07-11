@@ -17,16 +17,12 @@ class IntegrationHarnessOptionTests(unittest.TestCase):
 
     def test_live_tests_default_to_fast_economical_models(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(
-                self._options("claude"), {"model": "sonnet", "thinking_level": "low"}
-            )
+            self.assertEqual(self._options("claude"), {"model": "sonnet", "thinking_level": "low"})
             self.assertEqual(
                 self._options("codex"),
                 {"model": "gpt-5.6-luna", "thinking_level": "low"},
             )
-            self.assertEqual(
-                self._options("antigravity"), {"model": "Gemini 3.5 Flash (Low)"}
-            )
+            self.assertEqual(self._options("antigravity"), {"model": "Gemini 3.5 Flash (Low)"})
             self.assertEqual(
                 self._options("xai"),
                 {"model": "grok-4.5", "thinking_level": "low"},

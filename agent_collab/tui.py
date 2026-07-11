@@ -107,10 +107,10 @@ _CELL_MUTED = 250
 _CELL_DIM = 245
 _CELL_HAIRLINE = 236
 _CELL_ERROR = 203
-_CELL_BORDER = 59        # warm --border #635441
-_CELL_MENU_FILL = 234    # --color-gray-floor
+_CELL_BORDER = 59  # warm --border #635441
+_CELL_MENU_FILL = 234  # --color-gray-floor
 _CELL_MENU_SELECTED = 236  # --color-gray-panel
-_CELL_BAND = 237         # --raised
+_CELL_BAND = 237  # --raised
 
 
 class TuiApp:
@@ -196,7 +196,11 @@ class TuiApp:
             # read-only mode; repeating it here (in red) reads as a failure.
             self.message = f"opened {session_id} ({session.status})"
         else:
-            self.message = f"opened {session_id}" if _session_accepts_input(session) else "session is read-only (not interactive)"
+            self.message = (
+                f"opened {session_id}"
+                if _session_accepts_input(session)
+                else "session is read-only (not interactive)"
+            )
             self._start_poller()
 
     def _setup_curses(self) -> None:
@@ -333,7 +337,9 @@ class TuiApp:
         self.poll_stop = None
         self.poll_thread = None
 
-    def _poll_loop(self, session_id: Optional[str], cursor: int, epoch: int, stop: threading.Event) -> None:
+    def _poll_loop(
+        self, session_id: Optional[str], cursor: int, epoch: int, stop: threading.Event
+    ) -> None:
         if not session_id:
             return
         current = cursor
@@ -379,7 +385,9 @@ class TuiApp:
                 events = batch.events
                 if events:
                     self.transcript_lines = self.transcript_lines + format_transcript_events(events)
-                    self.scroll = clamp_scroll(self.scroll, len(self.transcript_lines), self._body_height())
+                    self.scroll = clamp_scroll(
+                        self.scroll, len(self.transcript_lines), self._body_height()
+                    )
                     self._refresh_session_status()
             elif kind == "status":
                 _, epoch, session_id, session = item
@@ -495,16 +503,30 @@ class TuiApp:
                 return
 
         if key in (curses.KEY_UP,):
-            self.scroll = scroll_by(self.scroll, len(self._active_body_lines()), self._body_height(), -1)
+            self.scroll = scroll_by(
+                self.scroll, len(self._active_body_lines()), self._body_height(), -1
+            )
             return
         if key in (curses.KEY_DOWN,):
-            self.scroll = scroll_by(self.scroll, len(self._active_body_lines()), self._body_height(), 1)
+            self.scroll = scroll_by(
+                self.scroll, len(self._active_body_lines()), self._body_height(), 1
+            )
             return
         if key in (curses.KEY_PPAGE,):
-            self.scroll = scroll_by(self.scroll, len(self._active_body_lines()), self._body_height(), -max(1, self._body_height()))
+            self.scroll = scroll_by(
+                self.scroll,
+                len(self._active_body_lines()),
+                self._body_height(),
+                -max(1, self._body_height()),
+            )
             return
         if key in (curses.KEY_NPAGE,):
-            self.scroll = scroll_by(self.scroll, len(self._active_body_lines()), self._body_height(), max(1, self._body_height()))
+            self.scroll = scroll_by(
+                self.scroll,
+                len(self._active_body_lines()),
+                self._body_height(),
+                max(1, self._body_height()),
+            )
             return
         if key in (curses.KEY_END,):
             self.scroll = follow_scroll(len(self._active_body_lines()), self._body_height())
@@ -631,7 +653,11 @@ class TuiApp:
             return
         if not _session_accepts_input(self.session):
             status = self.session.status
-            self.message = f"session is read-only ({status})" if session_is_terminal(self.session) else READ_ONLY_INPUT_MESSAGE
+            self.message = (
+                f"session is read-only ({status})"
+                if session_is_terminal(self.session)
+                else READ_ONLY_INPUT_MESSAGE
+            )
             return
         self._stop_poller()
         try:
@@ -670,12 +696,17 @@ class TuiApp:
         # Anchor the picker to its top (title + column header + latest-first
         # rows), then bring the pre-selected current session into view.
         self.scroll = picker_scroll(
-            self.picker, ScrollState(top=0, follow=False), self._body_text_width(), self._body_height()
+            self.picker,
+            ScrollState(top=0, follow=False),
+            self._body_text_width(),
+            self._body_height(),
         )
 
     def _move_picker(self, delta: int) -> None:
         self.picker = move_session_picker(self.picker, delta)
-        self.scroll = picker_scroll(self.picker, self.scroll, self._body_text_width(), self._body_height())
+        self.scroll = picker_scroll(
+            self.picker, self.scroll, self._body_text_width(), self._body_height()
+        )
 
     def _start_new_wizard(self) -> None:
         self.new_wizard = {"step": "task", "task": "", "workflow": "", "workdir": ""}
@@ -731,7 +762,9 @@ class TuiApp:
                 if workflows and wizard["workflow"] not in workflows:
                     wizard["step"] = "workflow"
                     wizard["default_workflow"] = workflows[0]
-                    self.message = f"unknown workflow {wizard['workflow']!r}; choices: {', '.join(workflows)}"
+                    self.message = (
+                        f"unknown workflow {wizard['workflow']!r}; choices: {', '.join(workflows)}"
+                    )
                     return
                 payload = build_new_session_payload(
                     task=wizard["task"],
@@ -800,7 +833,9 @@ class TuiApp:
     def _hairline(self, width: int) -> str:
         return (_BOX_UTF8["h"] if self.utf8 else _BOX_ASCII["h"]) * width
 
-    def _render_details_panel(self, body_top: int, body_height: int, transcript_width: int, details_width: int) -> None:
+    def _render_details_panel(
+        self, body_top: int, body_height: int, transcript_width: int, details_width: int
+    ) -> None:
         separator_x = transcript_width
         vertical = _BOX_UTF8["v"] if self.utf8 else _BOX_ASCII["v"]
         for row in range(body_top, body_top + body_height):
@@ -811,14 +846,21 @@ class TuiApp:
         )
         visible = clip_with_marker(detail_lines, body_height)
         for index, line in enumerate(visible):
-            self._add(body_top + index, separator_x + 1, line, details_width - 2, self._style("muted"))
+            self._add(
+                body_top + index, separator_x + 1, line, details_width - 2, self._style("muted")
+            )
 
     def _render_body_line(self, row: int, line, width: int) -> None:
         # Body text shares the chrome's 1-column left margin (context/info draw
         # at x=1); background fills still bleed to the terminal edge. Lines are
         # wrapped to width-1 so the margin never clips the last character.
         text_width = max(0, width - 1)
-        if line.source in (MENU_TITLE_SOURCE, MENU_HEADER_SOURCE, MENU_ROW_SOURCE, MENU_SELECTED_SOURCE):
+        if line.source in (
+            MENU_TITLE_SOURCE,
+            MENU_HEADER_SOURCE,
+            MENU_ROW_SOURCE,
+            MENU_SELECTED_SOURCE,
+        ):
             # Session picker: a colored menu block, like the slash palette.
             if line.source == MENU_TITLE_SOURCE:
                 # Raised band caps the menu: one shade lighter than the row
@@ -848,7 +890,13 @@ class TuiApp:
             self._add(row, 0, " " * width, width, self._style("band"))
             self._add(row, 1, line.text, text_width, self._style("band"))
             if line.timestamp and width > len(line.timestamp) + 1:
-                self._add(row, width - len(line.timestamp), line.timestamp, len(line.timestamp), self._style("band"))
+                self._add(
+                    row,
+                    width - len(line.timestamp),
+                    line.timestamp,
+                    len(line.timestamp),
+                    self._style("band"),
+                )
             return
         if line.continuation:
             self._add(row, 1, line.text, text_width, self._style("text"))
@@ -863,7 +911,13 @@ class TuiApp:
         if text_width > SOURCE_LABEL_WIDTH:
             # Tool summaries stay dim across the whole row; other bodies read in text.
             body_attr = self._style("dim") if line.source == "tool" else self._style("text")
-            self._add(row, 1 + SOURCE_LABEL_WIDTH, line.text[SOURCE_LABEL_WIDTH:], text_width - SOURCE_LABEL_WIDTH, body_attr)
+            self._add(
+                row,
+                1 + SOURCE_LABEL_WIDTH,
+                line.text[SOURCE_LABEL_WIDTH:],
+                text_width - SOURCE_LABEL_WIDTH,
+                body_attr,
+            )
 
     def _render_slash_completion(self, body_top: int, body_height: int, width: int) -> None:
         completion = self._current_slash_completion()
@@ -985,9 +1039,11 @@ class TuiApp:
             message = self.message
             message_style = self._message_style(message)
 
-        activity = format_activity_indicator(
-            self.session, int(time.monotonic() * 4), utf8=self.utf8
-        ) if self.session else ""
+        activity = (
+            format_activity_indicator(self.session, int(time.monotonic() * 4), utf8=self.utf8)
+            if self.session
+            else ""
+        )
         hint = self._select_hint(width)
         right = compose_status_right(activity, hint)
 

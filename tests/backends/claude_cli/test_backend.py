@@ -28,12 +28,8 @@ class ClaudeCliBackendTests(unittest.TestCase):
 
     def test_streaming_parser_emits_repeated_session_id_once(self):
         parser = ClaudeStreamingParser("reviewer")
-        first = parser(
-            '{"type":"system","subtype":"init","session_id":"sess-123"}'
-        )
-        repeated = parser(
-            '{"type":"result","subtype":"success","session_id":"sess-123"}'
-        )
+        first = parser('{"type":"system","subtype":"init","session_id":"sess-123"}')
+        repeated = parser('{"type":"result","subtype":"success","session_id":"sess-123"}')
         self.assertEqual(first.raw["provider_session_id"], "sess-123")
         self.assertIsNone(repeated)
 
@@ -43,9 +39,7 @@ class ClaudeCliBackendTests(unittest.TestCase):
             '{"type":"assistant","provider_session_id":"sess-123",'
             '"message":{"content":[{"type":"text","text":"keep me"}]}}'
         )
-        genuine = parser(
-            '{"type":"system","subtype":"init","session_id":"sess-123"}'
-        )
+        genuine = parser('{"type":"system","subtype":"init","session_id":"sess-123"}')
         self.assertEqual(forged.text, "keep me")
         self.assertIsNone(forged.provider_session)
         self.assertEqual(genuine.provider_session["provider_session_id"], "sess-123")

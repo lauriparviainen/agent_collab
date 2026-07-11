@@ -7,7 +7,18 @@ from dataclasses import MISSING, fields, is_dataclass
 import json
 from pathlib import Path
 import types
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union, get_args, get_origin, get_type_hints
+from typing import (
+    Any,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from .api_schema import (
     API_VERSION,
@@ -97,8 +108,7 @@ def generate_openapi() -> Dict[str, Any]:
         paths.setdefault(route.path, {})[route.method.lower()] = operation
 
     schemas = {
-        model.__name__: _model_schema(model, request=model in _REQUEST_MODELS)
-        for model in _MODELS
+        model.__name__: _model_schema(model, request=model in _REQUEST_MODELS) for model in _MODELS
     }
     return {
         "openapi": "3.1.0",
@@ -161,7 +171,9 @@ def render_http_api(schema: Optional[Mapping[str, Any]] = None) -> str:
                 "",
                 f"- Operation ID: `{operation['operationId']}`",
                 f"- Authentication: {'none' if operation['security'] == [] else 'Bearer token'}",
-                f"- Request model: `{route.request_model.__name__}`" if route.request_model else "- Request model: none",
+                f"- Request model: `{route.request_model.__name__}`"
+                if route.request_model
+                else "- Request model: none",
                 (
                     "- Response model: runtime-defined object"
                     if route.dynamic_response
@@ -211,7 +223,9 @@ def run_setup(
             path.write_text(expected, encoding="utf-8")
     if drift:
         names = ", ".join(str(path) for path in drift)
-        raise SetupError(f"generated setup artifacts are stale: {names}; run ./agent_collab.sh setup")
+        raise SetupError(
+            f"generated setup artifacts are stale: {names}; run ./agent_collab.sh setup"
+        )
     return len(config.agents), len(config.workflows)
 
 
@@ -316,7 +330,9 @@ def _model_schema(model: type, *, request: bool) -> Dict[str, Any]:
                 field_schema = dict(field_schema)
                 field_schema["default"] = default
             if item.name in declared_required or (
-                not declared_required and item.default is MISSING and item.default_factory is MISSING
+                not declared_required
+                and item.default is MISSING
+                and item.default_factory is MISSING
             ):
                 required.append(item.name)
         elif not (model is ErrorModel and item.name == "details"):
@@ -373,9 +389,18 @@ def _ref(model: type) -> Dict[str, str]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Validate repository setup and generate API artifacts.")
-    parser.add_argument("--check", action="store_true", help="Fail if generated artifacts differ; do not write.")
-    parser.add_argument("--workdir", type=Path, default=REPO_ROOT, help="Workdir whose effective config is validated.")
+    parser = argparse.ArgumentParser(
+        description="Validate repository setup and generate API artifacts."
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="Fail if generated artifacts differ; do not write."
+    )
+    parser.add_argument(
+        "--workdir",
+        type=Path,
+        default=REPO_ROOT,
+        help="Workdir whose effective config is validated.",
+    )
     args = parser.parse_args(argv)
     try:
         agents, workflows = run_setup(args.workdir, check=args.check)
@@ -383,7 +408,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"setup error: {exc}")
         return 1
     action = "verified" if args.check else "generated"
-    print(f"validated config: {args.workdir.expanduser().resolve()} ({agents} agents, {workflows} workflows)")
+    print(
+        f"validated config: {args.workdir.expanduser().resolve()} ({agents} agents, {workflows} workflows)"
+    )
     print(f"{action}: {OPENAPI_PATH}")
     print(f"{action}: {HTTP_API_PATH}")
     return 0

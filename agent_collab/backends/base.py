@@ -20,11 +20,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Protocol, Tuple, runtime_checkable
 
 from ..backend_contract import (
-    OPTION_UNSET,
-    BackendOptionError,
+    OPTION_UNSET as OPTION_UNSET,
+    BackendOptionError as BackendOptionError,
     OptionSpec,
-    load_option_schema,
-    normalize_declared_options,
+    load_option_schema as load_option_schema,
+    normalize_declared_options as normalize_declared_options,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only

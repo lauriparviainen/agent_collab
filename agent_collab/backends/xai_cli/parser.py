@@ -44,9 +44,7 @@ def parse_xai_line(
     if event_type == "end":
         session_id = raw.get("sessionId")
         if isinstance(session_id, str) and session_id:
-            return provider_session_event(
-                "xai", agent_id, session_id, "session", raw=raw
-            )
+            return provider_session_event("xai", agent_id, session_id, "session", raw=raw)
         return Event.create("xai", "status", _event_text(raw), raw) if verbose else None
     return Event.create("xai", "status", compact_json(raw), raw) if verbose else None
 
@@ -71,11 +69,7 @@ class XaiStreamingParser:
         verbose: bool = False,
     ) -> Optional[Union[Event, List[Event]]]:
         raw = parse_json_line(line)
-        if (
-            isinstance(raw, dict)
-            and raw.get("type") == "text"
-            and isinstance(raw.get("data"), str)
-        ):
+        if isinstance(raw, dict) and raw.get("type") == "text" and isinstance(raw.get("data"), str):
             self._text_parts.append(raw["data"])
             return None
 

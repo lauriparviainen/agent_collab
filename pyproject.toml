@@ -26,6 +26,11 @@ dependencies = [
     "xai-sdk>=1.17,<2",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff==0.15.20",
+]
+
 [project.scripts]
 agent-collab = "agent_collab.cli:main"
 agent-collab-mcp = "agent_collab.mcp_server:main"
@@ -40,3 +45,15 @@ agent_collab = [
     "backends/*/options.toml",
     "backends/*/config.toml",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

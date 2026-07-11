@@ -111,7 +111,9 @@ class SubprocessRunner(AgentRunner):
 
     async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
         run_dir = _resolve_run_dir(workdir, self.cwd)
-        command_prefix = self.command_builder(run_dir) if self.command_builder else list(self.command_prefix)
+        command_prefix = (
+            self.command_builder(run_dir) if self.command_builder else list(self.command_prefix)
+        )
         argv = command_prefix + [prompt]
         yield Event.create(
             "referee",
@@ -132,7 +134,9 @@ class SubprocessRunner(AgentRunner):
                 limit=self.stream_limit,
             )
         except FileNotFoundError as exc:
-            yield Event.create("error", "error", f"{self.name} command not found: {argv[0]}", {"error": str(exc)})
+            yield Event.create(
+                "error", "error", f"{self.name} command not found: {argv[0]}", {"error": str(exc)}
+            )
             return
 
         queue: asyncio.Queue[Optional[Event]] = asyncio.Queue()
@@ -180,9 +184,20 @@ class SubprocessRunner(AgentRunner):
                 if line:
                     if _is_noisy_stderr(line):
                         if self.verbose:
-                            await queue.put(Event.create(_event_source(self.name), "status", f"{self.name} stderr: {line}", {"line": line}))
+                            await queue.put(
+                                Event.create(
+                                    _event_source(self.name),
+                                    "status",
+                                    f"{self.name} stderr: {line}",
+                                    {"line": line},
+                                )
+                            )
                         continue
-                    await queue.put(Event.create("error", "error", f"{self.name} stderr: {line}", {"line": line}))
+                    await queue.put(
+                        Event.create(
+                            "error", "error", f"{self.name} stderr: {line}", {"line": line}
+                        )
+                    )
 
         async def terminate_process() -> None:
             if process.returncode is None:

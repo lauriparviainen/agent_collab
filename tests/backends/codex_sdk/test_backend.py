@@ -63,9 +63,7 @@ class _ThreadItem:
 
 
 def _agent_message(text, *, phase=_MessagePhase.final_answer, item_id="msg-1"):
-    return _ThreadItem(
-        _Object(type="agentMessage", id=item_id, text=text, phase=phase)
-    )
+    return _ThreadItem(_Object(type="agentMessage", id=item_id, text=text, phase=phase))
 
 
 def _reasoning(*, summary=None, content=None, item_id="reason-1"):
@@ -236,7 +234,9 @@ class CodexEventMappingTests(unittest.TestCase):
             ],
         )
         messages = [event for event in _run(result) if event.type == "message"]
-        self.assertEqual([event.text for event in messages], ["Final answer.", "I am checking the tests."])
+        self.assertEqual(
+            [event.text for event in messages], ["Final answer.", "I am checking the tests."]
+        )
         self.assertEqual(messages[1].raw["phase"], "commentary")
 
     def test_agent_item_is_fallback_when_final_response_is_absent(self):
@@ -256,8 +256,14 @@ class CodexEventMappingTests(unittest.TestCase):
         self.assertEqual(reasoning[0].text, "public summary")
         self.assertEqual(reasoning[0].raw["content"], ["reasoning content"])
 
-        content_result = _turn_result(final_response=None, items=[_reasoning(content=["content fallback"])])
-        fallback = [event for event in _run(content_result, verbose=True) if (event.raw or {}).get("reasoning")]
+        content_result = _turn_result(
+            final_response=None, items=[_reasoning(content=["content fallback"])]
+        )
+        fallback = [
+            event
+            for event in _run(content_result, verbose=True)
+            if (event.raw or {}).get("reasoning")
+        ]
         self.assertEqual(fallback[0].text, "content fallback")
 
     def test_failed_command_remains_a_command_with_real_status(self):
@@ -292,10 +298,14 @@ class CodexEventMappingTests(unittest.TestCase):
     def test_missing_runtime_and_sdk_failures_surface_as_error_events(self):
         unavailable = BackendUnavailable("codex", "sdk", "openai_codex is not importable", "hint")
         missing = _run(error=unavailable)
-        self.assertTrue(any(event.type == "error" and "not importable" in event.text for event in missing))
+        self.assertTrue(
+            any(event.type == "error" and "not importable" in event.text for event in missing)
+        )
 
         failed = _run(error=RuntimeError("authentication failed"))
-        self.assertTrue(any(event.type == "error" and "authentication failed" in event.text for event in failed))
+        self.assertTrue(
+            any(event.type == "error" and "authentication failed" in event.text for event in failed)
+        )
 
 
 class CodexSessionCaptureTests(unittest.TestCase):
@@ -303,7 +313,9 @@ class CodexSessionCaptureTests(unittest.TestCase):
         for verbose in (False, True):
             events = _run(_turn_result(), verbose=verbose, thread_id="thread-9")
             captured = [
-                event for event in events if (event.raw or {}).get("provider_session_id") == "thread-9"
+                event
+                for event in events
+                if (event.raw or {}).get("provider_session_id") == "thread-9"
             ]
             self.assertEqual(len(captured), 1, "verbose={}".format(verbose))
             raw = captured[0].raw
@@ -327,7 +339,9 @@ class CodexOptionMappingTests(unittest.TestCase):
             mapped,
             {"model": "gpt-5-codex", "sandbox": "workspace-write", "reasoning_effort": "high"},
         )
-        self.assertEqual(_map_sdk_options({"thinking_level": "minimal"}), {"reasoning_effort": "minimal"})
+        self.assertEqual(
+            _map_sdk_options({"thinking_level": "minimal"}), {"reasoning_effort": "minimal"}
+        )
 
     def test_sandbox_member_name_maps_cli_values_to_enum_members(self):
         self.assertEqual(sandbox_member_name("read-only"), "read_only")
@@ -386,7 +400,9 @@ class CodexProductionFactoryTests(unittest.TestCase):
         module.AsyncCodex = FakeAsyncCodex
         module.CodexConfig = FakeCodexConfig
         module.Sandbox = FakeSandbox
-        module.generated = SimpleNamespace(v2_all=SimpleNamespace(ReasoningEffort=FakeReasoningEffort))
+        module.generated = SimpleNamespace(
+            v2_all=SimpleNamespace(ReasoningEffort=FakeReasoningEffort)
+        )
         return module, FakeSandbox, FakeReasoningEffort
 
     def test_production_factory_uses_verified_async_api_and_keeps_client_open_for_mapping(self):
@@ -430,9 +446,12 @@ class CodexProductionFactoryTests(unittest.TestCase):
         async def collect():
             return [event async for event in runner.run("do a thing", Path("/workspace"))]
 
-        with mock.patch.dict(sys.modules, {"openai_codex": module}), mock.patch(
-            "agent_collab.backends.codex_sdk.backend.shutil.which",
-            return_value="/opt/codex/bin/codex",
+        with (
+            mock.patch.dict(sys.modules, {"openai_codex": module}),
+            mock.patch(
+                "agent_collab.backends.codex_sdk.backend.shutil.which",
+                return_value="/opt/codex/bin/codex",
+            ),
         ):
             events = asyncio.run(collect())
 
@@ -450,7 +469,10 @@ class CodexProductionFactoryTests(unittest.TestCase):
         self.assertNotIn("working_directory", state["thread_start"])
         self.assertTrue(any(event.type == "message" for event in events))
         self.assertTrue(
-            any((event.raw or {}).get("provider_session_id") == "thread-production" for event in events)
+            any(
+                (event.raw or {}).get("provider_session_id") == "thread-production"
+                for event in events
+            )
         )
 
     def test_early_consumer_close_unwinds_async_codex_context(self):

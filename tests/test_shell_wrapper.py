@@ -103,20 +103,29 @@ exit 1
         )
         self.assertEqual(captured["args"].count("--workdir"), 1)
 
-    def test_test_command_runs_unittest_discover_from_repo_root(self):
-        result, captured = self._run_with_fake_python(["test"], cwd=Path(tempfile.gettempdir()))
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(captured["cwd"], str(ROOT))
-        self.assertEqual(captured["args"], ["-m", "unittest", "discover", "-s", "tests", "-t", "."])
-
-    def test_integration_test_command_runs_separate_package(self):
-        result, captured = self._run_with_fake_python(["integration-test", "claude_sdk", "--strict"])
+    def test_test_command_runs_static_checks_then_unittest_from_repo_root(self):
+        result, commands = self._run_test_with_recording_python(cwd=Path(tempfile.gettempdir()))
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            captured["args"], ["-m", "integration_tests", "claude_sdk", "--strict"]
+            commands,
+            [
+                (str(ROOT), ["-m", "ruff", "check", "."]),
+                (str(ROOT), ["-m", "ruff", "format", "--check", "."]),
+                (
+                    str(ROOT),
+                    ["-m", "unittest", "discover", "-s", "tests", "-t", "."],
+                ),
+            ],
         )
+
+    def test_integration_test_command_runs_separate_package(self):
+        result, captured = self._run_with_fake_python(
+            ["integration-test", "claude_sdk", "--strict"]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(captured["args"], ["-m", "integration_tests", "claude_sdk", "--strict"])
 
     def test_smoke_command_uses_mock_runner(self):
         result, captured = self._run_with_fake_python(["smoke"])
@@ -167,6 +176,43 @@ exit 0
             )
             captured = self._read_capture(capture_path) if capture_path.exists() else {}
             return result, captured
+
+    def _run_test_with_recording_python(self, cwd=ROOT):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_python = tmp_path / "python3"
+            capture_path = tmp_path / "commands.txt"
+            fake_python.write_text(
+                """#!/usr/bin/env bash
+if [[ "${1:-}" == "-c" ]]; then
+  exit 0
+fi
+printf '%s' "$PWD" >> "$AGENT_COLLAB_CAPTURE"
+for arg in "$@"; do
+  printf '\037%s' "$arg" >> "$AGENT_COLLAB_CAPTURE"
+done
+printf '\n' >> "$AGENT_COLLAB_CAPTURE"
+""",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            env = os.environ.copy()
+            env["AGENT_COLLAB_PYTHON"] = str(fake_python)
+            env["AGENT_COLLAB_CAPTURE"] = str(capture_path)
+            result = subprocess.run(
+                [str(SCRIPT), "test"],
+                cwd=cwd,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            commands = []
+            for line in capture_path.read_text(encoding="utf-8").splitlines():
+                command_cwd, *args = line.split("\x1f")
+                commands.append((command_cwd, args))
+            return result, commands
 
     def _read_capture(self, capture_path):
         values = {}

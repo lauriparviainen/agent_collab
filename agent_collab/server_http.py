@@ -88,7 +88,9 @@ class AgentCollabHttpServer:
     def _log(self, message: str) -> None:
         print(f"agent-collab daemon {message}", flush=True)
 
-    async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
         try:
             method, target, headers, body = await self._read_request(reader)
             path = urlparse(target).path
@@ -127,7 +129,9 @@ class AgentCollabHttpServer:
             writer.close()
             await writer.wait_closed()
 
-    async def _read_request(self, reader: asyncio.StreamReader) -> Tuple[str, str, Dict[str, str], bytes]:
+    async def _read_request(
+        self, reader: asyncio.StreamReader
+    ) -> Tuple[str, str, Dict[str, str], bytes]:
         try:
             request_line = await reader.readline()
         except ValueError as exc:
@@ -159,11 +163,12 @@ class AgentCollabHttpServer:
             if not _is_valid_header_name(key):
                 raise HttpError(400, "invalid header name")
             normalized_key = key.lower()
-            if normalized_key in {"content-length", "transfer-encoding"} and normalized_key in headers:
+            if (
+                normalized_key in {"content-length", "transfer-encoding"}
+                and normalized_key in headers
+            ):
                 label = (
-                    "Content-Length"
-                    if normalized_key == "content-length"
-                    else "Transfer-Encoding"
+                    "Content-Length" if normalized_key == "content-length" else "Transfer-Encoding"
                 )
                 raise HttpError(400, f"duplicate {label} header")
             headers[normalized_key] = value.strip()
@@ -180,8 +185,7 @@ class AgentCollabHttpServer:
             normalized_length = raw_content_length.lstrip("0") or "0"
             maximum = str(MAX_REQUEST_BODY_BYTES)
             if len(normalized_length) > len(maximum) or (
-                len(normalized_length) == len(maximum)
-                and normalized_length > maximum
+                len(normalized_length) == len(maximum) and normalized_length > maximum
             ):
                 raise HttpError(
                     413,
@@ -194,7 +198,9 @@ class AgentCollabHttpServer:
             raise HttpError(400, "incomplete request body") from exc
         return method.upper(), target, headers, body
 
-    async def _dispatch(self, method: str, target: str, headers: Dict[str, str], body: bytes) -> Any:
+    async def _dispatch(
+        self, method: str, target: str, headers: Dict[str, str], body: bytes
+    ) -> Any:
         parsed = urlparse(target)
         normalized_path = parsed.path.rstrip("/") or "/"
         self._authorize(method, normalized_path, headers)
@@ -208,7 +214,9 @@ class AgentCollabHttpServer:
         handler = getattr(self, f"_route_{route.handler}", None)
         if not callable(handler):
             raise RuntimeError(f"route handler is not implemented: {route.handler}")
-        query = {key: values[0] for key, values in parse_qs(parsed.query, keep_blank_values=True).items()}
+        query = {
+            key: values[0] for key, values in parse_qs(parsed.query, keep_blank_values=True).items()
+        }
         return await handler(route, path_params, query, body)
 
     def _authorize(self, method: str, path: str, headers: Dict[str, str]) -> None:
@@ -401,8 +409,10 @@ def _decode_json_object(body: bytes) -> Dict[str, Any]:
 
 
 def _is_valid_header_name(name: str) -> bool:
-    return bool(name) and name.isascii() and all(
-        char.isalnum() or char in _HEADER_NAME_PUNCTUATION for char in name
+    return (
+        bool(name)
+        and name.isascii()
+        and all(char.isalnum() or char in _HEADER_NAME_PUNCTUATION for char in name)
     )
 
 
@@ -486,7 +496,9 @@ def run_server(
 ) -> None:
     paths = GlobalDataPaths.resolve()
     paths.ensure_dirs()
-    resolved_token_path = Path(token_path).expanduser().resolve() if token_path else paths.token_path
+    resolved_token_path = (
+        Path(token_path).expanduser().resolve() if token_path else paths.token_path
+    )
     resolved_token_path.parent.mkdir(parents=True, exist_ok=True)
     resolved_token_path.parent.chmod(0o700)
     token = mint_auth_token(resolved_token_path)

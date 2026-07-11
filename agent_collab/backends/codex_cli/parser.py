@@ -22,14 +22,8 @@ def parse_codex_line(
     if not isinstance(raw, dict):
         return Event.create("codex", "status", compact_json(raw), raw) if verbose else None
     thread_id = raw.get("thread_id")
-    if (
-        raw.get("type") == "thread.started"
-        and isinstance(thread_id, str)
-        and thread_id
-    ):
-        return provider_session_event(
-            "codex", agent_id, thread_id, "thread", raw=raw
-        )
+    if raw.get("type") == "thread.started" and isinstance(thread_id, str) and thread_id:
+        return provider_session_event("codex", agent_id, thread_id, "thread", raw=raw)
     if raw.get("type") in {"error", "fatal_error"} or "error" in raw:
         return Event.create("error", "error", first_text(raw) or compact_json(raw), raw)
     for predicate, event_type in (

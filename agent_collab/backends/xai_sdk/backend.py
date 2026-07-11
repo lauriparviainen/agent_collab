@@ -35,9 +35,7 @@ PACKAGE_NAME = "xai-sdk"
 INSTALL_HINT = "install the xAI SDK: pip install 'xai-sdk>=1.17,<2'"
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
-TurnStreamFactory = Callable[
-    [AgentConfig, Dict[str, Any], Path, str], AsyncIterator[Any]
-]
+TurnStreamFactory = Callable[[AgentConfig, Dict[str, Any], Path, str], AsyncIterator[Any]]
 
 
 def _canonical_reasoning(options: Mapping[str, Any]) -> Dict[str, Any]:
@@ -90,7 +88,9 @@ class XaiSdkBackend:
     def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
         return dict(OPTION_SCHEMA)
 
-    def normalize_options(self, agent: AgentConfig, requested: Mapping[str, Any]) -> Mapping[str, Any]:
+    def normalize_options(
+        self, agent: AgentConfig, requested: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
         normalized = normalize_declared_options(
             requested,
             self.option_schema(agent),
@@ -116,7 +116,9 @@ class XaiSdkBackend:
             summary["options"] = mapped
         return summary
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
+    def create_runner(
+        self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
+    ) -> AgentRunner:
         return XaiSdkRunner(
             agent,
             verbose,
@@ -180,7 +182,9 @@ async def _default_turn_stream(
         from xai_sdk import AsyncClient  # type: ignore
         from xai_sdk.chat import user  # type: ignore
     except ImportError as exc:
-        raise BackendUnavailable("xai", "sdk", f"{MODULE_NAME} is not importable", INSTALL_HINT) from exc
+        raise BackendUnavailable(
+            "xai", "sdk", f"{MODULE_NAME} is not importable", INSTALL_HINT
+        ) from exc
 
     mapped = _map_sdk_options(options)
     if "model" not in mapped:

@@ -25,7 +25,9 @@ def _visible_text(blocks: Iterable[Dict[str, Any]]) -> str:
     return "\n".join(
         str(block["text"]).strip()
         for block in blocks
-        if block.get("type") == "text" and isinstance(block.get("text"), str) and block["text"].strip()
+        if block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+        and block["text"].strip()
     )
 
 
@@ -57,12 +59,22 @@ def _tool_text(block: Dict[str, Any]) -> str:
 
 def _parse_message(raw: Dict[str, Any], verbose: bool) -> Optional[Event]:
     blocks: List[Dict[str, Any]] = list(_content_blocks(raw))
-    tools = [block for block in blocks if isinstance(block.get("type"), str) and "tool" in block["type"]]
+    tools = [
+        block for block in blocks if isinstance(block.get("type"), str) and "tool" in block["type"]
+    ]
     text = _visible_text(blocks)
     if tools:
         kinds = {_tool_kind(block) for block in tools}
-        event_type = "file_change" if "file_change" in kinds else "command" if "command" in kinds else "tool_call"
-        return Event.create("tool", event_type, text or "\n".join(_tool_text(block) for block in tools), raw)
+        event_type = (
+            "file_change"
+            if "file_change" in kinds
+            else "command"
+            if "command" in kinds
+            else "tool_call"
+        )
+        return Event.create(
+            "tool", event_type, text or "\n".join(_tool_text(block) for block in tools), raw
+        )
     if text:
         return Event.create("claude", "message", text, raw)
     if verbose:
@@ -89,14 +101,8 @@ def parse_claude_line(
         return Event.create("claude", "status", compact_json(raw), raw) if verbose else None
     identity = None
     session_id = raw.get("session_id")
-    if (
-        raw.get("type") in {"system", "result"}
-        and isinstance(session_id, str)
-        and session_id
-    ):
-        identity = provider_session_event(
-            "claude", agent_id, session_id, "session", raw=raw
-        )
+    if raw.get("type") in {"system", "result"} and isinstance(session_id, str) and session_id:
+        identity = provider_session_event("claude", agent_id, session_id, "session", raw=raw)
     if raw.get("type") in {"error", "fatal_error"} or "error" in raw:
         event = Event.create("error", "error", first_text(raw) or compact_json(raw), raw)
         return [identity, event] if identity is not None else event

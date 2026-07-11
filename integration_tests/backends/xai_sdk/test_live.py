@@ -10,9 +10,7 @@ class XaiSdkLiveTests(LiveBackendTestCase):
     def setUp(self):
         super().setUp()
         if not os.environ.get("XAI_API_KEY"):
-            self.skipTest(
-                missing_reason(self.provider, self.backend_id, "XAI_API_KEY is missing")
-            )
+            self.skipTest(missing_reason(self.provider, self.backend_id, "XAI_API_KEY is missing"))
 
     def test_turn_and_response(self):
         events = self.run_live()

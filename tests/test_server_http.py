@@ -53,9 +53,7 @@ class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_request_body_limit_is_16_mib_and_accepts_boundary(self):
         self.assertEqual(MAX_REQUEST_BODY_BYTES, 16 * 1024 * 1024)
-        reader = _request_reader(
-            b"POST /mcp HTTP/1.1\r\nContent-Length: 4\r\n\r\ntest"
-        )
+        reader = _request_reader(b"POST /mcp HTTP/1.1\r\nContent-Length: 4\r\n\r\ntest")
         with mock.patch("agent_collab.server_http.MAX_REQUEST_BODY_BYTES", 4):
             method, target, _headers, body = await self.server._read_request(reader)
 
@@ -65,9 +63,7 @@ class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
         for value in (b"5", b"9" * 5000):
             with self.subTest(length_digits=len(value)):
                 reader = _request_reader(
-                    b"POST /mcp HTTP/1.1\r\nContent-Length: "
-                    + value
-                    + b"\r\n\r\n"
+                    b"POST /mcp HTTP/1.1\r\nContent-Length: " + value + b"\r\n\r\n"
                 )
                 with mock.patch("agent_collab.server_http.MAX_REQUEST_BODY_BYTES", 4):
                     with self.assertRaises(HttpError) as ctx:
@@ -80,9 +76,7 @@ class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
         for value in (b"", b"-1", b"+1", b"1.0", b"one", b"1, 1"):
             with self.subTest(value=value):
                 reader = _request_reader(
-                    b"POST /mcp HTTP/1.1\r\nContent-Length: "
-                    + value
-                    + b"\r\n\r\n"
+                    b"POST /mcp HTTP/1.1\r\nContent-Length: " + value + b"\r\n\r\n"
                 )
                 with self.assertRaises(HttpError) as ctx:
                     await self.server._read_request(reader)
@@ -91,9 +85,7 @@ class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_duplicate_content_length_is_a_bad_request(self):
         reader = _request_reader(
-            b"POST /mcp HTTP/1.1\r\n"
-            b"Content-Length: 4\r\n"
-            b"content-length: 4\r\n\r\ntest"
+            b"POST /mcp HTTP/1.1\r\nContent-Length: 4\r\ncontent-length: 4\r\n\r\ntest"
         )
         with self.assertRaises(HttpError) as ctx:
             await self.server._read_request(reader)
@@ -115,8 +107,9 @@ class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         for request, limits in cases:
-            with self.subTest(limits=limits), mock.patch.multiple(
-                "agent_collab.server_http", **limits
+            with (
+                self.subTest(limits=limits),
+                mock.patch.multiple("agent_collab.server_http", **limits),
             ):
                 with self.assertRaises(HttpError) as ctx:
                     await self.server._read_request(_request_reader(request))
@@ -153,9 +146,7 @@ class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(has_content_length=bool(extra)):
                 reader = _request_reader(
                     b"POST /mcp HTTP/1.1\r\n"
-                    b"Transfer-Encoding: chunked\r\n"
-                    + extra
-                    + b"\r\n4\r\ntest\r\n0\r\n\r\n"
+                    b"Transfer-Encoding: chunked\r\n" + extra + b"\r\n4\r\ntest\r\n0\r\n\r\n"
                 )
                 with self.assertRaises(HttpError) as ctx:
                     await self.server._read_request(reader)
@@ -163,9 +154,7 @@ class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ctx.exception.message, "Transfer-Encoding is not supported")
 
     async def test_incomplete_request_body_is_a_bad_request(self):
-        reader = _request_reader(
-            b"POST /mcp HTTP/1.1\r\nContent-Length: 5\r\n\r\nabc"
-        )
+        reader = _request_reader(b"POST /mcp HTTP/1.1\r\nContent-Length: 5\r\n\r\nabc")
         with self.assertRaises(HttpError) as ctx:
             await self.server._read_request(reader)
 
@@ -173,9 +162,7 @@ class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.message, "incomplete request body")
 
     async def test_oversized_connection_gets_structured_413_response(self):
-        reader = _request_reader(
-            b"POST /mcp HTTP/1.1\r\nContent-Length: 5\r\n\r\n"
-        )
+        reader = _request_reader(b"POST /mcp HTTP/1.1\r\nContent-Length: 5\r\n\r\n")
         writer = _CaptureWriter()
         with mock.patch("agent_collab.server_http.MAX_REQUEST_BODY_BYTES", 4):
             await self.server._handle_connection(reader, writer)
@@ -186,9 +173,7 @@ class HttpRequestParsingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(writer.closed)
 
     async def test_excessive_headers_get_structured_431_response(self):
-        reader = _request_reader(
-            b"GET /health HTTP/1.1\r\nX-1: a\r\nX-2: b\r\n\r\n"
-        )
+        reader = _request_reader(b"GET /health HTTP/1.1\r\nX-1: a\r\nX-2: b\r\n\r\n")
         writer = _CaptureWriter()
         with mock.patch("agent_collab.server_http.MAX_REQUEST_HEADERS", 1):
             await self.server._handle_connection(reader, writer)
@@ -323,17 +308,16 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             body = json.dumps(
                 {"task": "slow probe", "workdir": str(root), "backend": "sdk"}
             ).encode("utf-8")
-            with mock.patch.dict(
-                os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}
-            ), mock.patch.object(
-                manager,
-                "_backend_health",
-                side_effect=slow_unavailable_probe,
+            with (
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}),
+                mock.patch.object(
+                    manager,
+                    "_backend_health",
+                    side_effect=slow_unavailable_probe,
+                ),
             ):
                 started_at = time.monotonic()
-                start_task = asyncio.create_task(
-                    server._dispatch("POST", "/sessions", {}, body)
-                )
+                start_task = asyncio.create_task(server._dispatch("POST", "/sessions", {}, body))
                 self.assertTrue(await asyncio.to_thread(entered.wait, 1.0))
                 try:
                     listed = await server._dispatch("GET", "/sessions", {}, b"")
@@ -403,7 +387,9 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             server = AgentCollabHttpServer(manager=SessionManager(default_workdir=root))
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
-                response = await server._dispatch("POST", "/options", {}, json.dumps({"workdir": str(root)}).encode("utf-8"))
+                response = await server._dispatch(
+                    "POST", "/options", {}, json.dumps({"workdir": str(root)}).encode("utf-8")
+                )
 
         self.assertIn("workflows", response)
         self.assertIn("backend_options", response)
@@ -538,7 +524,9 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         for payload in ({"task": "missing workdir"}, {"task": "blank workdir", "workdir": "   "}):
             with self.subTest(payload=payload):
                 with self.assertRaises(HttpError) as ctx:
-                    await server._dispatch("POST", "/sessions", {}, json.dumps(payload).encode("utf-8"))
+                    await server._dispatch(
+                        "POST", "/sessions", {}, json.dumps(payload).encode("utf-8")
+                    )
 
                 self.assertEqual(ctx.exception.status, 400)
                 self.assertEqual(ctx.exception.message, "workdir is required")
@@ -564,9 +552,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 await server._dispatch("GET", "/sessions", headers, b"")
             self.assertEqual(ctx.exception.status, 401)
 
-        listed = await server._dispatch(
-            "GET", "/sessions", {"authorization": "Bearer secret"}, b""
-        )
+        listed = await server._dispatch("GET", "/sessions", {"authorization": "Bearer secret"}, b"")
         self.assertEqual(listed, {"sessions": []})
         health_with_slash = await server._dispatch("GET", "/health/", {}, b"")
         self.assertEqual(health_with_slash["status"], "ok")
@@ -750,7 +736,9 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(result["content"][0]["text"])
         self.assertTrue(result["isError"])
         self.assertEqual(payload["error"], "invalid_start_options")
-        self.assertEqual(payload["details"][0]["path"], "backend_options.codex_cli.reasoning_effort")
+        self.assertEqual(
+            payload["details"][0]["path"], "backend_options.codex_cli.reasoning_effort"
+        )
 
     async def test_mcp_start_rejects_non_object_option_payload(self):
         with tempfile.TemporaryDirectory() as tmp:

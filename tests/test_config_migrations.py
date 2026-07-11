@@ -1,10 +1,15 @@
 import copy
-import io
 import tempfile
 import unittest
 from pathlib import Path
 
-from agent_collab.config import ConfigError, load_config, merge_config_data, CollaborationConfig, validate_config
+from agent_collab.config import (
+    ConfigError,
+    load_config,
+    merge_config_data,
+    CollaborationConfig,
+    validate_config,
+)
 from agent_collab.config_migrations import (
     CURRENT_CONFIG_SCHEMA,
     ConfigMigrationError,
@@ -71,7 +76,6 @@ class MigrateConfigDataTests(unittest.TestCase):
             merge_config_data(config, migrate_config_data({"surprises": {}}))
 
     def test_project_backend_policy_is_stripped_with_warning(self):
-        stream = io.StringIO()
         with self.assertLogs("agent_collab.config", level="WARNING") as logs:
             migrated = migrate_config_data(
                 {"backends": {"claude_cli": {"enabled": False}}},

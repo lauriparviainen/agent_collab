@@ -33,9 +33,7 @@ class Event:
     # Trusted in-process bookkeeping. This is deliberately not serialized: raw
     # provider output may contain identically named keys, but only backend code
     # can mark an Event as carrying a provider session identity.
-    _provider_session: Optional[Dict[str, str]] = field(
-        default=None, repr=False, compare=False
-    )
+    _provider_session: Optional[Dict[str, str]] = field(default=None, repr=False, compare=False)
 
     @classmethod
     def create(cls, source: str, event_type: str, text: str, raw: Any = None) -> "Event":
@@ -50,9 +48,7 @@ class Event:
         result.pop("_provider_session", None)
         return result
 
-    def mark_provider_session(
-        self, *, agent_id: str, session_id: str, kind: str
-    ) -> "Event":
+    def mark_provider_session(self, *, agent_id: str, session_id: str, kind: str) -> "Event":
         """Attach trusted, non-wire provider-session metadata to this event."""
 
         self._provider_session = {

@@ -38,11 +38,15 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
 
     def setUp(self):
         super().setUp()
-        self.adc_path = Path(
-            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", str(DEFAULT_ADC_PATH))
-        ).expanduser().resolve()
+        self.adc_path = (
+            Path(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", str(DEFAULT_ADC_PATH)))
+            .expanduser()
+            .resolve()
+        )
         if not self.adc_path.is_file():
-            self.skipTest(missing_reason(self.provider, self.backend_id, "Google ADC file is missing"))
+            self.skipTest(
+                missing_reason(self.provider, self.backend_id, "Google ADC file is missing")
+            )
         self.project = _configured_project()
         if not self.project:
             self.skipTest(

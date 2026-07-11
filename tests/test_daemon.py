@@ -56,7 +56,9 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 final = await self._wait_for_terminal(manager, state.session_id)
 
             self.assertEqual(final.status, "done")
-            global_sessions = GlobalDataPaths.resolve(env={"AGENT_COLLAB_HOME": str(root / "home")}).session_dir
+            global_sessions = GlobalDataPaths.resolve(
+                env={"AGENT_COLLAB_HOME": str(root / "home")}
+            ).session_dir
             self.assertEqual(Path(final.jsonl_path).parent, global_sessions)
             self.assertTrue(Path(final.jsonl_path).exists())
             self.assertTrue(Path(final.markdown_path).exists())
@@ -98,9 +100,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f"[event {tool_id}]", summary.events[tool_id]["text"])
             self.assertIn("result", summary.events[tool_id]["text"])
 
-            refetched = manager.read_events(
-                state.session_id, tool_id, limit=1, tool_output="full"
-            )
+            refetched = manager.read_events(state.session_id, tool_id, limit=1, tool_output="full")
             self.assertEqual(refetched.cursor, tool_id + 1)
             self.assertEqual(refetched.events, [full.events[tool_id]])
 
@@ -195,7 +195,9 @@ sequence = ["antigravity"]
                 awaiting = await self._wait_for_status(manager, state.session_id, "awaiting_input")
                 awaiting_events = manager.read_events(state.session_id, 0).events
                 cursor = manager.read_events(state.session_id, 0).cursor
-                wait_task = asyncio.create_task(manager.wait_events(state.session_id, cursor, timeout_ms=1000))
+                wait_task = asyncio.create_task(
+                    manager.wait_events(state.session_id, cursor, timeout_ms=1000)
+                )
                 batch = await manager.post_message(state.session_id, " please inspect this ")
                 waited = await wait_task
                 stopped = await manager.stop_session(state.session_id)
@@ -215,8 +217,12 @@ sequence = ["antigravity"]
                 [event["text"] for event in all_events].count("please inspect this"),
                 1,
             )
-            self.assertIn("please inspect this", Path(stopped.jsonl_path).read_text(encoding="utf-8"))
-            self.assertIn("please inspect this", Path(stopped.markdown_path).read_text(encoding="utf-8"))
+            self.assertIn(
+                "please inspect this", Path(stopped.jsonl_path).read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                "please inspect this", Path(stopped.markdown_path).read_text(encoding="utf-8")
+            )
 
     async def test_stop_session_transitions_awaiting_input_to_stopped(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -260,8 +266,12 @@ sequence = ["antigravity"]
                 )
                 await self._wait_for_status(manager, state.session_id, "awaiting_input")
                 before = manager.read_events(state.session_id, 0).cursor
-                batch = await manager.post_message(state.session_id, "what do you think?", target="codex")
-                directed = await manager.wait_events(state.session_id, batch.cursor, timeout_ms=1000)
+                batch = await manager.post_message(
+                    state.session_id, "what do you think?", target="codex"
+                )
+                directed = await manager.wait_events(
+                    state.session_id, batch.cursor, timeout_ms=1000
+                )
                 await manager.stop_session(state.session_id)
 
             self.assertGreaterEqual(batch.cursor, before + 1)
@@ -318,7 +328,9 @@ sequence = ["antigravity"]
                     batch = await manager.post_message(state.session_id, "remember mid-turn note")
                     release_first_turn.set()
                     await asyncio.wait_for(second_turn_started.wait(), timeout=1)
-                    awaiting = await self._wait_for_status(manager, state.session_id, "awaiting_input")
+                    awaiting = await self._wait_for_status(
+                        manager, state.session_id, "awaiting_input"
+                    )
                     await manager.stop_session(state.session_id)
 
             self.assertEqual(batch.events[0]["raw"]["queued"], True)
@@ -385,7 +397,9 @@ sequence = ["claude-a", "claude-b"]
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
-                    StartSessionRequest(task="noninteractive task", mock=True, max_turns=1, timeout=5, workdir=root)
+                    StartSessionRequest(
+                        task="noninteractive task", mock=True, max_turns=1, timeout=5, workdir=root
+                    )
                 )
                 with self.assertRaises(ValueError) as ctx:
                     await manager.post_message(state.session_id, "hello")
@@ -425,7 +439,9 @@ sequence = ["claude-a", "claude-b"]
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
-                    StartSessionRequest(task="cursor task", mock=True, max_turns=1, timeout=5, workdir=root)
+                    StartSessionRequest(
+                        task="cursor task", mock=True, max_turns=1, timeout=5, workdir=root
+                    )
                 )
                 await self._wait_for_terminal(manager, state.session_id)
 
@@ -445,7 +461,9 @@ sequence = ["claude-a", "claude-b"]
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
-                    StartSessionRequest(task="wait task", mock=True, max_turns=2, timeout=5, workdir=root)
+                    StartSessionRequest(
+                        task="wait task", mock=True, max_turns=2, timeout=5, workdir=root
+                    )
                 )
                 cursor = manager.read_events(state.session_id, 0).cursor
                 batch = await manager.wait_events(state.session_id, cursor, timeout_ms=1000)
@@ -467,10 +485,14 @@ sequence = ["claude-a", "claude-b"]
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(base / "home")}):
                 first, second = await asyncio.gather(
                     manager.start_session(
-                        StartSessionRequest(task="first workdir", mock=True, max_turns=1, timeout=5, workdir=root_a)
+                        StartSessionRequest(
+                            task="first workdir", mock=True, max_turns=1, timeout=5, workdir=root_a
+                        )
                     ),
                     manager.start_session(
-                        StartSessionRequest(task="second workdir", mock=True, max_turns=1, timeout=5, workdir=root_b)
+                        StartSessionRequest(
+                            task="second workdir", mock=True, max_turns=1, timeout=5, workdir=root_b
+                        )
                     ),
                 )
                 first_done, second_done = await asyncio.gather(
@@ -483,10 +505,15 @@ sequence = ["claude-a", "claude-b"]
             self.assertEqual(second_done.status, "done")
             self.assertEqual(first_done.workdir, str(root_a.resolve()))
             self.assertEqual(second_done.workdir, str(root_b.resolve()))
-            global_sessions = GlobalDataPaths.resolve(env={"AGENT_COLLAB_HOME": str(base / "home")}).session_dir
+            global_sessions = GlobalDataPaths.resolve(
+                env={"AGENT_COLLAB_HOME": str(base / "home")}
+            ).session_dir
             self.assertEqual(Path(first_done.jsonl_path).parent, global_sessions)
             self.assertEqual(Path(second_done.jsonl_path).parent, global_sessions)
-            self.assertEqual({state.session_id for state in manager.list_sessions()}, {first.session_id, second.session_id})
+            self.assertEqual(
+                {state.session_id for state in manager.list_sessions()},
+                {first.session_id, second.session_id},
+            )
 
     async def test_default_log_dir_overrides_global_session_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -496,7 +523,9 @@ sequence = ["claude-a", "claude-b"]
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
-                    StartSessionRequest(task="data log task", mock=True, max_turns=1, timeout=5, workdir=root)
+                    StartSessionRequest(
+                        task="data log task", mock=True, max_turns=1, timeout=5, workdir=root
+                    )
                 )
                 final = await self._wait_for_terminal(manager, state.session_id)
 
@@ -554,7 +583,9 @@ sequence = ["claude-a", "claude-b"]
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
-                    StartSessionRequest(task="stop task", mock=True, max_turns=100, timeout=5, workdir=root)
+                    StartSessionRequest(
+                        task="stop task", mock=True, max_turns=100, timeout=5, workdir=root
+                    )
                 )
                 first_batch = await manager.wait_events(state.session_id, 0, timeout_ms=1000)
                 stopped = await manager.stop_session(state.session_id)
@@ -572,13 +603,19 @@ sequence = ["claude-a", "claude-b"]
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 state = await manager.start_session(
-                    StartSessionRequest(task="logging task", mock=True, max_turns=1, timeout=5, workdir=root)
+                    StartSessionRequest(
+                        task="logging task", mock=True, max_turns=1, timeout=5, workdir=root
+                    )
                 )
                 final = await self._wait_for_terminal(manager, state.session_id)
 
             self.assertEqual(final.status, "done")
-            self.assertTrue(any(f"session {state.session_id} started" in message for message in messages))
-            self.assertTrue(any(f"session {state.session_id} done" in message for message in messages))
+            self.assertTrue(
+                any(f"session {state.session_id} started" in message for message in messages)
+            )
+            self.assertTrue(
+                any(f"session {state.session_id} done" in message for message in messages)
+            )
 
 
 if __name__ == "__main__":

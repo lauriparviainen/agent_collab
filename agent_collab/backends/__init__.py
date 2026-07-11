@@ -15,7 +15,7 @@ default ``cli`` backend stay standard-library only.
 
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
+from typing import Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from .base import (
     CREDENTIALS_MISSING,
@@ -32,6 +32,21 @@ from .base import (
     OptionSpec,
 )
 from .common.health import HealthCache
+
+__all__ = [
+    "CREDENTIALS_MISSING",
+    "CREDENTIALS_OK",
+    "CREDENTIALS_UNKNOWN",
+    "HEALTH_OK",
+    "HEALTH_UNAVAILABLE",
+    "HEALTH_UNKNOWN",
+    "AgentBackend",
+    "BackendCapabilities",
+    "BackendHealth",
+    "BackendOptionError",
+    "BackendUnavailable",
+    "OptionSpec",
+]
 
 DEFAULT_BACKEND = "cli"
 
@@ -78,7 +93,8 @@ def _validate_backend_contract(backend: AgentBackend) -> None:
     provider_session_id_kind = getattr(backend, "provider_session_id_kind", missing)
     if provider_session_id_kind is missing or not (
         provider_session_id_kind is None
-        or isinstance(provider_session_id_kind, str) and provider_session_id_kind
+        or isinstance(provider_session_id_kind, str)
+        and provider_session_id_kind
     ):
         raise TypeError(
             f"backend ({agent_type}, {backend_id}) must declare provider_session_id_kind "
@@ -93,7 +109,9 @@ def _validate_backend_contract(backend: AgentBackend) -> None:
         "create_runner",
     ):
         if not callable(getattr(backend, method, None)):
-            raise TypeError(f"backend ({agent_type}, {backend_id}) is missing required method {method}()")
+            raise TypeError(
+                f"backend ({agent_type}, {backend_id}) is missing required method {method}()"
+            )
     brand_color = getattr(backend, "brand_color", None)
     if not (
         isinstance(brand_color, str)

@@ -18,7 +18,9 @@ def configured_choices(
     return result
 
 
-def resolve_claude_thinking(options: Mapping[str, Any], requested: Mapping[str, Any]) -> Dict[str, Any]:
+def resolve_claude_thinking(
+    options: Mapping[str, Any], requested: Mapping[str, Any]
+) -> Dict[str, Any]:
     result = dict(options)
     explicit = set(requested)
     if {"thinking_level", "thinking_budget_tokens"}.issubset(explicit):
@@ -33,7 +35,9 @@ def resolve_claude_thinking(options: Mapping[str, Any], requested: Mapping[str, 
     return result
 
 
-def resolve_codex_effort(options: Mapping[str, Any], requested: Mapping[str, Any]) -> Dict[str, Any]:
+def resolve_codex_effort(
+    options: Mapping[str, Any], requested: Mapping[str, Any]
+) -> Dict[str, Any]:
     result = dict(options)
     explicit = set(requested)
     if {"thinking_level", "reasoning_effort"}.issubset(explicit):

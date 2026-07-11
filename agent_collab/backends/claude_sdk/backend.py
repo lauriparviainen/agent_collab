@@ -108,7 +108,9 @@ class ClaudeSdkBackend:
     ) -> Optional[list[str]]:
         return None
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
+    def create_runner(
+        self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
+    ) -> AgentRunner:
         factory = self._message_stream or _default_message_stream
         return ClaudeSdkRunner(agent, verbose, dict(options or {}), message_stream=factory)
 
@@ -208,7 +210,9 @@ def iter_claude_events(message: Any, verbose: bool) -> Iterator[Event]:
     if verbose:
         subtype = getattr(message, "subtype", None)
         if isinstance(subtype, str) and subtype:
-            yield Event.create("claude", "status", _result_status_text(message), _result_raw(message))
+            yield Event.create(
+                "claude", "status", _result_status_text(message), _result_raw(message)
+            )
 
 
 def _map_claude_content(content: List[Any], verbose: bool) -> Iterator[Event]:
@@ -377,6 +381,8 @@ def _default_message_stream(
     try:
         from claude_agent_sdk import ClaudeAgentOptions, query  # type: ignore
     except ImportError as exc:
-        raise BackendUnavailable("claude", "sdk", f"{MODULE_NAME} is not importable", INSTALL_HINT) from exc
+        raise BackendUnavailable(
+            "claude", "sdk", f"{MODULE_NAME} is not importable", INSTALL_HINT
+        ) from exc
     sdk_options = build_claude_agent_options(ClaudeAgentOptions, options, workdir)
     return query(prompt=prompt, options=sdk_options)

@@ -1,6 +1,5 @@
 """Generic self-describing backend contract and extension-point tests."""
 
-
 import asyncio
 import tempfile
 import unittest
@@ -236,7 +235,9 @@ class BuiltinBackendContractTests(unittest.TestCase):
     def test_invalid_option_manifest_fails_with_source_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "options.toml"
-            path.write_text('schema_version = 1\n[options.model]\ntype = "mystery"\n', encoding="utf-8")
+            path.write_text(
+                'schema_version = 1\n[options.model]\ntype = "mystery"\n', encoding="utf-8"
+            )
             with self.assertRaisesRegex(ConfigError, "options.toml"):
                 load_option_schema(path)
 
@@ -298,8 +299,9 @@ class BuiltinBackendContractTests(unittest.TestCase):
             candidate = _registration_candidate(f"missing-{attribute}")
             delattr(candidate, attribute)
             try:
-                with self.subTest(attribute=attribute), self.assertRaisesRegex(
-                    TypeError, attribute
+                with (
+                    self.subTest(attribute=attribute),
+                    self.assertRaisesRegex(TypeError, attribute),
                 ):
                     backends.register(candidate)
             finally:
@@ -317,8 +319,9 @@ class BuiltinBackendContractTests(unittest.TestCase):
             candidate = _registration_candidate(f"invalid-{attribute}-{value!r}")
             setattr(candidate, attribute, value)
             try:
-                with self.subTest(attribute=attribute, value=value), self.assertRaisesRegex(
-                    TypeError, attribute
+                with (
+                    self.subTest(attribute=attribute, value=value),
+                    self.assertRaisesRegex(TypeError, attribute),
                 ):
                     backends.register(candidate)
             finally:

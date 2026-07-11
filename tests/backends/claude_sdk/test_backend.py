@@ -181,7 +181,9 @@ class ClaudeEventMappingTests(unittest.TestCase):
         for event in events:
             by_type.setdefault(event.type, []).append(event)
 
-        self.assertTrue(any(e.source == "claude" and "Here is the plan." in e.text for e in by_type["message"]))
+        self.assertTrue(
+            any(e.source == "claude" and "Here is the plan." in e.text for e in by_type["message"])
+        )
         # Read -> tool_call, Bash -> command, Edit -> file_change.
         self.assertEqual(by_type["tool_call"][0].raw["name"], "Read")
         self.assertEqual(by_type["command"][0].raw["name"], "Bash")
@@ -194,9 +196,13 @@ class ClaudeEventMappingTests(unittest.TestCase):
     def test_thinking_hidden_unless_verbose_and_never_leaks_signature(self):
         message = _assistant([ThinkingBlock("secret plan text", "OPAQUE_SIG"), TextBlock("Done.")])
         quiet = _run([message], verbose=False)
-        self.assertFalse(any(e.type == "status" and "secret plan text" in (e.text or "") for e in quiet))
+        self.assertFalse(
+            any(e.type == "status" and "secret plan text" in (e.text or "") for e in quiet)
+        )
         loud = _run([message], verbose=True)
-        self.assertTrue(any(e.type == "status" and "secret plan text" in (e.text or "") for e in loud))
+        self.assertTrue(
+            any(e.type == "status" and "secret plan text" in (e.text or "") for e in loud)
+        )
         # The opaque verification signature must never appear anywhere.
         for event in quiet + loud:
             self.assertNotIn("OPAQUE_SIG", event.text or "")
@@ -268,7 +274,10 @@ class ClaudeEventMappingTests(unittest.TestCase):
         self.assertEqual(loud[0].raw["model_usage"]["claude-test"]["costUSD"], 0.012)
 
     def test_missing_import_at_stream_open_surfaces_error_event(self):
-        events = _run([], error=BackendUnavailable("claude", "sdk", "claude_agent_sdk is not importable", "hint"))
+        events = _run(
+            [],
+            error=BackendUnavailable("claude", "sdk", "claude_agent_sdk is not importable", "hint"),
+        )
         self.assertTrue(any(e.type == "error" and "not importable" in e.text for e in events))
 
     def test_options_constructor_drift_surfaces_actionable_error_event(self):
@@ -289,7 +298,9 @@ class ClaudeSessionCaptureTests(unittest.TestCase):
         for verbose in (False, True):
             events = _run(messages, verbose=verbose)
             captured = [e for e in events if (e.raw or {}).get("provider_session_id") == "sess-1"]
-            self.assertEqual(len(captured), 1, f"verbose={verbose}")  # emitted once, not per message
+            self.assertEqual(
+                len(captured), 1, f"verbose={verbose}"
+            )  # emitted once, not per message
             raw = captured[0].raw
             self.assertEqual(raw["provider_session_kind"], "session")
             self.assertEqual(raw["agent_id"], AGENT.id)
@@ -299,7 +310,9 @@ class ClaudeSessionCaptureTests(unittest.TestCase):
         # Session capture is the runner's job (it attributes the agent id); the
         # pure mapper only emits transcript prose/tools.
         events = list(
-            iter_claude_events(SystemMessage(subtype="init", data={"session_id": "x"}), verbose=False)
+            iter_claude_events(
+                SystemMessage(subtype="init", data={"session_id": "x"}), verbose=False
+            )
         )
         self.assertFalse(any((e.raw or {}).get("provider_session_id") for e in events))
 

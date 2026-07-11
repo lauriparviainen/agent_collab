@@ -11,45 +11,97 @@ from .referee import RefereeConfig, run_sync
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-collab", description="Watch Claude Code and Codex collaborate in a supervised terminal loop.")
+    parser = argparse.ArgumentParser(
+        prog="agent-collab",
+        description="Watch Claude Code and Codex collaborate in a supervised terminal loop.",
+    )
     parser.add_argument("task", nargs="?", help="Task to send to the collaboration loop.")
-    parser.add_argument("--workflow", default=DEFAULT_WORKFLOW, help="Workflow name from agent-collab config.")
+    parser.add_argument(
+        "--workflow", default=DEFAULT_WORKFLOW, help="Workflow name from agent-collab config."
+    )
     parser.add_argument("--max-turns", type=int, default=3)
-    parser.add_argument("--timeout", type=int, default=900, help="Per-agent turn timeout in seconds.")
-    parser.add_argument("--dry-run", action="store_true", help="Print commands without running Claude or Codex.")
+    parser.add_argument(
+        "--timeout", type=int, default=900, help="Per-agent turn timeout in seconds."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print commands without running Claude or Codex."
+    )
     parser.add_argument("--mock", action="store_true", help="Use simulated Claude/Codex runners.")
-    parser.add_argument("--verbose", action="store_true", help="Print compact unknown stream events.")
+    parser.add_argument(
+        "--verbose", action="store_true", help="Print compact unknown stream events."
+    )
     parser.add_argument("--no-color", action="store_true")
-    parser.add_argument("--workdir", type=Path, default=Path("."), help="Project root used as cwd for agent subprocesses.")
-    parser.add_argument("--log-dir", type=Path, help="Session log directory. Defaults to the global AGENT_COLLAB_HOME data/sessions directory.")
+    parser.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path("."),
+        help="Project root used as cwd for agent subprocesses.",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        help="Session log directory. Defaults to the global AGENT_COLLAB_HOME data/sessions directory.",
+    )
     parser.add_argument("--session-id", help=argparse.SUPPRESS)
-    parser.add_argument("--mcp-server", action="store_true", help="Run the stdio MCP server instead of the CLI loop.")
+    parser.add_argument(
+        "--mcp-server",
+        action="store_true",
+        help="Run the stdio MCP server instead of the CLI loop.",
+    )
     return parser
 
 
 def build_watch_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-collab watch", description="Watch an agent-collab JSONL session log.")
-    parser.add_argument("session_or_path", nargs="?", help="Session id or path to a session JSONL log.")
+    parser = argparse.ArgumentParser(
+        prog="agent-collab watch", description="Watch an agent-collab JSONL session log."
+    )
+    parser.add_argument(
+        "session_or_path", nargs="?", help="Session id or path to a session JSONL log."
+    )
     parser.add_argument("--server-url", help="Daemon URL for watching a daemon-owned session id.")
-    parser.add_argument("--workdir", type=Path, help="Project root used to resolve SESSION_ID logs.")
-    parser.add_argument("--log-dir", type=Path, help="Session log directory. Defaults to the global AGENT_COLLAB_HOME data/sessions directory.")
-    parser.add_argument("--session-id", help="Session id to resolve under the session log directory.")
-    parser.add_argument("--cursor", type=int, default=0, help="Start after this zero-based JSONL line offset.")
-    parser.add_argument("--no-follow", action="store_true", help="Print current events and exit instead of following.")
-    parser.add_argument("--wait-ms", type=int, default=30000, help="Daemon long-poll timeout while following.")
+    parser.add_argument(
+        "--workdir", type=Path, help="Project root used to resolve SESSION_ID logs."
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        help="Session log directory. Defaults to the global AGENT_COLLAB_HOME data/sessions directory.",
+    )
+    parser.add_argument(
+        "--session-id", help="Session id to resolve under the session log directory."
+    )
+    parser.add_argument(
+        "--cursor", type=int, default=0, help="Start after this zero-based JSONL line offset."
+    )
+    parser.add_argument(
+        "--no-follow",
+        action="store_true",
+        help="Print current events and exit instead of following.",
+    )
+    parser.add_argument(
+        "--wait-ms", type=int, default=30000, help="Daemon long-poll timeout while following."
+    )
     parser.add_argument("--no-color", action="store_true")
     return parser
 
 
 def build_tui_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-collab tui", description="Open the interactive daemon session TUI.")
-    parser.add_argument("session_id", nargs="?", help="Daemon session id to open. Defaults to the latest updated session.")
+    parser = argparse.ArgumentParser(
+        prog="agent-collab tui", description="Open the interactive daemon session TUI."
+    )
+    parser.add_argument(
+        "session_id",
+        nargs="?",
+        help="Daemon session id to open. Defaults to the latest updated session.",
+    )
     parser.add_argument("--server-url", help="Daemon URL for the TUI.")
     return parser
 
 
 def build_serve_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-collab serve", description="Run the local agent-collab daemon.")
+    parser = argparse.ArgumentParser(
+        prog="agent-collab serve", description="Run the local agent-collab daemon."
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--workdir", type=Path, default=Path("."), help=argparse.SUPPRESS)
@@ -59,7 +111,9 @@ def build_serve_parser() -> argparse.ArgumentParser:
 
 
 def build_start_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-collab start", description="Start a daemon-owned collaboration session.")
+    parser = argparse.ArgumentParser(
+        prog="agent-collab start", description="Start a daemon-owned collaboration session."
+    )
     parser.add_argument("task")
     parser.add_argument("--server-url")
     parser.add_argument("--workflow", default=DEFAULT_WORKFLOW)
@@ -77,8 +131,14 @@ def build_start_parser() -> argparse.ArgumentParser:
         "--backend-options",
         help='JSON object keyed by backend name, e.g. {"claude_cli":{"model":"opus"}}.',
     )
-    parser.add_argument("--watch", action="store_true", help="Start the session and immediately watch its transcript.")
-    parser.add_argument("--watch-wait-ms", type=int, default=30000, help="Long-poll timeout while watching.")
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Start the session and immediately watch its transcript.",
+    )
+    parser.add_argument(
+        "--watch-wait-ms", type=int, default=30000, help="Long-poll timeout while watching."
+    )
     parser.add_argument("--no-color", action="store_true")
     return parser
 
@@ -90,13 +150,19 @@ def build_options_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--server-url")
     parser.add_argument("--workdir", type=Path, default=Path("."))
-    parser.add_argument("--fresh", action="store_true", help="Bypass the backend health cache for this snapshot.")
-    parser.add_argument("--json", action="store_true", help="Print the complete discovery response as JSON.")
+    parser.add_argument(
+        "--fresh", action="store_true", help="Bypass the backend health cache for this snapshot."
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="Print the complete discovery response as JSON."
+    )
     return parser
 
 
 def build_daemon_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-collab daemon", description="Manage the global background server.")
+    parser = argparse.ArgumentParser(
+        prog="agent-collab daemon", description="Manage the global background server."
+    )
     subparsers = parser.add_subparsers(dest="action", required=True)
 
     start = subparsers.add_parser("start", help="Start the global background server.")
@@ -106,7 +172,7 @@ def build_daemon_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("status", help="Show daemon status.")
 
-    stop = subparsers.add_parser("stop", help="Stop the daemon.")
+    subparsers.add_parser("stop", help="Stop the daemon.")
 
     restart = subparsers.add_parser("restart", help="Restart the daemon.")
     _add_daemon_default_workdir(restart)
@@ -115,7 +181,9 @@ def build_daemon_parser() -> argparse.ArgumentParser:
 
     logs = subparsers.add_parser("logs", help="Print daemon logs.")
     logs.add_argument("--tail", type=int, default=100)
-    logs.add_argument("--stderr", action="store_true", help="Read daemon.stderr.log instead of daemon.log.")
+    logs.add_argument(
+        "--stderr", action="store_true", help="Read daemon.stderr.log instead of daemon.log."
+    )
     return parser
 
 
@@ -143,9 +211,15 @@ def build_session_parser(prog: str, description: str) -> argparse.ArgumentParser
 def build_events_parser() -> argparse.ArgumentParser:
     parser = build_session_parser("agent-collab events", "Read daemon session events.")
     parser.add_argument("--cursor", type=int, default=0)
-    parser.add_argument("--wait", action="store_true", help="Long-poll until events are available or timeout elapses.")
+    parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Long-poll until events are available or timeout elapses.",
+    )
     parser.add_argument("--timeout-ms", type=int, default=30000)
-    parser.add_argument("--json", action="store_true", help="Print raw JSON response instead of transcript lines.")
+    parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response instead of transcript lines."
+    )
     parser.add_argument("--no-color", action="store_true")
     return parser
 
@@ -163,9 +237,15 @@ def _main_watch(argv) -> int:
                 session_id=args.session_id,
                 log_dir=args.log_dir,
             )
-            watch_jsonl(path, follow=not args.no_follow, start_cursor=args.cursor, color=not args.no_color)
+            watch_jsonl(
+                path, follow=not args.no_follow, start_cursor=args.cursor, color=not args.no_color
+            )
         else:
-            session_id = args.session_id or args.session_or_path or _latest_daemon_session_id(args.server_url)
+            session_id = (
+                args.session_id
+                or args.session_or_path
+                or _latest_daemon_session_id(args.server_url)
+            )
             _watch_daemon_session(
                 session_id,
                 server_url=args.server_url,
@@ -208,7 +288,9 @@ def _watch_should_use_file(args) -> bool:
     return path.exists() or path.is_absolute() or len(path.parts) > 1 or path.suffix == ".jsonl"
 
 
-def _watch_daemon_session(session_id: str, server_url, cursor: int, follow: bool, wait_ms: int, color: bool) -> None:
+def _watch_daemon_session(
+    session_id: str, server_url, cursor: int, follow: bool, wait_ms: int, color: bool
+) -> None:
     from .events import Event
     from .terminal import print_event
 
@@ -234,7 +316,9 @@ def _latest_daemon_session_id(server_url) -> str:
     sessions = _client(server_url).list_sessions().sessions
     if not sessions:
         raise ValueError("no daemon sessions found")
-    latest = max(sessions, key=lambda item: (item.updated_at or item.created_at or "", item.session_id or ""))
+    latest = max(
+        sessions, key=lambda item: (item.updated_at or item.created_at or "", item.session_id or "")
+    )
     if not latest.session_id:
         raise ValueError("latest daemon session did not include a session_id")
     return str(latest.session_id)
@@ -313,7 +397,9 @@ def _main_options(argv) -> int:
             return 0
         discovery = result.get("discovery") or {}
         print(f"workdir: {discovery.get('workdir', payload['workdir'])}")
-        print(f"health: {discovery.get('health_request', payload['health_refresh'])} (advisory; start revalidates)")
+        print(
+            f"health: {discovery.get('health_request', payload['health_refresh'])} (advisory; start revalidates)"
+        )
         for name, item in sorted((result.get("canonical_backends") or {}).items()):
             probe = item.get("probe") or {}
             assessment = item.get("assessment") or {}
@@ -326,7 +412,9 @@ def _main_options(argv) -> int:
             )
         for workflow in result.get("workflows") or []:
             selected = ", ".join(workflow.get("selected_canonical_backends") or []) or "(mock)"
-            print(f"workflow {workflow.get('id')}: {selected} eligible={str(workflow.get('start_eligible')).lower()}")
+            print(
+                f"workflow {workflow.get('id')}: {selected} eligible={str(workflow.get('start_eligible')).lower()}"
+            )
     except Exception as exc:
         print(f"ERROR   {exc}", file=sys.stderr)
         return 1
@@ -334,11 +422,19 @@ def _main_options(argv) -> int:
 
 
 def _main_daemon(argv) -> int:
-    from .daemon_supervisor import DaemonSupervisorError, daemon_status, start_daemon, stop_daemon, tail_daemon_log
+    from .daemon_supervisor import (
+        DaemonSupervisorError,
+        daemon_status,
+        start_daemon,
+        stop_daemon,
+        tail_daemon_log,
+    )
 
     parser = build_daemon_parser()
     args = parser.parse_args(argv)
-    default_workdir = args.workdir.expanduser().resolve() if getattr(args, "workdir", None) else None
+    default_workdir = (
+        args.workdir.expanduser().resolve() if getattr(args, "workdir", None) else None
+    )
     try:
         if args.action == "start":
             state = start_daemon(host=args.host, port=args.port, default_workdir=default_workdir)
@@ -351,7 +447,13 @@ def _main_daemon(argv) -> int:
             status = daemon_status()
             print(status.message)
             if status.state:
-                for key in ("server_url", "mcp_url", "data_dir", "daemon_log_path", "daemon_stderr_path"):
+                for key in (
+                    "server_url",
+                    "mcp_url",
+                    "data_dir",
+                    "daemon_log_path",
+                    "daemon_stderr_path",
+                ):
                     if key in status.state:
                         print(f"{key}: {status.state[key]}")
             return 0 if status.running else 1
@@ -384,11 +486,17 @@ def _main_config(argv) -> int:
     from .config_migrations import CURRENT_CONFIG_SCHEMA
     from .paths import AgentCollabHome
 
-    parser = argparse.ArgumentParser(prog="agent-collab config", description="Inspect effective configuration.")
+    parser = argparse.ArgumentParser(
+        prog="agent-collab config", description="Inspect effective configuration."
+    )
     subparsers = parser.add_subparsers(dest="action", required=True)
     show = subparsers.add_parser("show", help="Print the effective merged config for a workdir.")
-    show.add_argument("--workdir", type=Path, default=Path("."), help="Project root whose config to resolve.")
-    init = subparsers.add_parser("init", help="Create a user config with explicit backend enablement policy.")
+    show.add_argument(
+        "--workdir", type=Path, default=Path("."), help="Project root whose config to resolve."
+    )
+    init = subparsers.add_parser(
+        "init", help="Create a user config with explicit backend enablement policy."
+    )
     init.add_argument("--force", action="store_true", help="Replace an existing user config.")
     args = parser.parse_args(argv)
 
@@ -396,7 +504,9 @@ def _main_config(argv) -> int:
         home = AgentCollabHome.resolve()
         if args.action == "init":
             if home.config_path.exists() and not args.force:
-                raise ValueError(f"user config already exists: {home.config_path} (pass --force to replace it)")
+                raise ValueError(
+                    f"user config already exists: {home.config_path} (pass --force to replace it)"
+                )
             home.root.mkdir(parents=True, exist_ok=True)
             home.config_path.write_text(render_user_config(), encoding="utf-8")
             print(f"created user config: {home.config_path}")
@@ -506,7 +616,9 @@ def _print_session(session) -> None:
     if sequence:
         print(f"sequence: {' -> '.join(sequence)}")
     for agent_id, agent in (settings.get("agents") or {}).items():
-        details = [f"{key}={value}" for key, value in agent.items() if key not in {"command_preview"}]
+        details = [
+            f"{key}={value}" for key, value in agent.items() if key not in {"command_preview"}
+        ]
         print(f"agent {agent_id}: {' '.join(details)}")
         preview = agent.get("command_preview")
         if preview:

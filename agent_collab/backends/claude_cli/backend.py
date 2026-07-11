@@ -33,7 +33,9 @@ class ClaudeCliBackend:
     def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
         return dict(OPTION_SCHEMA)
 
-    def normalize_options(self, agent: AgentConfig, requested: Mapping[str, Any]) -> Mapping[str, Any]:
+    def normalize_options(
+        self, agent: AgentConfig, requested: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
         inferred: Dict[str, Any] = {}
         for field, flag in (
             ("model", "--model"),
@@ -43,7 +45,9 @@ class ClaudeCliBackend:
         ):
             value = flag_value(agent.args, flag)
             if value is not None:
-                inferred[field] = int(value) if field == "thinking_budget_tokens" and value.isdigit() else value
+                inferred[field] = (
+                    int(value) if field == "thinking_budget_tokens" and value.isdigit() else value
+                )
         configured = agent.options_for(self.id)
         normalized = normalize_declared_options(
             requested, self.option_schema(agent), configured=configured, inferred=inferred
@@ -70,7 +74,9 @@ class ClaudeCliBackend:
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
         return {"backend": "cli", "options": dict(options)}
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
+    def create_runner(
+        self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
+    ) -> AgentRunner:
         if not agent.command:
             raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
         return SubprocessRunner(

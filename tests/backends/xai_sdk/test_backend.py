@@ -138,9 +138,7 @@ class XaiSdkBackendTests(unittest.TestCase):
             )
 
     def test_describe_options_exposes_dynamic_xai_sdk_contract(self):
-        payload = describe_options(
-            _config(), health=lambda backend: BackendHealth(status="ok")
-        )
+        payload = describe_options(_config(), health=lambda backend: BackendHealth(status="ok"))
         entry = payload["canonical_backends"]["xai_sdk"]
         self.assertEqual(entry["static"]["event_fidelity"], "message_only")
         self.assertEqual(entry["static"]["provider_session_id_kind"], "response")
@@ -166,12 +164,16 @@ class XaiSdkBackendTests(unittest.TestCase):
         events = asyncio.run(_collect(backend.create_runner(_agent(), True, options)))
         self.assertTrue(closed)
         messages = [event for event in events if event.type == "message"]
-        self.assertEqual([(event.source, event.text) for event in messages], [("xai", "fixture response")])
+        self.assertEqual(
+            [(event.source, event.text) for event in messages], [("xai", "fixture response")]
+        )
         identity = next(event for event in events if (event.raw or {}).get("provider_session_id"))
         self.assertEqual(identity.raw["provider_session_id"], "resp-123")
         self.assertEqual(identity.raw["provider_session_kind"], "response")
         self.assertEqual(identity.raw["agent_id"], "xai")
-        self.assertFalse(any(event.type in {"tool_call", "command", "file_change"} for event in events))
+        self.assertFalse(
+            any(event.type in {"tool_call", "command", "file_change"} for event in events)
+        )
 
     def test_sdk_exception_maps_to_transcript_error(self):
         async def failing_stream(agent, options, workdir, prompt):

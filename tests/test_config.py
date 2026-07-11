@@ -58,7 +58,9 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(DEFAULT_CONFIG_PATH.exists())
             self.assertEqual(config.agents["claude"].type, "claude")
             self.assertEqual(config.agents["claude"].command, "claude")
-            self.assertEqual(config.agents["claude"].args, ["-p", "--output-format", "stream-json", "--verbose"])
+            self.assertEqual(
+                config.agents["claude"].args, ["-p", "--output-format", "stream-json", "--verbose"]
+            )
             self.assertEqual(config.agents["claude"].options, {})
             self.assertEqual(config.agents["codex"].command, "codex")
             self.assertEqual(config.agents["codex"].args, ["exec", "--json"])
@@ -75,7 +77,9 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.agents["xai"].options, {})
             self.assertEqual(config.workflows["solo-claude"].sequence, ["claude"])
             self.assertEqual(config.workflows["solo-codex"].sequence, ["codex"])
-            self.assertEqual(config.workflows["cross-review"].sequence, ["claude", "codex", "claude"])
+            self.assertEqual(
+                config.workflows["cross-review"].sequence, ["claude", "codex", "claude"]
+            )
             self.assertEqual(config.workflows["compare"].sequence, ["claude", "codex"])
             self.assertEqual(config.loaded_paths, [])
 
@@ -112,8 +116,13 @@ sequence = ["codex_readonly", "claude", "codex_readonly"]
             config = load_config(root, env=_env(home))
 
             self.assertEqual(config.agents["codex"].command, "project-codex")
-            self.assertEqual(config.agents["codex_readonly"].args, ["exec", "--json", "--profile", "readonly"])
-            self.assertEqual(config.workflows["readonly-review"].sequence, ["codex_readonly", "claude", "codex_readonly"])
+            self.assertEqual(
+                config.agents["codex_readonly"].args, ["exec", "--json", "--profile", "readonly"]
+            )
+            self.assertEqual(
+                config.workflows["readonly-review"].sequence,
+                ["codex_readonly", "claude", "codex_readonly"],
+            )
 
     def test_user_config_overrides_builtin(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -228,7 +237,11 @@ sequence = ["claude"]
                 }
             },
             "workflows": [
-                {"id": "solo-claude", "selected_canonical_backends": ["claude_cli"], "start_eligible": True}
+                {
+                    "id": "solo-claude",
+                    "selected_canonical_backends": ["claude_cli"],
+                    "start_eligible": True,
+                }
             ],
         }
         output = io.StringIO()
@@ -273,7 +286,10 @@ sequence = ["codex_readonly", "claude", "codex_readonly"]
         )
 
         self.assertEqual(data["agents"]["codex_readonly"]["env"], {"CODEX_HOME": "/tmp/codex"})
-        self.assertEqual(data["workflows"]["readonly-review"]["sequence"], ["codex_readonly", "claude", "codex_readonly"])
+        self.assertEqual(
+            data["workflows"]["readonly-review"]["sequence"],
+            ["codex_readonly", "claude", "codex_readonly"],
+        )
 
     def test_toml_subset_parser_supports_backend_agent_options(self):
         data = _parse_toml_subset(
@@ -321,7 +337,7 @@ thinking_level = "high"
             home = Path(tmp) / "home"
             root.mkdir()
             home.mkdir()
-            _write_config(root, '[agents.claude]\nbogus = true\n')
+            _write_config(root, "[agents.claude]\nbogus = true\n")
 
             with self.assertRaisesRegex(ConfigError, "agents.claude.bogus"):
                 load_config(root, env=_env(home))
@@ -334,13 +350,13 @@ thinking_level = "high"
             home.mkdir()
             _write_config(
                 root,
-                '''
+                """
 [agents.antigravity_sdk]
 type = "antigravity"
 backend = "sdk"
 vertex = true
 location = "us-central1"
-''',
+""",
             )
 
             with self.assertRaisesRegex(ConfigError, "agents.antigravity_sdk.project"):

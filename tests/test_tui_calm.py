@@ -56,8 +56,8 @@ def _info_text(segments):
 class BrandColorMappingTests(unittest.TestCase):
     def test_known_brand_hexes_pin_to_expected_xterm256_cells(self):
         self.assertEqual(xterm256_from_hex("#D97757"), 173)  # claude coral
-        self.assertEqual(xterm256_from_hex("#10A37F"), 36)   # codex green
-        self.assertEqual(xterm256_from_hex("#4285F4"), 69)   # antigravity blue
+        self.assertEqual(xterm256_from_hex("#10A37F"), 36)  # codex green
+        self.assertEqual(xterm256_from_hex("#4285F4"), 69)  # antigravity blue
         self.assertEqual(xterm256_from_hex("#A0A0A0"), 247)  # xAI neutral monochrome
 
     def test_hex_parsing_tolerates_missing_hash_and_rejects_bad_input(self):
@@ -154,8 +154,18 @@ class ContextAgentClusterTests(unittest.TestCase):
         session = {
             "settings": {
                 "agents": {
-                    "claude": {"type": "claude", "model": "opus-4.8", "backend": "cli", "brand_color": "#D97757"},
-                    "codex": {"type": "codex", "model": "gpt-5", "backend": "sdk", "brand_color": "#10A37F"},
+                    "claude": {
+                        "type": "claude",
+                        "model": "opus-4.8",
+                        "backend": "cli",
+                        "brand_color": "#D97757",
+                    },
+                    "codex": {
+                        "type": "codex",
+                        "model": "gpt-5",
+                        "backend": "sdk",
+                        "brand_color": "#10A37F",
+                    },
                 }
             }
         }
@@ -208,7 +218,9 @@ class SharedOverlayTests(unittest.TestCase):
         self.assertEqual(lines, format_session_picker_lines(picker))
 
     def test_selects_help_overlay_when_no_picker(self):
-        lines = overlay_body_lines(picker=None, overlay_lines=("commands", "row"), details_overlay=("d",))
+        lines = overlay_body_lines(
+            picker=None, overlay_lines=("commands", "row"), details_overlay=("d",)
+        )
         self.assertEqual(lines, ("commands", "row"))
 
     def test_selects_details_overlay_last(self):
@@ -229,7 +241,9 @@ class HintPrecedenceTests(unittest.TestCase):
             "Enter next · Esc cancel",
         )
         self.assertEqual(select_hint(new_wizard_step="workdir"), "Enter start · Esc cancel")
-        self.assertEqual(select_hint(picker_open=True, palette_open=True), "↑↓ move · Enter open · Esc close")
+        self.assertEqual(
+            select_hint(picker_open=True, palette_open=True), "↑↓ move · Enter open · Esc close"
+        )
         self.assertEqual(select_hint(palette_open=True), "Enter send · Tab complete · Esc close")
         self.assertEqual(select_hint(details_mode="narrow"), "↑↓ scroll · Esc close")
         self.assertEqual(select_hint(details_mode="wide"), "Enter send · / cmds · Esc close")
@@ -275,7 +289,9 @@ class SpinnerTests(unittest.TestCase):
 
     def test_activity_indicator_uses_selected_spinner(self):
         self.assertEqual(format_activity_indicator({"status": "running"}, 0), "⠋ running")
-        self.assertEqual(format_activity_indicator({"status": "running"}, 0, utf8=False), ". running")
+        self.assertEqual(
+            format_activity_indicator({"status": "running"}, 0, utf8=False), ". running"
+        )
         self.assertEqual(format_activity_indicator({"status": "awaiting_input"}), "awaiting input")
 
 
@@ -314,7 +330,9 @@ class DirectedEntryTests(unittest.TestCase):
 
 class ToolSummaryTests(unittest.TestCase):
     def test_multiline_tool_event_collapses_to_one_summary_row(self):
-        event = Event.create("tool", "command", "Read options.py:281\n" + "\n".join(f"line {i}" for i in range(50)))
+        event = Event.create(
+            "tool", "command", "Read options.py:281\n" + "\n".join(f"line {i}" for i in range(50))
+        )
         lines = format_transcript_event(event)
         self.assertEqual(len(lines), 1)
         rendered = render_transcript_lines(lines)[0]
@@ -406,8 +424,18 @@ def _session():
                 "workflow": {"name": "cross-review", "sequence": ["claude", "codex"]},
                 "interactive": True,
                 "agents": {
-                    "claude": {"type": "claude", "model": "opus-4.8", "backend": "cli", "brand_color": "#D97757"},
-                    "codex": {"type": "codex", "model": "gpt-5", "backend": "sdk", "brand_color": "#10A37F"},
+                    "claude": {
+                        "type": "claude",
+                        "model": "opus-4.8",
+                        "backend": "cli",
+                        "brand_color": "#D97757",
+                    },
+                    "codex": {
+                        "type": "codex",
+                        "model": "gpt-5",
+                        "backend": "sdk",
+                        "brand_color": "#10A37F",
+                    },
                 },
             },
         }
@@ -471,9 +499,7 @@ class RenderIntegrationTests(unittest.TestCase):
         app.styles = {"band": 7}
         app.utf8 = True
         long_text = "verify the worker threads never touch live session state " * 3
-        app.transcript_lines = format_transcript_event(
-            Event.create("human", "message", long_text)
-        )
+        app.transcript_lines = format_transcript_event(Event.create("human", "message", long_text))
         app.scroll = follow_scroll(len(app.transcript_lines), app._body_height())
         app._render()
 

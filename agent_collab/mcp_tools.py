@@ -68,7 +68,11 @@ TOOLS = [
     {
         "name": "agent_collab_status",
         "description": "Return status and log paths for a daemon-owned agent-collab session.",
-        "inputSchema": {"type": "object", "properties": {"session_id": {"type": "string"}}, "required": ["session_id"]},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
     },
     {
         "name": "agent_collab_read_events",
@@ -136,7 +140,11 @@ TOOLS = [
     {
         "name": "agent_collab_stop",
         "description": "Request cancellation of a running daemon-owned session.",
-        "inputSchema": {"type": "object", "properties": {"session_id": {"type": "string"}}, "required": ["session_id"]},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
     },
     {
         "name": "agent_collab_guidance",
@@ -167,36 +175,27 @@ class McpToolError(ValueError):
 
 
 class ToolBackend(Protocol):
-    async def start_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        ...
+    async def start_session(self, payload: Dict[str, Any]) -> Dict[str, Any]: ...
 
-    async def describe_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        ...
+    async def describe_options(self, payload: Dict[str, Any]) -> Dict[str, Any]: ...
 
-    async def list_sessions(self) -> Dict[str, Any]:
-        ...
+    async def list_sessions(self) -> Dict[str, Any]: ...
 
-    async def get_session(self, session_id: str) -> Dict[str, Any]:
-        ...
+    async def get_session(self, session_id: str) -> Dict[str, Any]: ...
 
     async def read_events(
         self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
-    ) -> Dict[str, Any]:
-        ...
+    ) -> Dict[str, Any]: ...
 
     async def wait_events(
         self, session_id: str, cursor: int, timeout_ms: int, tool_output: str
-    ) -> Dict[str, Any]:
-        ...
+    ) -> Dict[str, Any]: ...
 
-    async def read_transcript(self, session_id: str, tool_output: str) -> str:
-        ...
+    async def read_transcript(self, session_id: str, tool_output: str) -> str: ...
 
-    async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        ...
+    async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]: ...
 
-    async def stop_session(self, session_id: str) -> Dict[str, Any]:
-        ...
+    async def stop_session(self, session_id: str) -> Dict[str, Any]: ...
 
 
 class SessionManagerToolBackend:
@@ -234,9 +233,7 @@ class SessionManagerToolBackend:
         self, session_id: str, cursor: int, timeout_ms: int, tool_output: str
     ) -> Dict[str, Any]:
         return (
-            await self.manager.wait_events(
-                session_id, cursor, timeout_ms, tool_output=tool_output
-            )
+            await self.manager.wait_events(session_id, cursor, timeout_ms, tool_output=tool_output)
         ).to_dict()
 
     async def read_transcript(self, session_id: str, tool_output: str) -> str:
@@ -247,7 +244,9 @@ class SessionManagerToolBackend:
             await self.manager.post_message(
                 session_id,
                 _required_str(payload, "text"),
-                source=str(payload.get("source", "referee")) if payload.get("source") is not None else "referee",
+                source=str(payload.get("source", "referee"))
+                if payload.get("source") is not None
+                else "referee",
                 target=payload.get("target"),
             )
         ).to_dict()
@@ -282,27 +281,37 @@ class HttpClientToolBackend:
     async def read_events(
         self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
     ) -> Dict[str, Any]:
-        return self.client_factory().read_events(
-            session_id, cursor, limit=limit, tool_output=tool_output
-        ).to_dict()
+        return (
+            self.client_factory()
+            .read_events(session_id, cursor, limit=limit, tool_output=tool_output)
+            .to_dict()
+        )
 
     async def wait_events(
         self, session_id: str, cursor: int, timeout_ms: int, tool_output: str
     ) -> Dict[str, Any]:
-        return self.client_factory().wait_events(
-            session_id, cursor, timeout_ms, tool_output=tool_output
-        ).to_dict()
+        return (
+            self.client_factory()
+            .wait_events(session_id, cursor, timeout_ms, tool_output=tool_output)
+            .to_dict()
+        )
 
     async def read_transcript(self, session_id: str, tool_output: str) -> str:
         return self.client_factory().read_transcript(session_id, tool_output=tool_output)
 
     async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self.client_factory().post_message(
-            session_id,
-            _required_str(payload, "text"),
-            source=str(payload.get("source", "referee")) if payload.get("source") is not None else "referee",
-            target=payload.get("target"),
-        ).to_dict()
+        return (
+            self.client_factory()
+            .post_message(
+                session_id,
+                _required_str(payload, "text"),
+                source=str(payload.get("source", "referee"))
+                if payload.get("source") is not None
+                else "referee",
+                target=payload.get("target"),
+            )
+            .to_dict()
+        )
 
     async def stop_session(self, session_id: str) -> Dict[str, Any]:
         return self.client_factory().stop_session(session_id).to_dict()
@@ -394,7 +403,7 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
         if name == "agent_collab_read_events":
             request = _parse_tool_request(
                 ReadEventsRequestModel.from_dict,
-                {key: args[key] for key in ("cursor", "limit", "tool_output") if key in args}
+                {key: args[key] for key in ("cursor", "limit", "tool_output") if key in args},
             )
             return content(
                 await backend.read_events(
@@ -407,11 +416,7 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
         if name == "agent_collab_wait_events":
             request = _parse_tool_request(
                 WaitEventsRequestModel.from_dict,
-                {
-                    key: args[key]
-                    for key in ("cursor", "timeout_ms", "tool_output")
-                    if key in args
-                }
+                {key: args[key] for key in ("cursor", "timeout_ms", "tool_output") if key in args},
             )
             return content(
                 await backend.wait_events(
@@ -424,7 +429,7 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
         if name == "agent_collab_read_transcript":
             request = _parse_tool_request(
                 TranscriptRequestModel.from_dict,
-                {key: args[key] for key in ("tool_output",) if key in args}
+                {key: args[key] for key in ("tool_output",) if key in args},
             )
             return text_content(await backend.read_transcript(session_id, request.tool_output))
         if name == "agent_collab_post_message":
@@ -544,7 +549,9 @@ def _post_message_payload(args: Dict[str, Any]) -> Dict[str, Any]:
     payload = {key: args[key] for key in ("text", "source", "target") if key in args}
     if not isinstance(payload.get("text"), str) or not payload["text"]:
         raise McpToolError("text is required")
-    if "source" in payload and (not isinstance(payload["source"], str) or payload["source"] not in {"human", "referee"}):
+    if "source" in payload and (
+        not isinstance(payload["source"], str) or payload["source"] not in {"human", "referee"}
+    ):
         raise McpToolError("source must be 'human' or 'referee'")
     if "target" in payload and not isinstance(payload["target"], str):
         raise McpToolError("target must be a string")

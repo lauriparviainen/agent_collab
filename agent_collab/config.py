@@ -109,7 +109,9 @@ def load_config(
     if project_path.exists():
         merge_config_data(
             config,
-            migrate_config_data(load_toml_file(project_path), source=str(project_path), scope="project"),
+            migrate_config_data(
+                load_toml_file(project_path), source=str(project_path), scope="project"
+            ),
         )
         config.loaded_paths.append(project_path)
 
@@ -134,7 +136,9 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
         for agent_id, values in agents.items():
             if not isinstance(values, Mapping):
                 raise ConfigError(f"[agents.{agent_id}] must be a table")
-            config.agents[str(agent_id)] = _merge_agent(config.agents.get(str(agent_id)), str(agent_id), values)
+            config.agents[str(agent_id)] = _merge_agent(
+                config.agents.get(str(agent_id)), str(agent_id), values
+            )
 
     workflows = data.get("workflows", {})
     if workflows is not None:
@@ -162,20 +166,26 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
             config.backends[name] = BackendPolicyConfig(name, enabled, "user_config")
 
 
-def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping[str, Any]) -> AgentConfig:
-    agent = AgentConfig(id=agent_id, type="") if existing is None else AgentConfig(
-        id=existing.id,
-        type=existing.type,
-        command=existing.command,
-        args=list(existing.args),
-        enabled=existing.enabled,
-        name=existing.name,
-        env=dict(existing.env),
-        cwd=existing.cwd,
-        timeout=existing.timeout,
-        backend_config=dict(existing.backend_config),
-        options=dict(existing.options),
-        backend=existing.backend,
+def _merge_agent(
+    existing: Optional[AgentConfig], agent_id: str, values: Mapping[str, Any]
+) -> AgentConfig:
+    agent = (
+        AgentConfig(id=agent_id, type="")
+        if existing is None
+        else AgentConfig(
+            id=existing.id,
+            type=existing.type,
+            command=existing.command,
+            args=list(existing.args),
+            enabled=existing.enabled,
+            name=existing.name,
+            env=dict(existing.env),
+            cwd=existing.cwd,
+            timeout=existing.timeout,
+            backend_config=dict(existing.backend_config),
+            options=dict(existing.options),
+            backend=existing.backend,
+        )
     )
     for key, value in values.items():
         if key == "type":
@@ -206,7 +216,9 @@ def _merge_agent(existing: Optional[AgentConfig], agent_id: str, values: Mapping
     return agent
 
 
-def _merge_workflow(existing: Optional[WorkflowConfig], workflow_id: str, values: Mapping[str, Any]) -> WorkflowConfig:
+def _merge_workflow(
+    existing: Optional[WorkflowConfig], workflow_id: str, values: Mapping[str, Any]
+) -> WorkflowConfig:
     workflow = (
         WorkflowConfig(id=workflow_id)
         if existing is None
@@ -308,9 +320,13 @@ def validate_workflow(config: CollaborationConfig, workflow_id: str) -> None:
     for agent_id in workflow.sequence:
         agent = config.agents.get(agent_id)
         if agent is None:
-            raise ConfigError(f"workflows.{workflow_id}.sequence references unknown agent {agent_id!r}")
+            raise ConfigError(
+                f"workflows.{workflow_id}.sequence references unknown agent {agent_id!r}"
+            )
         if not agent.enabled:
-            raise ConfigError(f"workflows.{workflow_id}.sequence references disabled agent {agent_id!r}")
+            raise ConfigError(
+                f"workflows.{workflow_id}.sequence references disabled agent {agent_id!r}"
+            )
 
 
 def load_toml_file(path: Path) -> Dict[str, Any]:
@@ -343,7 +359,9 @@ def _parse_toml_subset(text: str) -> Dict[str, Any]:
                     raise ConfigError(f"line {line_number}: invalid TOML section {section!r}")
                 child = current.setdefault(key, {})
                 if not isinstance(child, dict):
-                    raise ConfigError(f"line {line_number}: section conflicts with value {section!r}")
+                    raise ConfigError(
+                        f"line {line_number}: section conflicts with value {section!r}"
+                    )
                 current = child
             continue
         if "=" not in line:
@@ -352,7 +370,9 @@ def _parse_toml_subset(text: str) -> Dict[str, Any]:
         key = key.strip()
         if not key:
             raise ConfigError(f"line {line_number}: empty TOML key")
-        _set_dotted_key(current, key, _parse_toml_value(raw_value.strip(), line_number), line_number)
+        _set_dotted_key(
+            current, key, _parse_toml_value(raw_value.strip(), line_number), line_number
+        )
     return root
 
 
@@ -472,7 +492,9 @@ def _expect_str_list(value: Any, label: str) -> List[str]:
 
 
 def _expect_str_dict(value: Any, label: str) -> Dict[str, str]:
-    if not isinstance(value, Mapping) or not all(isinstance(key, str) and isinstance(val, str) for key, val in value.items()):
+    if not isinstance(value, Mapping) or not all(
+        isinstance(key, str) and isinstance(val, str) for key, val in value.items()
+    ):
         raise ConfigError(f"{label} must be a table of string values")
     return dict(value)
 

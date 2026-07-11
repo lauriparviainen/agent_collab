@@ -162,7 +162,9 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
 
                 restarted = SessionManager(index_path=index_path)
                 replayed = restarted.read_events(final.session_id, 0)
-                waited = await restarted.wait_events(final.session_id, replayed.cursor, timeout_ms=50)
+                waited = await restarted.wait_events(
+                    final.session_id, replayed.cursor, timeout_ms=50
+                )
 
             self.assertGreater(replayed.cursor, 0)
             self.assertEqual(

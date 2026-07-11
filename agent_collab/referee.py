@@ -151,14 +151,18 @@ class Referee:
         prior = self._recent_transcript(transcript)
         guardrails = self._guardrails()
         if turn == 1:
-            role = "Lead agent: analyze the task and propose or perform the smallest useful next step."
+            role = (
+                "Lead agent: analyze the task and propose or perform the smallest useful next step."
+            )
         elif turn == 2:
             role = "Reviewer agent: critique, identify gaps, and improve the previous response."
         else:
             role = "Lead/reviser: produce a concise revision that accounts for the review."
         return f"{guardrails}\n{role}\n\nTASK:\n{task}\n\nRECENT TRANSCRIPT:\n{prior}\n"
 
-    def _directed_prompt_for(self, task: str, agent: str, question: str, transcript: List[Event]) -> str:
+    def _directed_prompt_for(
+        self, task: str, agent: str, question: str, transcript: List[Event]
+    ) -> str:
         prior = self._recent_transcript(transcript)
         role = (
             "Directed agent: answer the referee's latest question using the current transcript. "
@@ -211,7 +215,11 @@ class Referee:
                 await self._emit(
                     logger,
                     transcript,
-                    Event.create("error", "error", f"{runner.name} turn exceeded timeout of {self.config.timeout}s"),
+                    Event.create(
+                        "error",
+                        "error",
+                        f"{runner.name} turn exceeded timeout of {self.config.timeout}s",
+                    ),
                 )
         finally:
             await self._set_turn_active(False)
@@ -226,7 +234,9 @@ class Referee:
     ) -> None:
         if not item.target:
             return
-        await self._emit(logger, transcript, Event.create("referee", "status", f"directed turn: {item.target}"))
+        await self._emit(
+            logger, transcript, Event.create("referee", "status", f"directed turn: {item.target}")
+        )
         prompt = self._directed_prompt_for(task, item.target, item.event.text, transcript)
         await self._run_agent_turn(logger, transcript, runners[item.target], prompt)
 
@@ -308,7 +318,9 @@ class Referee:
         sequence = self._sequence()[: max(0, self.config.max_turns)]
 
         with SessionLogger(self.log_dir, task, self.config.session_id) as logger:
-            await self._emit(logger, transcript, Event.create("human", "message", task, {"task": task}))
+            await self._emit(
+                logger, transcript, Event.create("human", "message", task, {"task": task})
+            )
             await self._emit(
                 logger,
                 transcript,
@@ -319,12 +331,18 @@ class Referee:
                 ),
             )
             if self.config.interactive:
-                await self._register_event_appender(lambda event: self._emit(logger, transcript, event))
+                await self._register_event_appender(
+                    lambda event: self._emit(logger, transcript, event)
+                )
             try:
                 for turn, agent_name in enumerate(sequence, start=1):
                     if self.config.interactive:
                         await self._process_pending_inputs(logger, transcript, runners, task)
-                    await self._emit(logger, transcript, Event.create("referee", "status", f"turn {turn}: {agent_name}"))
+                    await self._emit(
+                        logger,
+                        transcript,
+                        Event.create("referee", "status", f"turn {turn}: {agent_name}"),
+                    )
                     prompt = self._prompt_for(task, agent_name, turn, transcript)
                     await self._run_agent_turn(logger, transcript, runners[agent_name], prompt)
                 if self.config.interactive:

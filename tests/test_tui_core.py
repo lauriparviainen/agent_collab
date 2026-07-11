@@ -117,7 +117,10 @@ class TuiCoreTests(unittest.TestCase):
         self.assertIn("mock: false", text)
         self.assertIn("dry_run: true", text)
         self.assertIn("jsonl_path: /logs/s1.jsonl", text)
-        self.assertIn("agent codex: type=codex model=gpt-5 thinking_level=high sandbox=read-only approval_policy=never", text)
+        self.assertIn(
+            "agent codex: type=codex model=gpt-5 thinking_level=high sandbox=read-only approval_policy=never",
+            text,
+        )
         self.assertIn("command_preview: codex --model gpt-5", text)
         self.assertNotIn("ended_at:", text)
 
@@ -156,7 +159,9 @@ class TuiCoreTests(unittest.TestCase):
         state = make_slash_completion("/s")
         self.assertIsNotNone(state)
         assert state is not None
-        self.assertEqual([match.name for match in state.matches], ["/sessions", "/session", "/stop"])
+        self.assertEqual(
+            [match.name for match in state.matches], ["/sessions", "/session", "/stop"]
+        )
         self.assertEqual(selected_slash_command(state), "/sessions")
 
         state = move_slash_completion(state, 1)
@@ -190,9 +195,15 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(format_activity_indicator({"status": "running"}, tick=0), "⠋ running")
         self.assertEqual(format_activity_indicator({"status": "running"}, tick=1), "⠙ running")
         # ASCII dot-pulse fallback on non-UTF-8 terminals.
-        self.assertEqual(format_activity_indicator({"status": "running"}, tick=0, utf8=False), ". running")
-        self.assertEqual(format_activity_indicator({"status": "running"}, tick=2, utf8=False), "... running")
-        self.assertEqual(format_activity_indicator({"status": "awaiting_input"}, tick=2), "awaiting input")
+        self.assertEqual(
+            format_activity_indicator({"status": "running"}, tick=0, utf8=False), ". running"
+        )
+        self.assertEqual(
+            format_activity_indicator({"status": "running"}, tick=2, utf8=False), "... running"
+        )
+        self.assertEqual(
+            format_activity_indicator({"status": "awaiting_input"}, tick=2), "awaiting input"
+        )
         # Terminal sessions show just the status — the input chip carries "read-only".
         self.assertEqual(format_activity_indicator({"status": "done"}, tick=3), "done")
 
@@ -236,14 +247,21 @@ class TuiCoreTests(unittest.TestCase):
     def test_ensure_scroll_visible_adjusts_minimally_and_never_follows(self):
         state = ScrollState(top=10, follow=False)
         # Row already on screen: unchanged.
-        self.assertEqual(ensure_scroll_visible(state, 12, 13, 100, 10), ScrollState(top=10, follow=False))
+        self.assertEqual(
+            ensure_scroll_visible(state, 12, 13, 100, 10), ScrollState(top=10, follow=False)
+        )
         # Row above the viewport: scroll up to it.
-        self.assertEqual(ensure_scroll_visible(state, 4, 5, 100, 10), ScrollState(top=4, follow=False))
+        self.assertEqual(
+            ensure_scroll_visible(state, 4, 5, 100, 10), ScrollState(top=4, follow=False)
+        )
         # Row below the viewport: scroll down just enough.
-        self.assertEqual(ensure_scroll_visible(state, 25, 26, 100, 10), ScrollState(top=16, follow=False))
+        self.assertEqual(
+            ensure_scroll_visible(state, 25, 26, 100, 10), ScrollState(top=16, follow=False)
+        )
         # A following (tail-pinned) state is re-anchored to the row.
         self.assertEqual(
-            ensure_scroll_visible(follow_scroll(100, 10), 0, 1, 100, 10), ScrollState(top=0, follow=False)
+            ensure_scroll_visible(follow_scroll(100, 10), 0, 1, 100, 10),
+            ScrollState(top=0, follow=False),
         )
 
     def test_picker_scroll_opens_at_top_and_tracks_selection(self):
@@ -348,11 +366,26 @@ class TuiCoreTests(unittest.TestCase):
 
     def test_session_picker_helpers_sort_move_and_render(self):
         sessions = [
-            {"session_id": "old", "status": "done", "workflow": "solo-codex", "updated_at": "2026-07-08T00:00:00+00:00", "workdir": "/old"},
-            {"session_id": "new", "status": "running", "workflow": "cross-review", "updated_at": "2026-07-08T01:00:00+00:00", "workdir": "/new"},
+            {
+                "session_id": "old",
+                "status": "done",
+                "workflow": "solo-codex",
+                "updated_at": "2026-07-08T00:00:00+00:00",
+                "workdir": "/old",
+            },
+            {
+                "session_id": "new",
+                "status": "running",
+                "workflow": "cross-review",
+                "updated_at": "2026-07-08T01:00:00+00:00",
+                "workdir": "/new",
+            },
         ]
 
-        self.assertEqual([session["session_id"] for session in sort_sessions_latest_first(sessions)], ["new", "old"])
+        self.assertEqual(
+            [session["session_id"] for session in sort_sessions_latest_first(sessions)],
+            ["new", "old"],
+        )
 
         picker = make_session_picker(sessions, current_session_id="old")
         self.assertEqual(selected_picker_session_id(picker), "old")
@@ -376,7 +409,9 @@ class TuiCoreTests(unittest.TestCase):
             ],
         }
 
-        self.assertEqual(agents_from_options(options), (AgentRef(id="claude", type="claude", enabled=True),))
+        self.assertEqual(
+            agents_from_options(options), (AgentRef(id="claude", type="claude", enabled=True),)
+        )
         self.assertEqual(workflow_ids_from_options(options), ("solo-claude", "compare"))
 
     def test_new_session_payload_matches_daemon_start_shape(self):
@@ -436,7 +471,9 @@ class TuiCoreMockDaemonTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             manager = SessionManager()
             state = await manager.start_session(
-                StartSessionRequest(task="tui mock task", mock=True, max_turns=1, timeout=5, workdir=root)
+                StartSessionRequest(
+                    task="tui mock task", mock=True, max_turns=1, timeout=5, workdir=root
+                )
             )
             final = await self._wait_for_terminal(manager, state.session_id)
 

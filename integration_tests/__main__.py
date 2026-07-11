@@ -41,7 +41,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if result.failures or result.errors:
         return 1
-    if strict and any(str(reason).startswith("[strict-missing]") for _test, reason in result.skipped):
+    if strict and any(
+        str(reason).startswith("[strict-missing]") for _test, reason in result.skipped
+    ):
         return 2
     return 0
 

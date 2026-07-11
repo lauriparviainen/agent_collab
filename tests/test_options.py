@@ -24,7 +24,11 @@ class BackendQualifiedOptionTests(unittest.TestCase):
             _config(),
             "cross-review",
             {
-                "codex_cli": {"thinking_level": "xhigh", "sandbox": "workspace-write", "search": False},
+                "codex_cli": {
+                    "thinking_level": "xhigh",
+                    "sandbox": "workspace-write",
+                    "search": False,
+                },
                 "claude_cli": {"model": "sonnet", "thinking_level": "max"},
             },
         )
@@ -152,7 +156,9 @@ class DescribeOptionsTests(unittest.TestCase):
         config = _config()
         config.backends["claude_cli"] = BackendPolicyConfig("claude_cli", False)
         calls = []
-        payload = describe_options(config, health=lambda backend: calls.append(backend) or BackendHealth())
+        payload = describe_options(
+            config, health=lambda backend: calls.append(backend) or BackendHealth()
+        )
         entry = payload["canonical_backends"]["claude_cli"]
         self.assertFalse(entry["policy"]["enabled"])
         self.assertEqual(entry["probe"]["status"], "not_run")
@@ -164,7 +170,9 @@ class DescribeOptionsTests(unittest.TestCase):
 class CommandMappingTests(unittest.TestCase):
     def test_claude_cli_manifest_options_map_to_flags(self):
         agent = AgentConfig(
-            id="claude", type="claude", command="claude",
+            id="claude",
+            type="claude",
+            command="claude",
             args=["-p", "--output-format", "stream-json", "--model", "old"],
         )
         backend = ClaudeCliBackend()
@@ -193,7 +201,9 @@ class CommandMappingTests(unittest.TestCase):
         config = CollaborationConfig(
             agents={
                 "claude": AgentConfig(
-                    id="claude", type="claude", command="claude",
+                    id="claude",
+                    type="claude",
+                    command="claude",
                     options={"model": "sonnet"},
                 )
             },
@@ -207,7 +217,9 @@ class CommandMappingTests(unittest.TestCase):
         config = CollaborationConfig(
             agents={
                 "claude": AgentConfig(
-                    id="claude", type="claude", command="claude",
+                    id="claude",
+                    type="claude",
+                    command="claude",
                     options={"thinking_budget_tokens": 2048},
                 )
             },
@@ -241,8 +253,11 @@ class SessionSettingsTests(unittest.TestCase):
         )
         normalized = normalize_start_options(config, "solo", agent_backends={"claude": "sdk"})
         settings = build_session_settings(
-            config, "solo", normalized.backend_options,
-            agent_backends={"claude": "sdk"}, agent_options=normalized.agent_options,
+            config,
+            "solo",
+            normalized.backend_options,
+            agent_backends={"claude": "sdk"},
+            agent_options=normalized.agent_options,
         )
         self.assertNotIn("command_preview", settings["agents"]["claude"])
 

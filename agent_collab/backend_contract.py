@@ -89,7 +89,9 @@ def load_option_schema(path: Path) -> Dict[str, OptionSpec]:
         minimum = raw.get("min")
         maximum = raw.get("max")
         for key, value in (("min", minimum), ("max", maximum)):
-            if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+            if value is not None and (
+                not isinstance(value, (int, float)) or isinstance(value, bool)
+            ):
                 raise ConfigError(f"{label}.{key} must be a number")
         if (minimum is not None or maximum is not None) and option_type != "integer":
             raise ConfigError(f"{label}: min/max are supported only for integer options")
@@ -182,7 +184,8 @@ def _validate_values(values: Mapping[str, Any], schema: Mapping[str, OptionSpec]
             raise BackendOptionError(field, f"must be a {spec.type}")
         if spec.allowed is not None and value not in spec.allowed:
             raise BackendOptionError(
-                field, f"unsupported value {value!r}; expected one of: {', '.join(map(str, spec.allowed))}"
+                field,
+                f"unsupported value {value!r}; expected one of: {', '.join(map(str, spec.allowed))}",
             )
         if spec.minimum is not None and value < spec.minimum:
             raise BackendOptionError(field, f"must be >= {spec.minimum:g}")

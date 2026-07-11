@@ -71,11 +71,14 @@ class DaemonSupervisorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._paths(tmp)
 
-            with mock.patch(
-                "agent_collab.daemon_supervisor.subprocess.Popen", return_value=FakeProcess()
-            ) as popen, mock.patch(
-                "agent_collab.daemon_supervisor._read_process_identity",
-                return_value=self.PROCESS_IDENTITY,
+            with (
+                mock.patch(
+                    "agent_collab.daemon_supervisor.subprocess.Popen", return_value=FakeProcess()
+                ) as popen,
+                mock.patch(
+                    "agent_collab.daemon_supervisor._read_process_identity",
+                    return_value=self.PROCESS_IDENTITY,
+                ),
             ):
                 state = start_daemon(paths, host="127.0.0.1", port=8765)
 
@@ -109,11 +112,14 @@ class DaemonSupervisorTests(unittest.TestCase):
             workdir = Path(tmp) / "project"
             workdir.mkdir()
 
-            with mock.patch(
-                "agent_collab.daemon_supervisor.subprocess.Popen", return_value=FakeProcess()
-            ) as popen, mock.patch(
-                "agent_collab.daemon_supervisor._read_process_identity",
-                return_value=self.PROCESS_IDENTITY,
+            with (
+                mock.patch(
+                    "agent_collab.daemon_supervisor.subprocess.Popen", return_value=FakeProcess()
+                ) as popen,
+                mock.patch(
+                    "agent_collab.daemon_supervisor._read_process_identity",
+                    return_value=self.PROCESS_IDENTITY,
+                ),
             ):
                 state = start_daemon(paths, default_workdir=workdir)
 
@@ -127,7 +133,9 @@ class DaemonSupervisorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._paths(tmp)
 
-            with mock.patch("agent_collab.daemon_supervisor.subprocess.Popen", return_value=FailedProcess()):
+            with mock.patch(
+                "agent_collab.daemon_supervisor.subprocess.Popen", return_value=FailedProcess()
+            ):
                 with self.assertRaises(DaemonSupervisorError):
                     start_daemon(paths, host="127.0.0.1", port=8765)
 
@@ -183,11 +191,12 @@ class DaemonSupervisorTests(unittest.TestCase):
             paths.state_path.write_text(json.dumps({"pid": 4242}), encoding="utf-8")
             paths.token_path.write_text("stale", encoding="utf-8")
 
-            with mock.patch(
-                "agent_collab.daemon_supervisor.os.kill", return_value=None
-            ), mock.patch(
-                "agent_collab.daemon_supervisor._daemon_identity_status",
-                return_value="match",
+            with (
+                mock.patch("agent_collab.daemon_supervisor.os.kill", return_value=None),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._daemon_identity_status",
+                    return_value="match",
+                ),
             ):
                 with self.assertRaises(DaemonSupervisorError):
                     start_daemon(paths)
@@ -197,9 +206,10 @@ class DaemonSupervisorTests(unittest.TestCase):
             paths = self._paths(tmp)
             paths.ensure_dirs()
 
-            with _daemon_start_lock(paths), mock.patch(
-                "agent_collab.daemon_supervisor.subprocess.Popen"
-            ) as popen:
+            with (
+                _daemon_start_lock(paths),
+                mock.patch("agent_collab.daemon_supervisor.subprocess.Popen") as popen,
+            ):
                 with self.assertRaisesRegex(DaemonSupervisorError, "start already in progress"):
                     start_daemon(paths)
 
@@ -213,7 +223,9 @@ class DaemonSupervisorTests(unittest.TestCase):
             paths.pid_path.write_text("4242\n", encoding="utf-8")
             paths.state_path.write_text(json.dumps({"pid": 4242}), encoding="utf-8")
 
-            with mock.patch("agent_collab.daemon_supervisor.os.kill", side_effect=ProcessLookupError):
+            with mock.patch(
+                "agent_collab.daemon_supervisor.os.kill", side_effect=ProcessLookupError
+            ):
                 status = daemon_status(paths)
 
             self.assertFalse(status.running)
@@ -250,11 +262,12 @@ class DaemonSupervisorTests(unittest.TestCase):
                     raise ProcessLookupError()
                 return None
 
-            with mock.patch(
-                "agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill
-            ), mock.patch(
-                "agent_collab.daemon_supervisor._daemon_identity_status",
-                return_value="match",
+            with (
+                mock.patch("agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._daemon_identity_status",
+                    return_value="match",
+                ),
             ):
                 status = stop_daemon(paths, grace_seconds=0.1)
 
@@ -278,11 +291,12 @@ class DaemonSupervisorTests(unittest.TestCase):
                 signals.append(sig)
 
             replacement = dict(self.PROCESS_IDENTITY, start_time="999999")
-            with mock.patch(
-                "agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill
-            ), mock.patch(
-                "agent_collab.daemon_supervisor._read_process_identity",
-                return_value=replacement,
+            with (
+                mock.patch("agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._read_process_identity",
+                    return_value=replacement,
+                ),
             ):
                 status = stop_daemon(paths)
 
@@ -306,11 +320,12 @@ class DaemonSupervisorTests(unittest.TestCase):
             def fake_kill(_pid, sig):
                 signals.append(sig)
 
-            with mock.patch(
-                "agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill
-            ), mock.patch(
-                "agent_collab.daemon_supervisor._read_process_identity",
-                return_value=None,
+            with (
+                mock.patch("agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._read_process_identity",
+                    return_value=None,
+                ),
             ):
                 with self.assertRaisesRegex(DaemonSupervisorError, "refusing to signal"):
                     stop_daemon(paths)
@@ -333,11 +348,12 @@ class DaemonSupervisorTests(unittest.TestCase):
             def fake_kill(_pid, sig):
                 signals.append(sig)
 
-            with mock.patch(
-                "agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill
-            ), mock.patch(
-                "agent_collab.daemon_supervisor._daemon_identity_status",
-                side_effect=["match", "mismatch"],
+            with (
+                mock.patch("agent_collab.daemon_supervisor.os.kill", side_effect=fake_kill),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._daemon_identity_status",
+                    side_effect=["match", "mismatch"],
+                ),
             ):
                 status = stop_daemon(paths, grace_seconds=0)
 
@@ -352,9 +368,7 @@ class DaemonSupervisorTests(unittest.TestCase):
             "agent_collab.daemon_supervisor._read_process_identity",
             return_value=actual,
         ):
-            self.assertTrue(
-                _daemon_identity_matches(4242, {"process_identity": dict(actual)})
-            )
+            self.assertTrue(_daemon_identity_matches(4242, {"process_identity": dict(actual)}))
             self.assertFalse(
                 _daemon_identity_matches(
                     4242,

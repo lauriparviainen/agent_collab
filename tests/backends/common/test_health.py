@@ -50,7 +50,9 @@ class _CliProbeBackend:
 
 class CliProbeTests(unittest.TestCase):
     def test_missing_binary_is_unavailable_with_reason(self):
-        health = probe_cli_backend("agy", which=_WhichFake(False), run_version=None, now=lambda: "t")
+        health = probe_cli_backend(
+            "agy", which=_WhichFake(False), run_version=None, now=lambda: "t"
+        )
         self.assertEqual(health.status, HEALTH_UNAVAILABLE)
         self.assertIn("agy", health.reason)
         self.assertIn("not found", health.reason)
@@ -112,13 +114,17 @@ class AntigravityCredentialsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             (base / "antigravity-cli").mkdir()
-            (base / "antigravity-cli" / "antigravity-oauth-token").write_text("tok", encoding="utf-8")
+            (base / "antigravity-cli" / "antigravity-oauth-token").write_text(
+                "tok", encoding="utf-8"
+            )
             self.assertEqual(antigravity_credentials(base), CREDENTIALS_OK)
 
     def test_active_account_is_ok(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            (base / "google_accounts.json").write_text(json.dumps({"active": "me@x"}), encoding="utf-8")
+            (base / "google_accounts.json").write_text(
+                json.dumps({"active": "me@x"}), encoding="utf-8"
+            )
             self.assertEqual(antigravity_credentials(base), CREDENTIALS_OK)
 
     def test_no_token_and_no_account_is_missing(self):
@@ -224,7 +230,10 @@ class StartHealthGatingTests(unittest.TestCase):
 
     def test_unavailable_backend_rejects_start_with_reason(self):
         config = _antigravity_config()
-        health = lambda at, bid: BackendHealth(status=HEALTH_UNAVAILABLE, reason="agy: command not found on PATH")
+
+        def health(_agent_type, _backend_id):
+            return BackendHealth(status=HEALTH_UNAVAILABLE, reason="agy: command not found on PATH")
+
         with self.assertRaises(StartOptionsError) as ctx:
             validate_start_backends(config, "solo", health=health)
         message = ctx.exception.to_dict()["details"][0]["message"]
@@ -238,7 +247,9 @@ class StartHealthGatingTests(unittest.TestCase):
             reason="native runtime incompatible",
             checked_at="t",
             reason_codes=("native_runtime_incompatible",),
-            remediation=({"code": "use_compatible_native_runtime", "message": "Use a compatible host."},),
+            remediation=(
+                {"code": "use_compatible_native_runtime", "message": "Use a compatible host."},
+            ),
         )
         with self.assertRaises(StartOptionsError) as ctx:
             validate_start_backends(config, "solo", health=lambda *args: status)
@@ -267,7 +278,12 @@ class StartHealthGatingTests(unittest.TestCase):
 
     def test_missing_credentials_reject_with_sign_in_hint(self):
         config = _antigravity_config()
-        health = lambda at, bid: BackendHealth(status=HEALTH_OK, credentials=CREDENTIALS_MISSING, reason="no token")
+
+        def health(_agent_type, _backend_id):
+            return BackendHealth(
+                status=HEALTH_OK, credentials=CREDENTIALS_MISSING, reason="no token"
+            )
+
         with self.assertRaises(StartOptionsError) as ctx:
             validate_start_backends(config, "solo", health=health)
         message = ctx.exception.to_dict()["details"][0]["message"]
@@ -276,7 +292,10 @@ class StartHealthGatingTests(unittest.TestCase):
 
     def test_unknown_credentials_warn_but_do_not_block(self):
         config = _antigravity_config()
-        health = lambda at, bid: BackendHealth(status=HEALTH_OK, credentials=CREDENTIALS_UNKNOWN)
+
+        def health(_agent_type, _backend_id):
+            return BackendHealth(status=HEALTH_OK, credentials=CREDENTIALS_UNKNOWN)
+
         selection = validate_start_backends(config, "solo", health=health)
         self.assertEqual(selection.agent_backends, {"ag": "cli"})
         self.assertTrue(selection.warnings)
@@ -284,7 +303,10 @@ class StartHealthGatingTests(unittest.TestCase):
 
     def test_unknown_status_warns_but_does_not_block(self):
         config = _antigravity_config()
-        health = lambda at, bid: BackendHealth(status="unknown", reason="probe indeterminate")
+
+        def health(_agent_type, _backend_id):
+            return BackendHealth(status="unknown", reason="probe indeterminate")
+
         selection = validate_start_backends(config, "solo", health=health)
         self.assertEqual(selection.agent_backends, {"ag": "cli"})
         self.assertTrue(selection.warnings)
@@ -292,7 +314,10 @@ class StartHealthGatingTests(unittest.TestCase):
 
     def test_available_backend_with_ok_credentials_is_clean(self):
         config = _antigravity_config()
-        health = lambda at, bid: BackendHealth(status=HEALTH_OK, credentials=CREDENTIALS_OK)
+
+        def health(_agent_type, _backend_id):
+            return BackendHealth(status=HEALTH_OK, credentials=CREDENTIALS_OK)
+
         selection = validate_start_backends(config, "solo", health=health)
         self.assertEqual(selection.warnings, [])
 

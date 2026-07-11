@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add least-privilege, SHA-pinned GitHub Actions CI across Python 3.10-3.12,
+  enforcing Ruff lint/format checks, the hermetic suite, and generated API
+  artifact validation; establish and regression-test the repository-wide Ruff
+  baseline, including automatic Ruff checks in `./agent_collab.sh test`.
 - Capture proven Claude, Codex, and xAI CLI provider-session identities under
   the shared session schema, with trusted attribution and spoof-resistant
   bookkeeping; leave Antigravity CLI identity unset until its wire format

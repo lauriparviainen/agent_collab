@@ -96,7 +96,10 @@ class ClientAuthTests(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {}, clear=True):
                 with mock.patch(
-                    "agent_collab.client.urlopen", side_effect=lambda request, timeout: (_ for _ in ()).throw(_unauthorized(request))
+                    "agent_collab.client.urlopen",
+                    side_effect=lambda request, timeout: (_ for _ in ()).throw(
+                        _unauthorized(request)
+                    ),
                 ):
                     with self.assertRaisesRegex(ClientError, "daemon token mismatch"):
                         client.list_sessions()

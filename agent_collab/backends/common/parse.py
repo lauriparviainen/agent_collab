@@ -7,9 +7,22 @@ from typing import Any, Dict, Iterable
 
 TEXT_KEYS = ("text", "content", "message", "summary", "output")
 SKIP_TEXT_KEYS = {
-    "id", "model", "parent_tool_use_id", "request_id", "role", "service_tier",
-    "session_id", "signature", "status", "stop_reason", "stop_sequence", "subtype",
-    "thread_id", "type", "usage", "uuid",
+    "id",
+    "model",
+    "parent_tool_use_id",
+    "request_id",
+    "role",
+    "service_tier",
+    "session_id",
+    "signature",
+    "status",
+    "stop_reason",
+    "stop_sequence",
+    "subtype",
+    "thread_id",
+    "type",
+    "usage",
+    "uuid",
 }
 
 
@@ -57,4 +70,6 @@ def looks_like_tool(raw: Dict[str, Any]) -> bool:
 
 
 def looks_like_file_change(raw: Dict[str, Any]) -> bool:
-    return any(token in classifier_haystack(raw) for token in ("patch", "edit", "file_change", "diff"))
+    return any(
+        token in classifier_haystack(raw) for token in ("patch", "edit", "file_change", "diff")
+    )

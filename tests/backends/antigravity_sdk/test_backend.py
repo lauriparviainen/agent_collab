@@ -195,7 +195,12 @@ class SdkEventMappingTests(unittest.TestCase):
             by_type.setdefault(event.type, []).append(event)
 
         # final text -> antigravity message
-        self.assertTrue(any(e.source == "antigravity" and "Created hello.py" in e.text for e in by_type["message"]))
+        self.assertTrue(
+            any(
+                e.source == "antigravity" and "Created hello.py" in e.text
+                for e in by_type["message"]
+            )
+        )
         # CREATE_FILE -> file_change, RUN_COMMAND -> command, VIEW_FILE -> tool_call
         self.assertTrue(by_type.get("file_change"))
         self.assertTrue(by_type.get("command"))
@@ -274,10 +279,14 @@ class SdkEventMappingTests(unittest.TestCase):
 
     def test_reasoning_hidden_unless_verbose_and_never_leaks_signature(self):
         quiet = _run(_FakeResponse(_sample()["chat_response"]), verbose=False)
-        self.assertFalse(any(e.type == "status" and "create the file" in (e.text or "") for e in quiet))
+        self.assertFalse(
+            any(e.type == "status" and "create the file" in (e.text or "") for e in quiet)
+        )
 
         loud = _run(_FakeResponse(_sample()["chat_response"]), verbose=True)
-        self.assertTrue(any(e.type == "status" and "create the file" in (e.text or "") for e in loud))
+        self.assertTrue(
+            any(e.type == "status" and "create the file" in (e.text or "") for e in loud)
+        )
         # Thoughts carry reasoning text only, never their opaque bytes.
         for event in loud:
             self.assertNotIn("signature", event.raw or {})
@@ -531,7 +540,9 @@ class SdkSelectionTests(unittest.TestCase):
         with self.assertRaises(BackendOptionError) as missing_project:
             backend.normalize_config(
                 AgentConfig(
-                    id="ag", type="antigravity", backend="sdk",
+                    id="ag",
+                    type="antigravity",
+                    backend="sdk",
                     backend_config={"vertex": True, "location": "us-central1"},
                 )
             )
@@ -539,7 +550,9 @@ class SdkSelectionTests(unittest.TestCase):
         with self.assertRaises(BackendOptionError) as missing_location:
             backend.normalize_config(
                 AgentConfig(
-                    id="ag", type="antigravity", backend="sdk",
+                    id="ag",
+                    type="antigravity",
+                    backend="sdk",
                     backend_config={"vertex": True, "project": "test-project"},
                 )
             )
@@ -549,7 +562,9 @@ class SdkSelectionTests(unittest.TestCase):
         with self.assertRaises(BackendOptionError) as ctx:
             AntigravitySdkBackend().normalize_config(
                 AgentConfig(
-                    id="ag", type="antigravity", backend="sdk",
+                    id="ag",
+                    type="antigravity",
+                    backend="sdk",
                     backend_config={"project": "test-project"},
                 )
             )
@@ -574,14 +589,20 @@ class SdkSelectionTests(unittest.TestCase):
         # SDK normalization never imports the CLI posture from argv.
         normalized = validate_start_options(config, "solo")
         self.assertNotIn("mode", normalized["antigravity_sdk"])
-        selection = validate_start_backends(config, "solo", request_backend=None, backend_options={})
+        selection = validate_start_backends(
+            config, "solo", request_backend=None, backend_options={}
+        )
         self.assertEqual(selection.agent_backends, {"ag": "sdk"})
 
     def test_sdk_settings_do_not_advertise_inferred_cli_mode(self):
         config = CollaborationConfig(
             agents={
                 "ag": AgentConfig(
-                    id="ag", type="antigravity", command="agy", args=["-p", "--mode", "accept-edits"], backend="sdk"
+                    id="ag",
+                    type="antigravity",
+                    command="agy",
+                    args=["-p", "--mode", "accept-edits"],
+                    backend="sdk",
                 )
             },
             workflows={"solo": WorkflowConfig(id="solo", sequence=["ag"])},
@@ -604,9 +625,7 @@ class SdkSelectionTests(unittest.TestCase):
         self.assertEqual(entry["backend"], "sdk")
         self.assertNotIn("command_preview", entry)
         self.assertEqual(entry["backend_summary"]["package"], "google-antigravity")
-        self.assertEqual(
-            entry["backend_summary"]["options"], {"model": "Gemini 3.1 Pro (High)"}
-        )
+        self.assertEqual(entry["backend_summary"]["options"], {"model": "Gemini 3.1 Pro (High)"})
 
 
 if __name__ == "__main__":

@@ -96,7 +96,9 @@ def assess_native_runtime(
             "required": f"glibc >= {required}",
             "observed": f"{family} {observed}".strip() or "unknown",
         }
-    status = "compatible" if _version_tuple(observed) >= _version_tuple(required) else "incompatible"
+    status = (
+        "compatible" if _version_tuple(observed) >= _version_tuple(required) else "incompatible"
+    )
     return {
         "status": status,
         "required": f"glibc >= {required}",
@@ -238,7 +240,9 @@ class AntigravitySdkBackend:
     def normalize_config(self, agent: AgentConfig) -> Mapping[str, Any]:
         return _normalize_sdk_config(agent)
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
+    def create_runner(
+        self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
+    ) -> AgentRunner:
         factory = self._agent_factory or _default_agent_factory
         return AntigravitySdkRunner(agent, verbose, dict(options or {}), agent_factory=factory)
 
@@ -489,9 +493,13 @@ def _normalize_sdk_config(agent: AgentConfig) -> Dict[str, Any]:
     location = config.get("location")
     if vertex is True:
         if not isinstance(project, str) or not project.strip():
-            raise BackendOptionError("project", "is required and must be non-empty when vertex is true")
+            raise BackendOptionError(
+                "project", "is required and must be non-empty when vertex is true"
+            )
         if not isinstance(location, str) or not location.strip():
-            raise BackendOptionError("location", "is required and must be non-empty when vertex is true")
+            raise BackendOptionError(
+                "location", "is required and must be non-empty when vertex is true"
+            )
     elif project is not None or location is not None:
         field = "project" if project is not None else "location"
         raise BackendOptionError(field, "requires vertex=true")
@@ -513,7 +521,9 @@ def _default_agent_factory(agent: AgentConfig, options: Dict[str, Any], workdir:
     try:
         from google.antigravity import Agent, LocalAgentConfig  # type: ignore
     except ImportError as exc:
-        raise BackendUnavailable("antigravity", "sdk", f"{MODULE_NAME} is not importable", INSTALL_HINT) from exc
+        raise BackendUnavailable(
+            "antigravity", "sdk", f"{MODULE_NAME} is not importable", INSTALL_HINT
+        ) from exc
     config_kwargs: Dict[str, Any] = {"workspaces": [str(workdir)]}
     config_kwargs.update(_map_sdk_config(agent))
     config_kwargs.update(_map_sdk_options(options))

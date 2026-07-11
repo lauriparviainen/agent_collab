@@ -153,7 +153,8 @@ def probe_sdk_backend(
             remediation=(
                 {
                     "code": "install_sdk",
-                    "message": extra_hint or f"Install the Python package that provides {module_name}.",
+                    "message": extra_hint
+                    or f"Install the Python package that provides {module_name}.",
                 },
             ),
         )

@@ -99,13 +99,21 @@ def parse_input(raw: str) -> ParsedInput:
         name, _, rest = body.partition(" ")
         name = name.lower()
         if name not in SLASH_COMMANDS:
-            return ParsedInput(kind="invalid", command=name, error=f"unknown command /{name}; type /help")
+            return ParsedInput(
+                kind="invalid", command=name, error=f"unknown command /{name}; type /help"
+            )
         args = tuple(part for part in rest.split() if part)
         if name == "ask":
             agent, sep, message = rest.strip().partition(" ")
             if not sep or not agent.strip() or not message.strip():
                 return ParsedInput(kind="invalid", command=name, error="usage: /ask AGENT message")
-            return ParsedInput(kind="directed", command=name, args=args, agent=agent.strip(), message=message.strip())
+            return ParsedInput(
+                kind="directed",
+                command=name,
+                args=args,
+                agent=agent.strip(),
+                message=message.strip(),
+            )
         return ParsedInput(kind="slash", command=name, args=args, text=rest.strip())
     if value.startswith("#"):
         target, _, message = value.partition(" ")
@@ -198,7 +206,9 @@ def ascii_fallback(text: str) -> str:
     return str(text).translate(ASCII_FALLBACKS)
 
 
-def format_slash_completion_lines(state: SlashCompletionState, max_items: int = 6) -> Tuple[str, ...]:
+def format_slash_completion_lines(
+    state: SlashCompletionState, max_items: int = 6
+) -> Tuple[str, ...]:
     """Render the palette menu rows.
 
     Headerless (Stage 1b amendment): the typed ``/`` in the input box is the
@@ -323,7 +333,9 @@ def render_transcript_lines(lines: Iterable[TranscriptLine]) -> Tuple[str, ...]:
     return tuple(line.text for line in lines)
 
 
-def wrap_transcript_lines(lines: Sequence[TranscriptLine], width: int) -> Tuple[TranscriptLine, ...]:
+def wrap_transcript_lines(
+    lines: Sequence[TranscriptLine], width: int
+) -> Tuple[TranscriptLine, ...]:
     if width <= 0:
         return ()
     wrapped = []
@@ -359,7 +371,9 @@ def format_session_details(session: Any) -> Tuple[str, ...]:
     """
     raw_settings = _value(session, "settings", None)
     settings = raw_settings if isinstance(raw_settings, Mapping) else {}
-    workflow_settings = settings.get("workflow") if isinstance(settings.get("workflow"), Mapping) else {}
+    workflow_settings = (
+        settings.get("workflow") if isinstance(settings.get("workflow"), Mapping) else {}
+    )
 
     lines = []
     for key in ("session_id", "status"):
@@ -464,7 +478,9 @@ def sort_sessions_latest_first(sessions: Sequence[Any]) -> Tuple[Any, ...]:
     return tuple(sorted(sessions, key=_session_sort_key, reverse=True))
 
 
-def make_session_picker(sessions: Sequence[Any], current_session_id: Optional[str] = None) -> SessionPickerState:
+def make_session_picker(
+    sessions: Sequence[Any], current_session_id: Optional[str] = None
+) -> SessionPickerState:
     ordered = sort_sessions_latest_first(sessions)
     index = 0
     if current_session_id:
@@ -582,10 +598,14 @@ def visible_scroll_top(state: ScrollState, total_lines: int, viewport_height: in
 
 def clamp_scroll(state: ScrollState, total_lines: int, viewport_height: int) -> ScrollState:
     top = visible_scroll_top(state, total_lines, viewport_height)
-    return ScrollState(top=top, follow=state.follow and top == max_scroll_top(total_lines, viewport_height))
+    return ScrollState(
+        top=top, follow=state.follow and top == max_scroll_top(total_lines, viewport_height)
+    )
 
 
-def scroll_by(state: ScrollState, total_lines: int, viewport_height: int, delta: int) -> ScrollState:
+def scroll_by(
+    state: ScrollState, total_lines: int, viewport_height: int, delta: int
+) -> ScrollState:
     maximum = max_scroll_top(total_lines, viewport_height)
     current = visible_scroll_top(state, total_lines, viewport_height)
     top = max(0, min(maximum, current + delta))
@@ -676,7 +696,9 @@ def advance_cursor_state(
 ) -> Tuple[CursorState, bool]:
     if state.session_id != session_id or state.epoch != epoch:
         return state, False
-    return CursorState(session_id=state.session_id, cursor=max(0, int(cursor)), epoch=state.epoch), True
+    return CursorState(
+        session_id=state.session_id, cursor=max(0, int(cursor)), epoch=state.epoch
+    ), True
 
 
 def build_new_session_payload(
@@ -709,9 +731,7 @@ def build_new_session_payload(
         "dry_run": bool(dry_run),
         "interactive": bool(interactive),
         "interactive_idle_timeout": float(interactive_idle_timeout),
-        "backend_options": {
-            key: dict(value) for key, value in (backend_options or {}).items()
-        },
+        "backend_options": {key: dict(value) for key, value in (backend_options or {}).items()},
     }
 
 
@@ -943,7 +963,7 @@ def abbreviate_path(path: Any) -> str:
     if text == home:
         return "~"
     if text.startswith(home + "/"):
-        return "~" + text[len(home):]
+        return "~" + text[len(home) :]
     return text
 
 
@@ -964,7 +984,7 @@ def git_branch(workdir: Any) -> Optional[str]:
         return None
     prefix = "ref: refs/heads/"
     if content.startswith(prefix):
-        return content[len(prefix):].strip() or None
+        return content[len(prefix) :].strip() or None
     return None
 
 
@@ -1044,7 +1064,11 @@ def select_hint(
 ) -> str:
     """Resolve the contextual hint by first-match precedence (region 6)."""
     if new_wizard_step is not None:
-        return "Enter start · Esc cancel" if new_wizard_step == "workdir" else "Enter next · Esc cancel"
+        return (
+            "Enter start · Esc cancel"
+            if new_wizard_step == "workdir"
+            else "Enter next · Esc cancel"
+        )
     if picker_open:
         return "↑↓ move · Enter open · Esc close"
     if palette_open:
@@ -1115,13 +1139,28 @@ def overlay_body_lines(
 
 
 _ERROR_MESSAGE_MARKERS = (
-    "read-only", "unknown", "cannot", "error", "required", "invalid",
-    "ambiguous", "refused", "already", "no active session", "usage:",
+    "read-only",
+    "unknown",
+    "cannot",
+    "error",
+    "required",
+    "invalid",
+    "ambiguous",
+    "refused",
+    "already",
+    "no active session",
+    "usage:",
     "available only",
 )
 _SUCCESS_MESSAGE_MARKERS = (
-    "sent", "asked", "queued", "opened", "refreshed", "following",
-    "stopped", "inserted",
+    "sent",
+    "asked",
+    "queued",
+    "opened",
+    "refreshed",
+    "following",
+    "stopped",
+    "inserted",
 )
 
 

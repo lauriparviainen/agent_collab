@@ -60,8 +60,12 @@ class McpServerTests(unittest.TestCase):
         response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
         tools = {tool["name"]: tool for tool in response["result"]["tools"]}
 
-        self.assertEqual(tools["agent_collab_start"]["inputSchema"]["required"], ["task", "workdir"])
-        self.assertEqual(tools["agent_collab_describe_options"]["inputSchema"]["required"], ["workdir"])
+        self.assertEqual(
+            tools["agent_collab_start"]["inputSchema"]["required"], ["task", "workdir"]
+        )
+        self.assertEqual(
+            tools["agent_collab_describe_options"]["inputSchema"]["required"], ["workdir"]
+        )
 
     def test_guidance_without_topic_returns_full_markdown(self):
         result = handle_tool("agent_collab_guidance", {})
@@ -248,7 +252,10 @@ class McpServerTests(unittest.TestCase):
             result = handle_tool("agent_collab_read_transcript", {"session_id": "s1"})
 
         client.read_transcript.assert_called_once_with("s1", tool_output="summary")
-        self.assertEqual(result, {"content": [{"type": "text", "text": "# transcript\n\nhello\n"}], "isError": False})
+        self.assertEqual(
+            result,
+            {"content": [{"type": "text", "text": "# transcript\n\nhello\n"}], "isError": False},
+        )
 
     def test_read_projection_options_map_to_client(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -305,7 +312,9 @@ class McpServerTests(unittest.TestCase):
                 {"session_id": "s1", "text": "hello", "source": "referee", "target": "claude"},
             )
 
-        client.post_message.assert_called_once_with("s1", "hello", source="referee", target="claude")
+        client.post_message.assert_called_once_with(
+            "s1", "hello", source="referee", target="claude"
+        )
         _assert_tool_result(self, result, batch.to_dict())
 
     def test_stop_maps_to_client_stop_session(self):
@@ -347,7 +356,9 @@ class McpServerTests(unittest.TestCase):
 
         self.assertNotIn("error", response)
         self.assertEqual(response["id"], 7)
-        _assert_tool_result(self, response["result"], {"error": "could not reach daemon"}, is_error=True)
+        _assert_tool_result(
+            self, response["result"], {"error": "could not reach daemon"}, is_error=True
+        )
 
     def test_unexpected_client_exception_is_not_converted_to_tool_content(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -374,11 +385,14 @@ class McpServerTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
 
-        with mock.patch("agent_collab.mcp_server.sys.stdin", stdin), mock.patch(
-            "agent_collab.mcp_server.sys.stdout", stdout
-        ), mock.patch("agent_collab.mcp_server.sys.stderr", stderr), mock.patch(
-            "agent_collab.mcp_server.handle",
-            side_effect=RuntimeError(sensitive_detail),
+        with (
+            mock.patch("agent_collab.mcp_server.sys.stdin", stdin),
+            mock.patch("agent_collab.mcp_server.sys.stdout", stdout),
+            mock.patch("agent_collab.mcp_server.sys.stderr", stderr),
+            mock.patch(
+                "agent_collab.mcp_server.handle",
+                side_effect=RuntimeError(sensitive_detail),
+            ),
         ):
             serve()
 

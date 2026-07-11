@@ -16,6 +16,7 @@ class NormalizedStartOptions:
     backend_options: Dict[str, Dict[str, Any]]
     agent_options: Dict[str, Dict[str, Any]]
 
+
 class StartOptionsError(ValueError):
     code = "invalid_start_options"
 
@@ -83,8 +84,7 @@ def normalize_start_options(
     selected_names = {
         backend_registry.backend_name(
             config.agents[agent_id].type,
-            resolved.get(agent_id)
-            or backend_registry.resolve_backend_id(config.agents[agent_id]),
+            resolved.get(agent_id) or backend_registry.resolve_backend_id(config.agents[agent_id]),
         )
         for agent_id in workflow.sequence
         if config.agents[agent_id].type != "mock"
@@ -151,7 +151,9 @@ def normalize_start_options(
         try:
             normalized = dict(backend.normalize_options(agent, requested))
         except BackendOptionError as exc:
-            errors.append({"path": f"{path}.{exc.field}" if exc.field else path, "message": exc.message})
+            errors.append(
+                {"path": f"{path}.{exc.field}" if exc.field else path, "message": exc.message}
+            )
             continue
         except Exception as exc:
             errors.append(
@@ -193,11 +195,15 @@ def normalize_start_options(
             if agent_id in agent_options
             and backend_registry.backend_name(
                 config.agents[agent_id].type,
-                resolved.get(agent_id) or backend_registry.resolve_backend_id(config.agents[agent_id]),
-            ) == name
+                resolved.get(agent_id)
+                or backend_registry.resolve_backend_id(config.agents[agent_id]),
+            )
+            == name
         ]
         normalized_backend_options[name] = _common_options(values)
-    return NormalizedStartOptions(backend_options=normalized_backend_options, agent_options=agent_options)
+    return NormalizedStartOptions(
+        backend_options=normalized_backend_options, agent_options=agent_options
+    )
 
 
 def validate_start_backends(
@@ -297,7 +303,9 @@ def validate_start_backends(
 class BackendSelection:
     """Resolved per-agent backend map plus any non-fatal start warnings."""
 
-    def __init__(self, agent_backends: Dict[str, str], warnings: Optional[List[Dict[str, str]]] = None):
+    def __init__(
+        self, agent_backends: Dict[str, str], warnings: Optional[List[Dict[str, str]]] = None
+    ):
         self.agent_backends = dict(agent_backends)
         self.warnings = list(warnings or [])
 
@@ -352,7 +360,9 @@ def _validate_backend_values(
                     f"expected one of: {expected}"
                 )
             else:
-                message = f"backend {backend_id!r} returned an undeclared option for agent {agent_id!r}"
+                message = (
+                    f"backend {backend_id!r} returned an undeclared option for agent {agent_id!r}"
+                )
             errors.append({"path": field_path, "message": message})
             continue
         _validate_field_value(values[key], field_path, spec.to_dict(), errors)
@@ -444,7 +454,10 @@ def _gate_backend_health(
                         + "; run the provider CLI and sign in"
                     ),
                     "remediation": [
-                        {"code": "provider_sign_in", "message": "Use the provider's supported sign-in flow, then retry."}
+                        {
+                            "code": "provider_sign_in",
+                            "message": "Use the provider's supported sign-in flow, then retry.",
+                        }
                     ],
                 }
             )
@@ -498,7 +511,10 @@ def describe_options(
 
     resolved_workdir = str(workdir.expanduser().resolve()) if workdir else "."
     canonical_backends = _describe_canonical_backends(config, health, health_refresh)
-    agents = [_describe_agent(config, agent, canonical_backends) for agent in sorted(config.agents.values(), key=lambda item: item.id)]
+    agents = [
+        _describe_agent(config, agent, canonical_backends)
+        for agent in sorted(config.agents.values(), key=lambda item: item.id)
+    ]
     workflows = []
     workflow_agent_types: Dict[str, List[str]] = {}
     for workflow_id, workflow in sorted(config.workflows.items()):
@@ -544,8 +560,14 @@ def describe_options(
         "workflow_agent_types": workflow_agent_types,
         "backends": compatibility_backends,
         "recommendations": {
-            "agents": {agent["id"]: _agent_recommendation(agent, canonical_backends) for agent in agents if agent.get("canonical_backend")},
-            "workflows": {workflow["id"]: _workflow_recommendation(workflow) for workflow in workflows},
+            "agents": {
+                agent["id"]: _agent_recommendation(agent, canonical_backends)
+                for agent in agents
+                if agent.get("canonical_backend")
+            },
+            "workflows": {
+                workflow["id"]: _workflow_recommendation(workflow) for workflow in workflows
+            },
         },
         "backend_options": _backend_option_schemas(config),
         "examples": [
@@ -568,7 +590,9 @@ def describe_options(
     }
 
 
-def describe_options_for_workdir(workdir: Path, *, health_refresh: str = "cached") -> Dict[str, Any]:
+def describe_options_for_workdir(
+    workdir: Path, *, health_refresh: str = "cached"
+) -> Dict[str, Any]:
     root = workdir.expanduser().resolve()
     return describe_options(load_config(root), root, health_refresh=health_refresh)
 
@@ -657,7 +681,11 @@ def _probe_description(backend: Any, health: Any, *, fresh: bool, run: bool) -> 
 
         observation = backend_registry.HEALTH.observe(backend, fresh=fresh)
         status = observation.health
-        cache_hit, age, ttl = observation.cache_hit, observation.age_seconds, observation.ttl_seconds
+        cache_hit, age, ttl = (
+            observation.cache_hit,
+            observation.age_seconds,
+            observation.ttl_seconds,
+        )
     return {
         "status": "completed",
         "source": "side_effect_free_probe",
@@ -681,7 +709,9 @@ def _backend_configuration_schema(backend: Any) -> Dict[str, Any]:
         return _option_object_schema({})
 
 
-def _assess_backend(canonical: str, probe: Mapping[str, Any], policy: Mapping[str, Any]) -> Dict[str, Any]:
+def _assess_backend(
+    canonical: str, probe: Mapping[str, Any], policy: Mapping[str, Any]
+) -> Dict[str, Any]:
     if not policy["enabled"]:
         return {
             "state": "unknown",
@@ -700,7 +730,10 @@ def _assess_backend(canonical: str, probe: Mapping[str, Any], policy: Mapping[st
     credentials = health.get("credentials", "unknown")
     reason_codes = list(health.get("reason_codes") or [])
     remediation = [dict(item) for item in (health.get("remediation") or [])]
-    uncertainties = ["no_model_call_was_made", "authentication_entitlement_model_and_service_state_not_proven"]
+    uncertainties = [
+        "no_model_call_was_made",
+        "authentication_entitlement_model_and_service_state_not_proven",
+    ]
     if probe.get("stale"):
         state = "unknown"
         reason_codes.append("probe_stale")
@@ -709,7 +742,10 @@ def _assess_backend(canonical: str, probe: Mapping[str, Any], policy: Mapping[st
         if credentials == "missing" and "credentials_missing" not in reason_codes:
             reason_codes.append("credentials_missing")
             remediation.append(
-                {"code": "provider_sign_in", "message": "Use the provider's supported sign-in flow, then retry discovery."}
+                {
+                    "code": "provider_sign_in",
+                    "message": "Use the provider's supported sign-in flow, then retry discovery.",
+                }
             )
     elif status == "ok":
         state = "usable"
@@ -748,7 +784,9 @@ def _describe_agent(
         "configured_backend": agent.backend,
     }
     if agent.type == "mock":
-        entry.update({"effective_backend": None, "canonical_backend": None, "selection_source": "mock"})
+        entry.update(
+            {"effective_backend": None, "canonical_backend": None, "selection_source": "mock"}
+        )
         return entry
     from . import backends as backend_registry
 
@@ -809,7 +847,13 @@ def _describe_workflow(
             continue
         backend_id = backend_registry.resolve_backend_id(agent)
         canonical = backend_registry.backend_name(agent.type, backend_id)
-        effective_agents.append({"agent_id": agent_id, "canonical_backend": canonical, "selection_source": "agent_config" if agent.backend else "registry_default"})
+        effective_agents.append(
+            {
+                "agent_id": agent_id,
+                "canonical_backend": canonical,
+                "selection_source": "agent_config" if agent.backend else "registry_default",
+            }
+        )
         selected.append(canonical)
         provider_types.add(agent.type)
         catalog = canonical_backends[canonical]
@@ -819,14 +863,22 @@ def _describe_workflow(
         elif catalog["assessment"]["discovery_gate"] == "block_if_unchanged_at_start":
             ineligible.extend(catalog["assessment"]["reason_codes"] or ["backend_unavailable"])
         if catalog["assessment"]["state"] == "unavailable":
-            recommendation_blockers.extend(catalog["assessment"]["reason_codes"] or ["backend_unavailable"])
+            recommendation_blockers.extend(
+                catalog["assessment"]["reason_codes"] or ["backend_unavailable"]
+            )
     uniform = []
     if provider_types:
         candidates = set.intersection(
-            *(set(backend_registry.registered_backends(agent_type)) for agent_type in provider_types)
+            *(
+                set(backend_registry.registered_backends(agent_type))
+                for agent_type in provider_types
+            )
         )
         for backend_id in sorted(candidates):
-            names = [backend_registry.backend_name(agent_type, backend_id) for agent_type in provider_types]
+            names = [
+                backend_registry.backend_name(agent_type, backend_id)
+                for agent_type in provider_types
+            ]
             if all(
                 canonical_backends[name]["policy"]["enabled"]
                 and canonical_backends[name]["assessment"]["state"] != "unavailable"
@@ -855,7 +907,9 @@ def _describe_workflow(
     }
 
 
-def _project_backend_groups(canonical_backends: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _project_backend_groups(
+    canonical_backends: Mapping[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     from . import backends as backend_registry
 
     provider_groups: Dict[str, Any] = {}
@@ -878,7 +932,10 @@ def _project_backend_groups(canonical_backends: Mapping[str, Any]) -> Tuple[Dict
             "available": item["available"],
             "available_semantics": item["available_semantics"],
             "capabilities": item["static"]["capabilities"],
-            "health": deepcopy(item["probe"].get("health") or {"status": "unknown", "reason": item["probe"].get("reason")}),
+            "health": deepcopy(
+                item["probe"].get("health")
+                or {"status": "unknown", "reason": item["probe"].get("reason")}
+            ),
             "option_schema": item["static"]["option_schema"],
             "policy": deepcopy(item["policy"]),
             "assessment": deepcopy(item["assessment"]),
@@ -899,8 +956,14 @@ def _agent_recommendation(agent: Mapping[str, Any], catalog: Mapping[str, Any]) 
         "selected": selected,
         "recommended": None if blocked else selected,
         "action": "remediate" if blocked else "keep",
-        "reason_codes": backend["assessment"]["reason_codes"] if blocked else ["configured_selection_has_no_definite_blocker"],
-        "reasons": ["Keep the configured backend unless a definite blocker is present."] if not blocked else ["The configured backend has a definite blocker; no automatic fallback is recommended."],
+        "reason_codes": backend["assessment"]["reason_codes"]
+        if blocked
+        else ["configured_selection_has_no_definite_blocker"],
+        "reasons": ["Keep the configured backend unless a definite blocker is present."]
+        if not blocked
+        else [
+            "The configured backend has a definite blocker; no automatic fallback is recommended."
+        ],
         "evidence_checked_at": backend["probe"].get("checked_at"),
         "uncertainties": backend["assessment"]["uncertainties"],
         "remediation": backend["assessment"]["remediation"],
@@ -914,7 +977,10 @@ def _workflow_recommendation(workflow: Mapping[str, Any]) -> Dict[str, Any]:
         "selected": list(workflow["selected_canonical_backends"]),
         "recommended": list(workflow["selected_canonical_backends"]) if not blocked else None,
         "action": "remediate" if blocked else "keep",
-        "reason_codes": list(workflow.get("recommendation_blockers") or ["configured_selection_has_no_definite_blocker"]),
+        "reason_codes": list(
+            workflow.get("recommendation_blockers")
+            or ["configured_selection_has_no_definite_blocker"]
+        ),
         "uniform_backend_overrides": list(workflow["uniform_backend_overrides"]),
         "expressible_by_start_api": not blocked,
     }
@@ -951,8 +1017,10 @@ def build_session_settings(
             continue
         agent = config.agents[agent_id]
         entry: Dict[str, Any] = {"type": agent.type}
-        backend_id = None if agent.type == "mock" else (
-            resolved.get(agent_id) or backend_registry.resolve_backend_id(agent)
+        backend_id = (
+            None
+            if agent.type == "mock"
+            else (resolved.get(agent_id) or backend_registry.resolve_backend_id(agent))
         )
         options: Dict[str, Any] = {}
         if backend_id is not None:
@@ -966,7 +1034,9 @@ def build_session_settings(
             entry.update(options)
         if backend_id is not None:
             entry["backend"] = backend_id
-            entry["capabilities"] = backend_registry.capabilities_for(agent.type, backend_id).to_dict()
+            entry["capabilities"] = backend_registry.capabilities_for(
+                agent.type, backend_id
+            ).to_dict()
             # Provider brand hue, a backend-declared static fact; the TUI
             # colors agent labels from this and falls back to its own accent
             # when absent (mock agents, unknown providers).
@@ -1013,7 +1083,9 @@ def _expect_mapping(value: Any, path: str, errors: List[Dict[str, str]]) -> Mapp
     return value
 
 
-def _validate_field_value(value: Any, path: str, schema: Mapping[str, Any], errors: List[Dict[str, str]]) -> None:
+def _validate_field_value(
+    value: Any, path: str, schema: Mapping[str, Any], errors: List[Dict[str, str]]
+) -> None:
     expected_type = schema.get("type")
     if expected_type == "string" and not isinstance(value, str):
         errors.append({"path": path, "message": "must be a string"})
@@ -1027,7 +1099,12 @@ def _validate_field_value(value: Any, path: str, schema: Mapping[str, Any], erro
 
     allowed = schema.get("allowed")
     if allowed is not None and value not in allowed:
-        errors.append({"path": path, "message": f"unsupported value {value!r}; expected one of: {_join_values(allowed)}"})
+        errors.append(
+            {
+                "path": path,
+                "message": f"unsupported value {value!r}; expected one of: {_join_values(allowed)}",
+            }
+        )
         return
 
     minimum = schema.get("min")
@@ -1100,4 +1177,6 @@ def _workflow_agent_types(config: CollaborationConfig, sequence: Iterable[str]) 
 
 
 def _join_values(values: Sequence[Any]) -> str:
-    return ", ".join(str(value).lower() if isinstance(value, bool) else str(value) for value in values)
+    return ", ".join(
+        str(value).lower() if isinstance(value, bool) else str(value) for value in values
+    )

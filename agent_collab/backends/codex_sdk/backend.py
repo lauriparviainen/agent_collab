@@ -118,7 +118,9 @@ class CodexSdkBackend:
     ) -> Optional[list[str]]:
         return None
 
-    def create_runner(self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]) -> AgentRunner:
+    def create_runner(
+        self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
+    ) -> AgentRunner:
         factory = self._item_stream or _default_item_stream
         return CodexSdkRunner(agent, verbose, dict(options or {}), item_stream=factory)
 
@@ -433,7 +435,9 @@ async def _default_item_stream(
         try:
             client_config = config_cls(codex_bin=codex_bin)
         except Exception as exc:
-            raise _backend_unavailable(f"could not configure Codex executable {codex_bin!r}: {exc}") from exc
+            raise _backend_unavailable(
+                f"could not configure Codex executable {codex_bin!r}: {exc}"
+            ) from exc
 
     mapped = _map_sdk_options(options)
     start_kwargs: Dict[str, Any] = {"cwd": str(workdir)}

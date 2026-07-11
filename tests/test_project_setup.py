@@ -32,9 +32,7 @@ class OpenApiGenerationTests(unittest.TestCase):
         schema = generate_openapi()
         self.assertEqual(schema["info"]["version"], str(API_VERSION))
         self.assertEqual(schema["paths"]["/health"]["get"]["security"], [])
-        self.assertEqual(
-            schema["paths"]["/sessions"]["get"]["security"], [{"bearerAuth": []}]
-        )
+        self.assertEqual(schema["paths"]["/sessions"]["get"]["security"], [{"bearerAuth": []}])
         options_response = schema["paths"]["/options"]["post"]["responses"]["200"]
         self.assertTrue(
             options_response["content"]["application/json"]["schema"]["additionalProperties"]

@@ -104,7 +104,9 @@ class CapabilityReducerTests(unittest.TestCase):
     def test_builtin_backend_capabilities_are_all_false(self):
         for agent_type in ("claude", "codex", "antigravity", "xai"):
             caps = backends.capabilities_for(agent_type, "cli")
-            self.assertEqual(caps.to_dict(), {"resume": False, "interrupt": False, "tool_gate": False})
+            self.assertEqual(
+                caps.to_dict(), {"resume": False, "interrupt": False, "tool_gate": False}
+            )
 
 
 class _SentinelRunner(AgentRunner):
@@ -171,9 +173,7 @@ class StartBackendValidationTests(unittest.TestCase):
     def test_unselected_backend_options_are_rejected(self):
         config = builtin_config()
         with self.assertRaises(StartOptionsError) as ctx:
-            validate_start_options(
-                config, "cross-review", {"antigravity_cli": {"model": "gemini"}}
-            )
+            validate_start_options(config, "cross-review", {"antigravity_cli": {"model": "gemini"}})
         detail = ctx.exception.to_dict()["details"][0]
         self.assertEqual(detail["path"], "backend_options.antigravity_cli")
         self.assertIn("does not apply", detail["message"])

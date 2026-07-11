@@ -183,7 +183,9 @@ class SessionManager:
         self._notify_tasks: Set[asyncio.Task] = set()
         self._lifecycle_logger = lifecycle_logger
         self.default_workdir = Path(default_workdir).expanduser().resolve()
-        self.default_log_dir = Path(default_log_dir).expanduser().resolve() if default_log_dir else None
+        self.default_log_dir = (
+            Path(default_log_dir).expanduser().resolve() if default_log_dir else None
+        )
         self._index = SessionIndex(Path(index_path)) if index_path else None
         self._restore_from_index()
 
@@ -270,7 +272,9 @@ class SessionManager:
         )
         self._sessions[session_id] = managed
         self._persist(state)
-        managed.task = asyncio.create_task(self._run_session(managed), name=f"agent-collab-session-{session_id}")
+        managed.task = asyncio.create_task(
+            self._run_session(managed), name=f"agent-collab-session-{session_id}"
+        )
         self._log_lifecycle(
             f"session {session_id} started workflow={state.workflow} max_turns={state.max_turns} "
             f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
@@ -436,9 +440,7 @@ class SessionManager:
         cursor = min(self._normalize_cursor(cursor), len(events))
         limit = self._normalize_limit(limit)
         tool_output = self._normalize_tool_output(tool_output)
-        return _event_batch_from_snapshot(
-            session_id, events, cursor, limit, tool_output
-        )
+        return _event_batch_from_snapshot(session_id, events, cursor, limit, tool_output)
 
     async def read_events_async(
         self,
@@ -490,22 +492,27 @@ class SessionManager:
         timeout = max(0, int(timeout_ms)) / 1000.0
         tool_output = self._normalize_tool_output(tool_output)
 
-        if len(managed.events) <= cursor and managed.state.status in LIVE_WAIT_STATUSES and timeout > 0:
+        if (
+            len(managed.events) <= cursor
+            and managed.state.status in LIVE_WAIT_STATUSES
+            and timeout > 0
+        ):
             async with managed.condition:
                 if len(managed.events) <= cursor and managed.state.status in LIVE_WAIT_STATUSES:
                     try:
                         await asyncio.wait_for(
                             managed.condition.wait_for(
-                                lambda: len(managed.events) > cursor or managed.state.status not in LIVE_WAIT_STATUSES
+                                lambda: (
+                                    len(managed.events) > cursor
+                                    or managed.state.status not in LIVE_WAIT_STATUSES
+                                )
                             ),
                             timeout=timeout,
                         )
                     except asyncio.TimeoutError:
                         pass
 
-        return await self.read_events_async(
-            session_id, cursor, tool_output=tool_output
-        )
+        return await self.read_events_async(session_id, cursor, tool_output=tool_output)
 
     def read_transcript(self, session_id: str, *, tool_output: str = "summary") -> str:
         managed = self._get_managed(session_id)
@@ -518,9 +525,7 @@ class SessionManager:
             events = managed.events[:]
         return _render_transcript(session_id, events, tool_output)
 
-    async def read_transcript_async(
-        self, session_id: str, *, tool_output: str = "summary"
-    ) -> str:
+    async def read_transcript_async(self, session_id: str, *, tool_output: str = "summary") -> str:
         managed = self._get_managed(session_id)
         tool_output = self._normalize_tool_output(tool_output)
         if tool_output == "full":
@@ -561,7 +566,9 @@ class SessionManager:
             # Reuse the config validated at start; only reload if it was lost
             # (e.g. an index-restored request, which never runs anyway).
             collab_config=request.collab_config or load_config(workdir),
-            agent_options={key: dict(value) for key, value in (request.agent_options or {}).items()},
+            agent_options={
+                key: dict(value) for key, value in (request.agent_options or {}).items()
+            },
             agent_backends=dict(request.resolved_backends or {}),
             interactive=bool(request.interactive),
             interactive_idle_timeout=float(request.interactive_idle_timeout),
@@ -572,7 +579,9 @@ class SessionManager:
         )
 
         try:
-            result = await Referee(config, printer=lambda event: self._record_event(managed, event)).run(request.task)
+            result = await Referee(
+                config, printer=lambda event: self._record_event(managed, event)
+            ).run(request.task)
             state.jsonl_path = result.get("jsonl_path", state.jsonl_path)
             state.markdown_path = result.get("markdown_path", state.markdown_path)
             self._persist(state)
@@ -608,7 +617,12 @@ class SessionManager:
             return
         session_id = identity.get("provider_session_id")
         agent_id = identity.get("agent_id")
-        if not isinstance(session_id, str) or not session_id or not isinstance(agent_id, str) or not agent_id:
+        if (
+            not isinstance(session_id, str)
+            or not session_id
+            or not isinstance(agent_id, str)
+            or not agent_id
+        ):
             return
         request = managed.request
         resolved = request.resolved_backends if request else None
@@ -633,7 +647,9 @@ class SessionManager:
         managed.state.updated_at = utc_timestamp()
         self._persist(managed.state)
 
-    async def _set_event_appender(self, managed: _ManagedSession, appender: Optional[EventAppender]) -> None:
+    async def _set_event_appender(
+        self, managed: _ManagedSession, appender: Optional[EventAppender]
+    ) -> None:
         managed.append_event = appender
         if appender is None:
             managed.appender_ready.clear()
@@ -647,7 +663,9 @@ class SessionManager:
         async with managed.condition:
             managed.condition.notify_all()
 
-    async def _set_status(self, managed: _ManagedSession, status: str, error: Optional[str] = None) -> None:
+    async def _set_status(
+        self, managed: _ManagedSession, status: str, error: Optional[str] = None
+    ) -> None:
         now = utc_timestamp()
         managed.state.status = status
         managed.state.updated_at = now
@@ -761,7 +779,9 @@ class SessionManager:
             raise SessionRequestError("session is read-only because it has no live runner")
         return managed.append_event
 
-    def _resolve_message_target(self, managed: _ManagedSession, target: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    def _resolve_message_target(
+        self, managed: _ManagedSession, target: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str]]:
         if target is None:
             return None, None
         if not isinstance(target, str):
@@ -776,7 +796,11 @@ class SessionManager:
         id_matches = [agent_id for agent_id, _agent_type in agents if agent_id.lower() == needle]
         if id_matches:
             return selector, id_matches[0]
-        type_matches = [agent_id for agent_id, agent_type in agents if agent_type.lower() == needle and agent_type]
+        type_matches = [
+            agent_id
+            for agent_id, agent_type in agents
+            if agent_type.lower() == needle and agent_type
+        ]
         if len(type_matches) == 1:
             return selector, type_matches[0]
         valid = ", ".join(enabled_ids) if enabled_ids else "(none)"

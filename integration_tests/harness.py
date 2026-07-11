@@ -68,9 +68,15 @@ class LiveBackendTestCase(unittest.TestCase):
         backend = backends.get_backend(self.provider, self.backend_id)
         health = backend.probe()
         if health.status == HEALTH_UNAVAILABLE:
-            self.skipTest(missing_reason(self.provider, self.backend_id, health.reason or "unavailable"))
+            self.skipTest(
+                missing_reason(self.provider, self.backend_id, health.reason or "unavailable")
+            )
         if health.credentials == CREDENTIALS_MISSING:
-            self.skipTest(missing_reason(self.provider, self.backend_id, health.reason or "credentials missing"))
+            self.skipTest(
+                missing_reason(
+                    self.provider, self.backend_id, health.reason or "credentials missing"
+                )
+            )
 
     def requested_options(self) -> Dict[str, Any]:
         options = dict(DEFAULT_LIVE_OPTIONS[self.provider])
@@ -115,9 +121,10 @@ class LiveBackendTestCase(unittest.TestCase):
         backend = backends.get_backend(self.provider, self.backend_id)
         options = backend.normalize_options(agent, self.requested_options())
         runner = backend.create_runner(agent, True, options)
-        with tempfile.TemporaryDirectory(prefix="agent-collab-it-") as tmp, tempfile.TemporaryDirectory(
-            prefix="agent-collab-it-home-"
-        ) as home:
+        with (
+            tempfile.TemporaryDirectory(prefix="agent-collab-it-") as tmp,
+            tempfile.TemporaryDirectory(prefix="agent-collab-it-home-") as home,
+        ):
             workdir = Path(tmp).resolve()
             self.assertNotEqual(workdir, REPO_ROOT)
             self.assertNotIn(REPO_ROOT, workdir.parents)

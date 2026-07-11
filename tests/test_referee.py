@@ -15,12 +15,14 @@ class RefereeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
-                result = asyncio.run(Referee(
-                    RefereeConfig(mock=True, workdir=root, max_turns=2, timeout=5, color=False),
-                    printer=lambda event: None,
-                ).run(
-                    "test task",
-                ))
+                result = asyncio.run(
+                    Referee(
+                        RefereeConfig(mock=True, workdir=root, max_turns=2, timeout=5, color=False),
+                        printer=lambda event: None,
+                    ).run(
+                        "test task",
+                    )
+                )
             self.assertTrue(Path(result["jsonl_path"]).exists())
             self.assertTrue(Path(result["markdown_path"]).exists())
             text = Path(result["markdown_path"]).read_text(encoding="utf-8")
@@ -41,10 +43,19 @@ sequence = ["codex"]
             events = []
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
-                asyncio.run(Referee(
-                    RefereeConfig(workflow="codex-only", mock=True, workdir=root, max_turns=1, timeout=5, color=False),
-                    printer=events.append,
-                ).run("test task"))
+                asyncio.run(
+                    Referee(
+                        RefereeConfig(
+                            workflow="codex-only",
+                            mock=True,
+                            workdir=root,
+                            max_turns=1,
+                            timeout=5,
+                            color=False,
+                        ),
+                        printer=events.append,
+                    ).run("test task")
+                )
 
             self.assertIn("turn 1: codex", [event.text for event in events])
 
@@ -63,10 +74,14 @@ command = "configured-claude"
             events = []
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
-                asyncio.run(Referee(
-                    RefereeConfig(dry_run=True, workdir=root, max_turns=1, timeout=5, color=False),
-                    printer=events.append,
-                ).run("test task"))
+                asyncio.run(
+                    Referee(
+                        RefereeConfig(
+                            dry_run=True, workdir=root, max_turns=1, timeout=5, color=False
+                        ),
+                        printer=events.append,
+                    ).run("test task")
+                )
 
             command_events = [event for event in events if event.type == "command"]
             self.assertEqual(command_events[0].raw["argv"][0], "configured-claude")
