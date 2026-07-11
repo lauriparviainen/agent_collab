@@ -4,6 +4,14 @@
 low-priority code-health items remain open. Findings originated in a full-repo
 review at v0.2 (2026-07-10).
 
+**Issue:** [#6](https://github.com/lauriparviainen/agent_collab/issues/6)
+(milestone 0.3.0)
+
+**Release gate:** this stage gates the **0.3.0** release. When this document's
+acceptance criteria hold and it closes to `doc/tasks_closed/`, version 0.3.0 is
+bumped, tagged, and published following
+`.claude/skills/release/SKILL.md`.
+
 ## Purpose
 
 Fix concrete robustness, contract-integrity, and code-health defects found in
