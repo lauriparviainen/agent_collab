@@ -20,6 +20,8 @@ into a detailed work log.
 - Preserve the selected venv interpreter symlink during autostart registration
   so durability checks and generated units use the installed environment
   instead of incorrectly falling through to the system Python (#9).
+- Make root CLI help provider-neutral and advertise every public command,
+  including the TUI and daemon/session inspection surfaces (#10).
 
 ## [0.4.0] - 2026-07-12 - Permanent daemon token
 

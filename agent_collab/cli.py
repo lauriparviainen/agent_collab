@@ -10,10 +10,28 @@ from .config import DEFAULT_WORKFLOW
 from .referee import RefereeConfig, run_sync
 
 
+PUBLIC_COMMANDS = (
+    ("tui", "Open the interactive session TUI."),
+    ("daemon", "Manage the global daemon and login autostart."),
+    ("start", "Start a daemon-owned collaboration session."),
+    ("options", "Inspect configured workflows, agents, and backend health."),
+    ("list", "List daemon-owned sessions."),
+    ("status", "Show one daemon-owned session."),
+    ("events", "Read events for a daemon-owned session."),
+    ("watch", "Watch a live session or stored JSONL transcript."),
+    ("stop", "Stop a daemon-owned session."),
+    ("config", "Inspect or initialize agent-collab configuration."),
+    ("serve", "Run the daemon in the foreground for debugging."),
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-collab",
-        description="Watch Claude Code and Codex collaborate in a supervised terminal loop.",
+        usage="agent-collab [COMMAND] ... | agent-collab [OPTIONS] TASK",
+        description="Run and supervise bounded collaboration workflows across configured AI agents.",
+        epilog=_root_help_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("task", nargs="?", help="Task to send to the collaboration loop.")
     parser.add_argument(
@@ -24,9 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--timeout", type=int, default=900, help="Per-agent turn timeout in seconds."
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="Print commands without running Claude or Codex."
+        "--dry-run", action="store_true", help="Print commands without running configured agents."
     )
-    parser.add_argument("--mock", action="store_true", help="Use simulated Claude/Codex runners.")
+    parser.add_argument("--mock", action="store_true", help="Use simulated agent runners.")
     parser.add_argument(
         "--verbose", action="store_true", help="Print compact unknown stream events."
     )
@@ -49,6 +67,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the stdio MCP server instead of the CLI loop.",
     )
     return parser
+
+
+def _root_help_epilog() -> str:
+    width = max(len(name) for name, _description in PUBLIC_COMMANDS)
+    commands = "\n".join(
+        f"  {name:<{width}}  {description}" for name, description in PUBLIC_COMMANDS
+    )
+    return (
+        "commands:\n"
+        f"{commands}\n\n"
+        "Run 'agent-collab COMMAND --help' for command-specific options.\n"
+        "Without COMMAND, agent-collab runs TASK as a one-shot configured workflow."
+    )
 
 
 def build_watch_parser() -> argparse.ArgumentParser:
@@ -762,19 +793,7 @@ def main(argv=None) -> int:
         argv = sys.argv[1:]
     else:
         argv = list(argv)
-    subcommands = {
-        "watch": _main_watch,
-        "tui": _main_tui,
-        "serve": _main_serve,
-        "daemon": _main_daemon,
-        "start": _main_start,
-        "options": _main_options,
-        "list": _main_list,
-        "status": _main_status,
-        "events": _main_events,
-        "stop": _main_stop,
-        "config": _main_config,
-    }
+    subcommands = _command_handlers()
     if argv and argv[0] in subcommands:
         return subcommands[argv[0]](argv[1:])
 
@@ -809,6 +828,22 @@ def main(argv=None) -> int:
         print(f"ERROR   {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _command_handlers():
+    return {
+        "watch": _main_watch,
+        "tui": _main_tui,
+        "serve": _main_serve,
+        "daemon": _main_daemon,
+        "start": _main_start,
+        "options": _main_options,
+        "list": _main_list,
+        "status": _main_status,
+        "events": _main_events,
+        "stop": _main_stop,
+        "config": _main_config,
+    }
 
 
 if __name__ == "__main__":
