@@ -82,8 +82,18 @@ Start the local daemon:
 agent-collab daemon start
 ```
 
-Then configure your MCP client to launch the stdio adapter. For example, in
-Codex configuration:
+On first start the daemon generates a permanent bearer token into
+`~/.agent-collab/config.toml`; it stays valid across daemon restarts (see
+[runtime layout](doc/runtime-layout.md) for the semantics and rotation).
+
+Then register agent-collab with your MCP client. Either launch the stdio
+adapter, which reads the token automatically — in Claude Code:
+
+```bash
+claude mcp add agent-collab -- /absolute/path/to/agent_collab/.venv/bin/agent-collab-mcp
+```
+
+or in Codex configuration:
 
 ```toml
 [mcp_servers.agent_collab]
@@ -93,6 +103,14 @@ cwd = "/absolute/path/to/agent_collab"
 startup_timeout_sec = 10
 tool_timeout_sec = 60
 enabled = true
+```
+
+Or connect directly to the daemon's Streamable HTTP endpoint, passing the
+token from `~/.agent-collab/config.toml` — in Claude Code:
+
+```bash
+claude mcp add --transport http agent-collab http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer <your [daemon].token value>"
 ```
 
 Now ask your coding agent:
