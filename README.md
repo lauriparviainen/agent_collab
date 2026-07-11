@@ -15,6 +15,34 @@ the review less dependent on one model's blind spots.
 
 > The bet is simple: coverage comes from disagreement, not just more passes.
 
+## How it fits together
+
+```mermaid
+flowchart LR
+    U["You or your coding agent"]
+    C["CLI / TUI / MCP"]
+    D["Local agent-collab daemon"]
+    W["Bounded review workflow"]
+    A["Claude"]
+    B["Codex"]
+    O["Other configured agents"]
+    T["Live events + auditable transcripts"]
+
+    U --> C --> D --> W
+    W --> A
+    W --> B
+    W --> O
+    A --> T
+    B --> T
+    O --> T
+    T --> C
+```
+
+The daemon owns each session and runs the selected workflow. Provider backends
+launch the configured agents, while every result returns through one event
+stream and is saved as JSONL and readable Markdown. See the
+[architecture guide](doc/daemon-architecture.md) for the detailed design.
+
 ## Install
 
 You need Python 3.10 or newer.
