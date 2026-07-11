@@ -523,9 +523,8 @@ def _main_config(argv) -> int:
             command = " ".join([agent.command or ""] + list(agent.args)).strip()
             enabled = "" if agent.enabled else " (disabled)"
             print(f"agent {agent_id}: type={agent.type} command={command!r}{enabled}")
-            for option, schema in sorted(agent.options.items()):
-                details = " ".join(f"{key}={value}" for key, value in sorted(schema.items()))
-                print(f"  backend {agent.backend or 'cli'} option {option}: {details}")
+            for option, value in sorted(agent.options.items()):
+                print(f"  backend {agent.backend or 'cli'} option {option} = {value!r}")
         from .backends import registered_backend_names
         from .config import backend_policy
 

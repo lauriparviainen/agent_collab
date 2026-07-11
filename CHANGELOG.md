@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Fix `config show` crashing with `'str' object has no attribute 'items'`
+  when any agent has configured options; option values now print as
+  `option = value` lines (#3).
+
 ## [0.3.0] - 2026-07-11 - Daemon hardening, CI, and project process
 
 - Adopt GitHub issues for discrete task tracking alongside `doc/tasks_open/`

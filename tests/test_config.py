@@ -225,6 +225,70 @@ sequence = ["claude"]
             self.assertIn("workflow cross-review: claude -> codex -> claude", text)
             self.assertIn(str(root.resolve() / ".agent-collab" / "config.toml"), text)
 
+    def test_cli_config_show_prints_configured_agent_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_config(
+                root,
+                """
+[agents.claude.options]
+model = "opus"
+thinking_level = "high"
+""",
+            )
+
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, _env(home)):
+                with contextlib.redirect_stdout(output):
+                    code = cli.main(["config", "show", "--workdir", str(root)])
+
+            text = output.getvalue()
+            self.assertEqual(code, 0)
+            self.assertIn("backend cli option model = 'opus'", text)
+            self.assertIn("backend cli option thinking_level = 'high'", text)
+
+    def test_cli_config_show_handles_migrated_schema_3_user_config_with_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            home.mkdir()
+            (home / "config.toml").write_text(
+                """
+schema_version = 3
+
+[agents.claude_cli]
+type = "claude"
+backend = "cli"
+command = "claude"
+args = ["-p", "--output-format", "stream-json", "--verbose"]
+enabled = true
+
+[agents.claude_cli.options]
+model = "opus"
+thinking_level = "high"
+
+[workflows.solo-claude-cli]
+sequence = ["claude_cli"]
+""",
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            errors = io.StringIO()
+            with mock.patch.dict(os.environ, _env(home)):
+                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                    code = cli.main(["config", "show", "--workdir", str(root)])
+
+            text = output.getvalue()
+            self.assertEqual(code, 0, errors.getvalue())
+            self.assertIn("agent claude_cli:", text)
+            self.assertIn("backend cli option model = 'opus'", text)
+            self.assertIn("workflow solo-claude-cli: claude_cli", text)
+            self.assertEqual(errors.getvalue(), "")
+
     def test_cli_options_is_a_projection_of_daemon_discovery(self):
         client = mock.Mock()
         client.describe_options.return_value = {
