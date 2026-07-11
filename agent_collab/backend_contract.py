@@ -146,20 +146,26 @@ def normalize_declared_options(
     configured: Optional[Mapping[str, Any]] = None,
     inferred: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Apply backend inference, declared/configured defaults, then request data."""
+    """Apply defaults, CLI inference, configured options, then request data."""
 
-    result = {key: deepcopy(value) for key, value in (inferred or {}).items() if key in schema}
+    inferred_options = {
+        key: deepcopy(value) for key, value in (inferred or {}).items() if key in schema
+    }
     configured_options = configured or {}
     _validate_values(configured_options, schema)
     _validate_values(requested, schema)
+    result: Dict[str, Any] = {}
     for key, spec in schema.items():
         if spec.default is not OPTION_UNSET:
             result[key] = deepcopy(spec.default)
+    result.update(inferred_options)
+    for key in schema:
         if key in configured_options:
             result[key] = deepcopy(configured_options[key])
     for key, value in requested.items():
         if key in schema:
             result[key] = deepcopy(value)
+    _validate_values(result, schema)
     for key, spec in schema.items():
         if spec.required and key not in result:
             raise BackendOptionError(key, "is required")

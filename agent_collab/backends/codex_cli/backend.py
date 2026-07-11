@@ -12,7 +12,7 @@ from ...runners import AgentRunner, SubprocessRunner
 from ..base import BackendCapabilities, BackendHealth
 from ..common.cli import config_value, flag_value, remove_flag, set_config_value, set_flag_value
 from ..common.health import default_version_runner, probe_cli_backend
-from ..common.options import configured_choices, resolve_codex_effort
+from ..common.options import highest_precedence_choices, resolve_codex_effort
 from .parser import parse_codex_line
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
@@ -58,7 +58,13 @@ class CodexCliBackend:
         normalized = normalize_declared_options(
             requested, self.option_schema(agent), configured=configured, inferred=inferred
         )
-        return resolve_codex_effort(normalized, configured_choices(configured, requested))
+        choices = highest_precedence_choices(
+            ("thinking_level", "reasoning_effort"),
+            inferred,
+            configured,
+            requested,
+        )
+        return resolve_codex_effort(normalized, choices)
 
     def build_command(self, agent: AgentConfig, options: Mapping[str, Any]) -> list[str]:
         command = [agent.command or agent.id, *agent.args]

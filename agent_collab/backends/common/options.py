@@ -7,6 +7,18 @@ from typing import Any, Dict, Mapping
 from ...backend_contract import BackendOptionError
 
 
+def highest_precedence_choices(
+    fields: tuple[str, ...], *layers: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Return relevant values from the highest-precedence layer that selects one."""
+
+    for layer in reversed(layers):
+        selected = {field: layer[field] for field in fields if field in layer}
+        if selected:
+            return selected
+    return {}
+
+
 def configured_choices(
     configured: Mapping[str, Any], requested: Mapping[str, Any]
 ) -> Dict[str, Any]:

@@ -1,6 +1,6 @@
 # Stage 5.4: Daemon robustness and code health
 
-**Status:** Open. H1-H6 and M1-M2 are resolved and verified; M3-M5 and the
+**Status:** Open. H1-H6 and M1-M3 are resolved and verified; M4-M5 and the
 low-priority code-health items remain open. Findings originated in a full-repo
 review at v0.2 (2026-07-10).
 
@@ -245,7 +245,8 @@ were inspected and removed.
 
 **Resolved and independently reviewed (2026-07-11).** The repository now has a
 least-privilege GitHub Actions CI workflow for every push and pull request,
-matrixed across Python 3.10, 3.11, and 3.12. Each matrix job runs Ruff lint,
+matrixed across the supported floor, Python 3.10, and primary development
+version, Python 3.12. Each matrix job runs Ruff lint,
 Ruff format verification, the hermetic unit suite, and `setup --check`.
 
 - `actions/checkout` and `actions/setup-python` use immutable full commit SHAs;
@@ -285,12 +286,52 @@ both reviewers again returned **SHIP-READY / NO BLOCKERS**.
 
 ### M3. Even out backend test coverage
 
-`claude_cli`, `codex_cli`, and `antigravity_cli` have one hermetic test each
-(manifest only), versus 11-27 for the SDK suites and 18 for `xai_cli`.
-`build_command`/`normalize_options` for the three most-used CLI backends is
-essentially untested. Also uncovered in `runners.py`: the
-command-not-found error event (`runners.py:134-136`), non-oversized stderr
-error emission, and `_is_noisy_stderr` filtering.
+**Resolved and independently reviewed (2026-07-11).** Current diagnosis found
+that M1 had added identity coverage since the original test counts were
+recorded, but command normalization remained shallowly tested. The missing
+coverage exposed and now fixes two effective-option defects:
+
+- Backend option precedence is now manifest defaults, configured CLI-argument
+  inference, backend-specific configured options, then explicit request data.
+  Previously manifest defaults overwrote inferred CLI flags, so a configured
+  non-default model, mode, or thinking level could be silently replaced.
+- Repeated `--flag value`, `--flag=value`, `-c key=value`, `--config key=value`,
+  and `--config=key=value` occurrences use the last effective value instead of
+  the first. Command construction still removes all owned stale occurrences
+  and emits one canonical value while preserving unrelated config entries.
+- Validation applies to the final effective merge. An invalid lower-precedence
+  CLI value is rejected when effective, but may be repaired by a valid
+  configured or requested override that command construction will actually
+  substitute.
+- Claude thinking-level/token-budget and Codex thinking/reasoning aliases use
+  the highest-precedence layer that selected either field. Same-layer conflicts
+  fail, while a higher layer cleanly replaces its lower-layer counterpart.
+
+The Claude, Codex, and Antigravity CLI suites now cover inference, precedence,
+last-occurrence behavior, invalid effective values, exact command rewriting,
+prompt/add-directory placement, command previews, configured cwd/env, renamed
+runner identity, and missing-command configuration failures. Shared CLI tests
+exercise both flag syntaxes and all Codex config syntaxes.
+
+Wire-level subprocess tests execute real child processes to prove that a
+missing executable returns a structured command-not-found error, ordinary
+non-oversized stderr becomes an error event without becoming a transport
+failure, and known noisy stderr is suppressed normally but emitted as
+provider-status events in verbose mode. The focused CLI/runner suite passes (37
+tests), the full hermetic suite passes (561 tests), Ruff lint and format checks
+pass across 118 files, `./agent_collab.sh setup --check` passes, and
+`git diff --check` passes.
+
+Two concurrent two-reviewer loops used Gemini 3.1 Pro (High) and Gemini 3.5
+Flash (High), the highest Flash model advertised because `Flash 4 High` was not
+available. The first loop independently inspected the merge and transport
+paths, reran the full suite, distinguished the still-open M5 renamed-stderr
+finding from M3, and returned **SHIP-READY / NO BLOCKERS**. A subsequent
+parallel full run exposed a PATH-dependent `PermissionError` in the bare-name
+missing-command fixture; it now uses a guaranteed-missing absolute path. The
+second loop verified that portability fix and the resource-efficient Python
+3.10/3.12 CI endpoints; both reviewers again returned **SHIP-READY / NO
+BLOCKERS**.
 
 ### M4. `Event.create` silently relabels invalid inputs
 

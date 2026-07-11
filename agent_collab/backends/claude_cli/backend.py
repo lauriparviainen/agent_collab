@@ -11,7 +11,7 @@ from ...runners import AgentRunner, SubprocessRunner
 from ..base import BackendCapabilities, BackendHealth
 from ..common.cli import flag_value, set_flag_value
 from ..common.health import default_version_runner, probe_cli_backend
-from ..common.options import configured_choices, resolve_claude_thinking
+from ..common.options import highest_precedence_choices, resolve_claude_thinking
 from .parser import ClaudeStreamingParser
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
@@ -52,7 +52,13 @@ class ClaudeCliBackend:
         normalized = normalize_declared_options(
             requested, self.option_schema(agent), configured=configured, inferred=inferred
         )
-        return resolve_claude_thinking(normalized, configured_choices(configured, requested))
+        choices = highest_precedence_choices(
+            ("thinking_level", "thinking_budget_tokens"),
+            inferred,
+            configured,
+            requested,
+        )
+        return resolve_claude_thinking(normalized, choices)
 
     def build_command(self, agent: AgentConfig, options: Mapping[str, Any]) -> list[str]:
         command = [agent.command or agent.id, *agent.args]

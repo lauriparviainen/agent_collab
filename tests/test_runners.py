@@ -84,6 +84,71 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
             ["one", "two"],
         )
 
+    async def test_command_not_found_returns_structured_error_without_transport_failure(self):
+        missing_command = "/agent-collab-tests/missing-provider-command"
+        runner = SubprocessRunner(
+            "missing-provider",
+            [missing_command],
+            _json_message_parser,
+        )
+
+        events = await self._events(runner)
+
+        self.assertEqual([event.type for event in events], ["command", "error"])
+        error = events[-1]
+        self.assertEqual(error.source, "error")
+        self.assertEqual(
+            error.text,
+            f"missing-provider command not found: {missing_command}",
+        )
+        self.assertIn(missing_command, error.raw["error"])
+        self.assertNotIn("output transport failed", error.text)
+
+    async def test_non_noisy_stderr_is_emitted_as_structured_error(self):
+        script = "import sys; print('provider failed safely', file=sys.stderr)"
+        runner = SubprocessRunner(
+            "claude",
+            [sys.executable, "-c", script],
+            _json_message_parser,
+        )
+
+        events = await self._events(runner)
+
+        errors = [event for event in events if event.type == "error"]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].source, "error")
+        self.assertEqual(errors[0].text, "claude stderr: provider failed safely")
+        self.assertEqual(errors[0].raw, {"line": "provider failed safely"})
+        self.assertTrue(any("exited with code 0" in event.text for event in events))
+
+    async def test_noisy_stderr_is_suppressed_unless_verbose(self):
+        script = (
+            "import sys; "
+            "print('Reading additional input from stdin...', file=sys.stderr); "
+            "print('WARN provider chatter', file=sys.stderr); "
+            "print('prefix WARN provider chatter', file=sys.stderr)"
+        )
+        quiet = SubprocessRunner(
+            "claude",
+            [sys.executable, "-c", script],
+            _json_message_parser,
+        )
+        verbose = SubprocessRunner(
+            "claude",
+            [sys.executable, "-c", script],
+            _json_message_parser,
+            verbose=True,
+        )
+
+        quiet_events = await self._events(quiet)
+        verbose_events = await self._events(verbose)
+
+        self.assertFalse(any("stderr:" in event.text for event in quiet_events))
+        noisy = [event for event in verbose_events if "stderr:" in event.text]
+        self.assertEqual(len(noisy), 3)
+        self.assertTrue(all((event.source, event.type) == ("claude", "status") for event in noisy))
+        self.assertFalse(any(event.type == "error" for event in verbose_events))
+
     async def test_cancelling_runner_reaps_a_silent_child_promptly(self):
         runner = SubprocessRunner(
             "cancel-me",

@@ -33,7 +33,7 @@ class StaticToolingContractTests(unittest.TestCase):
         self.assertRegex(workflow, r"(?m)^  push:\s*$")
         self.assertRegex(workflow, r"(?m)^  pull_request:\s*$")
         self.assertIn("permissions:\n  contents: read\n", workflow)
-        self.assertIn('python-version: ["3.10", "3.11", "3.12"]', workflow)
+        self.assertIn('python-version: ["3.10", "3.12"]', workflow)
         self.assertIn("python-version: ${{ matrix.python-version }}", workflow)
         self.assertIn(f"python -m pip install 'ruff=={RUFF_VERSION}'", workflow)
         self.assertIn("ruff check --output-format=github .", workflow)

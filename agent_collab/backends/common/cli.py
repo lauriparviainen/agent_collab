@@ -8,15 +8,17 @@ from typing import List, Optional, Sequence
 
 def flag_value(args: Sequence[str], flag: str) -> Optional[str]:
     prefix = f"{flag}="
+    result = None
     for index, item in enumerate(args):
         if item == flag and index + 1 < len(args):
-            return args[index + 1]
-        if item.startswith(prefix):
-            return item[len(prefix) :]
-    return None
+            result = args[index + 1]
+        elif item.startswith(prefix):
+            result = item[len(prefix) :]
+    return result
 
 
 def config_value(args: Sequence[str], key: str) -> Optional[str]:
+    result = None
     for index, item in enumerate(args):
         value: Optional[str] = None
         if item in {"-c", "--config"} and index + 1 < len(args):
@@ -24,8 +26,8 @@ def config_value(args: Sequence[str], key: str) -> Optional[str]:
         elif item.startswith("--config="):
             value = item[len("--config=") :]
         if value is not None and "=" in value and value.split("=", 1)[0].strip() == key:
-            return value.split("=", 1)[1].strip("\"'")
-    return None
+            result = value.split("=", 1)[1].strip("\"'")
+    return result
 
 
 def set_flag_value(command: Sequence[str], flag: str, value: str) -> List[str]:

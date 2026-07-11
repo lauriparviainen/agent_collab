@@ -13,7 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
-- Add least-privilege, SHA-pinned GitHub Actions CI across Python 3.10-3.12,
+- Honor configured CLI arguments ahead of manifest defaults and use the final
+  repeated flag/config occurrence; validate final effective options and expand
+  Claude, Codex, Antigravity, and subprocess stderr/failure contract coverage.
+- Add least-privilege, SHA-pinned GitHub Actions CI on Python 3.10 and 3.12,
   enforcing Ruff lint/format checks, the hermetic suite, and generated API
   artifact validation; establish and regression-test the repository-wide Ruff
   baseline, including automatic Ruff checks in `./agent_collab.sh test`.
