@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- License the project under Apache License 2.0 and publish matching package
+  metadata (#1).
 - Add an explicit source-checkout user installer that exposes the existing
   `agent-collab` console command outside an activated venv, plus Linux systemd
   user-service registration with coherent daemon lifecycle routing, health,

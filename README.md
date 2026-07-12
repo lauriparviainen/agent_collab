@@ -266,9 +266,6 @@ backend also documents itself in `agent_collab/backends/<provider>_<backend>/REA
   cross-vendor.
 - This is an active prototype. Capability flags and health checks are reported
   conservatively rather than inferred from a provider name.
-- The repository does not yet carry an open-source license. Until one is
-  added, treat the code as source-available for evaluation rather than open
-  source.
 
 Configuration can be global or project-specific. The daemon's `options` command
 reports effective workflows, selected backends, accepted values, health
@@ -331,3 +328,7 @@ Two additional checks serve different purposes:
 runs a real provider/backend transport check and may require credentials or
 incur provider usage. See [development notes](doc/development.md) before running
 live integrations.
+
+## License
+
+`agent-collab` is licensed under the [Apache License 2.0](LICENSE).

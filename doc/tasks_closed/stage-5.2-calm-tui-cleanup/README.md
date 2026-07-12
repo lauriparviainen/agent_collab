@@ -27,10 +27,8 @@ until the ANSI screenshots are approved.
 
 ## References
 
-- Grok CLI screenshot reference:
-  [assets/grok-cli-reference.svg](assets/grok-cli-reference.svg)
-- Screenshot note:
-  [assets/README.md](assets/README.md)
+- A user-provided Grok CLI screenshot informed the layout direction during
+  planning but is not retained in the repository.
 - Current TUI implementation:
   [../../../agent_collab/tui.py](../../../agent_collab/tui.py),
   [../../../agent_collab/tui_core.py](../../../agent_collab/tui_core.py)
@@ -39,8 +37,8 @@ until the ANSI screenshots are approved.
 - David AI design system:
   `/home/devel/projects/david_ai_git/doc/david_ai_design_system`
 
-The Grok CLI reference is layout inspiration only. The agent-collab TUI palette
-must come from the David AI design system.
+The Grok CLI screenshot was layout inspiration only. The agent-collab TUI
+palette must come from the David AI design system.
 
 ## Resolved Decisions
 

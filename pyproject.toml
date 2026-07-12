@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "agent-collab"
 version = "0.4.0"
 description = "Local supervisor for bounded collaboration across configured AI agents."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 # Stage 5.1 makes the `sdk` backends first-class: the SDKs install with the
 # project, so the base target is now Python 3.10+ (all three SDKs require it).
 requires-python = ">=3.10"

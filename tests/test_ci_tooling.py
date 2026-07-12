@@ -5,11 +5,22 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = ROOT / "pyproject.toml"
+LICENSE_PATH = ROOT / "LICENSE"
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 RUFF_VERSION = "0.15.20"
 
 
 class StaticToolingContractTests(unittest.TestCase):
+    def test_project_declares_and_ships_apache_license(self):
+        pyproject = PYPROJECT_PATH.read_text(encoding="utf-8")
+        license_text = LICENSE_PATH.read_text(encoding="utf-8")
+
+        self.assertRegex(pyproject, r'(?m)^requires = \["setuptools>=77"\]$')
+        self.assertRegex(pyproject, r'(?m)^license = "Apache-2\.0"$')
+        self.assertRegex(pyproject, r'(?m)^license-files = \["LICENSE"\]$')
+        self.assertIn("Apache License\n                           Version 2.0", license_text)
+        self.assertIn("END OF TERMS AND CONDITIONS", license_text)
+
     def test_pyproject_pins_and_configures_ruff_lint_and_format(self):
         pyproject = PYPROJECT_PATH.read_text(encoding="utf-8")
 
