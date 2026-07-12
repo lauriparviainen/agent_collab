@@ -1,8 +1,9 @@
 # Stage 5.4: Daemon robustness and code health
 
-**Status:** Open. H1-H6 and M1-M5 are resolved and verified; only the
-low-priority code-health items remain open. Findings originated in a full-repo
-review at v0.2 (2026-07-10).
+**Status:** Closed (2026-07-12). All high (H1-H6) and medium (M1-M5) items are
+resolved and verified, and every low-priority code-health item is resolved
+except per-provider optional dependencies, which is explicitly deferred to
+issue #12. Findings originated in a full-repo review at v0.2 (2026-07-10).
 
 **Issue:** [#6](https://github.com/lauriparviainen/agent_collab/issues/6)
 (milestone 0.4.1)
