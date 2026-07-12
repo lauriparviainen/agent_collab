@@ -169,10 +169,12 @@ not mutate data and should end with guidance to rerun using `--apply`.
 whole-number units `h`, `d`, and `w`; reject zero, negative, fractional,
 unitless, or unknown-unit values. Rejecting zero is deliberate: "prune
 everything terminal right now" should not be one typo away; `--older-than 1h`
-is the explicit near-equivalent. `--keep N` protects the newest `N` eligible
-terminal sessions after status filtering, ordered deterministically by the
-effective terminal timestamp and then session ID (both descending for
-"newest"). `N` must be a non-negative integer.
+is the explicit near-equivalent. `--keep N` protects the newest `N` terminal
+sessions overall — at least `N` terminal sessions always survive a prune
+regardless of age — ordered deterministically by the effective terminal
+timestamp and then session ID (both descending for "newest"). Only protected
+sessions that would otherwise be pruned are reported as kept. `N` must be a
+non-negative integer.
 
 The command operates through the authenticated daemon API. It must not mutate
 the session index directly, because the daemon is the single index writer. If
