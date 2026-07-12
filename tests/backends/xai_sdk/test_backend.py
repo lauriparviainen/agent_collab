@@ -209,7 +209,9 @@ class XaiSdkBackendTests(unittest.TestCase):
 
     def test_settings_summary_reports_verified_distribution_version(self):
         with mock.patch(
-            "agent_collab.backends.xai_sdk.backend.package_version",
+            # settings_summary delegates to the shared sdk_settings_summary helper,
+            # so the version lookup must be patched where it is resolved.
+            "agent_collab.backends.common.sdk.package_version",
             return_value="1.17.0",
         ):
             summary = XaiSdkBackend().settings_summary(
