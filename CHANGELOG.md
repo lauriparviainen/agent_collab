@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add SECURITY.md (private vulnerability reporting, local trust model),
+  CONTRIBUTING.md (Apache 2.0 inbound terms, the required
+  `./agent_collab.sh test` and `./agent_collab.sh setup --check` gates), a
+  basic bug-report issue template, and README links to both documents (#2).
 - Add automatic session retention and manual pruning (#5). Terminal sessions
   are kept 30 days by default; a user-config `[sessions]` section (config
   schema 5) changes or disables it, the daemon prunes on startup and every

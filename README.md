@@ -338,6 +338,12 @@ runs a real provider/backend transport check and may require credentials or
 incur provider usage. See [development notes](doc/development.md) before running
 live integrations.
 
+## Contributing and security
+
+Pull requests are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) covers the
+required checks and conventions. Report vulnerabilities privately as described
+in [SECURITY.md](SECURITY.md).
+
 ## License
 
 `agent-collab` is licensed under the [Apache License 2.0](LICENSE).
