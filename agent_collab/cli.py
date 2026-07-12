@@ -20,6 +20,7 @@ PUBLIC_COMMANDS = (
     ("events", "Read events for a daemon-owned session."),
     ("watch", "Watch a live session or stored JSONL transcript."),
     ("stop", "Stop a daemon-owned session."),
+    ("sessions", "Manage stored sessions, including pruning old terminal sessions."),
     ("config", "Inspect or initialize agent-collab configuration."),
     ("serve", "Run the daemon in the foreground for debugging."),
 )
@@ -244,6 +245,52 @@ def _add_daemon_default_workdir(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Default workdir for sessions that do not pass one explicitly. Never affects daemon runtime paths.",
     )
+
+
+def build_sessions_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="agent-collab sessions",
+        description="Manage stored daemon sessions.",
+    )
+    subparsers = parser.add_subparsers(dest="action", required=True)
+
+    prune = subparsers.add_parser(
+        "prune",
+        help="Preview or delete old terminal sessions and their managed transcripts.",
+        description=(
+            "Preview or delete old terminal sessions. Without --apply this only "
+            "previews, using the configured retention (sessions.retention_days, "
+            "30 days by default). Only terminal sessions (done, failed, stopped, "
+            "interrupted) are ever eligible; transcripts outside the managed "
+            "session directory are preserved."
+        ),
+    )
+    prune.add_argument("--server-url")
+    mode = prune.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview candidates without deleting anything (the default behavior).",
+    )
+    mode.add_argument(
+        "--apply",
+        action="store_true",
+        help="Delete the selected sessions and their managed transcripts.",
+    )
+    prune.add_argument(
+        "--older-than",
+        metavar="DURATION",
+        help="Override configured retention for this run; whole-number h, d, or w (e.g. 7d).",
+    )
+    prune.add_argument(
+        "--keep",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Always keep the newest N terminal sessions regardless of age.",
+    )
+    prune.add_argument("--json", action="store_true", help="Print the full typed response as JSON.")
+    return parser
 
 
 def build_client_parser(prog: str, description: str) -> argparse.ArgumentParser:
@@ -596,6 +643,57 @@ def _print_autostart_status(status) -> None:
         print(f"detail: {status.detail}")
 
 
+def _main_sessions(argv) -> int:
+    from .api_schema import PruneSessionsRequestModel
+
+    parser = build_sessions_parser()
+    args = parser.parse_args(argv)
+    try:
+        raw: Dict[str, Any] = {"apply": bool(args.apply), "keep": args.keep}
+        if args.older_than is not None:
+            raw["older_than"] = args.older_than
+        # Validate locally through the shared wire DTO so a bad duration or
+        # keep count fails with the same message the daemon would give.
+        payload = PruneSessionsRequestModel.from_dict(raw).to_dict()
+        result = _client(args.server_url).prune_sessions(payload)
+        if args.json:
+            print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+            return 0
+        _print_prune_result(result)
+    except Exception as exc:
+        print(f"ERROR   {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _print_prune_result(result) -> None:
+    # ``result`` is a PruneResultModel from the typed client.
+    mode = "apply" if result.apply else "preview"
+    print(f"mode: {mode}")
+    print(f"cutoff: {result.cutoff}")
+    print(f"keep: {result.keep}")
+    print(f"candidates: {result.candidates}  pruned: {result.pruned}  failed: {result.failed}")
+    label = "bytes reclaimed" if result.apply else "bytes to reclaim"
+    print(f"{label}: {result.bytes_reclaimed}")
+    if result.unparseable_records:
+        print(f"unparseable index records (kept): {result.unparseable_records}")
+    for detail in result.sessions:
+        effective = f" ended {detail.effective_at}" if detail.effective_at else ""
+        print(f"{detail.disposition:<21} {detail.session_id} [{detail.status}]{effective}")
+        for path in detail.removed_files:
+            verb = "removed" if result.apply else "would remove"
+            print(f"  {verb}: {path}")
+        for entry in detail.preserved_files:
+            print(f"  preserved: {entry.get('path', '')} ({entry.get('reason', '')})")
+        if detail.error:
+            print(f"  error: {detail.error}")
+    if not result.apply:
+        if result.candidates:
+            print(f"preview only; rerun with --apply to delete {result.candidates} session(s)")
+        else:
+            print("nothing to prune")
+
+
 def _main_config(argv) -> int:
     from .config import DEFAULT_CONFIG_PATH, load_config, render_user_config
     from .config_migrations import CURRENT_CONFIG_SCHEMA
@@ -846,6 +944,7 @@ def _command_handlers():
         "status": _main_status,
         "events": _main_events,
         "stop": _main_stop,
+        "sessions": _main_sessions,
         "config": _main_config,
     }
 

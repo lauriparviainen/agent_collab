@@ -27,6 +27,22 @@ class CliHelpTests(unittest.TestCase):
             set(_command_handlers()),
         )
 
+    def test_sessions_prune_help_documents_safety_defaults(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "agent_collab.cli", "sessions", "prune", "--help"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage: agent-collab sessions prune", result.stdout)
+        self.assertIn("30 days by default", result.stdout)
+        self.assertIn("--apply", result.stdout)
+        self.assertIn("--older-than", result.stdout)
+        self.assertIn("--keep", result.stdout)
+
     def test_tui_command_specific_help_is_reachable(self):
         result = subprocess.run(
             [sys.executable, "-m", "agent_collab.cli", "tui", "--help"],
