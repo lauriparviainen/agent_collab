@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-12 - Apache 2.0, user install autostart, and code health
+
 - License the project under Apache License 2.0 and publish matching package
   metadata (#1).
 - Add an explicit source-checkout user installer that exposes the existing
