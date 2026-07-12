@@ -35,7 +35,7 @@ from ..common.sdk import (
 
 MODULE_NAME = "xai_sdk"
 PACKAGE_NAME = "xai-sdk"
-INSTALL_HINT = "install the xAI SDK: pip install 'xai-sdk>=1.17,<2'"
+INSTALL_HINT = "install the xAI SDK: pip install 'agent-collab[xai]' (xai-sdk)"
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 TurnStreamFactory = Callable[[AgentConfig, Dict[str, Any], Path, str], AsyncIterator[Any]]

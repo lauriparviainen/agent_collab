@@ -13,6 +13,12 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Make the vendor SDKs per-provider optional dependencies (#12). The base
+  install is now SDK-free (the `cli` backends need no SDK); `sdk` backends are
+  enabled with the `claude`, `codex`, `antigravity`, `xai`, or `all` extras.
+  `./agent_collab.sh install` installs the `all` extra so the durable user
+  environment keeps working out of the box, missing-SDK install hints name the
+  matching extra, and CI verifies the SDK-free base install.
 - `./agent_collab.sh test` now explains how to install the `dev` extra when
   Ruff is missing from the selected environment, instead of failing with a raw
   `No module named ruff` error (#4).

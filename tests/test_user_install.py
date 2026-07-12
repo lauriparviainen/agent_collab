@@ -36,7 +36,7 @@ class UserInstallTests(unittest.TestCase):
             self.assertEqual(calls[0], [str(root / "python"), "-m", "venv", str(venv)])
             self.assertEqual(
                 calls[1],
-                [str(venv / "bin" / "python"), "-m", "pip", "install", str(repo)],
+                [str(venv / "bin" / "python"), "-m", "pip", "install", f"{repo}[all]"],
             )
             self.assertTrue(link.is_symlink())
             self.assertEqual(link.resolve(), (venv / "bin" / "agent-collab").resolve())
@@ -69,7 +69,7 @@ class UserInstallTests(unittest.TestCase):
                     "pip",
                     "install",
                     "--editable",
-                    str(repo),
+                    f"{repo}[all]",
                 ],
             )
 

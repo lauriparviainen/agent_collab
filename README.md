@@ -80,10 +80,26 @@ agent-collab tui
 agent-collab --help
 ```
 
+The helper installs every provider SDK (the `all` extra) so the `sdk` backends
+work out of the box. A plain `pip install` of the package is SDK-free — the
+`cli` backends drive the provider command-line tools and need no vendor SDK —
+and enables `sdk` backends through per-provider extras:
+
+```bash
+pip install 'agent-collab[claude]'       # claude_sdk
+pip install 'agent-collab[codex]'        # codex_sdk
+pip install 'agent-collab[antigravity]'  # antigravity_sdk
+pip install 'agent-collab[xai]'          # xai_sdk
+pip install 'agent-collab[all]'          # everything
+```
+
+A missing SDK never crashes the daemon: the backend reports itself unavailable
+with the matching install hint.
+
 Re-run `./agent_collab.sh install` to update a source-based installation. Use
 `--editable` when you deliberately want the installed command to follow edits
-in this checkout. As a standard packaging alternative, `pipx install .` also
-installs the declared console commands in an isolated environment.
+in this checkout. As a standard packaging alternative, `pipx install '.[all]'`
+also installs the declared console commands in an isolated environment.
 
 A Docker image is planned but not available yet.
 
@@ -237,6 +253,8 @@ which selects project configuration and becomes the agents' working directory.
 
 Each provider is supported through two backends: `cli` runs the provider's own
 command-line tool as a subprocess, and `sdk` calls its Python SDK in-process.
+The `cli` backends work with the base install; each `sdk` backend needs its
+provider's optional dependency extra (see [Install](#install)).
 
 | Provider | CLI backend | SDK backend | Enabled by default |
 | --- | --- | --- | --- |

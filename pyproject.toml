@@ -9,26 +9,41 @@ description = "Local supervisor for bounded collaboration across configured AI a
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-# Stage 5.1 makes the `sdk` backends first-class: the SDKs install with the
-# project, so the base target is now Python 3.10+ (all three SDKs require it).
+# Python 3.10+ is the base target; the optional vendor SDKs all require it.
 requires-python = ">=3.10"
 authors = [{ name = "agent-collab prototype" }]
-# First-class SDK backends. These are lazy-imported (only inside probe()/runner),
-# so a missing wheel degrades to an unavailable backend rather than an import-time
-# crash; the `cli` backend keeps working with the provider CLIs regardless.
-# Ranges are bounded to the minor line verified during Stage 5.1 A1 on Python
-# 3.12.13. Codex needs an explicit prerelease floor; 0.1.0b3 installs the pinned
-# openai-codex-cli-bin 0.137.0a4 runtime dependency.
-dependencies = [
+# The base install is SDK-free: the `cli` backends drive the provider CLIs as
+# subprocesses and need no vendor SDK. The `sdk` backends lazy-import their SDK
+# (only inside probe()/runner), so a missing wheel degrades to an unavailable
+# backend with an install hint rather than an import-time crash. Install a
+# per-provider extra below (or `all`) to enable the matching `sdk` backend.
+dependencies = []
+
+# SDK ranges are bounded to the minor line verified during Stage 5.1 A1 on
+# Python 3.12.13. Codex needs an explicit prerelease floor; 0.1.0b3 installs the
+# pinned openai-codex-cli-bin 0.137.0a4 runtime dependency. xai-sdk 1.17.0 was
+# verified for AsyncClient/chat.sample and deterministic async context-manager
+# cleanup. `all` must stay the exact union of the provider extras; a hermetic
+# test enforces this.
+[project.optional-dependencies]
+claude = [
+    "claude-agent-sdk>=0.2.114,<0.3.0",
+]
+codex = [
+    "openai-codex>=0.1.0b3,<0.2.0",
+]
+antigravity = [
+    "google-antigravity>=0.1.5,<0.2.0",
+]
+xai = [
+    "xai-sdk>=1.17,<2",
+]
+all = [
     "claude-agent-sdk>=0.2.114,<0.3.0",
     "openai-codex>=0.1.0b3,<0.2.0",
     "google-antigravity>=0.1.5,<0.2.0",
-    # Verified on Python 3.12.13: AsyncClient/chat.sample and deterministic
-    # async context-manager cleanup in xai-sdk 1.17.0.
     "xai-sdk>=1.17,<2",
 ]
-
-[project.optional-dependencies]
 dev = [
     "ruff==0.15.20",
 ]

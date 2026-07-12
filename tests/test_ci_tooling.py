@@ -31,10 +31,8 @@ class StaticToolingContractTests(unittest.TestCase):
     def test_pyproject_pins_and_configures_ruff_lint_and_format(self):
         pyproject = PYPROJECT_PATH.read_text(encoding="utf-8")
 
-        self.assertRegex(
-            pyproject,
-            rf'(?ms)^\[project\.optional-dependencies\]\s+dev\s*=\s*\[\s*"ruff=={RUFF_VERSION}",?\s*\]',
-        )
+        extras = self._toml_table(pyproject, "project.optional-dependencies")
+        self.assertRegex(extras, rf'(?m)^dev\s*=\s*\[\s*"ruff=={RUFF_VERSION}",?\s*\]')
         ruff = self._toml_table(pyproject, "tool.ruff")
         self.assertRegex(ruff, r'(?m)^target-version\s*=\s*"py310"\s*$')
         self.assertRegex(ruff, r"(?m)^line-length\s*=\s*100\s*$")
@@ -44,6 +42,21 @@ class StaticToolingContractTests(unittest.TestCase):
         self.assertRegex(formatter, r'(?m)^quote-style\s*=\s*"double"\s*$')
         self.assertRegex(formatter, r'(?m)^indent-style\s*=\s*"space"\s*$')
         self.assertRegex(formatter, r'(?m)^line-ending\s*=\s*"lf"\s*$')
+
+    def test_base_install_is_sdk_free_and_all_extra_matches_provider_extras(self):
+        """Vendor SDKs are opt-in extras; `all` must stay their exact union."""
+        pyproject = PYPROJECT_PATH.read_text(encoding="utf-8")
+
+        project = self._toml_table(pyproject, "project")
+        self.assertRegex(project, r"(?m)^dependencies\s*=\s*\[\]\s*$")
+
+        extras = self._toml_table(pyproject, "project.optional-dependencies")
+        provider_pins = set()
+        for provider in ("claude", "codex", "antigravity", "xai"):
+            pins = self._extra_requirements(extras, provider)
+            self.assertEqual(len(pins), 1, f"{provider} extra must hold exactly one SDK pin")
+            provider_pins.update(pins)
+        self.assertEqual(set(self._extra_requirements(extras, "all")), provider_pins)
 
     def test_ci_runs_every_required_gate_with_pinned_actions(self):
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -58,6 +71,8 @@ class StaticToolingContractTests(unittest.TestCase):
         self.assertIn("ruff format --check .", workflow)
         self.assertIn("python -m unittest discover -s tests -t .", workflow)
         self.assertIn("./agent_collab.sh setup --check", workflow)
+        self.assertIn("python -m pip install .", workflow)
+        self.assertIn("agent-collab --help", workflow)
 
         uses = re.findall(r"(?m)^\s+uses:\s+([^\s#]+)", workflow)
         self.assertIn("actions/checkout", {action.partition("@")[0] for action in uses})
@@ -66,6 +81,13 @@ class StaticToolingContractTests(unittest.TestCase):
             _name, separator, revision = action.partition("@")
             self.assertEqual(separator, "@")
             self.assertRegex(revision, r"\A[0-9a-f]{40}\Z")
+
+    @staticmethod
+    def _extra_requirements(extras_table, name):
+        match = re.search(rf"(?ms)^{re.escape(name)}\s*=\s*\[(.*?)\]", extras_table)
+        if match is None:
+            raise AssertionError(f"missing optional-dependencies extra: {name}")
+        return re.findall(r'"([^"]+)"', match.group(1))
 
     @staticmethod
     def _toml_table(document, name):

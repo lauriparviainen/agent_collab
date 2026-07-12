@@ -56,7 +56,7 @@ from ..common.options import configured_choices, resolve_claude_thinking
 
 MODULE_NAME = "claude_agent_sdk"
 PACKAGE_NAME = "claude-agent-sdk"
-INSTALL_HINT = "install the Claude Agent SDK: pip install claude-agent-sdk"
+INSTALL_HINT = "install the Claude Agent SDK: pip install 'agent-collab[claude]' (claude-agent-sdk)"
 
 CLAUDE_SDK_OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 

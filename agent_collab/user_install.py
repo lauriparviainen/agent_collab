@@ -38,7 +38,10 @@ def install_user_command(
     install_args = [str(venv_python), "-m", "pip", "install"]
     if editable:
         install_args.append("--editable")
-    install_args.append(str(repo_root))
+    # The durable user environment installs every provider SDK so the `sdk`
+    # backends work out of the box; plain `pip install agent-collab` stays
+    # SDK-free and selects per-provider extras instead.
+    install_args.append(f"{repo_root}[all]")
     _run_checked(install_args)
 
     entrypoint = venv / "bin" / "agent-collab"

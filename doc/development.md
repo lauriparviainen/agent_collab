@@ -41,8 +41,12 @@ interpreter older than Python 3.10. Without a configured environment it tries
 `python3.12`, `python3.11`, `python3.10`, then `python3` in that order.
 
 `install` creates or updates the persistent environment, installs a normal
-non-editable copy of the checkout, and atomically exposes its `agent-collab`
-entry point under `~/.local/bin`. It does not edit shell startup files or enable
+non-editable copy of the checkout with the `all` extra (every provider SDK, so
+the `sdk` backends work out of the box), and atomically exposes its
+`agent-collab` entry point under `~/.local/bin`. The base package itself is
+SDK-free; per-provider extras (`claude`, `codex`, `antigravity`, `xai`, `all`)
+enable the `sdk` backends, and a missing SDK degrades to an unavailable backend
+with an install hint. It does not edit shell startup files or enable
 daemon autostart. `--editable` is available for active development;
 `AGENT_COLLAB_BIN_DIR` or `--bin-dir` selects a different user command
 directory for isolated tests or custom layouts.

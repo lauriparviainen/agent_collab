@@ -66,7 +66,9 @@ from ..common.sdk import (
 
 MODULE_NAME = "google.antigravity"
 PACKAGE_NAME = "google-antigravity"
-INSTALL_HINT = "install the Antigravity SDK: pip install google-antigravity"
+INSTALL_HINT = (
+    "install the Antigravity SDK: pip install 'agent-collab[antigravity]' (google-antigravity)"
+)
 REQUIRED_GLIBC = "2.36"
 
 ANTIGRAVITY_SDK_OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
