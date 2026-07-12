@@ -13,6 +13,15 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add automatic session retention and manual pruning (#5). Terminal sessions
+  are kept 30 days by default; a user-config `[sessions]` section (config
+  schema 5) changes or disables it, the daemon prunes on startup and every
+  `cleanup_interval_hours`, and `agent-collab sessions prune` previews or
+  applies the same selection through the new authenticated
+  `POST /sessions/prune` API. Deletion is convergent and bounded to managed
+  transcripts: live sessions, custom log directories, symlinks, and special
+  files are never touched.
+
 ## [0.5.0] - 2026-07-12 - Apache 2.0, user install autostart, and code health
 
 - License the project under Apache License 2.0 and publish matching package

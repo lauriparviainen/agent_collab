@@ -47,9 +47,9 @@ Track process metadata:
 
 ## Log retention
 
-The focused design is tracked in
-[session-retention-and-pruning.md](session-retention-and-pruning.md) and issue
-#5. Completed sessions are retained for 30 days by default, with user-owned
+Done — implemented and closed via
+[session-retention-and-pruning.md](../tasks_closed/session-retention-and-pruning.md)
+and issue #5. Completed sessions are retained for 30 days by default, with user-owned
 configuration to change or disable automatic pruning and a manual preview/apply
 command:
 

@@ -1,6 +1,10 @@
 # Session retention and pruning
 
-**Status:** Open implementation task; design verified against the v0.5.0 code.
+**Status:** Closed 2026-07-12. All seven stages implemented and verified; each
+stage was Gemini-reviewed to an explicit SHIP-READY verdict before its commit,
+and the daemon flow was smoke-tested end to end in an isolated
+`AGENT_COLLAB_HOME` (manual preview/apply over the CLI, disabled-retention
+error path, and the startup scheduler run pruning an expired session).
 
 **Created:** 2026-07-12
 

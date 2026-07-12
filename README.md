@@ -222,7 +222,10 @@ which selects project configuration and becomes the agents' working directory.
 - **Visible execution.** Messages, tool calls, commands, status, and errors are
   normalized into one event stream.
 - **Evidence after the terminal closes.** Every session writes JSONL and
-  Markdown transcripts.
+  Markdown transcripts. Finished sessions are kept for 30 days by default;
+  set `[sessions] retention_days` in the user config to keep them longer, or
+  `0` to disable automatic pruning, and use `agent-collab sessions prune` to
+  preview or clean up manually.
 - **Local session control.** The daemon binds to loopback by default and keeps
   its state under `~/.agent-collab/`.
 - **CLI, TUI, and MCP access.** Humans and editor agents can observe the same
@@ -257,6 +260,12 @@ backend also documents itself in `agent_collab/backends/<provider>_<backend>/REA
   provider usage. Start with Claude and Codex before adding more reviewers.
 - The daemon is local, but the provider tools it launches may send prompts and
   repository content to their vendors. Their data policies still apply.
+- The daemon is not a durable archive by default: terminal sessions older than
+  30 days are pruned automatically. Raise `[sessions] retention_days` in
+  `~/.agent-collab/config.toml` (or set it to `0` to disable pruning) before
+  relying on old transcripts as evidence. Only transcripts inside the managed
+  `data/sessions/` directory are ever deleted; running sessions and custom log
+  directories are never touched.
 - Agent review is advisory. It does not replace understanding critical code,
   tests, security review, or human accountability.
 - Different vendors can still make the same mistake. This project makes the

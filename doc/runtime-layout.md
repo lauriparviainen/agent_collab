@@ -154,4 +154,29 @@ Session records store the execution project and the effective settings confirmat
 }
 ```
 
-`settings` reflects effective config plus validated start options; `command_preview` never contains the task prompt. Statuses are `running`, `awaiting_input`, `done`, `failed`, `stopped`, and `interrupted` (the session was running or awaiting input when the daemon died). The session index grows without bound for now; automatic retention and a `sessions prune` command are planned in [session-retention-and-pruning.md](tasks_open/session-retention-and-pruning.md).
+`settings` reflects effective config plus validated start options; `command_preview` never contains the task prompt. Statuses are `running`, `awaiting_input`, `done`, `failed`, `stopped`, and `interrupted` (the session was running or awaiting input when the daemon died).
+
+## Session Retention
+
+Terminal sessions (`done`, `failed`, `stopped`, `interrupted`) are retained for
+30 days by default, then the daemon removes their index records and managed
+transcripts under `data/sessions/`. The policy is user-config-only (a project
+`[sessions]` section is ignored with a warning) and takes effect on daemon
+restart:
+
+```toml
+[sessions]
+retention_days = 30          # 0 disables automatic pruning
+cleanup_interval_hours = 24
+```
+
+`agent-collab sessions prune` previews the same selection; `--apply` deletes,
+`--older-than 7d` overrides the configured age for one run, and `--keep N`
+always preserves the newest `N` terminal sessions. Running sessions are never
+eligible, transcripts outside the managed session directory are preserved even
+when their expired records are removed, and pruning is convergent: a crash or
+failure mid-run leaves records that the next run re-selects and finishes. If
+the user config cannot be read at daemon startup, automatic retention is
+disabled rather than defaulting to deletion. See
+[session-retention-and-pruning.md](tasks_closed/session-retention-and-pruning.md)
+for the full design.
