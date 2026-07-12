@@ -3,7 +3,34 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import json
+import logging
 from typing import Any, Dict, Optional
+
+_logger = logging.getLogger("agent_collab.events")
+
+# One warning per distinct invalid value is enough to expose a backend
+# normalization bug without letting a misbehaving backend flood the daemon log.
+# The set is cleared at a small cap so memory stays bounded even if invalid
+# values are dynamic; recurrence then logs again, which is acceptable noise.
+_WARNED_COERCIONS_CAP = 64
+_warned_coercions: set = set()
+
+
+def _warn_coercion(field: str, value: str, replacement: str, source: str, event_type: str) -> None:
+    key = (field, value)
+    if key in _warned_coercions:
+        return
+    if len(_warned_coercions) >= _WARNED_COERCIONS_CAP:
+        _warned_coercions.clear()
+    _warned_coercions.add(key)
+    _logger.warning(
+        "coercing invalid event %s %r to %r (source=%r, type=%r)",
+        field,
+        value,
+        replacement,
+        source,
+        event_type,
+    )
 
 
 VALID_SOURCES = {
@@ -37,9 +64,15 @@ class Event:
 
     @classmethod
     def create(cls, source: str, event_type: str, text: str, raw: Any = None) -> "Event":
+        # Coercion keeps malformed backend output from crashing a live session,
+        # but it must never be silent: it hides backend normalization bugs.
+        # Warnings carry the original (pre-coercion) source and type.
+        original_source, original_type = source, event_type
         if source not in VALID_SOURCES:
+            _warn_coercion("source", source, "error", original_source, original_type)
             source = "error"
         if event_type not in VALID_TYPES:
+            _warn_coercion("type", event_type, "status", original_source, original_type)
             event_type = "status"
         return cls(utc_timestamp(), source, event_type, text, raw)
 

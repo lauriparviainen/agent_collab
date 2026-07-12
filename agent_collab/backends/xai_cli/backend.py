@@ -119,4 +119,5 @@ class XaiCliBackend:
             env=dict(agent.env),
             cwd=agent.cwd,
             command_builder=lambda _run_dir: self.build_command(agent, options),
+            source=self.agent_type,
         )

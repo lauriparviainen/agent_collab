@@ -1,6 +1,27 @@
 import unittest
 
+from agent_collab.backends.antigravity_cli.backend import AntigravityCliBackend
+from agent_collab.backends.claude_cli.backend import ClaudeCliBackend
+from agent_collab.backends.codex_cli.backend import CodexCliBackend
 from agent_collab.backends.common.cli import config_value, flag_value, insert_before_print_prompt
+from agent_collab.backends.xai_cli.backend import XaiCliBackend
+from agent_collab.config import AgentConfig
+
+
+class RunnerSourceAttributionTests(unittest.TestCase):
+    def test_renamed_agent_runner_source_is_the_provider_type(self):
+        """Stderr attribution must follow the provider, not the display id (M5)."""
+        for backend in (
+            ClaudeCliBackend(),
+            CodexCliBackend(),
+            AntigravityCliBackend(),
+            XaiCliBackend(),
+        ):
+            with self.subTest(backend=backend.agent_type):
+                agent = AgentConfig(id="reviewer", type=backend.agent_type, command="provider-cli")
+                runner = backend.create_runner(agent, False, {})
+                self.assertEqual(runner.source, backend.agent_type)
+                self.assertEqual(runner.name, "reviewer")
 
 
 class PrintPromptInsertionTests(unittest.TestCase):

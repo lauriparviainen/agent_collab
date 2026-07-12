@@ -97,6 +97,7 @@ class SubprocessRunner(AgentRunner):
         cwd: Optional[str] = None,
         command_builder: Optional[CommandBuilder] = None,
         stream_limit: int = DEFAULT_STREAM_LIMIT_BYTES,
+        source: Optional[str] = None,
     ):
         self.name = name
         self.command_prefix = command_prefix
@@ -105,6 +106,12 @@ class SubprocessRunner(AgentRunner):
         self.env = env or {}
         self.cwd = cwd
         self.command_builder = command_builder
+        # Provider stderr is attributed by provider type. The runner name is the
+        # configured agent id (a display label like "reviewer"), so it can only
+        # serve as a fallback source for callers that do not pass the provider.
+        if source is not None and source not in PROVIDER_SOURCES:
+            raise ValueError(f"source must be one of {sorted(PROVIDER_SOURCES)}, got {source!r}")
+        self.source = source if source is not None else _event_source(name)
         if isinstance(stream_limit, bool) or not isinstance(stream_limit, int) or stream_limit <= 0:
             raise ValueError("stream_limit must be a positive integer")
         self.stream_limit = stream_limit
@@ -186,7 +193,7 @@ class SubprocessRunner(AgentRunner):
                         if self.verbose:
                             await queue.put(
                                 Event.create(
-                                    _event_source(self.name),
+                                    self.source,
                                     "status",
                                     f"{self.name} stderr: {line}",
                                     {"line": line},

@@ -93,4 +93,5 @@ class AntigravityCliBackend:
             env=dict(agent.env),
             cwd=agent.cwd,
             command_builder=lambda run_dir: self.build_command(agent, options, run_dir),
+            source=self.agent_type,
         )

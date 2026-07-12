@@ -1,6 +1,6 @@
 # Stage 5.4: Daemon robustness and code health
 
-**Status:** Open. H1-H6 and M1-M3 are resolved and verified; M4-M5 and the
+**Status:** Open. H1-H6 and M1-M5 are resolved and verified; only the
 low-priority code-health items remain open. Findings originated in a full-repo
 review at v0.2 (2026-07-10).
 
@@ -346,16 +346,60 @@ BLOCKERS**.
 
 ### M4. `Event.create` silently relabels invalid inputs
 
-`events.py:36-40` maps an unknown `source` to `"error"` and unknown `type` to
-`"status"` with no logging, masking backend normalization bugs. Log (or fail
-loudly in tests) when coercion happens.
+**Resolved (2026-07-12).** `Event.create` keeps coercing an unknown `source`
+to `"error"` and an unknown `type` to `"status"` so malformed backend output
+cannot crash a live session, but the coercion is no longer silent: each one
+logs a warning through `logging.getLogger("agent_collab.events")` carrying the
+original pre-coercion source and type. Warnings are deduplicated per distinct
+`(field, value)` pair so a misbehaving backend cannot flood the daemon log; the
+dedup set is cleared at a small cap (64) so memory stays bounded even with
+dynamically generated invalid values, at the cost of occasional re-logging.
+
+Regression tests (`tests/test_events.py`) cover source and type coercion
+warnings, the both-invalid case logging original values, once-per-value
+deduplication, the bounded cap continuing to warn past 64 distinct values, and
+valid inputs logging nothing.
 
 ### M5. Stderr misattribution for renamed agents
 
-`runners.py:338-339` attributes provider stderr by runner *name*, but
-`SubprocessRunner` is constructed with `agent.id`. A Claude agent with id
-`reviewer` gets stderr attributed to `"tool"`. Attribute by provider type, not
-display id.
+**Resolved (2026-07-12).** `SubprocessRunner` now accepts an explicit `source`
+validated against `PROVIDER_SOURCES` (an invalid explicit value raises
+`ValueError`; omission keeps the legacy name-based fallback), and all four CLI
+backends pass `source=self.agent_type`. Verbose noisy provider stderr from a
+renamed agent (for example a Claude agent with id `reviewer`) is now attributed
+to its provider type instead of `"tool"`. The non-verbose structured-error path
+intentionally keeps source `"error"`: it never attributed by name and its
+contract is pinned by `test_non_noisy_stderr_is_emitted_as_structured_error`.
+
+Regression tests cover renamed-agent verbose stderr attribution and
+construction-time rejection of an invalid source (`tests/test_runners.py`), and
+a shared test proves every CLI backend threads its `agent_type` into the runner
+for a renamed agent (`tests/backends/common/test_cli.py`).
+
+Both fixes went through two read-only agent-collab review rounds using Gemini
+3.1 Pro (High) in plan mode. The first round produced four findings: two were
+fixed (the second coercion warning logging the already-coerced source, and the
+unthrottled warning flood risk) and two were rejected with evidence (an
+`assertNoLogs` Python 3.9 claim — the supported floor is 3.10 — and the
+non-verbose stderr `"error"` source, which is the reviewed M3 contract). The
+second round verified the fixes and both rejections and returned the explicit
+verdict **SHIP-READY / NO BLOCKERS**. The full hermetic suite passes (613
+tests) including Ruff lint/format gates, and `./agent_collab.sh setup --check`
+passes.
+
+### Related fix landed in this stage: installed daemons could not serve MCP guidance
+
+**Resolved (2026-07-12).** `agent_collab_guidance` failed with
+`RuntimeError('MCP guidance document is unavailable')` on installed daemons
+because `mcp_tools.py` resolved the guidance document at the repo-relative
+`doc/mcp-guidance.md`, which does not exist under site-packages. The document
+now lives at `agent_collab/mcp-guidance.md`, is declared as package data in
+`pyproject.toml`, and is resolved with `Path(__file__).with_name(...)` (the
+same convention as `default_config.toml`); documentation links were updated. A
+locally built wheel was verified to contain the file. Regression tests pin the
+path inside the package (`tests/test_mcp_server.py`) and the package-data
+declaration (`tests/test_ci_tooling.py`). Installed daemons pick the fix up on
+the next reinstall and restart.
 
 ## Low priority (code health)
 

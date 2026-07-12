@@ -24,6 +24,13 @@ into a detailed work log.
   instead of incorrectly falling through to the system Python (#9).
 - Make root CLI help provider-neutral and advertise every public command,
   including the TUI and daemon/session inspection surfaces (#10).
+- Ship the MCP guidance document as package data so installed daemons can
+  serve `agent_collab_guidance` instead of failing with an internal error
+  (#11).
+- Attribute renamed agents' verbose provider stderr to the provider type
+  instead of `tool`, and log `Event.create` source/type coercion (with
+  per-value deduplication) instead of silently relabeling invalid events
+  (#6).
 
 ## [0.4.0] - 2026-07-12 - Permanent daemon token
 

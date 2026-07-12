@@ -121,6 +121,32 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(errors[0].raw, {"line": "provider failed safely"})
         self.assertTrue(any("exited with code 0" in event.text for event in events))
 
+    async def test_renamed_agent_verbose_stderr_is_attributed_to_provider(self):
+        script = "import sys; print('WARN provider chatter', file=sys.stderr)"
+        runner = SubprocessRunner(
+            "reviewer",
+            [sys.executable, "-c", script],
+            _json_message_parser,
+            verbose=True,
+            source="claude",
+        )
+
+        events = await self._events(runner)
+
+        noisy = [event for event in events if "stderr:" in event.text]
+        self.assertEqual(len(noisy), 1)
+        self.assertEqual((noisy[0].source, noisy[0].type), ("claude", "status"))
+        self.assertEqual(noisy[0].text, "reviewer stderr: WARN provider chatter")
+
+    def test_invalid_source_is_rejected_at_construction(self):
+        with self.assertRaises(ValueError):
+            SubprocessRunner(
+                "reviewer",
+                [sys.executable, "-c", "pass"],
+                _json_message_parser,
+                source="reviewer",
+            )
+
     async def test_noisy_stderr_is_suppressed_unless_verbose(self):
         script = (
             "import sys; "
