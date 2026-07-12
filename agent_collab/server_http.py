@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 from dataclasses import dataclass
@@ -82,13 +83,58 @@ class AgentCollabHttpServer:
         # Daemon-global retention policy; run_server passes the user-config
         # value, direct construction (tests) gets the built-in defaults.
         self.sessions_config = sessions_config or SessionsConfig()
+        # Seconds between scheduled retention runs; tests shrink this.
+        self._retention_interval_seconds = float(self.sessions_config.cleanup_interval_hours * 3600)
 
     async def serve(self, host: str = "127.0.0.1", port: int = 8765) -> None:
         server = await asyncio.start_server(self._handle_connection, host, port)
         addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
         print(f"agent-collab daemon listening on {addresses}", flush=True)
-        async with server:
-            await server.serve_forever()
+        retention_task = self.start_retention_task()
+        try:
+            async with server:
+                await server.serve_forever()
+        finally:
+            # The daemon has no graceful shutdown beyond this unwinding
+            # (SIGTERM maps to KeyboardInterrupt); pruning is convergent, so
+            # cancelling mid-run is always safe.
+            if retention_task is not None:
+                retention_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await retention_task
+
+    def start_retention_task(self) -> Optional[asyncio.Task]:
+        """Start the periodic retention task; None when retention is disabled."""
+
+        if self.sessions_config.retention_days <= 0:
+            return None
+        return asyncio.get_running_loop().create_task(
+            self._retention_loop(), name="agent-collab-retention"
+        )
+
+    async def _retention_loop(self) -> None:
+        """Apply configured retention once after startup, then every interval.
+
+        Index restoration already happened in the manager constructor, so the
+        first run sees every restored record. A failing run is logged and the
+        loop continues; scheduled and manual pruning serialize through the
+        manager's prune lock, so runs never overlap. The loop only ends by
+        cancellation.
+        """
+
+        from datetime import timedelta
+
+        retention = timedelta(days=self.sessions_config.retention_days)
+        while True:
+            try:
+                await self.manager.prune_sessions(apply=True, retention=retention)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # The manager reports per-session failures in its result; this
+                # catches unexpected errors so the daemon stays healthy.
+                self._log(f"scheduled retention run failed: {exc!r}")
+            await asyncio.sleep(self._retention_interval_seconds)
 
     def _log(self, message: str) -> None:
         print(f"agent-collab daemon {message}", flush=True)

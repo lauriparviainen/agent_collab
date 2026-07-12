@@ -892,5 +892,181 @@ class PruneRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted(SessionIndex(self.index_path).load()), ["fresh"])
 
 
+class RetentionSchedulerTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name).resolve()
+        self.session_dir = root / "sessions"
+        self.session_dir.mkdir()
+        self.index_path = root / "session-index.json"
+
+    def _add_terminal_record(self, session_id, *, days_ago=60):
+        from datetime import datetime, timedelta, timezone
+
+        timestamp = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+        SessionIndex(self.index_path).upsert(
+            {
+                "session_id": session_id,
+                "status": "done",
+                "task": "old",
+                "workflow": "cross-review",
+                "workdir": self._tmp.name,
+                "jsonl_path": str(self.session_dir / f"{session_id}.jsonl"),
+                "markdown_path": str(self.session_dir / f"{session_id}.md"),
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "ended_at": timestamp,
+            }
+        )
+        (self.session_dir / f"{session_id}.jsonl").write_text("x", encoding="utf-8")
+        (self.session_dir / f"{session_id}.md").write_text("x", encoding="utf-8")
+
+    def _server(self, sessions_config=None):
+        manager = SessionManager(index_path=self.index_path, default_log_dir=self.session_dir)
+        return AgentCollabHttpServer(manager=manager, sessions_config=sessions_config)
+
+    async def _wait_for(self, predicate, timeout=2.0):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if predicate():
+                return
+            await asyncio.sleep(0.01)
+        self.fail("condition not reached before timeout")
+
+    async def _cancel(self, task):
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+    async def test_startup_run_prunes_restored_expired_sessions(self):
+        self._add_terminal_record("old-1")
+        self._add_terminal_record("fresh", days_ago=1)
+        server = self._server()
+        server._retention_interval_seconds = 60.0
+
+        task = server.start_retention_task()
+        self.assertIsNotNone(task)
+        await self._wait_for(lambda: sorted(SessionIndex(self.index_path).load()) == ["fresh"])
+        await self._cancel(task)
+
+        self.assertFalse((self.session_dir / "old-1.jsonl").exists())
+        self.assertTrue((self.session_dir / "fresh.jsonl").exists())
+
+    async def test_scheduler_reruns_on_the_configured_interval(self):
+        server = self._server()
+        server._retention_interval_seconds = 0.01
+        calls = []
+
+        async def counting_prune(**kwargs):
+            calls.append(kwargs)
+            return mock.Mock(pruned=0, failed=0, bytes_reclaimed=0)
+
+        with mock.patch.object(server.manager, "prune_sessions", side_effect=counting_prune):
+            task = server.start_retention_task()
+            await self._wait_for(lambda: len(calls) >= 3)
+            await self._cancel(task)
+
+        self.assertTrue(all(call["apply"] for call in calls))
+
+    async def test_disabled_retention_starts_no_task(self):
+        from agent_collab.config import SessionsConfig
+
+        server = self._server(sessions_config=SessionsConfig(retention_days=0))
+
+        self.assertIsNone(server.start_retention_task())
+
+    async def test_scheduled_and_manual_runs_never_overlap(self):
+        import threading
+        from datetime import timedelta
+
+        import agent_collab.daemon as daemon_module
+
+        for index in range(3):
+            self._add_terminal_record(f"old-{index}")
+        server = self._server()
+        server._retention_interval_seconds = 0.01
+        state = {"active": 0, "max": 0, "calls": 0}
+        guard = threading.Lock()
+        real_unlinks = daemon_module._execute_transcript_unlinks
+
+        def tracked_unlinks(plans, apply):
+            # Every prune run (scheduled or manual) passes through here; the
+            # sleep widens any overlap window the prune lock fails to close.
+            with guard:
+                state["active"] += 1
+                state["max"] = max(state["max"], state["active"])
+                state["calls"] += 1
+            time.sleep(0.02)
+            try:
+                return real_unlinks(plans, apply)
+            finally:
+                with guard:
+                    state["active"] -= 1
+
+        with mock.patch.object(
+            daemon_module, "_execute_transcript_unlinks", side_effect=tracked_unlinks
+        ):
+            task = server.start_retention_task()
+            await asyncio.gather(
+                *(
+                    server.manager.prune_sessions(apply=True, retention=timedelta(days=30))
+                    for _ in range(3)
+                )
+            )
+            await self._wait_for(lambda: state["calls"] >= 5)
+            await self._cancel(task)
+
+        self.assertEqual(state["max"], 1)
+
+    async def test_mid_run_cancellation_propagates_and_next_run_converges(self):
+        from datetime import timedelta
+
+        self._add_terminal_record("old-1")
+        server = self._server()
+        server._retention_interval_seconds = 60.0
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        real_prune = server.manager.prune_sessions
+
+        async def blocking_prune(**kwargs):
+            entered.set()
+            # Cancellation lands here, mid "run", and must not be swallowed
+            # by the loop's failure handling.
+            await release.wait()
+            return await real_prune(**kwargs)
+
+        with mock.patch.object(server.manager, "prune_sessions", side_effect=blocking_prune):
+            task = server.start_retention_task()
+            await asyncio.wait_for(entered.wait(), 2.0)
+            await self._cancel(task)
+
+        # Nothing was mutated mid-run; a later manual run converges normally.
+        result = await server.manager.prune_sessions(apply=True, retention=timedelta(days=30))
+        self.assertEqual(result.pruned, 1)
+        self.assertEqual(SessionIndex(self.index_path).load(), {})
+
+    async def test_failing_run_is_logged_and_the_loop_survives(self):
+        server = self._server()
+        server._retention_interval_seconds = 0.01
+        calls = []
+        logs = []
+        server._log = logs.append
+
+        async def flaky_prune(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RuntimeError("simulated retention failure")
+            return mock.Mock(pruned=0, failed=0, bytes_reclaimed=0)
+
+        with mock.patch.object(server.manager, "prune_sessions", side_effect=flaky_prune):
+            task = server.start_retention_task()
+            await self._wait_for(lambda: len(calls) >= 2)
+            await self._cancel(task)
+
+        self.assertTrue(any("simulated retention failure" in line for line in logs))
+
+
 if __name__ == "__main__":
     unittest.main()
