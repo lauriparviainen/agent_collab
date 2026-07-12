@@ -271,7 +271,7 @@ Configuration can be global or project-specific. The daemon's `options` command
 reports effective workflows, selected backends, accepted values, health
 evidence, and remediation without making a model call. See
 [agent configuration](doc/agent-configuration.md) and
-[MCP guidance](doc/mcp-guidance.md) for the complete setup and tool contract.
+[MCP guidance](agent_collab/mcp-guidance.md) for the complete setup and tool contract.
 
 ## Built alongside David AI
 
@@ -302,7 +302,7 @@ The README is deliberately short. Detailed behavior lives here:
 - [Agent and backend configuration](doc/agent-configuration.md)
 - [Runtime files and config precedence](doc/runtime-layout.md)
 - [Daemon, sessions, CLI, and MCP architecture](doc/daemon-architecture.md)
-- [MCP tool guidance](doc/mcp-guidance.md)
+- [MCP tool guidance](agent_collab/mcp-guidance.md)
 - [Generated HTTP API reference](doc/daemon_api_doc/http-api.md)
 - [Development and verification](doc/development.md)
 - [Current implementation notes](doc/implementation-notes.md)

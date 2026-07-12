@@ -260,7 +260,7 @@ Before agents pass non-default model, reasoning, permission, or sandbox settings
 they should call `agent_collab_describe_options` and then start sessions with the
 backend-qualified `backend_options` map. Invalid options are rejected before
 execution with field-level feedback. `agent_collab_guidance` serves full
-Markdown usage guidance from `doc/mcp-guidance.md`.
+Markdown usage guidance from `agent_collab/mcp-guidance.md` (shipped as package data).
 
 ## Safety model
 

@@ -43,6 +43,7 @@ include = ["agent_collab*"]
 [tool.setuptools.package-data]
 agent_collab = [
     "default_config.toml",
+    "mcp-guidance.md",
     "backends/*/README.md",
     "backends/*/options.toml",
     "backends/*/config.toml",

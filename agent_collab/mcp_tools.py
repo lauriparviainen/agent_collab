@@ -337,7 +337,9 @@ def text_content(text: str, is_error: bool = False) -> Dict[str, Any]:
 
 
 GUIDANCE_TOPICS = ("overview", "start", "watch", "options", "errors", "workflows")
-_GUIDANCE_PATH = Path(__file__).resolve().parent.parent / "doc" / "mcp-guidance.md"
+# Shipped as package data (see pyproject.toml) so installed daemons can serve
+# it; a repo-relative ``doc/`` path would not exist under site-packages.
+_GUIDANCE_PATH = Path(__file__).with_name("mcp-guidance.md")
 _GUIDANCE_HEADINGS = {
     "start": "## Start",
     "watch": "## Watch",

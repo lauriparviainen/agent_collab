@@ -23,7 +23,7 @@ MCP access to the same live session state.
   and typed start options.
 - [doc/runtime-layout.md](doc/runtime-layout.md): global runtime layout and
   config precedence.
-- [doc/mcp-guidance.md](doc/mcp-guidance.md): guidance served to MCP agents by
+- [agent_collab/mcp-guidance.md](agent_collab/mcp-guidance.md): guidance served to MCP agents by
   `agent_collab_guidance`.
 
 For commands, test expectations, and live-agent cautions, use

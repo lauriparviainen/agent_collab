@@ -1,6 +1,7 @@
 import io
 import json
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from agent_collab.api_schema import EventBatchModel, SessionListModel, SessionStateModel
@@ -84,6 +85,20 @@ class McpServerTests(unittest.TestCase):
         self.assertTrue(text.startswith("## Errors"))
         self.assertNotIn("## Watch", text)
         self.assertIn("invalid_start_options", text)
+
+    def test_guidance_document_ships_inside_the_package(self):
+        """Installed daemons must find the guidance file under site-packages.
+
+        A repo-relative ``doc/`` path resolves only in a source checkout, so the
+        document must live inside the ``agent_collab`` package (package-data
+        coverage is asserted in test_ci_tooling).
+        """
+        import agent_collab
+        from agent_collab.mcp_tools import _GUIDANCE_PATH
+
+        package_dir = Path(agent_collab.__file__).resolve().parent
+        self.assertEqual(_GUIDANCE_PATH.parent, package_dir)
+        self.assertTrue(_GUIDANCE_PATH.is_file())
 
     def test_guidance_unknown_topic_is_an_error(self):
         result = handle_tool("agent_collab_guidance", {"topic": "bogus"})

@@ -12,7 +12,7 @@ is the user-facing overview; these documents hold the detail.
   and typed start options
 - [Runtime layout](runtime-layout.md) — global runtime files and config
   precedence
-- [MCP guidance](mcp-guidance.md) — usage guidance served to MCP agents
+- [MCP guidance](../agent_collab/mcp-guidance.md) — usage guidance served to MCP agents
 - [Generated daemon REST API](daemon_api_doc/http-api.md)
 - [Development notes](development.md) — commands, tests, and coding constraints
 

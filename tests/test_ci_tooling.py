@@ -21,6 +21,13 @@ class StaticToolingContractTests(unittest.TestCase):
         self.assertIn("Apache License\n                           Version 2.0", license_text)
         self.assertIn("END OF TERMS AND CONDITIONS", license_text)
 
+    def test_mcp_guidance_document_is_declared_package_data(self):
+        """The guidance Markdown must ship in wheels, not only in the checkout."""
+        pyproject = PYPROJECT_PATH.read_text(encoding="utf-8")
+        package_data = pyproject.split("[tool.setuptools.package-data]", 1)[1]
+        self.assertIn('"mcp-guidance.md"', package_data)
+        self.assertTrue((ROOT / "agent_collab" / "mcp-guidance.md").is_file())
+
     def test_pyproject_pins_and_configures_ruff_lint_and_format(self):
         pyproject = PYPROJECT_PATH.read_text(encoding="utf-8")
 
