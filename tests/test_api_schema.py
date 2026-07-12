@@ -29,6 +29,8 @@ from agent_collab.api_schema import (
     HealthModel,
     OptionsRequestModel,
     PostMessageRequestModel,
+    PruneResultModel,
+    PruneSessionsRequestModel,
     ReadEventsRequestModel,
     SessionListModel,
     SessionStateModel,
@@ -241,6 +243,8 @@ class ModelRoundTripTests(unittest.TestCase):
             (ReadEventsRequestModel, {"cursor": 4, "limit": 1, "tool_output": "full"}),
             (WaitEventsRequestModel, {"cursor": 4, "timeout_ms": 10}),
             (TranscriptRequestModel, {"tool_output": "full"}),
+            (PruneSessionsRequestModel, {}),
+            (PruneSessionsRequestModel, {"apply": True, "older_than": "7d", "keep": 3}),
         ]
         for model, payload in cases:
             with self.subTest(model=model.__name__, payload=payload):
@@ -251,6 +255,27 @@ class ModelRoundTripTests(unittest.TestCase):
     def test_options_request_requires_workdir(self):
         with self.assertRaises(ValueError):
             OptionsRequestModel.from_dict({})
+
+    def test_prune_request_rejects_bad_input(self):
+        for payload in (
+            {"older_than": "0d"},
+            {"older_than": "soon"},
+            {"older_than": 7},
+            {"keep": -1},
+            {"keep": "many"},
+            {"unknown_field": True},
+            {"dry_run": True},
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaises(ValueError):
+                    PruneSessionsRequestModel.from_dict(payload)
+
+    def test_prune_request_defaults_to_safe_preview(self):
+        request = PruneSessionsRequestModel.from_dict({})
+
+        self.assertFalse(request.apply)
+        self.assertIsNone(request.older_than)
+        self.assertEqual(request.keep, 0)
 
 
 class LiveWireFidelityTests(unittest.IsolatedAsyncioTestCase):
@@ -309,6 +334,10 @@ class LiveWireFidelityTests(unittest.IsolatedAsyncioTestCase):
 
                 stopped = await server._dispatch("POST", f"/sessions/{session_id}/stop", {}, b"")
                 self.assertEqual(SessionStateModel.from_dict(stopped).to_dict(), stopped)
+
+                prune_body = json.dumps({"apply": False, "older_than": "1h"}).encode("utf-8")
+                pruned = await server._dispatch("POST", "/sessions/prune", {}, prune_body)
+                self.assertEqual(PruneResultModel.from_dict(pruned).to_dict(), pruned)
 
 
 class _CaptureWriter:

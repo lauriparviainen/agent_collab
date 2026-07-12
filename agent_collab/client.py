@@ -12,6 +12,7 @@ from .api_schema import (
     API_VERSION_HEADER,
     EventBatchModel,
     HealthModel,
+    PruneResultModel,
     SessionListModel,
     SessionStateModel,
     TranscriptModel,
@@ -121,6 +122,9 @@ class AgentCollabClient:
 
     def stop_session(self, session_id: str) -> SessionStateModel:
         return SessionStateModel.from_dict(self._request("POST", f"/sessions/{session_id}/stop"))
+
+    def prune_sessions(self, payload: Dict[str, Any]) -> PruneResultModel:
+        return PruneResultModel.from_dict(self._request("POST", "/sessions/prune", payload))
 
     def _request(
         self,

@@ -156,6 +156,158 @@
         ],
         "type": "object"
       },
+      "PruneResultModel": {
+        "additionalProperties": false,
+        "properties": {
+          "apply": {
+            "type": "boolean"
+          },
+          "bytes_reclaimed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "candidates": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cutoff": {
+            "type": "string"
+          },
+          "failed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "keep": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pruned": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/PruneSessionDetailModel"
+            },
+            "type": "array"
+          },
+          "unparseable_records": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "apply",
+          "cutoff",
+          "keep",
+          "candidates",
+          "pruned",
+          "failed",
+          "bytes_reclaimed",
+          "unparseable_records",
+          "sessions"
+        ],
+        "type": "object"
+      },
+      "PruneSessionDetailModel": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes_reclaimed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disposition": {
+            "enum": [
+              "pruned",
+              "preview",
+              "kept",
+              "skipped_no_timestamp",
+              "skipped_live",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "effective_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "preserved_files": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "removed_files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "status",
+          "disposition",
+          "effective_at",
+          "removed_files",
+          "preserved_files",
+          "bytes_reclaimed",
+          "error"
+        ],
+        "type": "object"
+      },
+      "PruneSessionsRequestModel": {
+        "additionalProperties": false,
+        "properties": {
+          "apply": {
+            "default": false,
+            "type": "boolean"
+          },
+          "keep": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "older_than": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "pattern": "^\\s*[0-9]+[hdw]\\s*$"
+          }
+        },
+        "type": "object"
+      },
       "ReadEventsRequestModel": {
         "additionalProperties": false,
         "properties": {
@@ -1025,6 +1177,124 @@
           }
         ],
         "summary": "Start a collaboration session"
+      }
+    },
+    "/sessions/prune": {
+      "post": {
+        "operationId": "prune_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PruneSessionsRequestModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruneResultModel"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Preview or apply terminal-session retention"
       }
     },
     "/sessions/{session_id}": {

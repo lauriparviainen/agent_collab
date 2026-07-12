@@ -30,6 +30,9 @@ from .api_schema import (
     HealthModel,
     OptionsRequestModel,
     PostMessageRequestModel,
+    PruneResultModel,
+    PruneSessionDetailModel,
+    PruneSessionsRequestModel,
     ReadEventsRequestModel,
     SessionListModel,
     SessionStateModel,
@@ -54,9 +57,12 @@ _MODELS = (
     EventBatchModel,
     TranscriptModel,
     ErrorModel,
+    PruneResultModel,
+    PruneSessionDetailModel,
     StartSessionRequestModel,
     OptionsRequestModel,
     PostMessageRequestModel,
+    PruneSessionsRequestModel,
     ReadEventsRequestModel,
     WaitEventsRequestModel,
     TranscriptRequestModel,
@@ -65,6 +71,7 @@ _REQUEST_MODELS = {
     StartSessionRequestModel,
     OptionsRequestModel,
     PostMessageRequestModel,
+    PruneSessionsRequestModel,
     ReadEventsRequestModel,
     WaitEventsRequestModel,
     TranscriptRequestModel,
@@ -92,6 +99,18 @@ _FIELD_SCHEMAS: Dict[Tuple[type, str], Dict[str, Any]] = {
     (WaitEventsRequestModel, "timeout_ms"): {"minimum": 0},
     (WaitEventsRequestModel, "tool_output"): {"enum": ["summary", "full"]},
     (TranscriptRequestModel, "tool_output"): {"enum": ["summary", "full"]},
+    (PruneSessionsRequestModel, "keep"): {"minimum": 0},
+    (PruneSessionsRequestModel, "older_than"): {"pattern": r"^\s*[0-9]+[hdw]\s*$"},
+    (PruneSessionDetailModel, "disposition"): {
+        "enum": ["pruned", "preview", "kept", "skipped_no_timestamp", "skipped_live", "failed"]
+    },
+    (PruneSessionDetailModel, "bytes_reclaimed"): {"minimum": 0},
+    (PruneResultModel, "candidates"): {"minimum": 0},
+    (PruneResultModel, "pruned"): {"minimum": 0},
+    (PruneResultModel, "failed"): {"minimum": 0},
+    (PruneResultModel, "bytes_reclaimed"): {"minimum": 0},
+    (PruneResultModel, "unparseable_records"): {"minimum": 0},
+    (PruneResultModel, "keep"): {"minimum": 0},
 }
 
 
@@ -273,6 +292,7 @@ def _summary(route: Any) -> str:
         "post_message": "Post input to an interactive session",
         "read_transcript": "Read a session transcript",
         "stop_session": "Stop a live session",
+        "prune_sessions": "Preview or apply terminal-session retention",
     }
     return names[route.handler]
 

@@ -14,12 +14,14 @@ from .api_schema import (
     HealthModel,
     OptionsRequestModel,
     PostMessageRequestModel,
+    PruneSessionsRequestModel,
     ROUTES,
     ReadEventsRequestModel,
     Route,
     TranscriptRequestModel,
     WaitEventsRequestModel,
 )
+from .config import SessionsConfig
 from .daemon import (
     SessionManager,
     SessionNotFoundError,
@@ -66,6 +68,7 @@ class AgentCollabHttpServer:
         session_log_dir: Optional[Path] = None,
         session_index_path: Optional[Path] = None,
         auth_token: Optional[str] = None,
+        sessions_config: Optional[SessionsConfig] = None,
     ):
         owns_manager = manager is None
         self.manager = manager or SessionManager(
@@ -76,6 +79,9 @@ class AgentCollabHttpServer:
         )
         self.log_requests = owns_manager if log_requests is None else bool(log_requests)
         self.auth_token = auth_token
+        # Daemon-global retention policy; run_server passes the user-config
+        # value, direct construction (tests) gets the built-in defaults.
+        self.sessions_config = sessions_config or SessionsConfig()
 
     async def serve(self, host: str = "127.0.0.1", port: int = 8765) -> None:
         server = await asyncio.start_server(self._handle_connection, host, port)
@@ -325,6 +331,29 @@ class AgentCollabHttpServer:
     ) -> Any:
         return (await self.manager.stop_session(path["session_id"])).to_dict()
 
+    async def _route_prune_sessions(
+        self, _route: Route, _path: Dict[str, str], _query: Dict[str, str], body: bytes
+    ) -> Any:
+        from datetime import timedelta
+
+        from .retention import parse_duration
+
+        request = _parse(PruneSessionsRequestModel.from_dict, _decode_json_object(body))
+        if request.older_than is not None:
+            retention = parse_duration(request.older_than)
+        elif self.sessions_config.retention_days > 0:
+            retention = timedelta(days=self.sessions_config.retention_days)
+        else:
+            raise HttpError(
+                400,
+                "automatic retention is disabled (sessions.retention_days = 0); "
+                "pass older_than to prune manually",
+            )
+        result = await self.manager.prune_sessions(
+            apply=request.apply, retention=retention, keep=request.keep
+        )
+        return result.to_dict()
+
     async def _dispatch_mcp(self, method: str, headers: Dict[str, str], body: bytes) -> Any:
         _validate_mcp_origin(headers.get("origin"))
         _validate_mcp_protocol_version(headers.get("mcp-protocol-version"))
@@ -481,6 +510,32 @@ def _http_reason(status: int) -> str:
     }.get(status, "Error")
 
 
+def _load_sessions_config(home: Path) -> SessionsConfig:
+    """Load the daemon-global [sessions] policy from built-in + user config.
+
+    Project config never participates: the daemon's home is not a project, and
+    project-scope [sessions] sections are stripped during migration anyway. A
+    broken user config must not keep the daemon from starting, but it also
+    must not silently re-enable deletion the user may have opted out of with
+    ``retention_days = 0`` — so the fail-safe is retention disabled, not the
+    built-in 30-day default. Manual ``sessions prune --older-than`` still
+    works, and session starts will surface the underlying config error.
+    """
+
+    from .config import ConfigError, load_config
+    from .paths import AgentCollabHome
+
+    resolved = AgentCollabHome(root=home, config_path=home / "config.toml")
+    try:
+        return load_config(home, home=resolved).sessions
+    except (ConfigError, OSError) as exc:
+        print(
+            f"agent-collab daemon disabling automatic session retention; config error: {exc}",
+            flush=True,
+        )
+        return SessionsConfig(retention_days=0)
+
+
 def run_server(
     host: str = "127.0.0.1",
     port: int = 8765,
@@ -504,5 +559,6 @@ def run_server(
             default_workdir=default_workdir,
             session_log_dir=session_log_dir,
             auth_token=token,
+            sessions_config=_load_sessions_config(paths.home),
         ).serve(host, port)
     )

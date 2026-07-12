@@ -310,6 +310,93 @@ class ErrorModel:
         return out
 
 
+@dataclass
+class PruneSessionDetailModel:
+    """One session's outcome in a prune run; mirrors ``daemon.PruneSessionDetail``.
+
+    ``disposition`` values are documented on the daemon dataclass (``pruned``,
+    ``preview``, ``kept``, ``skipped_no_timestamp``, ``skipped_live``,
+    ``failed``); like ``SessionStateModel.status`` the DTO does not reject
+    unknown future values, the generated schema documents the enum.
+    """
+
+    session_id: str
+    status: str
+    disposition: str
+    effective_at: Optional[str] = None
+    removed_files: List[str] = field(default_factory=list)
+    preserved_files: List[Dict[str, str]] = field(default_factory=list)
+    bytes_reclaimed: int = 0
+    error: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PruneSessionDetailModel":
+        return cls(
+            session_id=str(data["session_id"]),
+            status=str(data.get("status", "")),
+            disposition=str(data["disposition"]),
+            effective_at=data.get("effective_at"),
+            removed_files=[str(item) for item in data.get("removed_files", [])],
+            preserved_files=[dict(item) for item in data.get("preserved_files", [])],
+            bytes_reclaimed=_integer(data, "bytes_reclaimed", 0),
+            error=data.get("error"),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "status": self.status,
+            "disposition": self.disposition,
+            "effective_at": self.effective_at,
+            "removed_files": self.removed_files,
+            "preserved_files": self.preserved_files,
+            "bytes_reclaimed": self.bytes_reclaimed,
+            "error": self.error,
+        }
+
+
+@dataclass
+class PruneResultModel:
+    """``POST /sessions/prune`` response; mirrors ``daemon.PruneResult``."""
+
+    apply: bool
+    cutoff: str
+    keep: int
+    candidates: int
+    pruned: int
+    failed: int
+    bytes_reclaimed: int
+    unparseable_records: int
+    sessions: List[PruneSessionDetailModel] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PruneResultModel":
+        return cls(
+            apply=bool(data["apply"]),
+            cutoff=str(data["cutoff"]),
+            keep=_integer(data, "keep", 0),
+            candidates=_integer(data, "candidates", 0),
+            pruned=_integer(data, "pruned", 0),
+            failed=_integer(data, "failed", 0),
+            bytes_reclaimed=_integer(data, "bytes_reclaimed", 0),
+            unparseable_records=_integer(data, "unparseable_records", 0),
+            sessions=[PruneSessionDetailModel.from_dict(item) for item in data.get("sessions", [])],
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "apply": self.apply,
+            "cutoff": self.cutoff,
+            "keep": self.keep,
+            "candidates": self.candidates,
+            "pruned": self.pruned,
+            "failed": self.failed,
+            "bytes_reclaimed": self.bytes_reclaimed,
+            "unparseable_records": self.unparseable_records,
+            "sessions": [item.to_dict() for item in self.sessions],
+        }
+
+
 # --- Request DTOs -----------------------------------------------------------
 
 # Fields carried on ``daemon.StartSessionRequest`` that are NOT wire inputs:
@@ -450,6 +537,45 @@ class PostMessageRequestModel:
         out: Dict[str, Any] = {"source": self.source, "text": self.text}
         if self.target is not None:
             out["target"] = self.target
+        return out
+
+
+@dataclass
+class PruneSessionsRequestModel:
+    """``POST /sessions/prune`` request.
+
+    ``older_than`` overrides the configured retention for one invocation; the
+    duration grammar is validated here (via ``retention.parse_duration``) so a
+    bad value 400s before reaching the manager. Unknown fields are rejected —
+    this endpoint deletes data, so a mistyped field must never be ignored.
+    """
+
+    apply: bool = False
+    older_than: Optional[str] = None
+    keep: int = 0
+
+    WIRE_FIELDS: ClassVar[Tuple[str, ...]] = ("apply", "older_than", "keep")
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PruneSessionsRequestModel":
+        from .retention import parse_duration
+
+        unknown = sorted(set(data) - set(cls.WIRE_FIELDS))
+        if unknown:
+            raise ValueError(f"unknown prune field {unknown[0]!r}")
+        older_than = data.get("older_than")
+        if older_than is not None:
+            parse_duration(older_than)
+            older_than = str(older_than).strip()
+        keep = _integer(data, "keep", 0)
+        if keep < 0:
+            raise ValueError("keep must be >= 0")
+        return cls(apply=bool(data.get("apply", False)), older_than=older_than, keep=keep)
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {"apply": self.apply, "keep": self.keep}
+        if self.older_than is not None:
+            out["older_than"] = self.older_than
         return out
 
 
@@ -612,6 +738,14 @@ ROUTES: Tuple[Route, ...] = (
         None,
         SessionStateModel,
     ),
+    Route(
+        "POST",
+        "/sessions/prune",
+        "prune_sessions",
+        "prune_sessions",
+        PruneSessionsRequestModel,
+        PruneResultModel,
+    ),
 )
 
 # REST routes that legitimately have no typed-client method (server/manual-curl
@@ -631,9 +765,12 @@ __all__ = [
     "EventBatchModel",
     "TranscriptModel",
     "ErrorModel",
+    "PruneResultModel",
+    "PruneSessionDetailModel",
     "StartSessionRequestModel",
     "OptionsRequestModel",
     "PostMessageRequestModel",
+    "PruneSessionsRequestModel",
     "ReadEventsRequestModel",
     "WaitEventsRequestModel",
     "TranscriptRequestModel",

@@ -19,6 +19,7 @@ All operations except `GET /health` require the per-daemon Bearer token. `/optio
 | `POST` | `/sessions/{session_id}/messages` | Bearer | PostMessageRequestModel | EventBatchModel |
 | `GET` | `/sessions/{session_id}/transcript` | Bearer | TranscriptRequestModel | TranscriptModel |
 | `POST` | `/sessions/{session_id}/stop` | Bearer | — | SessionStateModel |
+| `POST` | `/sessions/prune` | Bearer | PruneSessionsRequestModel | PruneResultModel |
 
 ## Operations
 
@@ -120,6 +121,15 @@ Stop a live session
 - Authentication: Bearer token
 - Request model: none
 - Response model: `SessionStateModel`
+
+### POST `/sessions/prune`
+
+Preview or apply terminal-session retention
+
+- Operation ID: `prune_sessions_post`
+- Authentication: Bearer token
+- Request model: `PruneSessionsRequestModel`
+- Response model: `PruneResultModel`
 
 ## Generated artifacts
 

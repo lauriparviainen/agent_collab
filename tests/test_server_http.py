@@ -11,6 +11,7 @@ from unittest import mock
 from agent_collab.backends.base import BackendHealth, HEALTH_UNAVAILABLE
 from agent_collab.daemon import SessionManager, SessionRequestError
 from agent_collab.options import StartOptionsError
+from agent_collab.session_index import SessionIndex
 from agent_collab.server_http import (
     INTERNAL_SERVER_ERROR_MESSAGE,
     MAX_REQUEST_BODY_BYTES,
@@ -789,6 +790,106 @@ async def _wait_for_status(manager, session_id, expected):
             return state
         await asyncio.sleep(0.02)
     raise AssertionError(f"session {session_id} did not reach {expected}")
+
+
+class PruneRouteTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name).resolve()
+        self.session_dir = root / "sessions"
+        self.session_dir.mkdir()
+        self.index_path = root / "session-index.json"
+
+    def _add_terminal_record(self, session_id, *, days_ago=60):
+        from datetime import datetime, timedelta, timezone
+
+        timestamp = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+        SessionIndex(self.index_path).upsert(
+            {
+                "session_id": session_id,
+                "status": "done",
+                "task": "old",
+                "workflow": "cross-review",
+                "workdir": self._tmp.name,
+                "jsonl_path": str(self.session_dir / f"{session_id}.jsonl"),
+                "markdown_path": str(self.session_dir / f"{session_id}.md"),
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "ended_at": timestamp,
+            }
+        )
+        (self.session_dir / f"{session_id}.jsonl").write_text("x", encoding="utf-8")
+        (self.session_dir / f"{session_id}.md").write_text("x", encoding="utf-8")
+
+    def _server(self, sessions_config=None):
+        manager = SessionManager(index_path=self.index_path, default_log_dir=self.session_dir)
+        return AgentCollabHttpServer(manager=manager, sessions_config=sessions_config)
+
+    async def test_prune_route_requires_bearer_token(self):
+        server = AgentCollabHttpServer(manager=SessionManager(), auth_token="secret")
+
+        with self.assertRaises(HttpError) as ctx:
+            await server._dispatch("POST", "/sessions/prune", {}, b"{}")
+
+        self.assertEqual(ctx.exception.status, 401)
+
+    async def test_invalid_prune_payloads_are_bad_requests(self):
+        server = self._server()
+        for payload in ({"older_than": "0d"}, {"keep": -1}, {"bogus": 1}):
+            with self.subTest(payload=payload), self.assertRaises(HttpError) as ctx:
+                await server._dispatch(
+                    "POST", "/sessions/prune", {}, json.dumps(payload).encode("utf-8")
+                )
+            self.assertEqual(ctx.exception.status, 400)
+
+    async def test_disabled_retention_requires_explicit_older_than(self):
+        from agent_collab.config import SessionsConfig
+
+        self._add_terminal_record("old-1")
+        server = self._server(sessions_config=SessionsConfig(retention_days=0))
+
+        with self.assertRaises(HttpError) as ctx:
+            await server._dispatch("POST", "/sessions/prune", {}, b"{}")
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertIn("older_than", ctx.exception.message)
+
+        body = json.dumps({"older_than": "30d", "apply": True}).encode("utf-8")
+        result = await server._dispatch("POST", "/sessions/prune", {}, body)
+        self.assertEqual(result["pruned"], 1)
+
+    async def test_broken_user_config_fails_safe_to_disabled_retention(self):
+        # A config error must never silently re-enable deletion the user may
+        # have opted out of; the fail-safe is retention disabled, not 30 days.
+        from agent_collab.server_http import _load_sessions_config
+
+        home = Path(self._tmp.name).resolve() / "home"
+        home.mkdir()
+        (home / "config.toml").write_text("[agents.broken]\ntype = 12345\n", encoding="utf-8")
+
+        config = _load_sessions_config(home)
+
+        self.assertEqual(config.retention_days, 0)
+
+    async def test_preview_then_apply_uses_configured_retention(self):
+        self._add_terminal_record("old-1")
+        self._add_terminal_record("fresh", days_ago=1)
+        server = self._server()
+
+        preview = await server._dispatch("POST", "/sessions/prune", {}, b"{}")
+
+        self.assertFalse(preview["apply"])
+        self.assertEqual(preview["candidates"], 1)
+        self.assertEqual(preview["pruned"], 0)
+        self.assertTrue((self.session_dir / "old-1.jsonl").exists())
+
+        applied = await server._dispatch(
+            "POST", "/sessions/prune", {}, json.dumps({"apply": True}).encode("utf-8")
+        )
+
+        self.assertEqual(applied["pruned"], 1)
+        self.assertFalse((self.session_dir / "old-1.jsonl").exists())
+        self.assertEqual(sorted(SessionIndex(self.index_path).load()), ["fresh"])
 
 
 if __name__ == "__main__":
