@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import tempfile
@@ -10,6 +11,7 @@ from agent_collab.events import Event
 from agent_collab.options import StartOptionsError
 from agent_collab.paths import GlobalDataPaths
 from agent_collab.referee import Referee
+from agent_collab.session_index import SessionIndex
 
 
 TERMINAL_STATUSES = {"done", "failed", "stopped"}
@@ -656,6 +658,267 @@ sequence = ["claude-a", "claude-b"]
             self.assertTrue(
                 any(f"session {state.session_id} done" in message for message in messages)
             )
+
+
+class SessionManagerPruneTests(unittest.IsolatedAsyncioTestCase):
+    NOW = datetime(2026, 7, 12, 12, 0, 0, tzinfo=timezone.utc)
+    RETENTION = timedelta(days=30)
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name).resolve()
+        self.session_dir = root / "sessions"
+        self.session_dir.mkdir()
+        self.index_path = root / "session-index.json"
+        self.index = SessionIndex(self.index_path)
+
+    def _add_record(
+        self,
+        session_id,
+        *,
+        days_ago=60,
+        status="done",
+        write_files=True,
+        jsonl_path=None,
+        markdown_path=None,
+        ended_at="unset",
+        updated_at="unset",
+    ):
+        timestamp = (self.NOW - timedelta(days=days_ago)).isoformat()
+        record = {
+            "session_id": session_id,
+            "status": status,
+            "task": "old task",
+            "workflow": "cross-review",
+            "workdir": str(Path(self._tmp.name)),
+            "jsonl_path": jsonl_path or str(self.session_dir / f"{session_id}.jsonl"),
+            "markdown_path": markdown_path or str(self.session_dir / f"{session_id}.md"),
+            "created_at": timestamp,
+            "updated_at": timestamp if updated_at == "unset" else updated_at,
+            "ended_at": timestamp if ended_at == "unset" else ended_at,
+        }
+        self.index.upsert(record)
+        if write_files:
+            for key in ("jsonl_path", "markdown_path"):
+                path = Path(record[key])
+                if path.parent == self.session_dir:
+                    path.write_text("x" * 10, encoding="utf-8")
+        return record
+
+    def _manager(self):
+        return SessionManager(index_path=self.index_path, default_log_dir=self.session_dir)
+
+    async def _prune(self, manager, apply, keep=0):
+        return await manager.prune_sessions(
+            apply=apply, retention=self.RETENTION, keep=keep, now=self.NOW
+        )
+
+    async def test_preview_mutates_nothing_and_reports_candidates(self):
+        self._add_record("old-1")
+        self._add_record("old-2")
+        self._add_record("fresh", days_ago=1)
+        manager = self._manager()
+
+        result = await self._prune(manager, apply=False)
+
+        self.assertFalse(result.apply)
+        self.assertEqual(result.candidates, 2)
+        self.assertEqual(result.pruned, 0)
+        self.assertGreater(result.bytes_reclaimed, 0)
+        self.assertEqual(
+            sorted(d.session_id for d in result.sessions if d.disposition == "preview"),
+            ["old-1", "old-2"],
+        )
+        self.assertTrue((self.session_dir / "old-1.jsonl").exists())
+        self.assertEqual(len(self.index.load()), 3)
+        self.assertEqual(len(manager.list_sessions()), 3)
+
+    async def test_apply_removes_files_index_records_and_registry(self):
+        self._add_record("old-1")
+        self._add_record("fresh", days_ago=1)
+        manager = self._manager()
+
+        result = await self._prune(manager, apply=True)
+
+        self.assertEqual(result.pruned, 1)
+        self.assertEqual(result.failed, 0)
+        self.assertEqual(result.bytes_reclaimed, 20)
+        self.assertFalse((self.session_dir / "old-1.jsonl").exists())
+        self.assertFalse((self.session_dir / "old-1.md").exists())
+        self.assertEqual(sorted(self.index.load()), ["fresh"])
+        self.assertEqual([s.session_id for s in manager.list_sessions()], ["fresh"])
+
+    async def test_every_terminal_status_is_pruned_and_live_is_not(self):
+        for status in ("done", "failed", "stopped", "interrupted"):
+            self._add_record(f"old-{status}", status=status)
+        self._add_record("still-running", status="done")
+        manager = self._manager()
+        manager._sessions["still-running"].state.status = "running"
+
+        result = await self._prune(manager, apply=True)
+
+        self.assertEqual(result.pruned, 4)
+        self.assertIn("still-running", self.index.load())
+        self.assertNotIn("still-running", [detail.session_id for detail in result.sessions])
+
+    async def test_terminal_record_with_live_task_is_skipped(self):
+        self._add_record("racing")
+        manager = self._manager()
+        blocker = asyncio.create_task(asyncio.sleep(30))
+        self.addCleanup(blocker.cancel)
+        manager._sessions["racing"].task = blocker
+
+        result = await self._prune(manager, apply=True)
+
+        detail = next(d for d in result.sessions if d.session_id == "racing")
+        self.assertEqual(detail.disposition, "skipped_live")
+        self.assertIn("racing", self.index.load())
+        self.assertTrue((self.session_dir / "racing.jsonl").exists())
+
+    async def test_custom_log_dir_files_are_preserved_but_record_is_removed(self):
+        external = Path(self._tmp.name).resolve() / "elsewhere"
+        external.mkdir()
+        external_jsonl = external / "custom.jsonl"
+        external_jsonl.write_text("external", encoding="utf-8")
+        self._add_record(
+            "custom",
+            jsonl_path=str(external_jsonl),
+            markdown_path=str(external / "custom.md"),
+            write_files=False,
+        )
+        manager = self._manager()
+
+        result = await self._prune(manager, apply=True)
+
+        detail = next(d for d in result.sessions if d.session_id == "custom")
+        self.assertEqual(detail.disposition, "pruned")
+        self.assertEqual(detail.removed_files, [])
+        self.assertEqual(len(detail.preserved_files), 2)
+        self.assertTrue(external_jsonl.exists())
+        self.assertNotIn("custom", self.index.load())
+
+    async def test_missing_files_count_as_already_absent(self):
+        self._add_record("ghost", write_files=False)
+        manager = self._manager()
+
+        result = await self._prune(manager, apply=True)
+
+        detail = next(d for d in result.sessions if d.session_id == "ghost")
+        self.assertEqual(detail.disposition, "pruned")
+        self.assertEqual(detail.removed_files, [])
+        self.assertEqual(detail.bytes_reclaimed, 0)
+        self.assertNotIn("ghost", self.index.load())
+
+    async def test_symlinked_transcript_is_preserved_and_reported(self):
+        self._add_record("linked", write_files=False)
+        target = self.session_dir / "target-data.jsonl"
+        target.write_text("precious", encoding="utf-8")
+        (self.session_dir / "linked.jsonl").symlink_to(target)
+        (self.session_dir / "linked.md").write_text("x", encoding="utf-8")
+        manager = self._manager()
+
+        result = await self._prune(manager, apply=True)
+
+        detail = next(d for d in result.sessions if d.session_id == "linked")
+        self.assertEqual(detail.disposition, "pruned")
+        self.assertIn(("symlink"), [entry["reason"] for entry in detail.preserved_files])
+        self.assertTrue((self.session_dir / "linked.jsonl").exists())
+        self.assertTrue(target.exists())
+        self.assertFalse((self.session_dir / "linked.md").exists())
+
+    async def test_unlink_failure_keeps_record_and_next_run_converges(self):
+        import agent_collab.daemon as daemon_module
+
+        self._add_record("stubborn")
+        manager = self._manager()
+        real_unlink = os.unlink
+
+        def failing_unlink(path, *args, **kwargs):
+            if "stubborn" in str(path):
+                raise PermissionError("simulated unlink failure")
+            return real_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(daemon_module.os, "unlink", side_effect=failing_unlink):
+            result = await self._prune(manager, apply=True)
+
+        detail = next(d for d in result.sessions if d.session_id == "stubborn")
+        self.assertEqual(detail.disposition, "failed")
+        self.assertIn("simulated unlink failure", detail.error)
+        self.assertIn("stubborn", self.index.load())
+        self.assertIn("stubborn", [s.session_id for s in manager.list_sessions()])
+
+        retry = await self._prune(manager, apply=True)
+
+        self.assertEqual(retry.pruned, 1)
+        self.assertNotIn("stubborn", self.index.load())
+
+    async def test_index_rewrite_failure_reports_failed_and_next_run_converges(self):
+        self._add_record("half-done")
+        manager = self._manager()
+
+        with mock.patch.object(SessionIndex, "remove_many", side_effect=OSError("disk full")):
+            result = await self._prune(manager, apply=True)
+
+        detail = next(d for d in result.sessions if d.session_id == "half-done")
+        self.assertEqual(detail.disposition, "failed")
+        self.assertIn("disk full", detail.error)
+        # Files are already gone, but the record survives for the retry.
+        self.assertFalse((self.session_dir / "half-done.jsonl").exists())
+        self.assertIn("half-done", self.index.load())
+        self.assertIn("half-done", [s.session_id for s in manager.list_sessions()])
+
+        retry = await self._prune(manager, apply=True)
+
+        self.assertEqual(retry.pruned, 1)
+        self.assertNotIn("half-done", self.index.load())
+
+    async def test_keep_protects_newest_and_reports_kept(self):
+        self._add_record("old-1", days_ago=100)
+        self._add_record("old-2", days_ago=90)
+        manager = self._manager()
+
+        result = await self._prune(manager, apply=True, keep=1)
+
+        kept = [d.session_id for d in result.sessions if d.disposition == "kept"]
+        self.assertEqual(kept, ["old-2"])
+        self.assertEqual(result.pruned, 1)
+        self.assertIn("old-2", self.index.load())
+        self.assertNotIn("old-1", self.index.load())
+
+    async def test_unusable_timestamps_are_skipped_and_preserved(self):
+        self._add_record("no-clock", ended_at="junk", updated_at="also junk")
+        manager = self._manager()
+
+        result = await self._prune(manager, apply=True)
+
+        detail = next(d for d in result.sessions if d.session_id == "no-clock")
+        self.assertEqual(detail.disposition, "skipped_no_timestamp")
+        self.assertIn("no-clock", self.index.load())
+        self.assertTrue((self.session_dir / "no-clock.jsonl").exists())
+
+    async def test_unparseable_index_records_are_counted_not_deleted(self):
+        self._add_record("old-1")
+        # A record without a status fails restoration and stays invisible.
+        self.index.upsert({"session_id": "garbage", "task": "??"})
+        manager = self._manager()
+
+        result = await self._prune(manager, apply=True)
+
+        self.assertEqual(result.unparseable_records, 1)
+        self.assertIn("garbage", self.index.load())
+
+    async def test_manual_and_concurrent_prunes_serialize(self):
+        self._add_record("old-1")
+        self._add_record("old-2")
+        manager = self._manager()
+
+        results = await asyncio.gather(
+            self._prune(manager, apply=True), self._prune(manager, apply=True)
+        )
+
+        self.assertEqual(sorted(r.pruned for r in results), [0, 2])
+        self.assertEqual(self.index.load(), {})
 
 
 if __name__ == "__main__":

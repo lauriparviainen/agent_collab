@@ -44,6 +44,40 @@ class SessionIndexTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 index.upsert({"status": "running"})
 
+    def test_remove_many_rewrites_once_and_ignores_unknown_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session-index.json"
+            index = SessionIndex(path)
+            for session_id in ("one", "two", "three"):
+                index.upsert({"session_id": session_id, "status": "done"})
+
+            index.remove_many(["one", "three", "never-existed"])
+
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(sorted(data["sessions"]), ["two"])
+            self.assertFalse(path.with_name(path.name + ".tmp").exists())
+
+    def test_remove_many_with_no_matches_does_not_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "session-index.json"
+            index = SessionIndex(path)
+            index.upsert({"session_id": "one", "status": "done"})
+            before = path.stat().st_mtime_ns
+
+            index.remove_many(["unknown"])
+            index.remove_many([])
+
+            self.assertEqual(path.stat().st_mtime_ns, before)
+            self.assertEqual(sorted(index.load()), ["one"])
+
+    def test_remove_many_on_missing_file_is_a_no_op(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            index = SessionIndex(Path(tmp) / "session-index.json")
+
+            index.remove_many(["anything"])
+
+            self.assertEqual(index.load(), {})
+
 
 class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
     async def _run_session_to_done(self, manager, root, task="index task"):

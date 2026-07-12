@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Iterable
 
 INDEX_VERSION = 1
 
@@ -42,6 +42,20 @@ class SessionIndex:
         sessions = self.load()
         sessions[session_id] = dict(state)
         self._write(sessions)
+
+    def remove_many(self, session_ids: Iterable[Any]) -> None:
+        """Remove the given ids in one atomic rewrite; unknown ids are no-ops."""
+
+        ids = {str(session_id) for session_id in session_ids}
+        if not ids:
+            return
+        sessions = self.load()
+        remaining = {
+            session_id: state for session_id, state in sessions.items() if session_id not in ids
+        }
+        if len(remaining) == len(sessions):
+            return
+        self._write(remaining)
 
     def _write(self, sessions: Dict[str, Dict[str, Any]]) -> None:
         payload = {"version": INDEX_VERSION, "sessions": sessions}

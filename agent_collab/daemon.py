@@ -4,7 +4,9 @@ import asyncio
 import contextlib
 import copy
 from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 import uuid
@@ -19,17 +21,21 @@ from .options import (
 )
 from .paths import GlobalDataPaths
 from .referee import EventAppender, Referee, RefereeConfig, RefereeInput
+from .retention import (
+    DONE,
+    FAILED,
+    INTERRUPTED,
+    LIVE_WAIT_STATUSES,
+    RUNNING,
+    STOPPED,
+    TERMINAL_STATUSES,
+    classify_transcript_paths,
+    select_expired_sessions,
+    transcript_unlink_blocker,
+)
 from .session_index import SessionIndex
 
 
-RUNNING = "running"
-AWAITING_INPUT = "awaiting_input"
-DONE = "done"
-FAILED = "failed"
-STOPPED = "stopped"
-INTERRUPTED = "interrupted"
-TERMINAL_STATUSES = {DONE, FAILED, STOPPED, INTERRUPTED}
-LIVE_WAIT_STATUSES = {RUNNING, AWAITING_INPUT}
 MAX_FULL_TOOL_BYTES = 64 * 1024
 MAX_FULL_TRANSCRIPT_BYTES = 1024 * 1024
 
@@ -144,6 +150,51 @@ class EventBatch:
 
 
 @dataclass
+class PruneSessionDetail:
+    """One session's outcome in a prune run.
+
+    ``disposition`` is one of ``pruned`` (apply removed it), ``preview``
+    (would be removed), ``kept`` (protected by the keep count),
+    ``skipped_no_timestamp`` (terminal but no usable timestamp),
+    ``skipped_live`` (revalidation found a live task or non-terminal status),
+    or ``failed`` (a removal step errored; the record stays and the next run
+    retries). ``preserved_files`` lists (path, reason) pairs for transcripts
+    outside the managed boundary — those are never touched even though the
+    index record is removed.
+    """
+
+    session_id: str
+    status: str
+    disposition: str
+    effective_at: Optional[str] = None
+    removed_files: List[str] = field(default_factory=list)
+    preserved_files: List[Dict[str, str]] = field(default_factory=list)
+    bytes_reclaimed: int = 0
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class PruneResult:
+    """The structured result of one preview or apply prune run."""
+
+    apply: bool
+    cutoff: str
+    keep: int
+    candidates: int
+    pruned: int
+    failed: int
+    bytes_reclaimed: int
+    unparseable_records: int
+    sessions: List[PruneSessionDetail] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class _ManagedSession:
     # request is None for sessions restored from the on-disk index.
     request: Optional[StartSessionRequest]
@@ -184,6 +235,9 @@ class SessionManager:
     ) -> None:
         self._sessions: Dict[str, _ManagedSession] = {}
         self._notify_tasks: Set[asyncio.Task] = set()
+        # Manual and scheduled pruning serialize through this one lock so
+        # runs never overlap or interleave their unlink/index phases.
+        self._prune_lock = asyncio.Lock()
         self._lifecycle_logger = lifecycle_logger
         self.default_workdir = Path(default_workdir).expanduser().resolve()
         self.default_log_dir = (
@@ -386,6 +440,159 @@ class SessionManager:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         return self._copy_state(managed.state)
+
+    async def prune_sessions(
+        self,
+        *,
+        apply: bool,
+        retention: timedelta,
+        keep: int = 0,
+        now: Optional[datetime] = None,
+    ) -> PruneResult:
+        """Preview or apply retention over the in-memory session registry.
+
+        Convergent deletion, no transaction: validated managed transcripts are
+        unlinked first (in a worker thread, over a detached plan), then the
+        selected records leave the index in one atomic rewrite and the
+        registry. A crash or failure at any point leaves records that the
+        next run re-selects and finishes — rerunning selection *is* the
+        recovery mechanism. Failures never propagate out as exceptions for
+        individual sessions; they are reported in the result.
+        """
+
+        async with self._prune_lock:
+            current_time = now or datetime.now(timezone.utc)
+            cutoff = current_time - retention
+            session_dir = self._managed_session_dir()
+            selection = select_expired_sessions(
+                (managed.state.to_dict() for managed in self._sessions.values()),
+                now=current_time,
+                retention=retention,
+                keep=keep,
+            )
+
+            details: List[PruneSessionDetail] = []
+            for candidate in selection.kept:
+                details.append(
+                    PruneSessionDetail(
+                        session_id=candidate.session_id,
+                        status=candidate.status,
+                        disposition="kept",
+                        effective_at=candidate.effective_at.isoformat(),
+                    )
+                )
+            for session_id in selection.skipped_no_timestamp:
+                state = self._sessions[session_id].state
+                details.append(
+                    PruneSessionDetail(
+                        session_id=session_id,
+                        status=state.status,
+                        disposition="skipped_no_timestamp",
+                    )
+                )
+
+            # Revalidate on the event loop and build a detached unlink plan;
+            # the worker thread never touches manager state.
+            plans: List[Tuple[str, List[Path], List[Tuple[str, str]]]] = []
+            candidates_by_id = {}
+            for candidate in selection.expired:
+                managed = self._sessions.get(candidate.session_id)
+                if managed is None:
+                    continue
+                state = managed.state
+                task = managed.task
+                if state.status not in TERMINAL_STATUSES or (task is not None and not task.done()):
+                    details.append(
+                        PruneSessionDetail(
+                            session_id=candidate.session_id,
+                            status=state.status,
+                            disposition="skipped_live",
+                            effective_at=candidate.effective_at.isoformat(),
+                        )
+                    )
+                    continue
+                plan = classify_transcript_paths(state.to_dict(), session_dir)
+                plans.append((candidate.session_id, plan.deletable, plan.preserved))
+                candidates_by_id[candidate.session_id] = candidate
+
+            outcomes = await asyncio.to_thread(_execute_transcript_unlinks, plans, apply)
+
+            removable: List[str] = []
+            for session_id, deletable, preserved in plans:
+                candidate = candidates_by_id[session_id]
+                removed, preserved_fs, size, error = outcomes[session_id]
+                detail = PruneSessionDetail(
+                    session_id=session_id,
+                    status=candidate.status,
+                    disposition="preview" if not apply else ("failed" if error else "pruned"),
+                    effective_at=candidate.effective_at.isoformat(),
+                    removed_files=removed,
+                    preserved_files=[
+                        {"path": path, "reason": reason}
+                        for path, reason in preserved + preserved_fs
+                    ],
+                    bytes_reclaimed=size,
+                    error=error,
+                )
+                details.append(detail)
+                if apply and error is None:
+                    removable.append(session_id)
+
+            index_error: Optional[str] = None
+            if apply and removable and self._index is not None:
+                try:
+                    self._index.remove_many(removable)
+                except OSError as exc:
+                    index_error = f"failed to rewrite session index: {exc}"
+                    self._log_lifecycle(index_error)
+            if apply and index_error is None:
+                for session_id in removable:
+                    self._sessions.pop(session_id, None)
+            elif apply and index_error is not None:
+                # Files may already be gone; the records stay so the next run
+                # re-selects them and retries the index rewrite (convergence).
+                for detail in details:
+                    if detail.session_id in removable and detail.disposition == "pruned":
+                        detail.disposition = "failed"
+                        detail.error = index_error
+
+            pruned = sum(1 for detail in details if detail.disposition == "pruned")
+            failed = sum(1 for detail in details if detail.disposition == "failed")
+            result = PruneResult(
+                apply=apply,
+                cutoff=cutoff.isoformat(),
+                keep=keep,
+                candidates=len(plans),
+                pruned=pruned,
+                failed=failed,
+                bytes_reclaimed=sum(
+                    detail.bytes_reclaimed
+                    for detail in details
+                    if detail.disposition in {"pruned", "preview"}
+                ),
+                unparseable_records=self._count_unparseable_index_records(),
+                sessions=details,
+            )
+            if apply:
+                self._log_lifecycle(
+                    f"pruned {result.pruned} session(s), {result.failed} failure(s), "
+                    f"{result.bytes_reclaimed} bytes reclaimed, cutoff {result.cutoff}"
+                )
+            return result
+
+    def _managed_session_dir(self) -> Path:
+        return self.default_log_dir or GlobalDataPaths.resolve().session_dir
+
+    def _count_unparseable_index_records(self) -> int:
+        """Index records that failed state restoration; reported, never deleted."""
+
+        if self._index is None:
+            return 0
+        try:
+            records = self._index.load()
+        except OSError:
+            return 0
+        return sum(1 for session_id in records if session_id not in self._sessions)
 
     async def post_message(
         self,
@@ -842,6 +1049,54 @@ class SessionManager:
     def _log_lifecycle(self, message: str) -> None:
         if self._lifecycle_logger is not None:
             self._lifecycle_logger(message)
+
+
+def _execute_transcript_unlinks(
+    plans: List[Tuple[str, List[Path], List[Tuple[str, str]]]],
+    apply: bool,
+) -> Dict[str, Tuple[List[str], List[Tuple[str, str]], int, Optional[str]]]:
+    """Unlink (or, for preview, only inspect) planned managed transcripts.
+
+    Runs in a worker thread over a detached plan. Returns per session id:
+    (removed paths, filesystem-preserved (path, reason) pairs, bytes, error).
+    A missing file counts as already absent; symlinks and special files are
+    preserved and reported, never followed or unlinked. For a preview, bytes
+    are the size that an apply would reclaim and nothing is modified.
+    """
+
+    outcomes: Dict[str, Tuple[List[str], List[Tuple[str, str]], int, Optional[str]]] = {}
+    for session_id, deletable, _preserved in plans:
+        removed: List[str] = []
+        preserved_fs: List[Tuple[str, str]] = []
+        size = 0
+        error: Optional[str] = None
+        for path in deletable:
+            blocker = transcript_unlink_blocker(path)
+            if blocker is not None:
+                preserved_fs.append((str(path), blocker))
+                continue
+            try:
+                file_size = os.lstat(path).st_size
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                error = str(exc)
+                continue
+            if not apply:
+                size += file_size
+                removed.append(str(path))
+                continue
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                error = str(exc)
+                continue
+            size += file_size
+            removed.append(str(path))
+        outcomes[session_id] = (removed, preserved_fs, size, error)
+    return outcomes
 
 
 def _load_events_from_jsonl(path: Path) -> List[Dict[str, Any]]:
