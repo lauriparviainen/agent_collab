@@ -29,6 +29,12 @@ class DaemonSupervisorError(RuntimeError):
     pass
 
 
+# Default seconds to wait for a freshly spawned daemon to pass the protected
+# readiness probe. Overridable for slow cold starts (first venv import on a
+# cold filesystem cache can exceed 3s on small machines).
+DEFAULT_READY_TIMEOUT_SECONDS = 3.0
+READY_TIMEOUT_ENV = "AGENT_COLLAB_DAEMON_READY_TIMEOUT"
+
 IDENTITY_MATCH = "match"
 IDENTITY_MISMATCH = "mismatch"
 IDENTITY_UNKNOWN = "unknown"
@@ -503,9 +509,33 @@ def _is_zombie(pid: int) -> bool:
     return state == "Z"
 
 
+def _ready_timeout_seconds() -> float:
+    """The configured readiness timeout; invalid values fail loudly."""
+
+    raw = os.environ.get(READY_TIMEOUT_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_READY_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        value = -1.0
+    # `not value > 0` (rather than `value <= 0`) also rejects NaN.
+    if not value > 0:
+        raise DaemonSupervisorError(
+            f"{READY_TIMEOUT_ENV} must be a positive number of seconds, got {raw!r}"
+        )
+    return value
+
+
 def _wait_for_ready(
-    process: subprocess.Popen, host: str, port: int, paths: GlobalDataPaths, timeout: float = 3.0
+    process: subprocess.Popen,
+    host: str,
+    port: int,
+    paths: GlobalDataPaths,
+    timeout: Optional[float] = None,
 ) -> None:
+    if timeout is None:
+        timeout = _ready_timeout_seconds()
     poll = getattr(process, "poll", None)
     if not callable(poll):
         return

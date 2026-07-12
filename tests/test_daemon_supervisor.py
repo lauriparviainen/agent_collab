@@ -8,11 +8,14 @@ from unittest import mock
 from urllib.error import HTTPError
 
 from agent_collab.daemon_supervisor import (
+    DEFAULT_READY_TIMEOUT_SECONDS,
+    READY_TIMEOUT_ENV,
     DaemonSupervisorError,
     IDENTITY_UNKNOWN,
     _daemon_identity_matches,
     _daemon_identity_status,
     _daemon_start_lock,
+    _ready_timeout_seconds,
     _wait_for_ready,
     daemon_status,
     run_managed_daemon,
@@ -21,6 +24,30 @@ from agent_collab.daemon_supervisor import (
     tail_daemon_log,
 )
 from agent_collab.paths import GlobalDataPaths
+
+
+class ReadyTimeoutConfigTests(unittest.TestCase):
+    def test_default_when_env_is_unset_or_blank(self):
+        import os
+
+        with mock.patch.dict("os.environ"):
+            os.environ.pop(READY_TIMEOUT_ENV, None)
+            self.assertEqual(_ready_timeout_seconds(), DEFAULT_READY_TIMEOUT_SECONDS)
+        for blank in ("", "   "):
+            with self.subTest(blank=blank):
+                with mock.patch.dict("os.environ", {READY_TIMEOUT_ENV: blank}):
+                    self.assertEqual(_ready_timeout_seconds(), DEFAULT_READY_TIMEOUT_SECONDS)
+
+    def test_env_override_parses_positive_seconds(self):
+        with mock.patch.dict("os.environ", {READY_TIMEOUT_ENV: "12.5"}):
+            self.assertEqual(_ready_timeout_seconds(), 12.5)
+
+    def test_invalid_or_nonpositive_values_fail_loudly(self):
+        for raw in ("zero", "0", "-1", "nan"):
+            with self.subTest(raw=raw):
+                with mock.patch.dict("os.environ", {READY_TIMEOUT_ENV: raw}):
+                    with self.assertRaises(DaemonSupervisorError):
+                        _ready_timeout_seconds()
 
 
 class FakeProcess:

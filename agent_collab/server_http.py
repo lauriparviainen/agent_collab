@@ -4,7 +4,6 @@ import asyncio
 import hmac
 import json
 from dataclasses import dataclass
-from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
@@ -28,6 +27,7 @@ from .daemon import (
     StartSessionRequest,
 )
 from .paths import GlobalDataPaths
+from .net import is_loopback_host
 from .mcp_tools import (
     SUPPORTED_PROTOCOL_VERSIONS,
     SessionManagerToolBackend,
@@ -219,6 +219,11 @@ class AgentCollabHttpServer:
         return await handler(route, path_params, query, body)
 
     def _authorize(self, method: str, path: str, headers: Dict[str, str]) -> None:
+        # Intentional asymmetry: GET /health alone bypasses auth so liveness
+        # checks work without the token, while the supervisor's readiness
+        # probe deliberately uses the authenticated /sessions endpoint to
+        # prove token auth end-to-end. Do not "simplify" the probe to /health
+        # — that would stop verifying the token path at startup.
         if self.auth_token is None or (method == "GET" and path == "/health"):
             return
         authorization = headers.get("authorization", "")
@@ -449,17 +454,8 @@ def _validate_mcp_origin(origin: Optional[str]) -> None:
     if not origin:
         return
     parsed = urlparse(origin)
-    if parsed.scheme not in {"http", "https"}:
-        raise HttpError(403, "non-local Origin rejected for /mcp")
-    host = parsed.hostname
-    if host == "localhost":
+    if parsed.scheme in {"http", "https"} and is_loopback_host(parsed.hostname):
         return
-    if host is not None:
-        try:
-            if ip_address(host).is_loopback:
-                return
-        except ValueError:
-            pass
     raise HttpError(403, "non-local Origin rejected for /mcp")
 
 

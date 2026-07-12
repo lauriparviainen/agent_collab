@@ -403,26 +403,41 @@ the next reinstall and restart.
 
 ## Low priority (code health)
 
-- Deduplicate `_canonical_reasoning` (copied verbatim in `xai_cli/backend.py`
-  and `xai_sdk/backend.py`) into `backends/common/options.py`.
-- Deduplicate the SDK `settings_summary` boilerplate (4 copies) and the CLI
-  `create_runner`/`command_preview` boilerplate (4 copies) into
-  `backends/common/` helpers.
-- Define loopback detection once: `client.py:238-247` and
-  `server_http.py:346-361` independently implement the same trust-boundary
-  check.
-- Add a shared helper for the `BackendUnavailable` error event repeated in all
-  four SDK runners.
-- `_schedule_notify` (`daemon.py:567-574`) spawns one asyncio task per recorded
-  event; coalesce notifications.
-- Make the supervisor readiness timeout (`daemon_supervisor.py:234`, fixed
-  3.0s) configurable for slow cold starts.
-- Comment the intentional asymmetry that `/health` bypasses auth while the
-  supervisor readiness probe uses authenticated `/sessions`, so a refactor does
-  not lose the token check.
-- Consider `[project.optional-dependencies]` per provider SDK (with an `all`
-  extra) in `pyproject.toml` so the default install does not pull all four
-  vendor SDKs; weigh against the current first-class-SDK install story.
+**Resolved (2026-07-12)** except the final item, which is deferred:
+
+- `_canonical_reasoning` now lives once in `backends/common/options.py` as
+  `canonical_reasoning`; the verbatim copies in `xai_cli` and `xai_sdk` are
+  gone.
+- The SDK `settings_summary` boilerplate (4 copies) collapsed into
+  `backends/common/sdk.py:sdk_settings_summary`, and the CLI
+  `create_runner`/`command_preview`/`settings_summary` boilerplate into
+  `backends/common/cli.py:create_cli_runner`/`cli_command_preview`/
+  `cli_settings_summary`. The shared runner constructor also centralizes the
+  M5 `source=agent_type` threading. Antigravity keeps its own run-dir-dependent
+  `command_preview` by design.
+- Loopback trust detection is defined once in `agent_collab/net.py`
+  (`is_loopback_host`/`is_loopback_url`); the client token decision and the
+  daemon's MCP Origin validation both consume it. DNS names other than
+  `localhost` are never trusted. Unit tests pin localhost/literal-loopback
+  acceptance and resolver-independent rejection.
+- The repeated SDK `BackendUnavailable` error event collapsed into
+  `backends/common/sdk.py:backend_unavailable_event` (6 call sites).
+- `_schedule_notify` coalesces: a burst of recorded events schedules one
+  pending watcher notification instead of one asyncio task per event. Safe
+  because events are appended before scheduling and watchers re-check their
+  cursor under the condition; a regression test proves one task per burst,
+  watcher wake-up, and re-arming after delivery.
+- The supervisor readiness timeout is configurable via
+  `AGENT_COLLAB_DAEMON_READY_TIMEOUT` (seconds, default 3.0). Invalid or
+  non-positive values (including NaN) fail loudly; documented in
+  `doc/runtime-layout.md` and covered by tests.
+- The intentional `/health`-bypasses-auth asymmetry is now commented at the
+  auth check in `server_http.py`, warning refactors not to downgrade the
+  supervisor's authenticated `/sessions` readiness probe.
+- Per-provider `[project.optional-dependencies]` is **deferred to issue #12**:
+  it is a packaging behavior change that would re-gate this release to 0.5.0
+  and deserves its own design pass (installer, autostart venv, health-probe
+  presentation, CI matrix).
 
 ## Acceptance criteria
 

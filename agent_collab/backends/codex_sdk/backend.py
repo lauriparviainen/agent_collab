@@ -38,8 +38,10 @@ from ..base import (
 )
 from ..common.health import codex_api_key_credentials, probe_sdk_backend
 from ..common.sdk import (
+    backend_unavailable_event,
     close_async_stream,
     package_version,
+    sdk_settings_summary,
     provider_session_event,
     sdk_error_event,
     stringify,
@@ -125,13 +127,7 @@ class CodexSdkBackend:
         return CodexSdkRunner(agent, verbose, dict(options or {}), item_stream=factory)
 
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
-        summary: Dict[str, Any] = {"backend": "sdk", "package": PACKAGE_NAME}
-        version = package_version(PACKAGE_NAME)
-        if version:
-            summary["version"] = version
-        mapped = _map_sdk_options(options)
-        if mapped:
-            summary["options"] = mapped
+        summary = sdk_settings_summary(PACKAGE_NAME, _map_sdk_options(options))
         codex_bin = _configured_codex_bin(agent)
         summary["runtime"] = "configured_cli" if codex_bin else "sdk_pinned"
         if codex_bin:
@@ -168,7 +164,7 @@ class CodexSdkRunner(AgentRunner):
                 for event in iter_codex_turn_events(outcome.result, self.verbose):
                     yield event
         except BackendUnavailable as exc:
-            yield Event.create("error", "error", str(exc), {"error": str(exc)})
+            yield backend_unavailable_event(exc)
             return
         except Exception as exc:  # startup, auth, and turn errors reach the transcript
             yield sdk_error_event("codex", exc)

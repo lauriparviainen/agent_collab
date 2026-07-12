@@ -156,6 +156,9 @@ class _ManagedSession:
     post_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     turn_active: bool = False
     task: Optional[asyncio.Task] = None
+    # True while a coalesced watcher notification is scheduled but not yet
+    # delivered; _schedule_notify skips scheduling another one meanwhile.
+    notify_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -684,15 +687,27 @@ class SessionManager:
             )
 
     def _schedule_notify(self, managed: _ManagedSession) -> None:
+        """Wake watchers once for any burst of events recorded before it runs.
+
+        Events are appended before this is called and watchers re-check their
+        cursor under the condition, so one pending notification covers every
+        event recorded until it is delivered; only an event recorded after
+        delivery starts needs (and gets) a new one.
+        """
+
+        if managed.notify_pending:
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+        managed.notify_pending = True
         task = loop.create_task(self._notify(managed))
         self._notify_tasks.add(task)
         task.add_done_callback(self._notify_tasks.discard)
 
     async def _notify(self, managed: _ManagedSession) -> None:
+        managed.notify_pending = False
         async with managed.condition:
             managed.condition.notify_all()
 

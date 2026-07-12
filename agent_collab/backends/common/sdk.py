@@ -19,7 +19,7 @@ provider-session event helper is intentionally shared with CLI parsers.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from ...events import Event
 
@@ -60,6 +60,33 @@ def stringify(value: Any) -> str:
     SDK mapper needs before deciding whether a field carries prose."""
 
     return value.strip() if isinstance(value, str) else ""
+
+
+def sdk_settings_summary(package_name: str, mapped_options: Mapping[str, Any]) -> Dict[str, Any]:
+    """The base of every SDK ``settings_summary``.
+
+    Package identity, the installed version when known, and the backend's
+    mapped provider options when any. Backends append their specifics.
+    """
+
+    summary: Dict[str, Any] = {"backend": "sdk", "package": package_name}
+    version = package_version(package_name)
+    if version:
+        summary["version"] = version
+    if mapped_options:
+        summary["options"] = dict(mapped_options)
+    return summary
+
+
+def backend_unavailable_event(exc: Exception) -> Event:
+    """The one error event every SDK runner yields for ``BackendUnavailable``.
+
+    The exception text is the user-facing remediation (it names the missing
+    package or credential), so it is surfaced verbatim rather than wrapped in
+    the generic sdk-error shape.
+    """
+
+    return Event.create("error", "error", str(exc), {"error": str(exc)})
 
 
 def sdk_error_event(source: str, exc: Exception) -> Event:

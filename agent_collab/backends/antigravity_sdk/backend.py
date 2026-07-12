@@ -55,9 +55,11 @@ from ..base import (
 )
 from ..common.health import gemini_api_key_credentials, probe_sdk_backend
 from ..common.sdk import (
+    backend_unavailable_event,
     classify_tool_kind,
     close_async_stream,
     package_version,
+    sdk_settings_summary,
     provider_session_event,
     sdk_error_event,
 )
@@ -253,13 +255,7 @@ class AntigravitySdkBackend:
 
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
         # The sdk backend has no command_preview; it summarises itself instead.
-        summary: Dict[str, Any] = {"backend": "sdk", "package": PACKAGE_NAME}
-        version = package_version(PACKAGE_NAME)
-        if version:
-            summary["version"] = version
-        mapped = _map_sdk_options(options)
-        if mapped:
-            summary["options"] = mapped
+        summary = sdk_settings_summary(PACKAGE_NAME, _map_sdk_options(options))
         config = self.normalize_config(agent)
         if config:
             summary["config"] = config
@@ -286,7 +282,7 @@ class AntigravitySdkRunner(AgentRunner):
         try:
             agent_cm = self._agent_factory(self.agent, self.options, workdir)
         except BackendUnavailable as exc:
-            yield Event.create("error", "error", str(exc), {"error": str(exc)})
+            yield backend_unavailable_event(exc)
             return
         try:
             async with agent_cm as sdk_agent:
@@ -313,7 +309,7 @@ class AntigravitySdkRunner(AgentRunner):
                     # async close hook. Honor it before leaving the agent context.
                     await close_async_stream(response)
         except BackendUnavailable as exc:
-            yield Event.create("error", "error", str(exc), {"error": str(exc)})
+            yield backend_unavailable_event(exc)
             return
         except Exception as exc:  # surface SDK errors as transcript errors
             yield sdk_error_event("antigravity", exc)

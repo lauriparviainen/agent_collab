@@ -31,6 +31,12 @@ into a detailed work log.
   instead of `tool`, and log `Event.create` source/type coercion (with
   per-value deduplication) instead of silently relabeling invalid events
   (#6).
+- Code health: deduplicate backend boilerplate into `backends/common/`
+  helpers, define loopback trust detection once in `agent_collab/net.py`,
+  coalesce per-event watcher notifications in the daemon, and make the
+  supervisor readiness timeout configurable via
+  `AGENT_COLLAB_DAEMON_READY_TIMEOUT` (#6). Per-provider optional
+  dependencies are deferred to #12.
 
 ## [0.4.0] - 2026-07-12 - Permanent daemon token
 

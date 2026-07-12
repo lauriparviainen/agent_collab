@@ -6,13 +6,16 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from ...backend_contract import OptionSpec, load_option_schema, normalize_declared_options
-from ...config import AgentConfig, ConfigError
-from ...runners import AgentRunner, SubprocessRunner
+from ...config import AgentConfig
+from ...runners import AgentRunner
 from ..base import BackendCapabilities, BackendHealth
 from ..common.cli import (
+    cli_settings_summary,
+    create_cli_runner,
     flag_value,
     has_flag,
     insert_before_print_prompt,
+    resolve_run_dir,
     set_flag_value_before_print_prompt,
 )
 from ..common.health import antigravity_credentials, default_version_runner, probe_cli_backend
@@ -68,30 +71,27 @@ class AntigravityCliBackend:
     def command_preview(
         self, agent: AgentConfig, options: Mapping[str, Any], workdir: Optional[Path] = None
     ) -> Optional[list[str]]:
+        # Unlike the other CLI backends, the command depends on the run
+        # directory (--add-dir), so the shared run-dir-independent preview
+        # helper does not apply.
         if not agent.command:
             return None
         run_dir = None
         if workdir is not None:
-            from ..common.cli import resolve_run_dir
-
             run_dir = resolve_run_dir(workdir, agent.cwd)
         return self.build_command(agent, options, run_dir)
 
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
-        return {"backend": "cli", "options": dict(options)}
+        return cli_settings_summary(options)
 
     def create_runner(
         self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
     ) -> AgentRunner:
-        if not agent.command:
-            raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
-        return SubprocessRunner(
-            agent.id,
-            self.build_command(agent, options),
-            parse_antigravity_line,
+        return create_cli_runner(
+            self,
+            agent,
             verbose,
-            env=dict(agent.env),
-            cwd=agent.cwd,
+            options,
+            parse_antigravity_line,
             command_builder=lambda run_dir: self.build_command(agent, options, run_dir),
-            source=self.agent_type,
         )

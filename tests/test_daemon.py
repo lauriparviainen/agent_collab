@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from agent_collab.daemon import StartSessionRequest, SessionManager
+from agent_collab.daemon import StartSessionRequest, SessionManager, _ManagedSession
 from agent_collab.events import Event
 from agent_collab.options import StartOptionsError
 from agent_collab.paths import GlobalDataPaths
@@ -453,6 +453,46 @@ sequence = ["claude-a", "claude-b"]
             self.assertEqual(tail.events, all_events.events[1:])
             self.assertEqual(empty.cursor, all_events.cursor)
             self.assertEqual(empty.events, [])
+
+    async def test_rapid_events_coalesce_into_one_notification(self):
+        """A burst of recorded events schedules one notify task, not one each.
+
+        The recorded events themselves are visible to woken watchers because
+        they are appended before the notification is scheduled.
+        """
+        manager = SessionManager()
+        # _record_event only touches events, provider-session capture (a no-op
+        # for plain events), and notification scheduling, so no session state
+        # is needed here.
+        managed = _ManagedSession(
+            request=None, state=None, events=[], condition=asyncio.Condition()
+        )
+
+        woke = asyncio.Event()
+
+        async def waiter():
+            async with managed.condition:
+                await managed.condition.wait()
+            woke.set()
+
+        waiter_task = asyncio.create_task(waiter())
+        await asyncio.sleep(0)  # let the waiter start waiting on the condition
+
+        for index in range(5):
+            manager._record_event(managed, Event.create("referee", "status", f"burst {index}"))
+
+        self.assertEqual(len(manager._notify_tasks), 1)
+        self.assertTrue(managed.notify_pending)
+
+        await asyncio.wait_for(woke.wait(), timeout=1.0)
+        await asyncio.wait_for(waiter_task, timeout=1.0)
+        self.assertEqual(len(managed.events), 5)
+        self.assertFalse(managed.notify_pending)
+
+        # After delivery, the next event schedules a fresh notification.
+        manager._record_event(managed, Event.create("referee", "status", "after burst"))
+        self.assertTrue(managed.notify_pending)
+        await asyncio.gather(*manager._notify_tasks)
 
     async def test_wait_events_returns_new_events(self):
         with tempfile.TemporaryDirectory() as tmp:

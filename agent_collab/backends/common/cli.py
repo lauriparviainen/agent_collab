@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+
+from ...config import AgentConfig, ConfigError
+from ...runners import AgentRunner, CommandBuilder, Parser, SubprocessRunner
 
 
 def flag_value(args: Sequence[str], flag: str) -> Optional[str]:
@@ -96,6 +99,58 @@ def remove_config_value(command: Sequence[str], key: str) -> List[str]:
 
 def config_item_key(value: str) -> str:
     return value.split("=", 1)[0].strip()
+
+
+def cli_settings_summary(options: Mapping[str, Any]) -> Dict[str, Any]:
+    """The uniform CLI ``settings_summary``: the effective options verbatim."""
+
+    return {"backend": "cli", "options": dict(options)}
+
+
+def cli_command_preview(
+    backend: Any, agent: AgentConfig, options: Mapping[str, Any]
+) -> Optional[List[str]]:
+    """The uniform run-dir-independent ``command_preview``.
+
+    Backends whose command depends on the run directory (antigravity) keep
+    their own preview instead.
+    """
+
+    return backend.build_command(agent, options) if agent.command else None
+
+
+def create_cli_runner(
+    backend: Any,
+    agent: AgentConfig,
+    verbose: bool,
+    options: Mapping[str, Any],
+    parser: Parser,
+    command_builder: Optional[CommandBuilder] = None,
+) -> AgentRunner:
+    """Construct the ``SubprocessRunner`` every CLI backend shares.
+
+    Requires ``agent.command``, threads the backend's provider type so stderr
+    attribution never follows the display id, and defaults the rebuild hook to
+    a run-dir-independent ``build_command``.
+    """
+
+    if not agent.command:
+        raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
+    if command_builder is None:
+
+        def command_builder(_run_dir: Path) -> List[str]:
+            return backend.build_command(agent, options)
+
+    return SubprocessRunner(
+        agent.id,
+        backend.build_command(agent, options),
+        parser,
+        verbose,
+        env=dict(agent.env),
+        cwd=agent.cwd,
+        command_builder=command_builder,
+        source=backend.agent_type,
+    )
 
 
 def resolve_run_dir(workdir: Path, cwd: Optional[str]) -> Path:

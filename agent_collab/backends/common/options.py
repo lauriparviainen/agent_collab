@@ -30,6 +30,27 @@ def configured_choices(
     return result
 
 
+def canonical_reasoning(options: Mapping[str, Any]) -> Dict[str, Any]:
+    """Collapse the xai ``thinking_level``/``reasoning_effort`` aliases.
+
+    Shared by the xai CLI and SDK backends: conflicting values fail, matching
+    or single values normalize to ``thinking_level``.
+    """
+
+    result = dict(options)
+    thinking = result.pop("thinking_level", None)
+    native = result.pop("reasoning_effort", None)
+    if thinking is not None and native is not None and thinking != native:
+        raise BackendOptionError(
+            "reasoning_effort",
+            "conflicts with thinking_level; use one reasoning field or provide matching values",
+        )
+    effective = thinking if thinking is not None else native
+    if effective is not None:
+        result["thinking_level"] = effective
+    return result
+
+
 def resolve_claude_thinking(
     options: Mapping[str, Any], requested: Mapping[str, Any]
 ) -> Dict[str, Any]:

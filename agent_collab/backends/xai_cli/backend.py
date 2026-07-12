@@ -6,38 +6,26 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from ...backend_contract import (
-    BackendOptionError,
     OptionSpec,
     load_option_schema,
     normalize_declared_options,
 )
-from ...config import AgentConfig, ConfigError
-from ...runners import AgentRunner, SubprocessRunner
+from ...config import AgentConfig
+from ...runners import AgentRunner
 from ..base import BackendCapabilities, BackendHealth
 from ..common.cli import (
+    cli_command_preview,
+    cli_settings_summary,
+    create_cli_runner,
     flag_value,
     remove_flag,
     set_flag_value_before_print_prompt,
 )
 from ..common.health import default_version_runner, probe_cli_backend, xai_cli_credentials
+from ..common.options import canonical_reasoning
 from .parser import XaiStreamingParser
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
-
-
-def _canonical_reasoning(options: Mapping[str, Any]) -> Dict[str, Any]:
-    result = dict(options)
-    thinking = result.pop("thinking_level", None)
-    native = result.pop("reasoning_effort", None)
-    if thinking is not None and native is not None and thinking != native:
-        raise BackendOptionError(
-            "reasoning_effort",
-            "conflicts with thinking_level; use one reasoning field or provide matching values",
-        )
-    effective = thinking if thinking is not None else native
-    if effective is not None:
-        result["thinking_level"] = effective
-    return result
 
 
 class XaiCliBackend:
@@ -80,7 +68,7 @@ class XaiCliBackend:
             configured=agent.options_for(self.id),
             inferred=inferred,
         )
-        return _canonical_reasoning(normalized)
+        return canonical_reasoning(normalized)
 
     def build_command(self, agent: AgentConfig, options: Mapping[str, Any]) -> list[str]:
         command = [agent.command or agent.id, *agent.args]
@@ -100,24 +88,12 @@ class XaiCliBackend:
     def command_preview(
         self, agent: AgentConfig, options: Mapping[str, Any], workdir: Optional[Path] = None
     ) -> Optional[list[str]]:
-        return self.build_command(agent, options) if agent.command else None
+        return cli_command_preview(self, agent, options)
 
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
-        return {"backend": "cli", "options": dict(options)}
+        return cli_settings_summary(options)
 
     def create_runner(
         self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
     ) -> AgentRunner:
-        if not agent.command:
-            raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
-        parser = XaiStreamingParser(agent.id)
-        return SubprocessRunner(
-            agent.id,
-            self.build_command(agent, options),
-            parser,
-            verbose,
-            env=dict(agent.env),
-            cwd=agent.cwd,
-            command_builder=lambda _run_dir: self.build_command(agent, options),
-            source=self.agent_type,
-        )
+        return create_cli_runner(self, agent, verbose, options, XaiStreamingParser(agent.id))

@@ -88,6 +88,9 @@ Set `AGENT_COLLAB_HOME` to run an isolated daemon instance (tests do this so the
 AGENT_COLLAB_HOME=/tmp/agent-collab-home agent-collab daemon start
 ```
 
+Set `AGENT_COLLAB_DAEMON_READY_TIMEOUT` (seconds, default 3) if `daemon start`
+times out waiting for daemon readiness on a slow cold start.
+
 ## Config Precedence
 
 For a session with `workdir = PROJECT`, effective config is:

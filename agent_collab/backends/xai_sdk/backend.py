@@ -22,9 +22,12 @@ from ...events import Event
 from ...runners import AgentRunner
 from ..base import BackendCapabilities, BackendHealth, BackendUnavailable
 from ..common.health import probe_sdk_backend, xai_api_key_credentials
+from ..common.options import canonical_reasoning
 from ..common.sdk import (
+    backend_unavailable_event,
     close_async_stream,
     package_version,
+    sdk_settings_summary,
     provider_session_event,
     sdk_error_event,
     stringify,
@@ -36,21 +39,6 @@ INSTALL_HINT = "install the xAI SDK: pip install 'xai-sdk>=1.17,<2'"
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 TurnStreamFactory = Callable[[AgentConfig, Dict[str, Any], Path, str], AsyncIterator[Any]]
-
-
-def _canonical_reasoning(options: Mapping[str, Any]) -> Dict[str, Any]:
-    result = dict(options)
-    thinking = result.pop("thinking_level", None)
-    native = result.pop("reasoning_effort", None)
-    if thinking is not None and native is not None and thinking != native:
-        raise BackendOptionError(
-            "reasoning_effort",
-            "conflicts with thinking_level; use one reasoning field or provide matching values",
-        )
-    effective = thinking if thinking is not None else native
-    if effective is not None:
-        result["thinking_level"] = effective
-    return result
 
 
 def _map_sdk_options(options: Mapping[str, Any]) -> Dict[str, Any]:
@@ -99,7 +87,7 @@ class XaiSdkBackend:
         model = normalized.get("model")
         if not isinstance(model, str) or not model.strip():
             raise BackendOptionError("model", "must be a non-empty string")
-        return _canonical_reasoning(normalized)
+        return canonical_reasoning(normalized)
 
     def command_preview(
         self, agent: AgentConfig, options: Mapping[str, Any], workdir: Optional[Path] = None
@@ -107,13 +95,7 @@ class XaiSdkBackend:
         return None
 
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
-        summary: Dict[str, Any] = {"backend": "sdk", "package": PACKAGE_NAME}
-        version = package_version(PACKAGE_NAME)
-        if version:
-            summary["version"] = version
-        mapped = _map_sdk_options(options)
-        if mapped:
-            summary["options"] = mapped
+        summary = sdk_settings_summary(PACKAGE_NAME, _map_sdk_options(options))
         return summary
 
     def create_runner(
@@ -154,7 +136,7 @@ class XaiSdkRunner(AgentRunner):
                 if response_id:
                     yield provider_session_event("xai", self.name, response_id, "response")
         except BackendUnavailable as exc:
-            yield Event.create("error", "error", str(exc), {"error": str(exc)})
+            yield backend_unavailable_event(exc)
             return
         except Exception as exc:
             yield sdk_error_event("xai", exc)

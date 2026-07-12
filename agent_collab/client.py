@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-from ipaddress import ip_address
 from typing import Any, Dict, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .api_schema import (
@@ -17,6 +16,7 @@ from .api_schema import (
     SessionStateModel,
     TranscriptModel,
 )
+from .net import is_loopback_url
 
 
 DEFAULT_SERVER_URL = "http://127.0.0.1:8765"
@@ -184,7 +184,7 @@ class AgentCollabClient:
         override = os.environ.get(TOKEN_ENV)
         if override is not None:
             token = override.strip()
-        elif _is_loopback_server(self.server_url):
+        elif is_loopback_url(self.server_url):
             from .config import load_daemon_token
 
             try:
@@ -231,15 +231,3 @@ def _format_error_payload(payload: Dict[str, Any]) -> str:
                 lines.append(f"{path}: {message}" if path else message)
         return "\n".join(lines)
     return str(error)
-
-
-def _is_loopback_server(server_url: str) -> bool:
-    host = urlparse(server_url).hostname
-    if host == "localhost":
-        return True
-    if host is None:
-        return False
-    try:
-        return ip_address(host).is_loopback
-    except ValueError:
-        return False

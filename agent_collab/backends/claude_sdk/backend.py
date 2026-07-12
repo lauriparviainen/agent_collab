@@ -43,9 +43,11 @@ from ..base import (
 )
 from ..common.health import anthropic_api_key_credentials, probe_sdk_backend
 from ..common.sdk import (
+    backend_unavailable_event,
     classify_tool_kind,
     close_async_stream,
     package_version,
+    sdk_settings_summary,
     provider_session_event,
     sdk_error_event,
     stringify,
@@ -115,13 +117,7 @@ class ClaudeSdkBackend:
         return ClaudeSdkRunner(agent, verbose, dict(options or {}), message_stream=factory)
 
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
-        summary: Dict[str, Any] = {"backend": "sdk", "package": PACKAGE_NAME}
-        version = package_version(PACKAGE_NAME)
-        if version:
-            summary["version"] = version
-        mapped = _map_sdk_options(options)
-        if mapped:
-            summary["options"] = mapped
+        summary = sdk_settings_summary(PACKAGE_NAME, _map_sdk_options(options))
         # Be explicit that runs do not implicitly load user/project filesystem
         # settings, so behaviour is predictable regardless of the host's config.
         summary["setting_sources"] = "none"
@@ -150,7 +146,7 @@ class ClaudeSdkRunner(AgentRunner):
         try:
             stream = self._message_stream(self.agent, self.options, workdir, prompt)
         except BackendUnavailable as exc:
-            yield Event.create("error", "error", str(exc), {"error": str(exc)})
+            yield backend_unavailable_event(exc)
             return
         except Exception as exc:
             # Constructor/API drift is surfaced instead of silently retrying
@@ -169,7 +165,7 @@ class ClaudeSdkRunner(AgentRunner):
                 for event in iter_claude_events(message, self.verbose):
                     yield event
         except BackendUnavailable as exc:
-            yield Event.create("error", "error", str(exc), {"error": str(exc)})
+            yield backend_unavailable_event(exc)
             return
         except Exception as exc:  # surface SDK errors as transcript errors
             yield sdk_error_event("claude", exc)
