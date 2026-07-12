@@ -96,6 +96,11 @@ case "${1:-help}" in
   test)
     shift
     cd "$repo_root"
+    if ! "$python_bin" -m ruff --version >/dev/null 2>&1; then
+      printf "Ruff is not installed in this environment. Install the dev extra:\n  %s -m pip install -e '.[dev]'\n" \
+        "$python_bin" >&2
+      exit 2
+    fi
     "$python_bin" -m ruff check .
     "$python_bin" -m ruff format --check .
     exec "$python_bin" -m unittest discover -s tests -t . "$@"

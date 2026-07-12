@@ -128,6 +128,7 @@ exit 1
         self.assertEqual(
             commands,
             [
+                (str(ROOT), ["-m", "ruff", "--version"]),
                 (str(ROOT), ["-m", "ruff", "check", "."]),
                 (str(ROOT), ["-m", "ruff", "format", "--check", "."]),
                 (
@@ -136,6 +137,39 @@ exit 1
                 ),
             ],
         )
+
+    def test_test_command_explains_missing_ruff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_python = Path(tmp) / "python3"
+            fake_python.write_text(
+                """#!/usr/bin/env bash
+if [[ "${1:-}" == "-c" ]]; then
+  exit 0
+fi
+if [[ "${1:-}" == "-m" && "${2:-}" == "ruff" ]]; then
+  printf '%s: No module named ruff\\n' "$0" >&2
+  exit 1
+fi
+exit 0
+""",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            env = os.environ.copy()
+            env["AGENT_COLLAB_PYTHON"] = str(fake_python)
+            result = subprocess.run(
+                [str(SCRIPT), "test"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Ruff is not installed", result.stderr)
+        self.assertIn("pip install -e '.[dev]'", result.stderr)
 
     def test_integration_test_command_runs_separate_package(self):
         result, captured = self._run_with_fake_python(

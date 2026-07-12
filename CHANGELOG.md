@@ -13,6 +13,9 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- `./agent_collab.sh test` now explains how to install the `dev` extra when
+  Ruff is missing from the selected environment, instead of failing with a raw
+  `No module named ruff` error (#4).
 - Add SECURITY.md (private vulnerability reporting, local trust model),
   CONTRIBUTING.md (Apache 2.0 inbound terms, the required
   `./agent_collab.sh test` and `./agent_collab.sh setup --check` gates), a
