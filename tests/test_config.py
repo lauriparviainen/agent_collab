@@ -42,7 +42,7 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_file_parses_with_fallback_toml_parser(self):
         data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(data["schema_version"], 4)
+        self.assertEqual(data["schema_version"], 5)
         self.assertNotIn("options", data["agents"]["claude"])
         self.assertNotIn("options", data["agents"]["codex"])
         self.assertNotIn("options", data["agents"]["antigravity"])
@@ -157,6 +157,90 @@ command = "user-claude"
 
             self.assertFalse(config.backends["claude_cli"].enabled)
             self.assertEqual(config.backends["claude_cli"].source, "user_config")
+
+    def test_sessions_defaults_without_any_config_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            home.mkdir()
+
+            config = load_config(root, env=_env(home))
+
+            self.assertEqual(config.sessions.retention_days, 30)
+            self.assertEqual(config.sessions.cleanup_interval_hours, 24)
+
+    def test_user_sessions_settings_override_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_user_config(home, "[sessions]\nretention_days = 7\n")
+
+            config = load_config(root, env=_env(home))
+
+            self.assertEqual(config.sessions.retention_days, 7)
+            # An unset key keeps its built-in default.
+            self.assertEqual(config.sessions.cleanup_interval_hours, 24)
+
+    def test_sessions_retention_zero_disables_pruning_and_loads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_user_config(home, "[sessions]\nretention_days = 0\n")
+
+            config = load_config(root, env=_env(home))
+
+            self.assertEqual(config.sessions.retention_days, 0)
+
+    def test_sessions_rejects_invalid_values(self):
+        from agent_collab.config import CollaborationConfig, merge_config_data
+
+        cases = [
+            ({"sessions": {"retention_days": -1}}, "retention_days"),
+            ({"sessions": {"retention_days": True}}, "retention_days"),
+            ({"sessions": {"retention_days": 1.5}}, "retention_days"),
+            ({"sessions": {"retention_days": "30"}}, "retention_days"),
+            ({"sessions": {"cleanup_interval_hours": 0}}, "cleanup_interval_hours"),
+            ({"sessions": {"cleanup_interval_hours": -6}}, "cleanup_interval_hours"),
+            ({"sessions": {"cleanup_interval_hours": False}}, "cleanup_interval_hours"),
+            ({"sessions": {"bogus": 1}}, "sessions.bogus"),
+            ({"sessions": "not a table"}, r"\[sessions\] must be a table"),
+        ]
+        for data, message in cases:
+            with self.assertRaisesRegex(ConfigError, message, msg=repr(data)):
+                merge_config_data(CollaborationConfig(), data)
+
+    def test_project_sessions_section_is_stripped_with_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            home.mkdir()
+            _write_config(root, "[sessions]\nretention_days = 1\n")
+
+            with self.assertLogs("agent_collab.config", level="WARNING") as logs:
+                config = load_config(root, env=_env(home))
+
+            self.assertEqual(config.sessions.retention_days, 30)
+            self.assertTrue(any("[sessions]" in line for line in logs.output))
+
+    def test_cli_config_show_prints_sessions_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_user_config(home, "[sessions]\nretention_days = 90\n")
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, _env(home)):
+                with contextlib.redirect_stdout(output):
+                    code = cli.main(["config", "show", "--workdir", str(root)])
+
+            self.assertEqual(code, 0)
+            self.assertIn(
+                "sessions: retention_days=90 cleanup_interval_hours=24", output.getvalue()
+            )
 
     def test_config_init_materializes_every_registered_backend(self):
         with tempfile.TemporaryDirectory() as tmp:

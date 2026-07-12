@@ -644,6 +644,10 @@ def _main_config(argv) -> int:
         print(f"user_config: {home.config_path}{'' if home.config_path.exists() else ' (missing)'}")
         loaded = [str(path) for path in config.loaded_paths]
         print(f"loaded_paths: {', '.join(loaded) if loaded else '(built-in defaults only)'}")
+        print(
+            f"sessions: retention_days={config.sessions.retention_days} "
+            f"cleanup_interval_hours={config.sessions.cleanup_interval_hours}"
+        )
         for agent_id, agent in sorted(config.agents.items()):
             command = " ".join([agent.command or ""] + list(agent.args)).strip()
             enabled = "" if agent.enabled else " (disabled)"

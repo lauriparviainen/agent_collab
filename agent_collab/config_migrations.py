@@ -15,7 +15,7 @@ import copy
 import logging
 from typing import Any, Callable, Dict, Mapping
 
-CURRENT_CONFIG_SCHEMA = 4
+CURRENT_CONFIG_SCHEMA = 5
 
 _logger = logging.getLogger("agent_collab.config")
 
@@ -64,6 +64,12 @@ def migrate_config_data(
             label,
         )
         result.pop("daemon", None)
+    if scope == "project" and "sessions" in result:
+        _logger.warning(
+            "%s: ignoring project [sessions] section; session retention is allowed only in the user config",
+            label,
+        )
+        result.pop("sessions", None)
     return result
 
 
@@ -92,8 +98,15 @@ def _migrate_v3_to_v4(data: Dict[str, Any], source: str) -> Dict[str, Any]:
     return data
 
 
+def _migrate_v4_to_v5(data: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """v5 adds optional user-config [sessions] retention settings."""
+
+    return data
+
+
 MIGRATIONS: Dict[int, Callable[[Dict[str, Any], str], Dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
+    4: _migrate_v4_to_v5,
 }

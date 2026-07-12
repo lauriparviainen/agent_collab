@@ -85,6 +85,28 @@ class MigrateConfigDataTests(unittest.TestCase):
         self.assertNotIn("backends", migrated)
         self.assertIn("user config", "\n".join(logs.output))
 
+    def test_v4_config_is_stamped_to_v5(self):
+        migrated = migrate_config_data({"schema_version": 4, "agents": {}})
+
+        self.assertEqual(migrated["schema_version"], CURRENT_CONFIG_SCHEMA)
+
+    def test_project_sessions_section_is_stripped_with_warning(self):
+        with self.assertLogs("agent_collab.config", level="WARNING") as logs:
+            migrated = migrate_config_data(
+                {"sessions": {"retention_days": 1}},
+                source="project.toml",
+                scope="project",
+            )
+        self.assertNotIn("sessions", migrated)
+        self.assertIn("user config", "\n".join(logs.output))
+
+    def test_user_sessions_section_is_preserved(self):
+        migrated = migrate_config_data(
+            {"sessions": {"retention_days": 7}}, source="user.toml", scope="user"
+        )
+
+        self.assertEqual(migrated["sessions"], {"retention_days": 7})
+
 
 class LoadConfigMigrationTests(unittest.TestCase):
     def test_load_config_migrates_versionless_file(self):

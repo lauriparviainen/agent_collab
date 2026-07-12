@@ -52,10 +52,25 @@ class BackendPolicyConfig:
 
 
 @dataclass
+class SessionsConfig:
+    """Daemon-global session retention policy; user config only.
+
+    The defaults live here rather than in ``default_config.toml`` — the same
+    shape as ``daemon_token``, which also has no TOML built-in. A TOML
+    ``[sessions]`` section only overrides. ``retention_days = 0`` disables
+    automatic pruning.
+    """
+
+    retention_days: int = 30
+    cleanup_interval_hours: int = 24
+
+
+@dataclass
 class CollaborationConfig:
     agents: Dict[str, AgentConfig] = field(default_factory=dict)
     workflows: Dict[str, WorkflowConfig] = field(default_factory=dict)
     backends: Dict[str, BackendPolicyConfig] = field(default_factory=dict)
+    sessions: SessionsConfig = field(default_factory=SessionsConfig)
     daemon_token: Optional[str] = None
     loaded_paths: List[Path] = field(default_factory=list)
 
@@ -124,7 +139,7 @@ def load_config(
     return config
 
 
-KNOWN_TOP_LEVEL_KEYS = {"schema_version", "agents", "workflows", "backends", "daemon"}
+KNOWN_TOP_LEVEL_KEYS = {"schema_version", "agents", "workflows", "backends", "daemon", "sessions"}
 
 
 def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> None:
@@ -169,6 +184,26 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
                 raise ConfigError(f"unknown field backends.{name}.{unknown[0]}")
             enabled = _expect_bool(values.get("enabled", True), f"backends.{name}.enabled")
             config.backends[name] = BackendPolicyConfig(name, enabled, "user_config")
+
+    sessions = data.get("sessions", {})
+    if sessions is not None and sessions != {}:
+        if not isinstance(sessions, Mapping):
+            raise ConfigError("[sessions] must be a table")
+        unknown = sorted(set(sessions) - {"retention_days", "cleanup_interval_hours"})
+        if unknown:
+            raise ConfigError(f"unknown field sessions.{unknown[0]}")
+        if "retention_days" in sessions:
+            retention_days = _expect_int(sessions["retention_days"], "sessions.retention_days")
+            if retention_days < 0:
+                raise ConfigError("sessions.retention_days must be >= 0 (0 disables pruning)")
+            config.sessions.retention_days = retention_days
+        if "cleanup_interval_hours" in sessions:
+            interval = _expect_int(
+                sessions["cleanup_interval_hours"], "sessions.cleanup_interval_hours"
+            )
+            if interval < 1:
+                raise ConfigError("sessions.cleanup_interval_hours must be >= 1")
+            config.sessions.cleanup_interval_hours = interval
 
     daemon = data.get("daemon", {})
     if daemon is not None and daemon != {}:
