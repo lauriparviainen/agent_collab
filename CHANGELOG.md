@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-13 - Optional SDK extras and session retention
+
+- Allow selecting the Fable model on the Claude `cli` and `sdk` backends by
+  adding `fable` to the `model` option's allowed values, alongside `sonnet` and
+  `opus` (`opus` remains the default).
 - Make the vendor SDKs per-provider optional dependencies (#12). The base
   install is now SDK-free (the `cli` backends need no SDK); `sdk` backends are
   enabled with the `claude`, `codex`, `antigravity`, `xai`, or `all` extras.

@@ -3,7 +3,7 @@ schema_version = 1
 [options.model]
 type = "string"
 default = "opus"
-allowed = ["sonnet", "opus"]
+allowed = ["fable", "sonnet", "opus"]
 
 [options.permission_mode]
 type = "string"
