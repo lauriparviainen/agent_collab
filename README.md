@@ -81,6 +81,14 @@ agent-collab tui
 agent-collab --help
 ```
 
+> **Two entry points — know which one you are typing.**
+> `./agent_collab.sh` (underscore) is the checkout script: use it for
+> `install`, `uninstall`, and upgrading after `git pull` — typically nothing
+> else. `agent-collab` (hyphen) is the installed command for everyday use:
+> the daemon, sessions, the TUI, and configuration. The installed command
+> deliberately has no `install` subcommand; if you type `agent-collab
+> install` it tells you where to go instead.
+
 The helper installs every provider SDK (the `all` extra) so the `sdk` backends
 work out of the box. A plain `pip install` of the package is SDK-free — the
 `cli` backends drive the provider command-line tools and need no vendor SDK —

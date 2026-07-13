@@ -1,12 +1,58 @@
+import io
 import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from agent_collab.cli import PUBLIC_COMMANDS, _command_handlers, build_parser
+from agent_collab.cli import PUBLIC_COMMANDS, _command_handlers, build_parser, main
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class CommandDispatchTests(unittest.TestCase):
+    def test_unknown_bare_word_is_rejected_instead_of_becoming_a_task(self):
+        for word in ("install", "uninstall", "build", "statsu"):
+            with self.subTest(word=word):
+                with (
+                    mock.patch("agent_collab.cli.run_sync") as run,
+                    mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+                ):
+                    code = main([word])
+
+                self.assertEqual(code, 2)
+                run.assert_not_called()
+                self.assertIn(f"unknown command '{word}'", stderr.getvalue())
+                self.assertIn("daemon", stderr.getvalue())
+
+    def test_multi_word_task_still_runs_the_one_shot_workflow(self):
+        with mock.patch("agent_collab.cli.run_sync") as run:
+            code = main(["Review the login bug fix", "--mock"])
+
+        self.assertEqual(code, 0)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], "Review the login bug fix")
+
+    def test_option_first_single_word_task_is_allowed(self):
+        with mock.patch("agent_collab.cli.run_sync") as run:
+            code = main(["--mock", "Refactor"])
+
+        self.assertEqual(code, 0)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], "Refactor")
+
+    def test_empty_task_argument_gets_the_task_required_error(self):
+        with (
+            mock.patch("agent_collab.cli.run_sync") as run,
+            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            with self.assertRaises(SystemExit) as caught:
+                main([""])
+
+        self.assertEqual(caught.exception.code, 2)
+        run.assert_not_called()
+        self.assertIn("task is required", stderr.getvalue())
 
 
 class CliHelpTests(unittest.TestCase):

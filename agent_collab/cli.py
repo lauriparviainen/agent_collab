@@ -80,7 +80,9 @@ def _root_help_epilog() -> str:
         "commands:\n"
         f"{commands}\n\n"
         "Run 'agent-collab COMMAND --help' for command-specific options.\n"
-        "Without COMMAND, agent-collab runs TASK as a one-shot configured workflow."
+        "Without COMMAND, agent-collab runs TASK as a one-shot configured workflow.\n"
+        "A bare unknown word is treated as a mistyped command, not a task; describe\n"
+        "tasks in a sentence, or pass any option first to force a one-word task."
     )
 
 
@@ -995,6 +997,19 @@ def main(argv=None) -> int:
     subcommands = _command_handlers()
     if argv and argv[0] in subcommands:
         return subcommands[argv[0]](argv[1:])
+    if argv and _looks_like_command(argv[0]):
+        # A bare word that is not a known command is almost always a typo or
+        # a script-only command (install, uninstall, build) — never silently
+        # run it as a collaboration task against the current directory.
+        error(
+            f"unknown command {argv[0]!r}; expected one of: "
+            + ", ".join(sorted(subcommands))
+            + ". install/uninstall live in ./agent_collab.sh; developer commands in "
+            "./agent_collab_dev.sh. To run a one-shot task, describe it in a "
+            'sentence, e.g. agent-collab "Review my diff" — or pass any option '
+            f"first for a deliberate one-word task: agent-collab --max-turns 3 {argv[0]}"
+        )
+        return 2
 
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1028,6 +1043,18 @@ def main(argv=None) -> int:
         error(str(exc))
         return 1
     return 0
+
+
+def _looks_like_command(token: str) -> bool:
+    """True for a bare single word: no option prefix, no whitespace.
+
+    Real one-shot tasks are sentences; a lone word in command position is
+    treated as an (unknown) command so typos fail loudly instead of launching
+    agents. A deliberate one-word task can still be run by passing any option
+    before it. Empty tokens fall through to the parser's task-required error.
+    """
+
+    return bool(token) and not token.startswith("-") and not any(char.isspace() for char in token)
 
 
 def _command_handlers():

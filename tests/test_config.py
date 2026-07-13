@@ -265,6 +265,23 @@ sequence = ["project_only"]
             with self.assertRaisesRegex(ConfigError, "add that directory to the user config"):
                 load_config(outside, env=_env(home))
 
+    def test_workdir_at_agent_collab_home_parent_does_not_reload_user_config_as_project(self):
+        """A home-directory workdir must not strip the user config as project config."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp) / "userhome"
+            home = workdir / ".agent-collab"
+            _write_user_config(
+                home,
+                'schema_version = 6\n\n[daemon]\ntoken = "secret-token-value"\n',
+            )
+
+            config = load_config(workdir, env=_env(home))
+
+            self.assertEqual(config.daemon_token, "secret-token-value")
+            self.assertEqual(config.warnings, [])
+            self.assertEqual(len(config.loaded_paths), 1)
+
     def test_project_workdir_policy_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

@@ -131,6 +131,12 @@ def load_config(
     resolved_workdir = workdir.expanduser().resolve()
     project_path = project_config_path(resolved_workdir)
     validate_workdir_allowed(config, resolved_workdir)
+    user_path = user_config_path(home or AgentCollabHome.resolve(env))
+    if project_path.expanduser().resolve() == user_path.expanduser().resolve():
+        # A workdir at (or resolving to) the agent-collab home would re-read
+        # the user config as project config and strip its own user-only
+        # sections with confusing warnings. It was already loaded; skip it.
+        return config
     if project_path.exists():
         project_warnings: List[Dict[str, str]] = []
         merge_config_data(

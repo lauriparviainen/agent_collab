@@ -13,6 +13,14 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Reject unknown bare-word commands instead of running them as one-shot
+  collaboration tasks (#16): `agent-collab install` (or a typo like
+  `statsu`) used to silently launch a full multi-agent workflow against the
+  current directory. A deliberate one-word task still runs when any option
+  precedes it, and the contract is documented in the root help. Also stop
+  re-reading the user config as project config when the session workdir is
+  the home directory, which stripped user-only sections with confusing
+  warnings (#16).
 - Make `./agent_collab.sh install` switchless and the documented upgrade
   command (#15): it migrates the user config to the current schema in place
   (tomlkit-based, comment-preserving, with a `config.toml.bak` backup),
