@@ -33,6 +33,7 @@ AGENT = AgentConfig(id="codex", type="codex", backend="sdk")
 
 class _TurnStatus(Enum):
     completed = "completed"
+    interrupted = "interrupted"
     failed = "failed"
 
 
@@ -146,12 +147,41 @@ def _run(result=None, *, verbose=False, options=None, error=None, thread_id="thr
     )
 
     async def collect():
-        return [event async for event in runner.run("do a thing", Path("."))]
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        await runner.run_turn("do a thing", Path("."), emit)
+        return events
+
+    return asyncio.run(collect())
+
+
+def _outcome(result=None, *, error=None):
+    outcomes = [] if result is None else [CodexTurnOutcome("thread-9", result)]
+    runner = CodexSdkRunner(AGENT, False, {}, item_stream=_stream_factory(outcomes, error=error))
+
+    async def collect():
+        async def emit(_event):
+            return None
+
+        return await runner.run_turn("do a thing", Path("."), emit)
 
     return asyncio.run(collect())
 
 
 class CodexEventMappingTests(unittest.TestCase):
+    def test_collected_turn_status_controls_outcome(self):
+        self.assertEqual(_outcome(_turn_result()).outcome, "completed")
+        interrupted = _outcome(_turn_result(status=_TurnStatus.interrupted))
+        self.assertEqual(
+            (interrupted.outcome, interrupted.code), ("cancelled", "provider_turn_cancelled")
+        )
+        failed = _outcome(_turn_result(status=_TurnStatus.failed))
+        self.assertEqual((failed.outcome, failed.code), ("failed", "provider_terminal_failure"))
+        self.assertEqual(_outcome().code, "provider_output_incomplete")
+
     def test_cancellation_closes_item_stream_even_when_close_fails(self):
         async def scenario(close_error):
             entered = asyncio.Event()
@@ -181,7 +211,13 @@ class CodexEventMappingTests(unittest.TestCase):
             )
 
             async def collect():
-                return [event async for event in runner.run("cancel me", Path("."))]
+                events = []
+
+                async def emit(event):
+                    events.append(event)
+
+                await runner.run_turn("cancel me", Path("."), emit)
+                return events
 
             consumer = asyncio.create_task(collect())
             await asyncio.wait_for(entered.wait(), timeout=1.0)
@@ -444,7 +480,13 @@ class CodexProductionFactoryTests(unittest.TestCase):
         )
 
         async def collect():
-            return [event async for event in runner.run("do a thing", Path("/workspace"))]
+            events = []
+
+            async def emit(event):
+                events.append(event)
+
+            await runner.run_turn("do a thing", Path("/workspace"), emit)
+            return events
 
         with (
             mock.patch.dict(sys.modules, {"openai_codex": module}),
@@ -480,15 +522,17 @@ class CodexProductionFactoryTests(unittest.TestCase):
         module, _, _ = self._fake_module(state, _turn_result())
         runner = CodexSdkRunner(AGENT, False, {}, item_stream=_default_item_stream)
 
-        async def consume_one_then_close():
-            events = runner.run("do a thing", Path("/workspace"))
-            first = await events.__anext__()
-            self.assertEqual((first.raw or {}).get("provider_session_id"), "thread-production")
-            self.assertTrue(state["open"])
-            await events.aclose()
+        async def cancel_on_first_event():
+            async def emit(first):
+                self.assertEqual((first.raw or {}).get("provider_session_id"), "thread-production")
+                self.assertTrue(state["open"])
+                raise asyncio.CancelledError
+
+            with self.assertRaises(asyncio.CancelledError):
+                await runner.run_turn("do a thing", Path("/workspace"), emit)
 
         with mock.patch.dict(sys.modules, {"openai_codex": module}):
-            asyncio.run(consume_one_then_close())
+            asyncio.run(cancel_on_first_event())
 
         self.assertEqual(state["exited"], 1)
         self.assertFalse(state["open"])

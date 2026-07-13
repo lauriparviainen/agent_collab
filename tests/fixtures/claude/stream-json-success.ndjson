@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"fixture response"}]}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"session-redacted"}

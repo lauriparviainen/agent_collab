@@ -72,6 +72,21 @@ section. Antigravity SDK owns and validates `vertex`, `project`, and `location`
 through its colocated `config.toml`; its `[agents.<id>.options]` table contains
 only MCP-overridable values such as `model`.
 
+All runners implement one sink-plus-return boundary: `run_turn` awaits each
+event sink call for streaming backpressure and returns exactly one immutable
+`TurnOutcome` after bounded cleanup. Provider parsers retain terminal markers
+as private evidence; the runner resolves fatal evidence, transport/parser
+failure, process exit, verified success, and an explicitly declared clean-EOF
+fallback in that order. The referee assigns `turn-N` identity before launch and
+commits each `TurnOutcomeRecord` with its boundary event through one awaited
+daemon callback.
+
+New sessions persist a packed append-only `turn_outcomes` list and an optional
+canonical `failure`; restored legacy sessions keep both fields null rather than
+fabricating history. Event read/wait batches carry the same status, terminal,
+error, failure, and outcome view as session detail without changing transcript
+cursor semantics. Session terminal transitions are monotonic.
+
 Backend capabilities (`resume`, `interrupt`, `tool_gate`) are honest runtime
 facts and are not inferred from provider brand. Live backend health gates starts
 on certainty and is reported by `describe_options`, not by daemon status.

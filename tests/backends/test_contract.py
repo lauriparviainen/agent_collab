@@ -32,6 +32,7 @@ from agent_collab.options import (
     validate_start_backends,
 )
 from agent_collab.runners import AgentRunner, configured_runner
+from agent_collab.outcomes import TurnOutcome
 
 
 class _ContractRunner(AgentRunner):
@@ -39,13 +40,16 @@ class _ContractRunner(AgentRunner):
         self.name = name
         self.options = dict(options)
 
-    async def run(self, prompt, workdir):
-        yield Event.create(
-            "claude",
-            "message",
-            f"contract backend: {self.options['contract_mode']}",
-            {"options": dict(self.options)},
+    async def run_turn(self, prompt, workdir, emit):
+        await emit(
+            Event.create(
+                "claude",
+                "message",
+                f"contract backend: {self.options['contract_mode']}",
+                {"options": dict(self.options)},
+            )
         )
+        return TurnOutcome("completed")
 
 
 class _ContractBackend:
@@ -175,7 +179,13 @@ class BackendContractExtensionTests(unittest.TestCase):
         )
 
         async def collect():
-            return [event async for event in runner.run("test", ".")]
+            events = []
+
+            async def emit(event):
+                events.append(event)
+
+            await runner.run_turn("test", Path("."), emit)
+            return events
 
         events = asyncio.run(collect())
         self.assertEqual(events[0].raw["options"], {"contract_mode": "careful"})

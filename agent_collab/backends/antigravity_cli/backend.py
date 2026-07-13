@@ -33,6 +33,10 @@ class AntigravityCliBackend:
     capabilities = BackendCapabilities()
     checks_credentials = True
     block_on_unavailable = True
+    # The supported ``agy -p`` surface is message-only.  Until the provider
+    # exposes a structured terminal marker, clean exit plus non-empty output is
+    # the deliberately provisional success contract.
+    clean_eof_fallback = True
 
     def probe(self) -> BackendHealth:
         return probe_cli_backend(

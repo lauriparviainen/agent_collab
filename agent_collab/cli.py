@@ -426,9 +426,14 @@ def _watch_daemon_session(
         current = int(batch.cursor)
         if not follow:
             return
-        state = client.get_session(session_id)
-        if state.status in {"done", "failed", "stopped", "interrupted"} and not batch.events:
+        if batch.terminal:
             return
+        if batch.terminal is None:
+            # Compatibility with an older daemon that omits the additive
+            # outcome view from event batches.
+            state = client.get_session(session_id)
+            if state.status in {"done", "failed", "stopped", "interrupted"} and not batch.events:
+                return
 
 
 def _latest_daemon_session_id(server_url) -> str:
@@ -952,6 +957,14 @@ def _main_events(argv) -> int:
             for event in batch.events:
                 print_event(Event(**event.to_dict()), color=not args.no_color)
             print(f"cursor: {batch.cursor}")
+            if batch.status:
+                print(f"status: {batch.status}")
+            has_boundary = any(
+                isinstance(event.raw, dict) and "turn_outcome" in event.raw
+                for event in batch.events
+            )
+            if batch.failure and not has_boundary:
+                print(f"failure: {batch.failure.get('code')} — {batch.failure.get('message')}")
     except Exception as exc:
         error(str(exc))
         return 1
@@ -973,6 +986,10 @@ def _print_session(session) -> None:
     # ``session`` is a SessionStateModel from the typed client.
     for key in ("session_id", "status", "workflow", "workdir", "jsonl_path", "markdown_path"):
         print(f"{key}: {getattr(session, key)}")
+    if session.failure:
+        failure = session.failure
+        turn = f" {failure.get('turn_id')}" if failure.get("turn_id") else ""
+        print(f"failure{turn}: {failure.get('code')} — {failure.get('message')}")
     settings = session.settings
     if not settings:
         return

@@ -235,7 +235,7 @@ sequence = ["xai"]
         event = parse_xai_line('{"type":"end","stopReason":"SafetyStop","sessionId":"sess"}')
 
         self.assertEqual((event.source, event.type), ("error", "error"))
-        self.assertEqual(event.raw["code"], "provider_turn_failed")
+        self.assertEqual(event.raw["code"], "provider_terminal_failure")
         self.assertIn("SafetyStop", event.text)
 
     def test_probe_reports_missing_dependency_and_observed_version(self):

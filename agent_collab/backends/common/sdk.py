@@ -19,6 +19,7 @@ provider-session event helper is intentionally shared with CLI parsers.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Mapping, Optional
 
 from ...events import Event
@@ -29,6 +30,7 @@ from ...events import Event
 # (EDIT_FILE/RUN_COMMAND) and Codex item types (apply_patch/command) classify.
 _FILE_CHANGE_TOKENS = ("edit", "write", "patch", "create_file")
 _COMMAND_TOKENS = ("command", "bash", "exec", "shell")
+SDK_CLOSE_GRACE_SECONDS = 1.0
 
 
 def classify_tool_kind(name: Any) -> str:
@@ -86,7 +88,7 @@ def backend_unavailable_event(exc: Exception) -> Event:
     the generic sdk-error shape.
     """
 
-    return Event.create("error", "error", str(exc), {"error": str(exc)})
+    return Event.create("error", "error", str(exc), {"error": str(exc), "fatal": True})
 
 
 def sdk_error_event(source: str, exc: Exception) -> Event:
@@ -101,24 +103,39 @@ def sdk_error_event(source: str, exc: Exception) -> Event:
         "error",
         "error",
         f"{source} sdk error: {exc}",
-        {"error": str(exc), "exception": exc.__class__.__name__},
+        {"error": str(exc), "exception": exc.__class__.__name__, "fatal": True},
     )
 
 
-async def close_async_stream(stream: Any) -> None:
-    """Best-effort close without masking a turn error or cancellation.
+async def close_async_stream(stream: Any) -> bool:
+    """Bounded close; transfer an over-grace close to a background reaper.
 
-    ``CancelledError`` remains a ``BaseException`` and is deliberately not
-    swallowed if a new cancellation interrupts the close itself.
+    The boolean reports whether close completed cleanly inside the grace.  A
+    timeout never blocks the causal timeout/interruption outcome.
     """
 
     close = getattr(stream, "aclose", None)
     if not callable(close):
-        return
+        return True
+    task = asyncio.ensure_future(close())
     try:
-        await close()
+        await asyncio.wait_for(asyncio.shield(task), timeout=SDK_CLOSE_GRACE_SECONDS)
+        return True
+    except asyncio.TimeoutError:
+        task.add_done_callback(_consume_background_result)
+        return False
+    except asyncio.CancelledError:
+        task.add_done_callback(_consume_background_result)
+        raise
     except Exception:
-        return
+        return False
+
+
+def _consume_background_result(task: asyncio.Future) -> None:
+    try:
+        task.result()
+    except BaseException:
+        pass
 
 
 def provider_session_event(

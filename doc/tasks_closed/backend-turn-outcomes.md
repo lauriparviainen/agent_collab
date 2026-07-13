@@ -1,6 +1,6 @@
 # Backend turn outcomes and MCP failure reporting
 
-**Status:** Design complete and independently reviewed; implementation not started.
+**Status:** Complete — closed 2026-07-13 after installed-daemon acceptance.
 
 **Created:** 2026-07-13.
 
@@ -16,8 +16,9 @@ session state for sequential, interactive, and future parallel workflows.
 REST, MCP, CLI, and TUI consumers must not infer success from provider-specific
 transcript prose, raw payloads, provider identity, or process exit alone.
 
-This is a design and planning document. Production implementation is not part
-of this pass.
+This document is also the durable implementation and review record. The shared
+contract is implemented in this pass; issue #19's parallel workflow config and
+runtime remain out of scope.
 
 ## Relationship to the parallel workflow
 
@@ -536,7 +537,8 @@ Requirements:
 - snapshot state and the event list together on the event-loop thread before
   potentially expensive projection in a worker;
 - the cursor continues to count transcript events only;
-- state and outcome changes never advance the cursor;
+- pure state changes never advance the cursor; an outcome commit advances it
+  only through the atomically paired boundary event;
 - a terminal transition wakes a long poll and returns the terminal snapshot
   with an unchanged cursor when appropriate;
 - a mid-parallel-stage outcome update is atomically paired with a structured
@@ -749,6 +751,50 @@ Credentialed verification, when explicitly authorized during implementation:
 ./agent_collab_dev.sh integration-test <changed-backend> --strict
 ```
 
+## Implementation record (2026-07-13)
+
+- Added immutable `TurnOutcome`, `TurnOutcomeRecord`, `SessionFailure`, and
+  private terminal-evidence types with a closed code/message table and strict
+  structured-data allowlist.
+- Replaced the runner async-generator boundary with `run_turn(prompt, workdir,
+  emit) -> TurnOutcome`. Event delivery retains backpressure; CLI and SDK
+  cleanup is bounded, with an event-loop-owned background reaper when a runner
+  ignores cancellation past the grace period.
+- Added deterministic pre-launch turn identity, deadline/stop/policy/bare-cancel
+  arbitration, fail-fast sequential and directed aggregation, a registered
+  daemon-to-referee stop signal, and one post-settle `stopped` publisher.
+- Added packed append-only outcome persistence, nullable legacy compatibility,
+  structured decisive failures, monotonic session status compare-and-set, and
+  one awaited daemon commit that appends an outcome and its boundary event
+  before watcher notification.
+- Added the shared outcome view to session detail/status and REST/MCP event
+  read/wait responses. Event/state snapshots are taken together on the event
+  loop; transcript cursors still count only events.
+- Mapped all eight current backends conservatively. Marker-bearing transports
+  fail closed; Antigravity CLI alone uses the documented provisional clean-EOF
+  plus message fallback; refusal remains unmapped without structured evidence.
+- Added sanitized Claude/Codex/xAI CLI fixtures, SDK shape tests, precedence,
+  cancellation race, cleanup/reaper, persistence/migration, polling snapshot,
+  terminal CAS, hostile-data, and presentation coverage. No credentialed
+  provider call was run.
+- Updated CLI/TUI rendering, MCP guidance, architecture/implementation docs,
+  every backend README, changelog, and generated REST artifacts. No issue #19
+  configuration, workflow, or concurrent runtime was exposed.
+
+Local verification before implementation review:
+
+```text
+./agent_collab_dev.sh test                 772 tests passed
+./agent_collab_dev.sh build                passed
+./agent_collab_dev.sh build --check        passed
+python3 -m unittest discover -s tests      772 tests passed
+git diff --check                           passed
+mock one-shot smoke                        passed
+```
+
+Implementation review findings and dispositions are recorded below after the
+pre-existing design-review record.
+
 ## Design review findings and disposition
 
 Two independent read-only reviews were run through agent-collab in two rounds:
@@ -832,6 +878,105 @@ clarified rather than adopted literally:
   comes from optional fields and tests, not from fabricating a migration;
 - provider terminal behavior noted from installed interfaces remains
   provisional until the listed fixture or credentialed verification exists.
+
+## Implementation review findings and disposition
+
+Two independent implementation-review rounds use Grok Build at medium
+reasoning and Gemini 3.1 Pro (High) in plan mode. Reviewers inspect the current
+diff read-only; the caller adjudicates findings against the repository and
+reruns the applicable hermetic gates. Sessions count only after the daemon
+reports a terminal state.
+
+### Round 1
+
+**Grok Build** reported no blocker and three important improvements:
+
+- The credentialed integration harness still called the removed runner
+  generator. **Accepted and fixed**; it now collects through the awaited sink,
+  asserts a `completed` outcome, and returns the emitted events to existing
+  live assertions.
+- Restart restoration retained a free-form legacy `error`. **Accepted and
+  fixed**; restart still marks the session `interrupted` without fabricating a
+  turn outcome, failure, or structured detail.
+- Antigravity CLI's provisional EOF contract lacked a captured transport
+  fixture at the runner boundary. **Accepted and fixed**; the existing captured
+  stdout fixture now exercises clean EOF plus nonempty parsed messages, while
+  empty EOF remains an explicit failure case.
+
+Its optional directed-turn `stage_index` observation is deferred to #19's
+stage model because current sequential/directed occurrence numbering is
+internally consistent. Conditional omission of new event-batch fields when
+round-tripping an old-daemon response is retained deliberately for backward
+compatibility. The suggested presentation duplication was not reproduced in
+the authoritative fatal path.
+
+**Gemini 3.1 Pro (High)** found a blocker in bounded cleanup: blindly
+propagating `CancelledError` cannot distinguish a compliant child acknowledging
+`runner_task.cancel()` from cancellation of the cleanup owner. **Accepted and
+fixed**; child acknowledgment now completes causal outcome recording, while a
+cancelled cleanup owner transfers an unfinished child to the reaper and
+propagates cancellation. Hermetic tests cover timeout, explicit stop, bare
+cancel, directly cancelled cleanup, reaper release, and the race where an
+already-completed provider result is retained but a registered stop prevents
+the next planned turn.
+
+The optional suggestion to abandon the cancelled subprocess waiter without
+gathering it was **not adopted**: gathering retrieves the already-cancelled
+waiter and does not extend the bounded terminate/kill/reap sequence. An earlier
+Gemini attempt ended at the provider response timeout and was excluded from the
+two-reviewer count; its claim that verified SDK success can ignore an unclean
+close was also not adopted because the specified precedence requires verified
+success plus clean SDK teardown unless fixture-backed evidence documents a
+best-effort exception.
+
+Round-one fixes passed the focused 69-test outcome/referee/daemon suite and the
+full 772-test hermetic gate.
+
+### Round 2
+
+Both reviewers reassessed the revised diff and the round-one dispositions.
+
+**Grok Build** reported no blocker, contradictory transition, cancellation
+race, unbounded cleanup, missing/duplicate outcome, unsafe structured-data
+exposure, cursor/state skew, invented provider mapping, sequential/interactive
+regression, #19 incompatibility, or legacy-compatibility gap. It identified one
+imprecise contract sentence saying outcome changes never advance the cursor.
+**Accepted and clarified**: pure state changes do not advance it; an outcome
+commit advances it only via its atomically paired boundary event. Its optional
+directed-turn numeric-coupling and future parallel `turn_active` observations
+remain #19 implementation concerns; the current parameterized turn boundary
+does not prevent pre-allocation or group-level activity management.
+
+**Gemini 3.1 Pro (High)** confirmed every round-one fix and returned
+**APPROVE**, with no blocker, important improvement, optional improvement, or
+incorrect/unsupported assumption. It independently found no remaining issue in
+the requested transition, cancellation, exactly-once, exposure, snapshot,
+mapping, workflow, #19-interface, or migration categories.
+
+After round two, the full hermetic suite and standalone discovery both pass 772
+tests; build, generated-artifact check, diff check, and an isolated three-turn
+mock smoke pass. Credentialed provider verification remains intentionally not
+run without owner authorization.
+
+## Installed-daemon acceptance (2026-07-13)
+
+After reinstalling and restarting the daemon, its installed MCP surface passed
+both terminal paths without a provider call:
+
+- a normal one-turn mock session returned `done`, `terminal=true`,
+  `failure=null`, and one `completed` `TurnOutcomeRecord`;
+- the same mock workflow with a zero-second local deadline returned `failed`,
+  `terminal=true`, canonical `local_turn_timed_out` failure data, and one
+  matching `timed_out` record;
+- reading each session again at its terminal cursor returned `events=[]` while
+  preserving the complete status/failure/outcome snapshot;
+- session status/detail returned the same structured failure and packed outcome
+  history as event polling.
+
+This exercises the durable installed daemon, MCP serialization, terminal
+arbitration, persistence, and the no-new-events snapshot contract. Credentialed
+provider verification remains an evidence-gathering follow-up, not a blocker to
+the shared contract.
 
 ## Decisions
 

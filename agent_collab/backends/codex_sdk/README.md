@@ -14,6 +14,13 @@ Select with `backend="sdk"`. The `openai-codex` wheel and its runtime are requir
 
 The stable final response is message-first; known command/file/reasoning items are mapped and unknown items become verbose status. The thread id is captured with identity kind `thread`; resume is not implemented. A configured local `codex` binary is preferred over the SDK-pinned runtime when available.
 
+## Turn outcome
+
+Collected `TurnStatus.completed` completes, `interrupted` maps to provider
+`cancelled`, and `failed` fails. An in-progress/unknown collected status,
+missing result, SDK exception, or uncertain bounded close fails. Item-level
+command failures are diagnostic unless the collected turn itself fails.
+
 ## Capabilities and security
 
 `resume`, `interrupt`, and `tool_gate` are false. Threads are ephemeral and cwd-scoped. Missing/incompatible runtime setup fails probing or produces an error event.

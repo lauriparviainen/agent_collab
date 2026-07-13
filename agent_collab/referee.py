@@ -15,6 +15,7 @@ from .config import (
 )
 from .events import Event
 from .logging import SessionLogger
+from .outcomes import SessionFailure, TurnOutcome, TurnOutcomeRecord
 from .paths import GlobalDataPaths
 from .runners import (
     AgentRunner,
@@ -28,8 +29,45 @@ from .terminal import print_event
 
 
 WORKFLOWS = set(builtin_config().workflows)
+RUNNER_CLEANUP_GRACE_SECONDS = 2.0
 
 EventAppender = Callable[[Event], Awaitable[int]]
+OutcomeCommitter = Callable[[TurnOutcomeRecord, Event], Awaitable[None]]
+
+
+class RequiredTurnFailed(RuntimeError):
+    """A required sequential/directed turn did not complete."""
+
+    def __init__(self, record: TurnOutcomeRecord):
+        self.record = record
+        super().__init__(record.message or "A required turn did not complete")
+
+    @property
+    def failure(self) -> SessionFailure:
+        return SessionFailure.from_record(self.record)
+
+
+class RefereeStopSignal:
+    """Daemon-owned stop cause registered before task cancellation."""
+
+    def __init__(self) -> None:
+        self._requested = False
+        self._event: Optional[asyncio.Event] = None
+
+    def request(self) -> None:
+        self._requested = True
+        if self._event is not None:
+            self._event.set()
+
+    def is_set(self) -> bool:
+        return self._requested
+
+    async def wait(self) -> None:
+        if self._requested:
+            return
+        if self._event is None:
+            self._event = asyncio.Event()
+        await self._event.wait()
 
 
 def _is_provider_session_event(event: Event) -> bool:
@@ -74,6 +112,8 @@ class RefereeConfig:
     status_callback: Optional[Callable[[str], Awaitable[None]]] = None
     event_appender_callback: Optional[Callable[[Optional[EventAppender]], Awaitable[None]]] = None
     turn_active_callback: Optional[Callable[[bool], Awaitable[None]]] = None
+    outcome_commit_callback: Optional[OutcomeCommitter] = None
+    stop_signal: Optional[RefereeStopSignal] = None
 
 
 class Referee:
@@ -86,6 +126,17 @@ class Referee:
         if config.collab_config is not None:
             validate_config(self.collab_config)
         self._emit_lock: Optional[asyncio.Lock] = None
+        self.stop_signal = config.stop_signal or RefereeStopSignal()
+        self._policy_cancel = RefereeStopSignal()
+        self._next_turn_number = 1
+        self._committed_turn_ids: set[str] = set()
+        self._reaper_tasks: set[asyncio.Task] = set()
+
+    def request_stop(self) -> None:
+        self.stop_signal.request()
+
+    def request_policy_cancel(self) -> None:
+        self._policy_cancel.request()
 
     def _runners(self) -> Dict[str, AgentRunner]:
         runners: Dict[str, AgentRunner] = {}
@@ -196,32 +247,159 @@ class Referee:
         if self.config.turn_active_callback is not None:
             await self.config.turn_active_callback(active)
 
+    def _allocate_occurrence(self) -> str:
+        turn_id = f"turn-{self._next_turn_number}"
+        self._next_turn_number += 1
+        return turn_id
+
+    def _canonical_backend(self, agent_id: str) -> str:
+        if self.config.mock:
+            return "mock"
+        agent = self.collab_config.agents[agent_id]
+        backend_id = self._backend_for(agent_id) or agent.backend or "cli"
+        return f"{agent.type}_{backend_id}"
+
+    async def _commit_outcome(
+        self,
+        logger: SessionLogger,
+        transcript: List[Event],
+        record: TurnOutcomeRecord,
+    ) -> None:
+        if record.turn_id in self._committed_turn_ids:
+            raise RuntimeError(f"outcome already committed for {record.turn_id}")
+        if record.message:
+            detail = f": {record.message} ({record.code})"
+        else:
+            detail = ""
+        boundary = Event.create(
+            "referee",
+            "status",
+            f"{record.turn_id} {record.agent_id} {record.outcome}{detail}",
+            {"turn_outcome": record.to_dict()},
+        )
+        if self._emit_lock is None:
+            self._emit_lock = asyncio.Lock()
+        async with self._emit_lock:
+            transcript.append(boundary)
+            logger.write(boundary)
+            if self.config.outcome_commit_callback is not None:
+                await self.config.outcome_commit_callback(record, boundary)
+            else:
+                self.printer(boundary)
+            self._committed_turn_ids.add(record.turn_id)
+
+    async def _cancel_runner_bounded(self, runner_task: asyncio.Task) -> None:
+        runner_task.cancel()
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(runner_task), timeout=RUNNER_CLEANUP_GRACE_SECONDS
+            )
+        except asyncio.TimeoutError:
+            self._adopt_runner_reaper(runner_task)
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                self._adopt_runner_reaper(runner_task)
+                raise
+            # The awaited runner acknowledged our cancellation. This is the
+            # expected cleanup result, not cancellation of the cleanup owner.
+            _consume_task_result(runner_task)
+        except Exception:
+            # Awaiting the task retrieved its exception; the turn outcome is
+            # still determined by the causal local timeout/stop/policy event.
+            pass
+
+    def _adopt_runner_reaper(self, runner_task: asyncio.Task) -> None:
+        if runner_task.done():
+            _consume_task_result(runner_task)
+            return
+        self._reaper_tasks.add(runner_task)
+        runner_task.add_done_callback(self._reaper_tasks.discard)
+        runner_task.add_done_callback(_consume_task_result)
+
     async def _run_agent_turn(
         self,
         logger: SessionLogger,
         transcript: List[Event],
         runner: AgentRunner,
         prompt: str,
-    ) -> None:
-        async def consume() -> None:
-            async for event in runner.run(prompt, self.workdir):
-                await self._emit(logger, transcript, event)
+        *,
+        agent_id: str,
+        stage_index: int,
+        turn_id: str,
+    ) -> TurnOutcomeRecord:
+        async def emit(event: Event) -> None:
+            await self._emit(logger, transcript, event)
+
+        runner_task = asyncio.create_task(
+            runner.run_turn(prompt, self.workdir, emit),
+            name=f"agent-collab-{turn_id}-{agent_id}",
+        )
+        deadline_task = asyncio.create_task(asyncio.sleep(max(0, self.config.timeout)))
+        stop_task = asyncio.create_task(self.stop_signal.wait())
+        policy_task = asyncio.create_task(self._policy_cancel.wait())
+        local_outcome: Optional[TurnOutcome] = None
+        unexpected_cancel = False
 
         await self._set_turn_active(True)
         try:
             try:
-                await asyncio.wait_for(consume(), timeout=self.config.timeout)
-            except asyncio.TimeoutError:
-                await self._emit(
-                    logger,
-                    transcript,
-                    Event.create(
-                        "error",
-                        "error",
-                        f"{runner.name} turn exceeded timeout of {self.config.timeout}s",
-                    ),
+                await asyncio.wait(
+                    {runner_task, deadline_task, stop_task, policy_task},
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
+            except asyncio.CancelledError:
+                if runner_task.done():
+                    pass
+                elif self.stop_signal.is_set():
+                    local_outcome = TurnOutcome("interrupted", "local_turn_interrupted")
+                elif self._policy_cancel.is_set():
+                    local_outcome = TurnOutcome("interrupted", "referee_turn_cancelled")
+                else:
+                    local_outcome = TurnOutcome("failed", "referee_cancelled_unexpected")
+                    unexpected_cancel = True
+
+            if runner_task.done():
+                try:
+                    outcome = runner_task.result()
+                except asyncio.CancelledError:
+                    outcome = local_outcome or TurnOutcome("failed", "referee_cancelled_unexpected")
+                except Exception:
+                    outcome = TurnOutcome("failed", "provider_transport_failed")
+            else:
+                if local_outcome is None:
+                    if deadline_task.done():
+                        local_outcome = TurnOutcome("timed_out", "local_turn_timed_out")
+                    elif stop_task.done():
+                        local_outcome = TurnOutcome("interrupted", "local_turn_interrupted")
+                    elif policy_task.done():
+                        local_outcome = TurnOutcome("interrupted", "referee_turn_cancelled")
+                    else:
+                        local_outcome = TurnOutcome("failed", "referee_cancelled_unexpected")
+                await asyncio.shield(self._cancel_runner_bounded(runner_task))
+                outcome = local_outcome
+
+            record = TurnOutcomeRecord.from_outcome(
+                turn_id=turn_id,
+                stage_index=stage_index,
+                agent_id=agent_id,
+                backend=self._canonical_backend(agent_id),
+                outcome=outcome,
+            )
+            await asyncio.shield(self._commit_outcome(logger, transcript, record))
+            # A provider result that was already complete at arbitration keeps
+            # its truthful outcome, but a concurrent registered stop still
+            # ends this workflow now instead of launching another turn.
+            if self.stop_signal.is_set():
+                raise asyncio.CancelledError
+            if unexpected_cancel:
+                raise RequiredTurnFailed(record)
+            return record
         finally:
+            for task in (deadline_task, stop_task, policy_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(deadline_task, stop_task, policy_task, return_exceptions=True)
             await self._set_turn_active(False)
 
     async def _process_input_item(
@@ -231,14 +409,26 @@ class Referee:
         runners: Dict[str, AgentRunner],
         task: str,
         item: RefereeInput,
-    ) -> None:
+    ) -> Optional[TurnOutcomeRecord]:
         if not item.target:
-            return
+            return None
         await self._emit(
             logger, transcript, Event.create("referee", "status", f"directed turn: {item.target}")
         )
         prompt = self._directed_prompt_for(task, item.target, item.event.text, transcript)
-        await self._run_agent_turn(logger, transcript, runners[item.target], prompt)
+        turn_id = self._allocate_occurrence()
+        record = await self._run_agent_turn(
+            logger,
+            transcript,
+            runners[item.target],
+            prompt,
+            agent_id=item.target,
+            stage_index=self._next_turn_number - 1,
+            turn_id=turn_id,
+        )
+        if record.outcome != "completed":
+            raise RequiredTurnFailed(record)
+        return record
 
     async def _process_pending_inputs(
         self,
@@ -344,7 +534,18 @@ class Referee:
                         Event.create("referee", "status", f"turn {turn}: {agent_name}"),
                     )
                     prompt = self._prompt_for(task, agent_name, turn, transcript)
-                    await self._run_agent_turn(logger, transcript, runners[agent_name], prompt)
+                    turn_id = self._allocate_occurrence()
+                    record = await self._run_agent_turn(
+                        logger,
+                        transcript,
+                        runners[agent_name],
+                        prompt,
+                        agent_id=agent_name,
+                        stage_index=turn,
+                        turn_id=turn_id,
+                    )
+                    if record.outcome != "completed":
+                        raise RequiredTurnFailed(record)
                 if self.config.interactive:
                     await self._process_pending_inputs(logger, transcript, runners, task)
                     await self._set_status("awaiting_input")
@@ -365,3 +566,10 @@ class Referee:
 
 def run_sync(task: str, config: RefereeConfig) -> Dict[str, str]:
     return asyncio.run(Referee(config).run(task))
+
+
+def _consume_task_result(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except BaseException:
+        pass

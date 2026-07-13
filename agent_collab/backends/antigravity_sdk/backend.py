@@ -39,11 +39,12 @@ import enum
 import inspect
 import platform
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
 
 from ...config import AgentConfig
 from ...events import Event, compact_json
-from ...runners import AgentRunner
+from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
+from ...runners import AgentRunner, AsyncEventSink
 from ..base import (
     BackendCapabilities,
     BackendHealth,
@@ -278,14 +279,19 @@ class AntigravitySdkRunner(AgentRunner):
         self.options = options
         self._agent_factory = agent_factory
 
-    async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
+    async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         if self.verbose:
-            yield Event.create("antigravity", "status", f"antigravity sdk starting in {workdir}")
+            await emit(
+                Event.create("antigravity", "status", f"antigravity sdk starting in {workdir}")
+            )
+        evidence = TerminalEvidenceAccumulator()
+        exception_code: Optional[str] = None
+        clean_close = True
         try:
             agent_cm = self._agent_factory(self.agent, self.options, workdir)
         except BackendUnavailable as exc:
-            yield backend_unavailable_event(exc)
-            return
+            await emit(backend_unavailable_event(exc))
+            return TurnOutcome("failed", "provider_transport_failed")
         try:
             async with agent_cm as sdk_agent:
                 response = None
@@ -295,29 +301,44 @@ class AntigravitySdkRunner(AgentRunner):
                     # thoughts/tool_calls properties are async cursors, not lists.
                     chunks = await _resolve_chunks(response)
                     usage_metadata = getattr(response, "usage_metadata", None)
-                    for event in map_antigravity_turn(chunks, self.verbose, usage_metadata):
-                        yield event
+                    mapped = list(map_antigravity_turn(chunks, self.verbose, usage_metadata))
+                    for event in mapped:
+                        await emit(event)
+                    if any(
+                        event.type == "message"
+                        and event.source == "antigravity"
+                        and event.text.strip()
+                        for event in mapped
+                    ):
+                        evidence.add(TerminalEvidence("completed"))
+                    else:
+                        exception_code = "provider_empty_response"
                     conversation_id = getattr(sdk_agent, "conversation_id", None)
                     if conversation_id:
                         # Uniform provider-session capture (kind="conversation"). The
                         # daemon records it into central session state; nothing resumes
                         # it this stage (capabilities stay false).
-                        yield provider_session_event(
-                            "antigravity", self.name, str(conversation_id), "conversation"
+                        await emit(
+                            provider_session_event(
+                                "antigravity", self.name, str(conversation_id), "conversation"
+                            )
                         )
                 finally:
                     # The installed ChatResponse is drained by resolve(), while
                     # injected/future implementations may also own an explicit
                     # async close hook. Honor it before leaving the agent context.
-                    await close_async_stream(response)
+                    clean_close = await close_async_stream(response)
         except BackendUnavailable as exc:
-            yield backend_unavailable_event(exc)
-            return
+            await emit(backend_unavailable_event(exc))
+            exception_code = "provider_transport_failed"
         except Exception as exc:  # surface SDK errors as transcript errors
-            yield sdk_error_event("antigravity", exc)
-            return
+            await emit(sdk_error_event("antigravity", exc))
+            exception_code = "provider_transport_failed"
+        if not clean_close and exception_code is None:
+            exception_code = "provider_transport_failed"
         if self.verbose:
-            yield Event.create("antigravity", "status", "antigravity sdk turn complete")
+            await emit(Event.create("antigravity", "status", "antigravity sdk turn complete"))
+        return evidence.resolve(exception_code=exception_code)
 
 
 def map_antigravity_turn(

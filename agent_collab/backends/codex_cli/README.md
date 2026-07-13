@@ -12,7 +12,14 @@ Select with `backend="cli"`; the agent needs a configured `codex` command. Codex
 
 ## Events and identity
 
-Agent messages, commands, file changes, tools, errors, and verbose statuses are mapped from JSONL. No resumable thread identity is captured from this CLI stream.
+Agent messages, commands, file changes, tools, errors, and verbose statuses are mapped from JSONL. `thread.started.thread_id` is captured as provider identity kind `thread`, but resume is not implemented.
+
+## Turn outcome
+
+`turn.completed` is verified success and `turn.failed` is terminal failure.
+`thread.started` is identity only, and failed command/item events remain
+diagnostic when the enclosing turn later completes. EOF without a turn marker,
+malformed output, transport failure, or nonzero exit fails closed.
 
 ## Capabilities and security
 

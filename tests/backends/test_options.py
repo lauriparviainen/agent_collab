@@ -20,6 +20,7 @@ from agent_collab.daemon import (
 )
 from agent_collab.backends.common.sdk import provider_session_event
 from agent_collab.events import Event
+from agent_collab.outcomes import TurnOutcome
 from agent_collab.options import (
     StartOptionsError,
     validate_start_backends,
@@ -129,9 +130,10 @@ class SdkSettingsDisplayTests(unittest.TestCase):
 class _SessionRunner:
     name = "claude"
 
-    async def run(self, prompt, workdir):
-        yield provider_session_event("claude", "claude", "sess-xyz", "session")
-        yield Event.create("claude", "message", "hi")
+    async def run_turn(self, prompt, workdir, emit):
+        await emit(provider_session_event("claude", "claude", "sess-xyz", "session"))
+        await emit(Event.create("claude", "message", "hi"))
+        return TurnOutcome("completed")
 
 
 class ProviderSessionCaptureTests(unittest.TestCase):

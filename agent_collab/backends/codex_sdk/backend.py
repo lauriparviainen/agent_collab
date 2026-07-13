@@ -27,7 +27,8 @@ from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Mapping, 
 
 from ...config import AgentConfig
 from ...events import Event, compact_json
-from ...runners import AgentRunner
+from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
+from ...runners import AgentRunner, AsyncEventSink
 from ..base import (
     BackendCapabilities,
     BackendHealth,
@@ -149,34 +150,56 @@ class CodexSdkRunner(AgentRunner):
         self.options = options
         self._item_stream = item_stream
 
-    async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
+    async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         if self.verbose:
-            yield Event.create("codex", "status", f"codex sdk starting in {workdir}")
+            await emit(Event.create("codex", "status", f"codex sdk starting in {workdir}"))
 
         stream: Optional[AsyncIterator[CodexTurnOutcome]] = None
         thread_id: Optional[str] = None
+        evidence = TerminalEvidenceAccumulator()
+        exception_code: Optional[str] = None
+        clean_close = True
         try:
             stream = self._item_stream(self.agent, self.options, workdir, prompt)
             async for outcome in stream:
                 if outcome.thread_id and outcome.thread_id != thread_id:
                     thread_id = outcome.thread_id
-                    yield provider_session_event("codex", self.name, thread_id, "thread")
+                    await emit(provider_session_event("codex", self.name, thread_id, "thread"))
+                status = _enum_value(getattr(outcome.result, "status", None))
+                if status == "completed":
+                    evidence.add(TerminalEvidence("completed"))
+                elif status == "interrupted":
+                    evidence.add(
+                        TerminalEvidence(
+                            "cancelled",
+                            "provider_turn_cancelled",
+                            provider_stop_reason="interrupted",
+                        )
+                    )
+                elif status == "failed":
+                    evidence.add(TerminalEvidence("failed", "provider_terminal_failure"))
+                else:
+                    exception_code = "provider_output_invalid"
                 for event in iter_codex_turn_events(outcome.result, self.verbose):
-                    yield event
+                    await emit(event)
         except BackendUnavailable as exc:
-            yield backend_unavailable_event(exc)
-            return
+            await emit(backend_unavailable_event(exc))
+            exception_code = "provider_transport_failed"
         except Exception as exc:  # startup, auth, and turn errors reach the transcript
-            yield sdk_error_event("codex", exc)
-            return
+            await emit(sdk_error_event("codex", exc))
+            exception_code = "provider_transport_failed"
         finally:
             # Explicitly close an injected/production async generator if the
             # consumer cancels before exhausting the transcript.  This unwinds
             # the production AsyncCodex context promptly.
-            await close_async_stream(stream)
+            clean_close = await close_async_stream(stream)
+
+        if not clean_close and exception_code is None:
+            exception_code = "provider_transport_failed"
 
         if self.verbose:
-            yield Event.create("codex", "status", "codex sdk turn complete")
+            await emit(Event.create("codex", "status", "codex sdk turn complete"))
+        return evidence.resolve(exception_code=exception_code)
 
 
 def iter_codex_turn_events(result: Any, verbose: bool) -> Iterator[Event]:
@@ -215,13 +238,13 @@ def iter_codex_turn_events(result: Any, verbose: bool) -> Iterator[Event]:
         details = stringify(getattr(error, "additional_details", None))
         if details:
             raw["additional_details"] = details
-        yield Event.create("error", "error", text, raw)
+        yield Event.create("error", "error", text, {**raw, "fatal": True})
     elif status == "failed":
         yield Event.create(
             "error",
             "error",
             "codex sdk turn failed",
-            {"turn_id": turn_id or None, "status": status},
+            {"turn_id": turn_id or None, "status": status, "fatal": True},
         )
 
 

@@ -19,6 +19,7 @@ from .config import (
     resolve_existing_workdir,
 )
 from .events import Event, compact_json, utc_timestamp
+from .outcomes import CANONICAL_MESSAGES, SessionFailure, TurnOutcomeRecord
 from .options import (
     build_session_settings,
     describe_options,
@@ -26,7 +27,14 @@ from .options import (
     validate_start_backends,
 )
 from .paths import GlobalDataPaths
-from .referee import EventAppender, Referee, RefereeConfig, RefereeInput
+from .referee import (
+    EventAppender,
+    Referee,
+    RefereeConfig,
+    RefereeInput,
+    RefereeStopSignal,
+    RequiredTurnFailed,
+)
 from .retention import (
     DONE,
     FAILED,
@@ -44,6 +52,7 @@ from .session_index import SessionIndex
 
 MAX_FULL_TOOL_BYTES = 64 * 1024
 MAX_FULL_TRANSCRIPT_BYTES = 1024 * 1024
+CANONICAL_SAFE_ERRORS = frozenset(CANONICAL_MESSAGES.values())
 
 
 class SessionNotFoundError(KeyError):
@@ -130,6 +139,10 @@ class SessionState:
     interactive_idle_timeout: float = 600.0
     ended_at: Optional[str] = None
     error: Optional[str] = None
+    failure: Optional[Dict[str, Any]] = None
+    # None means a legacy record had no outcome instrumentation; every new
+    # session starts with a packed append-only list.
+    turn_outcomes: Optional[List[Dict[str, Any]]] = None
     settings: Optional[Dict[str, Any]] = None
     # Honest session-level capability summary derived from the backends actually
     # in use (all false this stage); persisted so it survives daemon restart.
@@ -149,6 +162,11 @@ class SessionState:
 class EventBatch:
     session_id: str
     cursor: int
+    status: str
+    terminal: bool
+    error: Optional[str]
+    failure: Optional[Dict[str, Any]]
+    turn_outcomes: Optional[List[Dict[str, Any]]]
     events: List[Dict[str, Any]]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -213,6 +231,8 @@ class _ManagedSession:
     post_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     turn_active: bool = False
     task: Optional[asyncio.Task] = None
+    referee: Optional[Referee] = None
+    stop_signal: RefereeStopSignal = field(default_factory=RefereeStopSignal)
     # True while a coalesced watcher notification is scheduled but not yet
     # delivered; _schedule_notify skips scheduling another one meanwhile.
     notify_pending: bool = False
@@ -243,7 +263,7 @@ class SessionManager:
         self._notify_tasks: Set[asyncio.Task] = set()
         # Manual and scheduled pruning serialize through this one lock so
         # runs never overlap or interleave their unlink/index phases.
-        self._prune_lock = asyncio.Lock()
+        self._prune_lock: Optional[asyncio.Lock] = None
         self._lifecycle_logger = lifecycle_logger
         self.default_workdir = Path(default_workdir).expanduser().resolve()
         self.default_log_dir = (
@@ -261,8 +281,11 @@ class SessionManager:
                 continue
             if state.status not in TERMINAL_STATUSES:
                 now = utc_timestamp()
-                state.status = INTERRUPTED
-                state.error = "daemon restarted while session was running"
+                self._transition_state(state, INTERRUPTED)
+                # The lost in-memory turn cannot be classified truthfully, so
+                # retain the legacy unknown outcome/failure shape without
+                # inventing a free-form error alongside the interrupted state.
+                state.error = None
                 state.updated_at = now
                 state.ended_at = now
                 self._persist(state)
@@ -280,6 +303,20 @@ class SessionManager:
         data = {key: value for key, value in record.items() if key in known}
         if not data.get("session_id") or not data.get("status"):
             return None
+        if "failure" in data and data["failure"] is not None:
+            try:
+                data["failure"] = SessionFailure.from_dict(data["failure"]).to_dict()
+            except (AttributeError, TypeError, ValueError):
+                data["failure"] = None
+        if "turn_outcomes" in data and data["turn_outcomes"] is not None:
+            sanitized = []
+            if isinstance(data["turn_outcomes"], list):
+                for item in data["turn_outcomes"]:
+                    try:
+                        sanitized.append(TurnOutcomeRecord.from_dict(item).to_dict())
+                    except (AttributeError, TypeError, ValueError):
+                        continue
+            data["turn_outcomes"] = sanitized
         try:
             return SessionState(**data)
         except TypeError:
@@ -326,6 +363,7 @@ class SessionManager:
             interactive_idle_timeout=float(request.interactive_idle_timeout),
             settings=prepared.settings,
             capabilities=prepared.capabilities,
+            turn_outcomes=[],
         )
         managed = _ManagedSession(
             request=request,
@@ -449,11 +487,16 @@ class SessionManager:
         if managed.state.status in TERMINAL_STATUSES:
             return self._copy_state(managed.state)
 
-        await self._set_status(managed, STOPPED)
         if task is not None and not task.done():
+            managed.stop_signal.request()
+            if managed.referee is not None:
+                managed.referee.request_stop()
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+            await self._set_status(managed, STOPPED)
+        else:
+            await self._set_status(managed, STOPPED)
         return self._copy_state(managed.state)
 
     async def prune_sessions(
@@ -475,6 +518,8 @@ class SessionManager:
         individual sessions; they are reported in the result.
         """
 
+        if self._prune_lock is None:
+            self._prune_lock = asyncio.Lock()
         async with self._prune_lock:
             current_time = now or datetime.now(timezone.utc)
             cutoff = current_time - retention
@@ -642,7 +687,12 @@ class SessionManager:
             managed.state.updated_at = event.timestamp
             self._persist(managed.state)
             await managed.input_queue.put(RefereeInput(event=event, target=resolved_target))
-            return EventBatch(session_id=session_id, cursor=cursor, events=[event.to_dict()])
+            return EventBatch(
+                session_id=session_id,
+                cursor=cursor,
+                events=[event.to_dict()],
+                **_outcome_view(managed.state),
+            )
 
     def list_sessions(self) -> List[SessionState]:
         return [self._copy_state(managed.state) for managed in self._sessions.values()]
@@ -662,10 +712,13 @@ class SessionManager:
         if managed.request is None and not managed.events:
             managed.events = _load_events_from_jsonl(Path(managed.state.jsonl_path))
         events = managed.events[:]
+        outcome_view = _outcome_view(managed.state)
         cursor = min(self._normalize_cursor(cursor), len(events))
         limit = self._normalize_limit(limit)
         tool_output = self._normalize_tool_output(tool_output)
-        return _event_batch_from_snapshot(session_id, events, cursor, limit, tool_output)
+        return _event_batch_from_snapshot(
+            session_id, events, cursor, limit, tool_output, outcome_view
+        )
 
     async def read_events_async(
         self,
@@ -681,6 +734,7 @@ class SessionManager:
         # snapshot crosses into the worker used for potentially expensive event
         # projection/deep-copying; recorded event dicts are append-only.
         events = managed.events[:]
+        outcome_view = _outcome_view(managed.state)
         cursor = min(self._normalize_cursor(cursor), len(events))
         limit = self._normalize_limit(limit)
         tool_output = self._normalize_tool_output(tool_output)
@@ -691,6 +745,7 @@ class SessionManager:
             cursor,
             limit,
             tool_output,
+            outcome_view,
         )
 
     async def _load_restored_events(self, managed: _ManagedSession) -> None:
@@ -801,35 +856,67 @@ class SessionManager:
             status_callback=lambda status: self._set_status(managed, status),
             event_appender_callback=lambda appender: self._set_event_appender(managed, appender),
             turn_active_callback=lambda active: self._set_turn_active(managed, active),
+            outcome_commit_callback=lambda record, event: self._record_turn_outcome(
+                managed, record, event
+            ),
+            stop_signal=managed.stop_signal,
         )
 
         try:
-            result = await Referee(
-                config, printer=lambda event: self._record_event(managed, event)
-            ).run(request.task)
+            referee = Referee(config, printer=lambda event: self._record_event(managed, event))
+            managed.referee = referee
+            result = await referee.run(request.task)
             state.jsonl_path = result.get("jsonl_path", state.jsonl_path)
             state.markdown_path = result.get("markdown_path", state.markdown_path)
             self._persist(state)
-            if state.status in LIVE_WAIT_STATUSES:
+            if state.status in LIVE_WAIT_STATUSES and not managed.stop_signal.is_set():
                 await self._set_status(managed, DONE)
         except asyncio.CancelledError:
-            await self._set_status(managed, STOPPED)
+            # Explicit stop has one publisher: stop_session, after this task
+            # settles. A cancellation without that registered cause is a
+            # canonical daemon failure.
+            if not managed.stop_signal.is_set():
+                failure = SessionFailure(code="referee_cancelled_unexpected")
+                await self._set_status(managed, FAILED, failure=failure)
+        except RequiredTurnFailed as exc:
+            await self._set_status(managed, FAILED, failure=exc.failure)
         except Exception as exc:
             self._record_event(
                 managed,
                 Event.create(
                     "error",
                     "error",
-                    str(exc),
-                    {"error": str(exc), "exception": exc.__class__.__name__},
+                    "Unexpected session failure",
+                    {"exception": exc.__class__.__name__},
                 ),
             )
-            if state.status != STOPPED:
-                await self._set_status(managed, FAILED, error=str(exc))
+            failure = SessionFailure(code="provider_transport_failed")
+            await self._set_status(managed, FAILED, failure=failure)
+        finally:
+            managed.referee = None
 
     def _record_event(self, managed: _ManagedSession, event: Event) -> None:
         managed.events.append(event.to_dict())
         self._maybe_capture_provider_session(managed, event)
+        self._schedule_notify(managed)
+
+    async def _record_turn_outcome(
+        self,
+        managed: _ManagedSession,
+        record: TurnOutcomeRecord,
+        boundary_event: Event,
+    ) -> None:
+        outcomes = list(managed.state.turn_outcomes or [])
+        if any(item.get("turn_id") == record.turn_id for item in outcomes):
+            raise RuntimeError(f"duplicate turn outcome {record.turn_id}")
+        outcomes.append(record.to_dict())
+        managed.state.turn_outcomes = outcomes
+        managed.state.updated_at = boundary_event.timestamp
+        # Outcome state and its boundary cursor entry are mutated together on
+        # the event-loop thread before the single watcher notification.
+        managed.events.append(boundary_event.to_dict())
+        self._maybe_capture_provider_session(managed, boundary_event)
+        self._persist(managed.state)
         self._schedule_notify(managed)
 
     def _maybe_capture_provider_session(self, managed: _ManagedSession, event: Event) -> None:
@@ -888,16 +975,42 @@ class SessionManager:
         async with managed.condition:
             managed.condition.notify_all()
 
+    @staticmethod
+    def _transition_state(state: SessionState, status: str) -> bool:
+        current = state.status
+        current_terminal = current in TERMINAL_STATUSES
+        requested_terminal = status in TERMINAL_STATUSES
+        if current_terminal:
+            return current == status
+        if current not in LIVE_WAIT_STATUSES:
+            return False
+        if status not in LIVE_WAIT_STATUSES and not requested_terminal:
+            return False
+        state.status = status
+        return True
+
     async def _set_status(
-        self, managed: _ManagedSession, status: str, error: Optional[str] = None
-    ) -> None:
+        self,
+        managed: _ManagedSession,
+        status: str,
+        error: Optional[str] = None,
+        failure: Optional[SessionFailure] = None,
+    ) -> bool:
+        if managed.state.status in TERMINAL_STATUSES:
+            return managed.state.status == status
+        if not self._transition_state(managed.state, status):
+            return False
         now = utc_timestamp()
-        managed.state.status = status
         managed.state.updated_at = now
         if status in TERMINAL_STATUSES:
             managed.state.ended_at = now
-        if error is not None:
-            managed.state.error = error
+        if failure is not None:
+            managed.state.failure = failure.to_dict()
+            managed.state.error = failure.message
+        elif error is not None:
+            # Callers retaining this compatibility path must still select a
+            # canonical safe message.
+            managed.state.error = error if error in CANONICAL_SAFE_ERRORS else None
         self._persist(managed.state)
         async with managed.condition:
             managed.condition.notify_all()
@@ -907,6 +1020,7 @@ class SessionManager:
                 f"session {managed.state.session_id} {status} events={len(managed.events)} "
                 f"logs={managed.state.jsonl_path}{suffix}"
             )
+        return True
 
     def _schedule_notify(self, managed: _ManagedSession) -> None:
         """Wake watchers once for any burst of events recorded before it runs.
@@ -1139,13 +1253,24 @@ def _event_batch_from_snapshot(
     cursor: int,
     limit: Optional[int],
     tool_output: str,
+    outcome_view: Dict[str, Any],
 ) -> EventBatch:
     end = len(events) if limit is None else min(len(events), cursor + limit)
     projected = [
         _project_event(event, event_id, tool_output)
         for event_id, event in enumerate(events[cursor:end], start=cursor)
     ]
-    return EventBatch(session_id=session_id, cursor=end, events=projected)
+    return EventBatch(session_id=session_id, cursor=end, events=projected, **outcome_view)
+
+
+def _outcome_view(state: SessionState) -> Dict[str, Any]:
+    return {
+        "status": state.status,
+        "terminal": state.status in TERMINAL_STATUSES,
+        "error": state.error,
+        "failure": copy.deepcopy(state.failure),
+        "turn_outcomes": copy.deepcopy(state.turn_outcomes),
+    }
 
 
 def _read_full_transcript(path: Path) -> str:

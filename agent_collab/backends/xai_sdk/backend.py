@@ -19,7 +19,8 @@ from ...backend_contract import (
 )
 from ...config import AgentConfig
 from ...events import Event
-from ...runners import AgentRunner
+from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
+from ...runners import AgentRunner, AsyncEventSink
 from ..base import BackendCapabilities, BackendHealth, BackendUnavailable
 from ..common.health import probe_sdk_backend, xai_api_key_credentials
 from ..common.options import canonical_reasoning
@@ -123,34 +124,79 @@ class XaiSdkRunner(AgentRunner):
         self.options = options
         self._turn_stream = turn_stream
 
-    async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
+    async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         if self.verbose:
-            yield Event.create("xai", "status", f"xai sdk starting in {workdir}")
+            await emit(Event.create("xai", "status", f"xai sdk starting in {workdir}"))
         stream: Optional[AsyncIterator[Any]] = None
+        evidence = TerminalEvidenceAccumulator()
+        exception_code: Optional[str] = None
+        clean_close = True
         try:
             stream = self._turn_stream(self.agent, self.options, workdir, prompt)
             async for response in stream:
+                content = stringify(getattr(response, "content", None))
+                finish_reason = _finish_reason(response)
+                tool_calls = getattr(response, "tool_calls", None)
+                if tool_calls:
+                    evidence.add(TerminalEvidence("failed", "provider_output_invalid"))
+                elif finish_reason == "STOP":
+                    evidence.add(
+                        TerminalEvidence(
+                            "completed" if content else "failed",
+                            None if content else "provider_empty_response",
+                            provider_stop_reason="STOP",
+                        )
+                    )
+                elif finish_reason in {"MAX_TOKENS", "LENGTH"}:
+                    evidence.add(
+                        TerminalEvidence(
+                            "failed",
+                            "provider_output_incomplete",
+                            provider_stop_reason=finish_reason,
+                        )
+                    )
+                elif finish_reason is None:
+                    exception_code = "provider_output_incomplete"
+                else:
+                    evidence.add(
+                        TerminalEvidence(
+                            "failed",
+                            "provider_terminal_failure",
+                            provider_stop_reason=finish_reason,
+                        )
+                    )
                 for event in iter_xai_response_events(response):
-                    yield event
+                    await emit(event)
                 response_id = stringify(getattr(response, "id", None))
                 if response_id:
-                    yield provider_session_event("xai", self.name, response_id, "response")
+                    await emit(provider_session_event("xai", self.name, response_id, "response"))
         except BackendUnavailable as exc:
-            yield backend_unavailable_event(exc)
-            return
+            await emit(backend_unavailable_event(exc))
+            exception_code = "provider_transport_failed"
         except Exception as exc:
-            yield sdk_error_event("xai", exc)
-            return
+            await emit(sdk_error_event("xai", exc))
+            exception_code = "provider_transport_failed"
         finally:
-            await close_async_stream(stream)
+            clean_close = await close_async_stream(stream)
+        if not clean_close and exception_code is None:
+            exception_code = "provider_transport_failed"
         if self.verbose:
-            yield Event.create("xai", "status", "xai sdk turn complete")
+            await emit(Event.create("xai", "status", "xai sdk turn complete"))
+        return evidence.resolve(exception_code=exception_code)
 
 
 def iter_xai_response_events(response: Any) -> Iterator[Event]:
     content = stringify(getattr(response, "content", None))
     if content:
         yield Event.create("xai", "message", content, {"text": content})
+
+
+def _finish_reason(response: Any) -> Optional[str]:
+    value = getattr(response, "finish_reason", None)
+    raw = getattr(value, "value", value)
+    if not isinstance(raw, str):
+        raw = getattr(value, "name", None)
+    return raw if isinstance(raw, str) and raw else None
 
 
 async def _default_turn_stream(

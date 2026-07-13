@@ -299,6 +299,11 @@ also means no restriction.
   agents run and in what order.
 - **Visible execution.** Messages, tool calls, commands, status, and errors are
   normalized into one event stream.
+- **Explicit turn results.** Every new backend invocation records one
+  `completed`, `cancelled`, `interrupted`, `timed_out`, `refused`, or `failed`
+  outcome. Session detail and event polling expose the packed turn history and
+  a canonical structured failure; clients never need to infer success from
+  provider prose or process exit.
 - **Evidence after the terminal closes.** Every session writes JSONL and
   Markdown transcripts. Finished sessions are kept for 30 days by default;
   set `[sessions] retention_days` in the user config to keep them longer, or

@@ -30,6 +30,13 @@ model = "Gemini 3.1 Pro (High)"
 
 Typed text becomes messages; tool calls/results become tool, command, file-change, status, or error events. Thought signatures are never emitted. `Agent.conversation_id` is captured as identity kind `conversation`, but resume is not implemented.
 
+## Turn outcome
+
+A resolved response with a non-empty text result completes. Empty resolved
+buffers, resolve/transport exceptions, or uncertain bounded response close
+fail conservatively. Tool-result prose is never interpreted as cancellation or
+refusal.
+
 ## Capabilities and security
 
 `resume`, `interrupt`, and `tool_gate` are false. `LocalAgentConfig(workspaces=[...])` receives only the resolved workspace.

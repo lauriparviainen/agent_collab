@@ -14,6 +14,13 @@ Select with `backend="sdk"`. Python and the `claude-agent-sdk` wheel are require
 
 Typed text/tool/result blocks map to normalized events. Thinking signatures are never emitted. `ResultMessage.session_id` is captured as provider identity kind `session`, but resume is not implemented.
 
+## Turn outcome
+
+A terminal non-error `ResultMessage` is required for completion. An error
+result, SDK/transport exception, missing result, or uncertain close fails. SDK
+stream close is bounded; an over-grace close transfers to a background reaper
+without delaying timeout/interruption recording.
+
 ## Capabilities and security
 
 `resume`, `interrupt`, and `tool_gate` are false. The disposable/session workdir is passed as SDK cwd. Missing wheels fail availability probing; runtime/auth errors become transcript error events.

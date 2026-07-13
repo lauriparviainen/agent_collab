@@ -144,7 +144,27 @@ def _run(messages, *, verbose=False, options=None, error=None):
     )
 
     async def collect():
-        return [event async for event in runner.run("do a thing", Path("."))]
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        await runner.run_turn("do a thing", Path("."), emit)
+        return events
+
+    return asyncio.run(collect())
+
+
+def _outcome(messages, *, error=None):
+    runner = ClaudeSdkRunner(
+        AGENT, False, {}, message_stream=_stream_factory(messages, error=error)
+    )
+
+    async def collect():
+        async def emit(_event):
+            return None
+
+        return await runner.run_turn("do a thing", Path("."), emit)
 
     return asyncio.run(collect())
 
@@ -167,6 +187,16 @@ def _result(**overrides):
 
 
 class ClaudeEventMappingTests(unittest.TestCase):
+    def test_terminal_result_controls_outcome(self):
+        self.assertEqual(_outcome([_result()]).outcome, "completed")
+        failed = _outcome([_result(is_error=True, subtype="error_during_execution")])
+        self.assertEqual((failed.outcome, failed.code), ("failed", "provider_terminal_failure"))
+        incomplete = _outcome([_assistant([TextBlock("partial")])])
+        self.assertEqual(incomplete.code, "provider_output_incomplete")
+        transport = _outcome([], error=RuntimeError("Bearer secret /home/private"))
+        self.assertEqual(transport.code, "provider_transport_failed")
+        self.assertNotIn("secret", str(transport.to_dict()))
+
     def test_message_and_typed_tool_uses_map_to_standard_events(self):
         message = _assistant(
             [
@@ -345,7 +375,13 @@ class ClaudeSessionCaptureTests(unittest.TestCase):
             )
 
             async def collect():
-                return [event async for event in runner.run("cancel me", Path("."))]
+                events = []
+
+                async def emit(event):
+                    events.append(event)
+
+                await runner.run_turn("cancel me", Path("."), emit)
+                return events
 
             consumer = asyncio.create_task(collect())
             await asyncio.wait_for(entered.wait(), timeout=1.0)

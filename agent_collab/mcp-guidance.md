@@ -127,8 +127,11 @@ Read events incrementally with a cursor:
    immediately poll again merely because the long-poll returned early. Use a
    tighter cadence only when the user requests it or an actionable event needs
    an immediate follow-up,
-4. stop when `agent_collab_status` reports a terminal status and no new
-   events arrive. `awaiting_input` is live, not terminal.
+4. inspect `status`, `terminal`, `error`, `failure`, and `turn_outcomes` on
+   every read/wait response, including responses with `events: []`; stop when
+   `terminal` is true. `awaiting_input` is live, not terminal. An older daemon
+   may omit this additive view; only then use `agent_collab_status` as the
+   compatibility fallback.
 
 Never make one unbounded blocking call. Always pass the cursor from the
 previous response, not a guess. Tool events default to compact summaries that
@@ -151,3 +154,11 @@ remediate deliberately rather than automatically oscillating between backends.
 If a workflow or agent is unknown, call `agent_collab_describe_options` for
 the same `workdir` and choose from what it lists. Unknown `session_id`
 errors usually mean the id was mistyped or belongs to a different daemon.
+
+For a started session, treat `turn_outcomes` as the authoritative per-turn
+history and key entries by `turn_id`, never by array position. A required
+sequential or directed turn continues the workflow only when its outcome is
+`completed`. Use the structured `failure.code` and canonical `failure.message`
+for remediation. Provider identity, partial transcript prose, raw terminal
+payloads, an exit-zero status, and the absence of a Python exception do not
+prove success. Do not infer `refused` from model prose.

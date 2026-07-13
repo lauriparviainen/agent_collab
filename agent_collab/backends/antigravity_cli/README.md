@@ -14,6 +14,14 @@ Select with `backend="cli"`; `agy` must be on PATH. The health probe checks the 
 
 Every non-empty stdout line becomes `antigravity/message`. Tool structure and provider conversation identity cannot be recovered from print mode.
 
+## Turn outcome
+
+This message-only transport has the one provisional clean-EOF fallback: exit
+zero plus at least one non-empty stdout message completes; empty output,
+nonzero exit, or output/transport failure fails. No prose is classified as a
+provider cancellation or refusal. A stronger marker contract remains pending
+provider evidence.
+
 ## Capabilities and security
 
 `resume`, `interrupt`, and `tool_gate` are false. Execution is confined to the resolved cwd/add-dir configuration.

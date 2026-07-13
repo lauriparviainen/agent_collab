@@ -12,7 +12,14 @@ Select with `backend="cli"`; the configured agent needs a `claude` command. Auth
 
 ## Events and identity
 
-Text becomes `claude/message`; tool blocks become `tool/tool_call`, `command`, or `file_change`; errors become `error/error`. Thinking is emitted only as verbose status and signatures are never emitted. CLI output does not currently provide resumable identity.
+Text becomes `claude/message`; tool blocks become `tool/tool_call`, `command`, or `file_change`; errors become `error/error`. Thinking is emitted only as verbose status and signatures are never emitted. A result/system `session_id` is captured as provider identity kind `session`, but resume is not implemented.
+
+## Turn outcome
+
+The stream must end with a `result` marker. `subtype=success` with
+`is_error=false` plus clean process teardown completes the turn; an error
+result, malformed/unfinished stream, transport failure, or nonzero exit fails
+it. Partial text and exit zero do not replace the marker.
 
 ## Capabilities and security
 

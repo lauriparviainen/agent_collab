@@ -139,6 +139,8 @@ class SessionStateModel:
     interactive_idle_timeout: float = 600.0
     ended_at: Optional[str] = None
     error: Optional[str] = None
+    failure: Optional[Dict[str, Any]] = None
+    turn_outcomes: Optional[List[Dict[str, Any]]] = None
     settings: Optional[Dict[str, Any]] = None
     capabilities: Optional[Dict[str, bool]] = None
     # Per-agent provider session identity (backend + provider_session_id +
@@ -165,6 +167,8 @@ class SessionStateModel:
             interactive_idle_timeout=_number(data, "interactive_idle_timeout", 600.0),
             ended_at=data.get("ended_at"),
             error=data.get("error"),
+            failure=data.get("failure"),
+            turn_outcomes=data.get("turn_outcomes"),
             settings=data.get("settings"),
             capabilities=data.get("capabilities"),
             agent_sessions=data.get("agent_sessions"),
@@ -191,6 +195,8 @@ class SessionStateModel:
             "interactive_idle_timeout": self.interactive_idle_timeout,
             "ended_at": self.ended_at,
             "error": self.error,
+            "failure": self.failure,
+            "turn_outcomes": self.turn_outcomes,
             "settings": self.settings,
             "capabilities": self.capabilities,
             "agent_sessions": self.agent_sessions,
@@ -249,6 +255,11 @@ class EventBatchModel:
 
     session_id: str
     cursor: int
+    status: Optional[str] = None
+    terminal: Optional[bool] = None
+    error: Optional[str] = None
+    failure: Optional[Dict[str, Any]] = None
+    turn_outcomes: Optional[List[Dict[str, Any]]] = None
     events: List[EventModel] = field(default_factory=list)
 
     @classmethod
@@ -256,15 +267,31 @@ class EventBatchModel:
         return cls(
             session_id=str(data["session_id"]),
             cursor=int(data["cursor"]),
+            status=str(data["status"]) if "status" in data else None,
+            terminal=bool(data["terminal"]) if "terminal" in data else None,
+            error=data.get("error"),
+            failure=data.get("failure"),
+            turn_outcomes=data.get("turn_outcomes"),
             events=[EventModel.from_dict(item) for item in data.get("events", [])],
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out = {
             "session_id": self.session_id,
             "cursor": self.cursor,
             "events": [item.to_dict() for item in self.events],
         }
+        if self.status is not None:
+            out.update(
+                {
+                    "status": self.status,
+                    "terminal": bool(self.terminal),
+                    "error": self.error,
+                    "failure": self.failure,
+                    "turn_outcomes": self.turn_outcomes,
+                }
+            )
+        return out
 
 
 @dataclass

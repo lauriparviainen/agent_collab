@@ -150,6 +150,7 @@ def create_cli_runner(
         cwd=agent.cwd,
         command_builder=command_builder,
         source=backend.agent_type,
+        clean_eof_fallback=bool(getattr(backend, "clean_eof_fallback", False)),
     )
 
 

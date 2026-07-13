@@ -30,13 +30,23 @@ def _env(home: Path):
 
 
 async def _collect(runner, prompt="do a thing"):
-    return [event async for event in runner.run(prompt, Path("."))]
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    await runner.run_turn(prompt, Path("."), emit)
+    return events
 
 
 async def _first_event(runner, prompt="do a thing", workdir=Path(".")):
-    async for event in runner.run(prompt, workdir):
-        return event
-    return None
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    await runner.run_turn(prompt, workdir, emit)
+    return events[0] if events else None
 
 
 class AntigravityParserTests(unittest.TestCase):

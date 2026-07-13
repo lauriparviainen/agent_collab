@@ -13,6 +13,7 @@ from agent_collab.daemon import (
     _ManagedSession,
 )
 from agent_collab.events import Event
+from agent_collab.outcomes import TurnOutcome
 from agent_collab.options import StartOptionsError
 from agent_collab.paths import GlobalDataPaths
 from agent_collab.referee import Referee
@@ -63,6 +64,10 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 final = await self._wait_for_terminal(manager, state.session_id)
 
             self.assertEqual(final.status, "done")
+            self.assertEqual(len(final.turn_outcomes), 1)
+            self.assertEqual(final.turn_outcomes[0]["turn_id"], "turn-1")
+            self.assertEqual(final.turn_outcomes[0]["outcome"], "completed")
+            self.assertIsNone(final.failure)
             global_sessions = GlobalDataPaths.resolve(
                 env={"AGENT_COLLAB_HOME": str(root / "home")}
             ).session_dir
@@ -75,6 +80,10 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(batch.cursor, 0)
             self.assertEqual(batch.events[0]["source"], "human")
             self.assertIn("daemon mock task", batch.events[0]["text"])
+            self.assertEqual(batch.status, "done")
+            self.assertTrue(batch.terminal)
+            self.assertIsNone(batch.error)
+            self.assertEqual(batch.turn_outcomes, final.turn_outcomes)
 
             self.assertEqual(state.workflow, "cross-review")
             self.assertEqual(state.settings["workflow"]["name"], "cross-review")
@@ -85,6 +94,161 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             for agent in state.settings["agents"].values():
                 for part in agent.get("command_preview", []):
                     self.assertNotIn("daemon mock task", part)
+
+    async def test_terminal_wait_returns_state_with_unchanged_cursor_and_no_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(task="poll snapshot", mock=True, max_turns=1, workdir=root)
+                )
+                await self._wait_for_terminal(manager, state.session_id)
+                consumed = await manager.read_events_async(state.session_id, 0)
+                terminal = await manager.wait_events(
+                    state.session_id, consumed.cursor, timeout_ms=50
+                )
+
+        self.assertEqual(terminal.cursor, consumed.cursor)
+        self.assertEqual(terminal.events, [])
+        self.assertEqual(terminal.status, "done")
+        self.assertTrue(terminal.terminal)
+        self.assertEqual(terminal.turn_outcomes, consumed.turn_outcomes)
+
+    async def test_required_failure_is_structured_and_preserves_earlier_outcome(self):
+        class SequenceRunner:
+            def __init__(self, name, outcome):
+                self.name = name
+                self.outcome = outcome
+
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create(self.name, "message", f"{self.name} output"))
+                return self.outcome
+
+        runners = {
+            "claude": SequenceRunner("claude", TurnOutcome("completed")),
+            "codex": SequenceRunner("codex", TurnOutcome("failed", "provider_terminal_failure")),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="later failure",
+                            workflow="compare",
+                            max_turns=2,
+                            timeout=5,
+                            workdir=root,
+                        )
+                    )
+                    final = await self._wait_for_terminal(manager, state.session_id)
+
+        self.assertEqual(final.status, "failed")
+        self.assertEqual([item["outcome"] for item in final.turn_outcomes], ["completed", "failed"])
+        self.assertEqual(final.failure["turn_id"], "turn-2")
+        self.assertEqual(final.failure["backend"], "codex_cli")
+        self.assertEqual(final.failure["code"], "provider_terminal_failure")
+        self.assertEqual(final.error, "The provider reported a terminal failure")
+
+    async def test_stop_records_active_interruption_before_stopped(self):
+        started = asyncio.Event()
+        cleaned = asyncio.Event()
+
+        class BlockingRunner:
+            name = "claude"
+
+            async def run_turn(self, prompt, workdir, emit):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cleaned.set()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(
+                    Referee, "_runners", return_value={"claude": BlockingRunner()}
+                ):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="stop active",
+                            workflow="solo-claude",
+                            max_turns=1,
+                            timeout=30,
+                            workdir=root,
+                        )
+                    )
+                    await started.wait()
+                    stopped = await manager.stop_session(state.session_id)
+
+        self.assertTrue(cleaned.is_set())
+        self.assertEqual(stopped.status, "stopped")
+        self.assertEqual(len(stopped.turn_outcomes), 1)
+        self.assertEqual(stopped.turn_outcomes[0]["outcome"], "interrupted")
+        batch = manager.read_events(stopped.session_id, 0)
+        boundary_index = next(
+            index
+            for index, event in enumerate(batch.events)
+            if (event.get("raw") or {}).get("turn_outcome")
+        )
+        self.assertGreaterEqual(boundary_index, 0)
+
+    async def test_terminal_compare_and_set_rejects_overwrite_and_live_transition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = SessionManager()
+            now = "2026-07-13T00:00:00+00:00"
+            state = manager._state_from_record(
+                {
+                    "session_id": "terminal-cas",
+                    "status": "failed",
+                    "task": "",
+                    "workflow": "",
+                    "workdir": tmp,
+                    "jsonl_path": str(Path(tmp) / "x.jsonl"),
+                    "markdown_path": str(Path(tmp) / "x.md"),
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+            managed = _ManagedSession(
+                request=None,
+                state=state,
+                events=[],
+                condition=asyncio.Condition(),
+            )
+            self.assertFalse(await manager._set_status(managed, "done"))
+            self.assertFalse(await manager._set_status(managed, "running"))
+            self.assertTrue(await manager._set_status(managed, "failed"))
+            self.assertEqual(managed.state.status, "failed")
+
+    async def test_restart_marks_live_legacy_session_interrupted_without_outcome(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            index_path = Path(tmp) / "session-index.json"
+            now = "2026-07-13T00:00:00+00:00"
+            SessionIndex(index_path).upsert(
+                {
+                    "session_id": "legacy-live",
+                    "status": "running",
+                    "task": "legacy",
+                    "workflow": "solo-claude",
+                    "workdir": tmp,
+                    "jsonl_path": str(Path(tmp) / "legacy.jsonl"),
+                    "markdown_path": str(Path(tmp) / "legacy.md"),
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+            manager = SessionManager(index_path=index_path)
+            restored = manager.get_session("legacy-live")
+
+        self.assertEqual(restored.status, "interrupted")
+        self.assertIsNone(restored.error)
+        self.assertIsNone(restored.failure)
+        self.assertIsNone(restored.turn_outcomes)
 
     async def test_start_rejects_missing_and_non_directory_workdirs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -355,15 +519,22 @@ sequence = ["antigravity"]
                 batch = await manager.post_message(
                     state.session_id, "what do you think?", target="codex"
                 )
-                directed = await manager.wait_events(
-                    state.session_id, batch.cursor, timeout_ms=1000
-                )
+                directed_events = []
+                cursor = batch.cursor
+                for _ in range(5):
+                    directed = await manager.wait_events(state.session_id, cursor, timeout_ms=1000)
+                    directed_events.extend(directed.events)
+                    cursor = directed.cursor
+                    if any(
+                        (event.get("raw") or {}).get("turn_outcome") for event in directed_events
+                    ):
+                        break
                 await manager.stop_session(state.session_id)
 
             self.assertGreaterEqual(batch.cursor, before + 1)
             self.assertEqual(batch.events[0]["raw"]["target"], "codex")
             self.assertEqual(batch.events[0]["raw"]["resolved_target"], "codex")
-            texts = [event["text"] for event in directed.events]
+            texts = [event["text"] for event in directed_events]
             self.assertIn("directed turn: codex", texts)
             self.assertEqual(texts.count("directed turn: codex"), 1)
             self.assertEqual(sum("mock codex received prompt" in text for text in texts), 1)
@@ -382,15 +553,16 @@ sequence = ["antigravity"]
                     self.name = name
                     self.pause = pause
 
-                async def run(self, prompt, workdir):
+                async def run_turn(self, prompt, workdir, emit):
                     prompts.append((self.name, prompt))
                     if self.pause:
                         first_turn_started.set()
-                        yield Event.create(self.name, "status", f"{self.name} started")
+                        await emit(Event.create(self.name, "status", f"{self.name} started"))
                         await release_first_turn.wait()
                     else:
                         second_turn_started.set()
-                    yield Event.create(self.name, "message", f"{self.name} done")
+                    await emit(Event.create(self.name, "message", f"{self.name} done"))
+                    return TurnOutcome("completed")
 
             runners = {
                 "claude": CaptureRunner("claude", pause=True),

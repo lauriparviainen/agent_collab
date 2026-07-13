@@ -22,6 +22,12 @@ into a detailed work log.
   unsuccessful Grok terminal reasons are reported as fatal provider errors
   instead of empty successful turns. Expose Grok's separate internal
   model/tool-loop limit as `provider_max_turns`.
+- Add the shared explicit backend turn-outcome contract across all eight CLI
+  and SDK backends (#17): awaited event sinks, bounded cleanup, deterministic
+  `turn-N` records, fail-fast sequential/directed aggregation, monotonic
+  session terminals, sanitized structured failures, and coherent outcome views
+  on REST/MCP session and event-polling responses. Legacy session records remain
+  readable without fabricated outcomes.
 - Make direct authenticated Streamable HTTP the preferred MCP registration
   path and expose the stdio fallback as `agent-collab mcp` (#14). Remove the
   separate `agent-collab-mcp` console script and checkout-local README commands

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from functools import partial
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -22,7 +21,7 @@ from ..common.cli import (
 )
 from ..common.health import default_version_runner, probe_cli_backend
 from ..common.options import highest_precedence_choices, resolve_codex_effort
-from .parser import parse_codex_line
+from .parser import CodexStreamingParser
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 
@@ -106,6 +105,4 @@ class CodexCliBackend:
     def create_runner(
         self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
     ) -> AgentRunner:
-        return create_cli_runner(
-            self, agent, verbose, options, partial(parse_codex_line, agent_id=agent.id)
-        )
+        return create_cli_runner(self, agent, verbose, options, CodexStreamingParser(agent.id))

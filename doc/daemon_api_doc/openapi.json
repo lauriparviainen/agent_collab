@@ -28,19 +28,79 @@
           "cursor": {
             "type": "integer"
           },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "events": {
             "items": {
               "$ref": "#/components/schemas/EventModel"
             },
             "type": "array"
           },
+          "failure": {
+            "anyOf": [
+              {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "session_id": {
             "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "turn_outcomes": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {},
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "session_id",
           "cursor",
+          "status",
+          "terminal",
+          "error",
+          "failure",
+          "turn_outcomes",
           "events"
         ],
         "type": "object"
@@ -407,6 +467,17 @@
               }
             ]
           },
+          "failure": {
+            "anyOf": [
+              {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "interactive": {
             "type": "boolean"
           },
@@ -456,6 +527,20 @@
           "timeout": {
             "type": "integer"
           },
+          "turn_outcomes": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {},
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updated_at": {
             "type": "string"
           },
@@ -484,6 +569,8 @@
           "interactive_idle_timeout",
           "ended_at",
           "error",
+          "failure",
+          "turn_outcomes",
           "settings",
           "capabilities",
           "agent_sessions"

@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"partial response"}]}}
+{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"session-redacted"}

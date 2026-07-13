@@ -3,8 +3,9 @@
 **Status:** Designed and design-reviewed; not started.
 
 **Implementation dependency:** The shared turn-outcome contract in
-`backend-turn-outcomes.md` (#17) lands before this task's referee/runtime slice.
-Configuration-only work may proceed after those shared types are frozen, but
+`backend-turn-outcomes.md` (#17) is complete and is the foundation for this
+task's referee/runtime slice. Configuration-only work may proceed now that
+those shared types are frozen, but
 must not become externally visible on its own: schema-7 parsing, discovery,
 and the built-in `dual-review` workflow ship together with the stage runtime,
 or the daemon would advertise a workflow the referee cannot execute (Codex
@@ -357,8 +358,8 @@ fan-out.
    reads (correction from fresh-eyes review, verified against
    `daemon.py:_session_agent_refs`) — adds a `parallel` representation under
    `settings.workflow`, and keeps `settings.workflow.sequence` present as the
-   ordered member list for existing settings consumers. Once issue #17 has
-   added the shared failure/outcome/event-batch fields, this task's only
+   ordered member list for existing settings consumers. With issue #17's
+   shared failure/outcome/event-batch fields now implemented, this task's only
    additional fixed API-schema field is `EventModel.agent_id` (goal 6).
 
 10. **Discovery reports a parallel workflow eligible only when *all* members are

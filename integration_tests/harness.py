@@ -53,8 +53,14 @@ def missing_reason(provider: str, backend_id: str, reason: str) -> str:
     return f"[strict-missing] {name}: {reason}" if strict else f"[missing] {name}: {reason}"
 
 
-async def _collect(runner: Any, prompt: str, workdir: Path) -> list:
-    return [event async for event in runner.run(prompt, workdir)]
+async def _collect(runner: Any, prompt: str, workdir: Path) -> tuple[list, Any]:
+    events = []
+
+    async def emit(event: Any) -> None:
+        events.append(event)
+
+    outcome = await runner.run_turn(prompt, workdir, emit)
+    return events, outcome
 
 
 class LiveBackendTestCase(unittest.TestCase):
@@ -134,7 +140,13 @@ class LiveBackendTestCase(unittest.TestCase):
             previous = {key: os.environ.get(key) for key in overrides}
             os.environ.update(overrides)
             try:
-                return asyncio.run(_collect(runner, prompt or self.prompt, workdir))
+                events, outcome = asyncio.run(_collect(runner, prompt or self.prompt, workdir))
+                self.assertEqual(
+                    outcome.outcome,
+                    "completed",
+                    f"backend turn did not complete: {outcome.to_dict()}",
+                )
+                return events
             finally:
                 for key, value in previous.items():
                     if value is None:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Union
+import json
 
 from ...events import Event, compact_json, parse_json_line
+from ...outcomes import TerminalEvidence
 from ..common.parse import first_text, looks_like_command, looks_like_file_change, looks_like_tool
 from ..common.sdk import provider_session_event
 
@@ -104,7 +106,9 @@ def parse_claude_line(
     if raw.get("type") in {"system", "result"} and isinstance(session_id, str) and session_id:
         identity = provider_session_event("claude", agent_id, session_id, "session", raw=raw)
     if raw.get("type") in {"error", "fatal_error"} or "error" in raw:
-        event = Event.create("error", "error", first_text(raw) or compact_json(raw), raw)
+        event = Event.create(
+            "error", "error", first_text(raw) or compact_json(raw), {**raw, "fatal": True}
+        )
         return [identity, event] if identity is not None else event
     if raw.get("type") in {"system", "rate_limit_event", "result"}:
         text = str(raw.get("subtype") or raw.get("status") or raw.get("type"))
@@ -133,8 +137,26 @@ class ClaudeStreamingParser:
     def __init__(self, agent_id: str = "claude") -> None:
         self.agent_id = agent_id
         self._seen_session_ids: set[str] = set()
+        self._terminal_evidence: List[TerminalEvidence] = []
 
     def __call__(self, line: str, verbose: bool = False):
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid Claude stream JSON") from exc
+        if isinstance(raw, dict):
+            record_type = raw.get("type")
+            if record_type == "result":
+                if raw.get("subtype") == "success" and raw.get("is_error") is not True:
+                    self._terminal_evidence.append(TerminalEvidence("completed"))
+                else:
+                    self._terminal_evidence.append(
+                        TerminalEvidence("failed", "provider_terminal_failure")
+                    )
+            elif record_type in {"error", "fatal_error"}:
+                self._terminal_evidence.append(
+                    TerminalEvidence("failed", "provider_terminal_failure")
+                )
         parsed = parse_claude_line(line, verbose, agent_id=self.agent_id)
         events = parsed if isinstance(parsed, list) else [parsed]
         kept = []
@@ -154,3 +176,8 @@ class ClaudeStreamingParser:
         if not kept:
             return None
         return kept[0] if len(kept) == 1 else kept
+
+    def take_terminal_evidence(self) -> List[TerminalEvidence]:
+        evidence = self._terminal_evidence
+        self._terminal_evidence = []
+        return evidence

@@ -32,7 +32,8 @@ from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Mapping, 
 
 from ...config import AgentConfig
 from ...events import Event, compact_json
-from ...runners import AgentRunner
+from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
+from ...runners import AgentRunner, AsyncEventSink
 from ..base import (
     BackendCapabilities,
     BackendHealth,
@@ -140,19 +141,22 @@ class ClaudeSdkRunner(AgentRunner):
         self.options = options
         self._message_stream = message_stream
 
-    async def run(self, prompt: str, workdir: Path) -> AsyncIterator[Event]:
+    async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         if self.verbose:
-            yield Event.create("claude", "status", f"claude sdk starting in {workdir}")
+            await emit(Event.create("claude", "status", f"claude sdk starting in {workdir}"))
+        evidence = TerminalEvidenceAccumulator()
+        exception_code: Optional[str] = None
+        clean_close = True
         try:
             stream = self._message_stream(self.agent, self.options, workdir, prompt)
         except BackendUnavailable as exc:
-            yield backend_unavailable_event(exc)
-            return
+            await emit(backend_unavailable_event(exc))
+            return TurnOutcome("failed", "provider_transport_failed")
         except Exception as exc:
             # Constructor/API drift is surfaced instead of silently retrying
             # with the cwd or settings-isolation options removed.
-            yield sdk_error_event("claude", exc)
-            return
+            await emit(sdk_error_event("claude", exc))
+            return TurnOutcome("failed", "provider_transport_failed")
         session_id: Optional[str] = None
         try:
             async for message in stream:
@@ -161,22 +165,34 @@ class ClaudeSdkRunner(AgentRunner):
                     session_id = sid
                     # Uniform provider-session capture (kind="session"). Nothing
                     # resumes it this stage; capabilities stay false.
-                    yield provider_session_event("claude", self.name, sid, "session")
+                    await emit(provider_session_event("claude", self.name, sid, "session"))
+                if _is_result_message(message):
+                    if getattr(message, "is_error", False):
+                        evidence.add(TerminalEvidence("failed", "provider_terminal_failure"))
+                    else:
+                        evidence.add(TerminalEvidence("completed"))
                 for event in iter_claude_events(message, self.verbose):
-                    yield event
+                    await emit(event)
         except BackendUnavailable as exc:
-            yield backend_unavailable_event(exc)
-            return
+            await emit(backend_unavailable_event(exc))
+            exception_code = "provider_transport_failed"
         except Exception as exc:  # surface SDK errors as transcript errors
-            yield sdk_error_event("claude", exc)
-            return
+            await emit(sdk_error_event("claude", exc))
+            exception_code = "provider_transport_failed"
         finally:
             # A cancelled daemon turn stops consuming before the SDK iterator
             # is exhausted. Close it explicitly so the provider connection and
             # any child resources unwind before cancellation completes.
-            await close_async_stream(stream)
+            clean_close = await close_async_stream(stream)
+        if not clean_close and exception_code is None:
+            exception_code = "provider_transport_failed"
         if self.verbose:
-            yield Event.create("claude", "status", "claude sdk turn complete")
+            await emit(Event.create("claude", "status", "claude sdk turn complete"))
+        return evidence.resolve(exception_code=exception_code)
+
+
+def _is_result_message(message: Any) -> bool:
+    return not isinstance(getattr(message, "content", None), list) and hasattr(message, "is_error")
 
 
 def iter_claude_events(message: Any, verbose: bool) -> Iterator[Event]:
@@ -201,7 +217,7 @@ def iter_claude_events(message: Any, verbose: bool) -> Iterator[Event]:
         return
     if getattr(message, "is_error", False):
         text = _result_error_text(message)
-        yield Event.create("error", "error", text, _result_raw(message))
+        yield Event.create("error", "error", text, {**_result_raw(message), "fatal": True})
         return
     if verbose:
         subtype = getattr(message, "subtype", None)

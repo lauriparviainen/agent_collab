@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Union
 
 from ...events import Event, compact_json, parse_json_line
+from ...outcomes import TerminalEvidence
 from ..common.sdk import provider_session_event
 
 
@@ -48,7 +49,9 @@ def parse_xai_line(
         stop_reason = raw.get("stopReason")
         if stop_reason != SUCCESS_STOP_REASON:
             reason = stop_reason if isinstance(stop_reason, str) and stop_reason else "unknown"
-            code = "provider_turn_cancelled" if reason == "Cancelled" else "provider_turn_failed"
+            code = (
+                "provider_turn_cancelled" if reason == "Cancelled" else "provider_terminal_failure"
+            )
             text = (
                 "Grok ended the turn before producing a response"
                 if reason == "Cancelled"
@@ -85,6 +88,7 @@ class XaiStreamingParser:
     def __init__(self, agent_id: str = "xai") -> None:
         self.agent_id = agent_id
         self._text_parts: List[str] = []
+        self._terminal_evidence: List[TerminalEvidence] = []
 
     def __call__(
         self,
@@ -92,11 +96,37 @@ class XaiStreamingParser:
         verbose: bool = False,
     ) -> Optional[Union[Event, List[Event]]]:
         raw = parse_json_line(line)
+        if raw is None and line.strip():
+            raise ValueError("invalid xAI streaming JSON")
         if isinstance(raw, dict) and raw.get("type") == "text" and isinstance(raw.get("data"), str):
             self._text_parts.append(raw["data"])
             return None
 
         event = parse_xai_line(line, verbose, agent_id=self.agent_id)
+        if isinstance(raw, dict) and raw.get("type") == "end":
+            reason = raw.get("stopReason")
+            if reason == SUCCESS_STOP_REASON:
+                self._terminal_evidence.append(
+                    TerminalEvidence("completed", provider_stop_reason=SUCCESS_STOP_REASON)
+                )
+            elif reason == "Cancelled":
+                self._terminal_evidence.append(
+                    TerminalEvidence(
+                        "cancelled",
+                        "provider_turn_cancelled",
+                        provider_stop_reason="Cancelled",
+                    )
+                )
+            else:
+                self._terminal_evidence.append(
+                    TerminalEvidence(
+                        "failed",
+                        "provider_terminal_failure",
+                        provider_stop_reason=reason if isinstance(reason, str) else None,
+                    )
+                )
+        elif isinstance(raw, dict) and raw.get("type") == "error":
+            self._terminal_evidence.append(TerminalEvidence("failed", "provider_terminal_failure"))
         if isinstance(raw, dict) and raw.get("type") in {"end", "error"}:
             events = self._flush_text()
             if event is not None:
@@ -115,6 +145,11 @@ class XaiStreamingParser:
 
         events = self._flush_text()
         return events or None
+
+    def take_terminal_evidence(self) -> List[TerminalEvidence]:
+        evidence = self._terminal_evidence
+        self._terminal_evidence = []
+        return evidence
 
     def _flush_text(self) -> List[Event]:
         if not self._text_parts:

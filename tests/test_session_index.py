@@ -152,7 +152,9 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
 
             restored = manager.get_session("daemon-dead")
             self.assertEqual(restored.status, "interrupted")
-            self.assertIn("daemon restarted", restored.error)
+            self.assertIsNone(restored.error)
+            self.assertIsNone(restored.failure)
+            self.assertIsNone(restored.turn_outcomes)
             self.assertIsNotNone(restored.ended_at)
             self.assertEqual(index.load()["daemon-dead"]["status"], "interrupted")
 
@@ -181,7 +183,9 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
 
             restored = manager.get_session("daemon-awaiting")
             self.assertEqual(restored.status, "interrupted")
-            self.assertIn("daemon restarted", restored.error)
+            self.assertIsNone(restored.error)
+            self.assertIsNone(restored.failure)
+            self.assertIsNone(restored.turn_outcomes)
             self.assertEqual(index.load()["daemon-awaiting"]["status"], "interrupted")
 
     async def test_read_events_replays_jsonl_for_restored_sessions(self):

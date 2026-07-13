@@ -30,7 +30,20 @@ def _config():
 
 
 async def _collect(runner):
-    return [event async for event in runner.run("fixture prompt", Path("/tmp/fixture"))]
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    await runner.run_turn("fixture prompt", Path("/tmp/fixture"), emit)
+    return events
+
+
+async def _outcome(runner):
+    async def emit(_event):
+        return None
+
+    return await runner.run_turn("fixture prompt", Path("/tmp/fixture"), emit)
 
 
 class XaiSdkBackendTests(unittest.TestCase):
@@ -153,7 +166,9 @@ class XaiSdkBackendTests(unittest.TestCase):
             self.assertEqual(options, {"model": "grok-4.5", "thinking_level": "low"})
             self.assertEqual(prompt, "fixture prompt")
             try:
-                yield SimpleNamespace(content="fixture response", id="resp-123")
+                yield SimpleNamespace(
+                    content="fixture response", id="resp-123", finish_reason="STOP"
+                )
             finally:
                 closed.append(True)
 
@@ -174,6 +189,30 @@ class XaiSdkBackendTests(unittest.TestCase):
         self.assertFalse(
             any(event.type in {"tool_call", "command", "file_change"} for event in events)
         )
+
+    def test_finish_reason_and_content_control_outcome(self):
+        async def stream_with(response):
+            yield response
+
+        completed = XaiSdkBackend(
+            turn_stream=lambda *_args: stream_with(
+                SimpleNamespace(content="done", id="r1", finish_reason="STOP")
+            )
+        ).create_runner(_agent(), False, {})
+        limited = XaiSdkBackend(
+            turn_stream=lambda *_args: stream_with(
+                SimpleNamespace(content="partial", id="r2", finish_reason="MAX_TOKENS")
+            )
+        ).create_runner(_agent(), False, {})
+        empty = XaiSdkBackend(
+            turn_stream=lambda *_args: stream_with(
+                SimpleNamespace(content="", id="r3", finish_reason="STOP")
+            )
+        ).create_runner(_agent(), False, {})
+
+        self.assertEqual(asyncio.run(_outcome(completed)).outcome, "completed")
+        self.assertEqual(asyncio.run(_outcome(limited)).code, "provider_output_incomplete")
+        self.assertEqual(asyncio.run(_outcome(empty)).code, "provider_empty_response")
 
     def test_sdk_exception_maps_to_transcript_error(self):
         async def failing_stream(agent, options, workdir, prompt):

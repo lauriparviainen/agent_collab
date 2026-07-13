@@ -5,6 +5,10 @@ import unittest
 from pathlib import Path
 
 from agent_collab.events import Event
+from agent_collab.backends.claude_cli.parser import ClaudeStreamingParser
+from agent_collab.backends.codex_cli.parser import CodexStreamingParser
+from agent_collab.backends.antigravity_cli import parse_antigravity_line
+from agent_collab.backends.xai_cli.parser import XaiStreamingParser
 from agent_collab.runners import SubprocessRunner
 
 
@@ -16,9 +20,24 @@ def _json_message_parser(line, verbose):
 class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
     async def _events(self, runner):
         async def collect():
-            return [event async for event in runner.run("prompt", Path("."))]
+            events = []
+
+            async def emit(event):
+                events.append(event)
+
+            await runner.run_turn("prompt", Path("."), emit)
+            return events
 
         return await asyncio.wait_for(collect(), timeout=5.0)
+
+    async def _result(self, runner):
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        outcome = await asyncio.wait_for(runner.run_turn("prompt", Path("."), emit), timeout=5.0)
+        return events, outcome
 
     async def test_jsonl_event_larger_than_asyncio_default_is_supported(self):
         size = 100_000
@@ -33,7 +52,7 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
 
         message = next(event for event in events if event.source == "claude")
         self.assertEqual(len(message.text), size)
-        self.assertTrue(any("exited with code 0" in event.text for event in events))
+        self.assertFalse(any("exited with code 0" in event.text for event in events))
 
     async def test_over_limit_stdout_fails_immediately_and_closes_stream(self):
         script = "import json; print(json.dumps({'text': 'x' * 4096}))"
@@ -119,7 +138,7 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(errors[0].source, "error")
         self.assertEqual(errors[0].text, "claude stderr: provider failed safely")
         self.assertEqual(errors[0].raw, {"line": "provider failed safely"})
-        self.assertTrue(any("exited with code 0" in event.text for event in events))
+        self.assertFalse(any("exited with code 0" in event.text for event in events))
 
     async def test_renamed_agent_verbose_stderr_is_attributed_to_provider(self):
         script = "import sys; print('WARN provider chatter', file=sys.stderr)"
@@ -183,13 +202,100 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
         )
 
         async def collect():
-            return [event async for event in runner.run("prompt", Path("."))]
+            events = []
+
+            async def emit(event):
+                events.append(event)
+
+            await runner.run_turn("prompt", Path("."), emit)
+            return events
 
         task = asyncio.create_task(collect())
         await asyncio.sleep(0.05)
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=2.0)
+
+    async def test_fixture_backed_marker_contracts(self):
+        fixture_root = Path(__file__).parent / "fixtures"
+        cases = (
+            ("claude/stream-json-success.ndjson", ClaudeStreamingParser(), "completed", None),
+            (
+                "claude/stream-json-error.ndjson",
+                ClaudeStreamingParser(),
+                "failed",
+                "provider_terminal_failure",
+            ),
+            ("codex/jsonl-success.ndjson", CodexStreamingParser(), "completed", None),
+            (
+                "codex/jsonl-failed.ndjson",
+                CodexStreamingParser(),
+                "failed",
+                "provider_terminal_failure",
+            ),
+            (
+                "xai/streaming-json-reasoning.ndjson",
+                XaiStreamingParser(),
+                "completed",
+                None,
+            ),
+            (
+                "xai/streaming-json-cancelled.ndjson",
+                XaiStreamingParser(),
+                "cancelled",
+                "provider_turn_cancelled",
+            ),
+        )
+        for relative, parser, expected_outcome, expected_code in cases:
+            with self.subTest(fixture=relative):
+                path = fixture_root / relative
+                script = f"from pathlib import Path; print(Path({str(path)!r}).read_text(), end='')"
+                runner = SubprocessRunner(
+                    "fixture-provider", [sys.executable, "-c", script], parser
+                )
+                _events, outcome = await self._result(runner)
+                self.assertEqual((outcome.outcome, outcome.code), (expected_outcome, expected_code))
+
+    async def test_success_marker_followed_by_nonzero_exit_fails(self):
+        line = '{"type":"turn.completed"}'
+        script = f"import sys; print({line!r}); sys.exit(7)"
+        runner = SubprocessRunner("codex", [sys.executable, "-c", script], CodexStreamingParser())
+        _events, outcome = await self._result(runner)
+        self.assertEqual(outcome.code, "subprocess_exit_nonzero")
+        self.assertEqual(outcome.process_exit_code, 7)
+
+    async def test_marker_transport_fails_closed_after_partial_output(self):
+        line = '{"type":"text","data":"partial"}'
+        runner = SubprocessRunner(
+            "xai",
+            [sys.executable, "-c", f"print({line!r})"],
+            XaiStreamingParser(),
+        )
+        events, outcome = await self._result(runner)
+        self.assertTrue(any(event.type == "message" for event in events))
+        self.assertEqual(outcome.code, "provider_output_incomplete")
+
+    async def test_antigravity_provisional_clean_eof_requires_message(self):
+        fixture = Path(__file__).parent / "fixtures/antigravity/agy-print-sample.stdout.txt"
+        script = f"from pathlib import Path; print(Path({str(fixture)!r}).read_text(), end='')"
+        with_message = SubprocessRunner(
+            "antigravity",
+            [sys.executable, "-c", script],
+            parse_antigravity_line,
+            clean_eof_fallback=True,
+        )
+        events, outcome = await self._result(with_message)
+        self.assertTrue(any(event.type == "message" for event in events))
+        self.assertEqual(outcome.outcome, "completed")
+
+        empty = SubprocessRunner(
+            "antigravity",
+            [sys.executable, "-c", "pass"],
+            lambda line, verbose: None,
+            clean_eof_fallback=True,
+        )
+        _events, outcome = await self._result(empty)
+        self.assertEqual(outcome.code, "provider_empty_response")
 
 
 if __name__ == "__main__":

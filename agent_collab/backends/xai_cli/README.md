@@ -32,5 +32,10 @@ partial turn is flushed at EOF. A real tool-use capture emitted no typed action
 record, so tool, command, and file-change fidelity is intentionally not claimed.
 Resume, interrupt, and tool-gate capabilities are all false.
 
+The typed turn outcome uses the same evidence: `EndTurn` completes,
+`Cancelled` maps to `cancelled`, other end reasons fail conservatively, and EOF
+without `end` fails even after partial text. Conflicting terminal markers fail
+with `provider_protocol_conflict`; identical duplicates are harmless.
+
 Hermetic tests: `python3 -m unittest tests.backends.xai_cli.test_backend`.
 Credentialed test: `./agent_collab_dev.sh integration-test xai_cli --strict`.

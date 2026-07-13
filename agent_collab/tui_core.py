@@ -294,6 +294,9 @@ def format_transcript_event(event: Any) -> Tuple[TranscriptLine, ...]:
     single dim summary row (name + first-line digest + ``+N lines`` size) — a
     display-only projection; the JSONL keeps the full payload.
     """
+    raw = _value(event, "raw", None)
+    if isinstance(raw, Mapping) and raw.get("fatal") is True:
+        return ()
     source = str(_value(event, "source", "error"))
     label = gutter_label(source)
     text = str(_value(event, "text", "") or "")
@@ -399,9 +402,26 @@ def format_session_details(session: Any) -> Tuple[str, ...]:
         "interactive_idle_timeout",
         "jsonl_path",
         "markdown_path",
-        "error",
     ):
         _append_present(lines, key, session)
+
+    failure = _value(session, "failure", None)
+    if isinstance(failure, Mapping):
+        turn = f" {failure.get('turn_id')}" if failure.get("turn_id") else ""
+        lines.append(f"failure{turn}: {failure.get('code')} — {failure.get('message')}")
+    else:
+        _append_present(lines, "error", session)
+
+    outcomes = _value(session, "turn_outcomes", None)
+    if isinstance(outcomes, Sequence) and not isinstance(outcomes, (str, bytes)):
+        for outcome in outcomes:
+            if not isinstance(outcome, Mapping):
+                continue
+            lines.append(
+                "outcome "
+                f"{outcome.get('turn_id')}: {outcome.get('agent_id')} "
+                f"{outcome.get('outcome')}"
+            )
 
     agents = settings.get("agents") if isinstance(settings.get("agents"), Mapping) else {}
     if agents:

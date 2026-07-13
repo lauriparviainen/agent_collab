@@ -74,14 +74,19 @@ hardcoded to exactly one Claude runner and one Codex runner. See
 1. A client asks the server to start a session.
 2. The server creates a `session_id`.
 3. The server loads config from the session `workdir`, validates typed start options, and builds the effective settings confirmation (workflow sequence, per-agent options, prompt-free command previews) before creating session state. Session logs go to the global `~/.agent-collab/data/sessions/`.
-4. The server runs the existing `Referee` in a background task.
+4. The server runs the existing `Referee` in a background task. Each backend
+   turn streams through an awaited event sink and returns one typed terminal
+   outcome after bounded cleanup.
 5. Each emitted event is:
    - appended to in-memory session history,
    - sent to live watchers,
    - written to JSONL,
    - written to Markdown.
-6. Clients watch by reading event history from a cursor and then waiting for new events.
-7. Session status becomes `done`, `failed`, or `stopped`. Interactive sessions may pause in non-terminal `awaiting_input` before a terminal status. Session state is persisted to the global `session-index.json` on every change; after a daemon restart, sessions that were `running` or `awaiting_input` are reported as `interrupted`.
+6. The referee assigns deterministic occurrence identity before launch. The
+   daemon appends each outcome to the packed session history together with its
+   boundary event before notifying watchers.
+7. Clients watch by reading event history from a cursor and then waiting for new events.
+8. Session status becomes `done`, `failed`, or `stopped`. Interactive sessions may pause in non-terminal `awaiting_input` before a terminal status. Session state is persisted to the global `session-index.json` on every change; after a daemon restart, sessions that were `running` or `awaiting_input` are reported as `interrupted` without a fabricated lost-turn outcome.
 
 ## Event cursor model
 
@@ -104,6 +109,11 @@ and receive:
 ```json
 {
   "cursor": 11,
+  "status": "failed",
+  "terminal": true,
+  "error": "The provider reported a terminal failure",
+  "failure": {"code": "provider_terminal_failure", "turn_id": "turn-2"},
+  "turn_outcomes": [{"turn_id": "turn-1", "outcome": "completed"}],
   "events": [...]
 }
 ```
@@ -114,7 +124,10 @@ For near-streaming behavior, clients call:
 wait_events(session_id, cursor, timeout_ms, tool_output="summary")
 ```
 
-The server returns as soon as new events exist or the timeout expires.
+The server returns as soon as new events exist, the session becomes terminal,
+or the timeout expires. The cursor counts transcript events only; a terminal
+transition can therefore return `events=[]` and an unchanged cursor while the
+same response carries the updated structured session view.
 
 ## Local API
 

@@ -82,6 +82,46 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(rendered[0], "tool        abcde")
         self.assertTrue(rendered[1].startswith("        "))
 
+    def test_terminal_provider_evidence_is_hidden_for_canonical_boundary(self):
+        event = Event.create(
+            "error",
+            "error",
+            "hostile provider detail",
+            {"fatal": True, "error": "hostile provider detail"},
+        )
+        self.assertEqual(format_transcript_event(event), ())
+
+    def test_details_render_structured_failure_once_with_outcomes(self):
+        session = {
+            "session_id": "s1",
+            "status": "failed",
+            "error": "The provider cancelled the turn",
+            "failure": {
+                "code": "provider_turn_cancelled",
+                "message": "The provider cancelled the turn",
+                "turn_id": "turn-2",
+            },
+            "turn_outcomes": [
+                {
+                    "turn_id": "turn-1",
+                    "agent_id": "claude",
+                    "outcome": "completed",
+                },
+                {
+                    "turn_id": "turn-2",
+                    "agent_id": "xai",
+                    "outcome": "cancelled",
+                },
+            ],
+        }
+        lines = format_session_details(session)
+        self.assertEqual(sum("The provider cancelled the turn" in line for line in lines), 1)
+        self.assertIn(
+            "failure turn-2: provider_turn_cancelled — The provider cancelled the turn",
+            lines,
+        )
+        self.assertIn("outcome turn-1: claude completed", lines)
+
     def test_details_format_uses_top_level_state_and_settings_agents(self):
         session = {
             "session_id": "s1",

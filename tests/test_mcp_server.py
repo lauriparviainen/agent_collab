@@ -36,12 +36,47 @@ def _batch(session_id="s1", cursor=0, events=()):
     )
 
 
+def _outcome_batch(session_id="s1"):
+    return EventBatchModel.from_dict(
+        {
+            "session_id": session_id,
+            "cursor": 4,
+            "status": "failed",
+            "terminal": True,
+            "error": "The provider transport failed",
+            "failure": {
+                "code": "provider_transport_failed",
+                "message": "The provider transport failed",
+                "stage_index": None,
+                "turn_id": None,
+                "agent_id": None,
+                "backend": None,
+                "outcome": None,
+                "provider_stop_reason": None,
+                "process_exit_code": None,
+            },
+            "turn_outcomes": [],
+            "events": [],
+        }
+    )
+
+
 def _assert_tool_result(testcase, result, payload, is_error=False):
     testcase.assertEqual(_payload(result), payload)
     testcase.assertEqual(result.get("isError"), is_error)
 
 
 class McpServerTests(unittest.TestCase):
+    def test_event_polling_preserves_structured_terminal_snapshot(self):
+        batch = _outcome_batch()
+        client = mock.Mock()
+        client.read_events.return_value = batch
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient", return_value=client):
+            result = handle_tool("agent_collab_read_events", {"session_id": "s1"})
+        self.assertEqual(_payload(result), batch.to_dict())
+        self.assertEqual(_payload(result)["events"], [])
+        self.assertTrue(_payload(result)["terminal"])
+
     def test_tools_list_includes_daemon_tools(self):
         response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 

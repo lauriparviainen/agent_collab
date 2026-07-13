@@ -20,5 +20,10 @@ IDs are correlation metadata, not resumable conversation state. Resume,
 interrupt, and tool-gate capabilities are all false. Credential values and SDK
 responses are never logged by health probes.
 
+For this no-tools backend, `finish_reason=STOP` with non-empty content is the
+only verified completion. Empty content, length/token limits, unexpected tool
+calls, other finish reasons, SDK exceptions, and uncertain bounded close fail
+conservatively. No structured refusal mapping is claimed.
+
 Hermetic tests: `python3 -m unittest tests.backends.xai_sdk.test_backend`.
 Credentialed test: `./agent_collab_dev.sh integration-test xai_sdk --strict`.

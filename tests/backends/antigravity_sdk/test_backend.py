@@ -176,7 +176,13 @@ def _factory_for(response, conversation_id=None):
 
 
 async def _collect(runner, prompt="do a thing"):
-    return [event async for event in runner.run(prompt, Path("."))]
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    await runner.run_turn(prompt, Path("."), emit)
+    return events
 
 
 def _run(response, *, verbose=False, options=None, conversation_id=None):
@@ -186,7 +192,25 @@ def _run(response, *, verbose=False, options=None, conversation_id=None):
     return asyncio.run(_collect(runner))
 
 
+def _outcome(response):
+    runner = AntigravitySdkRunner(AGENT, False, {}, agent_factory=_factory_for(response))
+
+    async def collect():
+        async def emit(_event):
+            return None
+
+        return await runner.run_turn("do a thing", Path("."), emit)
+
+    return asyncio.run(collect())
+
+
 class SdkEventMappingTests(unittest.TestCase):
+    def test_resolved_message_is_required_for_success(self):
+        completed = _outcome(_FakeResponse(_sample()["text_only_response"]))
+        self.assertEqual(completed.outcome, "completed")
+        empty = _outcome(_FakeResponse({"chunks": []}))
+        self.assertEqual((empty.outcome, empty.code), ("failed", "provider_empty_response"))
+
     def test_typed_buffer_maps_text_calls_results_and_errors(self):
         response = _FakeResponse(_sample()["chat_response"])
         events = _run(response)

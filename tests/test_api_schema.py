@@ -230,6 +230,30 @@ class ModelRoundTripTests(unittest.TestCase):
         }
         self.assertEqual(EventBatchModel.from_dict(payload).to_dict(), payload)
 
+    def test_current_event_batch_round_trips_structured_outcome_view(self):
+        outcome = {
+            "turn_id": "turn-1",
+            "stage_index": 1,
+            "agent_id": "xai",
+            "backend": "xai_cli",
+            "outcome": "cancelled",
+            "code": "provider_turn_cancelled",
+            "message": "The provider cancelled the turn",
+            "provider_stop_reason": "Cancelled",
+            "process_exit_code": 0,
+        }
+        payload = {
+            "session_id": "daemon-abc",
+            "cursor": 7,
+            "status": "failed",
+            "terminal": True,
+            "error": "The provider cancelled the turn",
+            "failure": dict(outcome),
+            "turn_outcomes": [outcome],
+            "events": [],
+        }
+        self.assertEqual(EventBatchModel.from_dict(payload).to_dict(), payload)
+
     def test_request_models_are_idempotent(self):
         cases = [
             (StartSessionRequestModel, {"task": "t", "workdir": "/w"}),

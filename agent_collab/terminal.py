@@ -17,6 +17,10 @@ RESET = "\033[0m"
 
 
 def print_event(event: Event, color: bool = True) -> None:
+    if isinstance(event.raw, dict) and event.raw.get("fatal") is True:
+        # The referee's canonical turn-outcome boundary is the one human fatal
+        # line. Provider evidence remains in JSONL for diagnostics.
+        return
     label = event.source.upper()
     prefix = f"{label:<7}"
     if color and sys.stdout.isatty():
