@@ -318,6 +318,12 @@ command-line tool as a subprocess, and `sdk` calls its Python SDK in-process.
 The `cli` backends work with the base install; each `sdk` backend needs its
 provider's optional dependency extra (see [Install](#install)).
 
+> **SDK status:** The SDK backends are experimental. Basic in-process turns and
+> provider-session identity work, but native session resume, provider-confirmed
+> interruption, and interactive tool approval are not fully implemented;
+> capability flags remain conservative. Follow the design refresh and full SDK
+> capability work in [issue #20](https://github.com/lauriparviainen/agent_collab/issues/20).
+
 | Provider | CLI backend | SDK backend | Enabled by default |
 | --- | --- | --- | --- |
 | Claude (Claude Code) | `claude_cli` | `claude_sdk` | yes |
