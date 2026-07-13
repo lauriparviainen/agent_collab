@@ -119,14 +119,17 @@ Build); their consensus and dissents are folded into the decisions below.
    - Install stays out of other tools' config directories: no automatic
      copying into `~/.claude/` or `~/.agents/` by `./agent_collab.sh`.
 
-7. **Daemon-side parallel workflow is out of scope, tracked separately.**
+7. **The dual skill builds on the daemon-side parallel workflow (#19).**
    Gemini reported client-side parallel session management is error-prone
    for it and asked for a daemon-orchestrated parallel workflow (one
-   session, two concurrent reviewers, merged event stream). Claude and Grok
-   handle client-side parallelism fine with the hygiene rules above, so the
-   dual skill ships client-side now; the parallel workflow type is filed as
-   [#19](https://github.com/lauriparviainen/agent_collab/issues/19) and
-   would later shrink the dual skill to a single session watch.
+   session, N concurrent reviewers, merged attributed event stream).
+   Decision (2026-07-13): implement
+   [#19](https://github.com/lauriparviainen/agent_collab/issues/19) first —
+   design in the task document `parallel-review-workflow` — so the dual
+   (and triple) review skill is a single `agent_collab_start` of a
+   `stages` workflow plus one watch loop, and the client-side
+   parallel-session hygiene rules in the recipe reduce to per-agent
+   attribution handling. This task is blocked on #19.
 
 ## Implementation notes
 
