@@ -34,9 +34,11 @@ documents for larger design work. The conventions — including the
 public-content guardrail for issues — live in
 [.claude/skills/github-issues/SKILL.md](.claude/skills/github-issues/SKILL.md);
 versioning and the release procedure live in
-[.claude/skills/release/SKILL.md](.claude/skills/release/SKILL.md). Follow
-both for any issue, task-document, or release change regardless of which
-agent harness you run under.
+[.claude/skills/release/SKILL.md](.claude/skills/release/SKILL.md); shell
+entrypoint rules and the CLI output marker convention live in
+[.claude/skills/cli-scripting/SKILL.md](.claude/skills/cli-scripting/SKILL.md).
+Follow them for any issue, task-document, release, or CLI-output change
+regardless of which agent harness you run under.
 
 Backend implementations live in peer `agent_collab/backends/<provider>_<backend>/`
 packages. Each package owns an `options.toml` and README. Hermetic tests belong
