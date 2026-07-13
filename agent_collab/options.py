@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
-from .config import AgentConfig, CollaborationConfig, load_config, validate_workflow
+from .config import (
+    AgentConfig,
+    CollaborationConfig,
+    load_config,
+    validate_workflow,
+    workflow_members,
+)
 from .backend_contract import BackendOptionError, OptionSpec
 
 
@@ -80,13 +86,14 @@ def normalize_start_options(
 
     validate_workflow(config, workflow_id)
     workflow = config.workflows[workflow_id]
+    members = workflow_members(workflow)
     resolved = dict(agent_backends or {})
     selected_names = {
         backend_registry.backend_name(
             config.agents[agent_id].type,
             resolved.get(agent_id) or backend_registry.resolve_backend_id(config.agents[agent_id]),
         )
-        for agent_id in workflow.sequence
+        for agent_id in members
         if config.agents[agent_id].type != "mock"
     }
     for name, payload in option_payloads.items():
@@ -115,7 +122,7 @@ def normalize_start_options(
 
     agent_options: Dict[str, Dict[str, Any]] = {}
     seen_agents: Set[str] = set()
-    for agent_id in workflow.sequence:
+    for agent_id in members:
         if agent_id in seen_agents:
             continue
         seen_agents.add(agent_id)
@@ -234,8 +241,9 @@ def validate_start_backends(
     resolved: Dict[str, str] = {}
     validate_workflow(config, workflow_id)
     workflow = config.workflows[workflow_id]
+    members = workflow_members(workflow)
 
-    for agent_id in workflow.sequence:
+    for agent_id in members:
         if agent_id in resolved:
             continue
         agent = config.agents[agent_id]
@@ -518,7 +526,7 @@ def describe_options(
     workflows = []
     workflow_agent_types: Dict[str, List[str]] = {}
     for workflow_id, workflow in sorted(config.workflows.items()):
-        types = sorted(_workflow_agent_types(config, workflow.sequence))
+        types = sorted(_workflow_agent_types(config, workflow_members(workflow)))
         workflow_agent_types[workflow_id] = types
         workflows.append(_describe_workflow(config, workflow_id, types, canonical_backends))
 
@@ -840,12 +848,13 @@ def _describe_workflow(
     from . import backends as backend_registry
 
     workflow = config.workflows[workflow_id]
+    members = workflow_members(workflow)
     effective_agents: List[Dict[str, Any]] = []
     selected: List[str] = []
     ineligible: List[str] = []
     recommendation_blockers: List[str] = []
     provider_types: Set[str] = set()
-    for agent_id in workflow.sequence:
+    for agent_id in members:
         agent = config.agents[agent_id]
         if agent.type == "mock":
             effective_agents.append({"agent_id": agent_id, "canonical_backend": None})
@@ -891,7 +900,7 @@ def _describe_workflow(
             ):
                 resolved = {
                     agent_id: backend_id
-                    for agent_id in dict.fromkeys(workflow.sequence)
+                    for agent_id in dict.fromkeys(members)
                     if config.agents[agent_id].type != "mock"
                 }
                 try:
@@ -901,7 +910,8 @@ def _describe_workflow(
                 uniform.append(backend_id)
     return {
         "id": workflow_id,
-        "sequence": list(workflow.sequence),
+        "sequence": members,
+        "parallel": None if workflow.parallel is None else list(workflow.parallel),
         "agent_types": types,
         "effective_agents": effective_agents,
         "selected_canonical_backends": sorted(set(selected)),
@@ -1016,8 +1026,9 @@ def build_session_settings(
 
     resolved = dict(agent_backends or {})
     workflow = config.workflows[workflow_id]
+    members = workflow_members(workflow)
     agents: Dict[str, Dict[str, Any]] = {}
-    for agent_id in workflow.sequence:
+    for agent_id in members:
         if agent_id in agents:
             continue
         agent = config.agents[agent_id]
@@ -1056,7 +1067,11 @@ def build_session_settings(
                 entry["command_preview"] = preview
         agents[agent_id] = entry
     settings: Dict[str, Any] = {
-        "workflow": {"name": workflow_id, "sequence": list(workflow.sequence)},
+        "workflow": {
+            "name": workflow_id,
+            "sequence": members,
+            "parallel": None if workflow.parallel is None else list(workflow.parallel),
+        },
         "agents": agents,
         "interactive": bool(interactive),
         "interactive_idle_timeout": float(interactive_idle_timeout),

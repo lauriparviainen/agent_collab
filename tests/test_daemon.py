@@ -227,6 +227,168 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(summary["raw"]["accepted_members"], [])
 
+    async def test_parallel_start_runs_one_attributed_cursor_stream(self):
+        started = set()
+        all_started = asyncio.Event()
+
+        class Runner:
+            def __init__(self, source):
+                self.source = source
+
+            async def run_turn(self, prompt, workdir, emit):
+                started.add(self.source)
+                if started == {"claude", "codex"}:
+                    all_started.set()
+                await all_started.wait()
+                await emit(Event.create(self.source, "message", f"{self.source} review"))
+                return TurnOutcome("completed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                'schema_version = 7\n[workflows.parallel]\nparallel = ["claude", "codex"]\n',
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                with mock.patch.object(
+                    Referee,
+                    "_runners",
+                    return_value={"claude": Runner("claude"), "codex": Runner("codex")},
+                ):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="parallel review",
+                            workflow="parallel",
+                            mock=True,
+                            workdir=root,
+                        )
+                    )
+                    final = await self._wait_for_terminal(manager, state.session_id)
+
+        self.assertEqual(final.status, "done")
+        self.assertEqual(set(final.settings["agents"]), {"claude", "codex"})
+        self.assertEqual(final.settings["workflow"]["sequence"], ["claude", "codex"])
+        self.assertEqual(final.settings["workflow"]["parallel"], ["claude", "codex"])
+        batch = manager.read_events(final.session_id, 0)
+        messages = [event for event in batch.events if event.get("agent_id") in started]
+        self.assertEqual({event["agent_id"] for event in messages}, started)
+        summaries = [
+            event
+            for event in batch.events
+            if isinstance(event.get("raw"), dict) and event["raw"].get("parallel") is True
+        ]
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0]["raw"]["accepted_members"], ["claude", "codex"])
+
+    async def test_parallel_start_rejects_interactive_and_zero_turns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                'schema_version = 7\n[workflows.parallel]\nparallel = ["claude", "codex"]\n',
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                with self.assertRaises(StartOptionsError) as interactive:
+                    await manager.start_session(
+                        StartSessionRequest(
+                            task="interactive parallel",
+                            workflow="parallel",
+                            mock=True,
+                            interactive=True,
+                            workdir=root,
+                        )
+                    )
+                with self.assertRaises(StartOptionsError) as zero_turns:
+                    await manager.start_session(
+                        StartSessionRequest(
+                            task="zero parallel",
+                            workflow="parallel",
+                            mock=True,
+                            max_turns=0,
+                            workdir=root,
+                        )
+                    )
+
+        interactive_detail = interactive.exception.to_dict()["details"][0]
+        self.assertEqual(interactive_detail["path"], "interactive")
+        self.assertEqual(
+            interactive_detail["message"],
+            "workflow 'parallel' is a parallel workflow; interactive sessions are not "
+            "supported — start it with interactive=false",
+        )
+        zero_detail = zero_turns.exception.to_dict()["details"][0]
+        self.assertEqual(zero_detail["path"], "max_turns")
+        self.assertIn("max_turns must be at least 1", zero_detail["message"])
+        self.assertEqual(manager.list_sessions(), [])
+
+    async def test_parallel_stop_publishes_stopped_only_after_members_settle(self):
+        started = {"claude": asyncio.Event(), "codex": asyncio.Event()}
+        cancelled = {"claude": asyncio.Event(), "codex": asyncio.Event()}
+        cleaned = {"claude": asyncio.Event(), "codex": asyncio.Event()}
+        release = asyncio.Event()
+
+        class BlockingRunner:
+            def __init__(self, agent_id):
+                self.agent_id = agent_id
+
+            async def run_turn(self, prompt, workdir, emit):
+                started[self.agent_id].set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled[self.agent_id].set()
+                    await release.wait()
+                finally:
+                    cleaned[self.agent_id].set()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                'schema_version = 7\n[workflows.parallel]\nparallel = ["claude", "codex"]\n',
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                with mock.patch.object(
+                    Referee,
+                    "_runners",
+                    return_value={
+                        "claude": BlockingRunner("claude"),
+                        "codex": BlockingRunner("codex"),
+                    },
+                ):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="stop parallel",
+                            workflow="parallel",
+                            mock=True,
+                            timeout=30,
+                            workdir=root,
+                        )
+                    )
+                    await asyncio.gather(*(event.wait() for event in started.values()))
+                    stop_task = asyncio.create_task(manager.stop_session(state.session_id))
+                    await asyncio.gather(*(event.wait() for event in cancelled.values()))
+                    self.assertFalse(stop_task.done())
+                    self.assertEqual(manager.get_session(state.session_id).status, "running")
+                    release.set()
+                    stopped = await stop_task
+
+        self.assertTrue(all(event.is_set() for event in cleaned.values()))
+        self.assertEqual(stopped.status, "stopped")
+        self.assertEqual(
+            {item["agent_id"]: item["outcome"] for item in stopped.turn_outcomes},
+            {"claude": "interrupted", "codex": "interrupted"},
+        )
+
     async def test_stop_records_active_interruption_before_stopped(self):
         started = asyncio.Event()
         cleaned = asyncio.Event()

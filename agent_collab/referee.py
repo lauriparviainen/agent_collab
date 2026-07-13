@@ -12,6 +12,7 @@ from .config import (
     load_config,
     validate_config,
     validate_workflow,
+    workflow_members,
 )
 from .events import Event
 from .logging import SessionLogger
@@ -195,8 +196,8 @@ class Referee:
     def _stages(self) -> List[List[str]]:
         workflow = self.collab_config.workflows[self.config.workflow]
         if workflow.parallel is not None:
-            return [list(workflow.parallel)]
-        return [[agent_id] for agent_id in workflow.sequence]
+            return [workflow_members(workflow)]
+        return [[agent_id] for agent_id in workflow_members(workflow)]
 
     def _guardrails(self) -> str:
         return (

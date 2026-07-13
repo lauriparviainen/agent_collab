@@ -480,6 +480,23 @@ sequence = ["project_only"]
                 "sessions: retention_days=90 cleanup_interval_hours=24", output.getvalue()
             )
 
+    def test_cli_config_show_labels_parallel_workflows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_user_config(
+                home,
+                'schema_version = 7\n[workflows.review]\nparallel = ["claude", "codex"]\n',
+            )
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, _env(home)):
+                with contextlib.redirect_stdout(output):
+                    code = cli.main(["config", "show", "--workdir", str(root)])
+
+            self.assertEqual(code, 0)
+            self.assertIn("workflow review (parallel): claude + codex", output.getvalue())
+
     def test_config_init_materializes_every_registered_backend(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = io.StringIO()

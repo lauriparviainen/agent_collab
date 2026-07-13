@@ -21,6 +21,7 @@ from .config import (
 from .events import Event, compact_json, utc_timestamp
 from .outcomes import CANONICAL_MESSAGES, SessionFailure, TurnOutcomeRecord
 from .options import (
+    StartOptionsError,
     build_session_settings,
     describe_options,
     normalize_start_options,
@@ -393,6 +394,32 @@ class SessionManager:
             collab_config = load_config(workdir)
         except ConfigError as exc:
             raise SessionRequestError(str(exc)) from exc
+        workflow = collab_config.workflows.get(request.workflow)
+        if workflow is not None and workflow.parallel is not None:
+            errors = []
+            if request.interactive:
+                errors.append(
+                    {
+                        "path": "interactive",
+                        "message": (
+                            f"workflow {request.workflow!r} is a parallel workflow; "
+                            "interactive sessions are not supported — start it with "
+                            "interactive=false"
+                        ),
+                    }
+                )
+            if int(request.max_turns) < 1:
+                errors.append(
+                    {
+                        "path": "max_turns",
+                        "message": (
+                            f"workflow {request.workflow!r} is a parallel workflow; "
+                            "max_turns must be at least 1"
+                        ),
+                    }
+                )
+            if errors:
+                raise StartOptionsError(errors)
         log_dir = (
             Path(request.log_dir).expanduser().resolve()
             if request.log_dir

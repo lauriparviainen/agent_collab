@@ -812,7 +812,12 @@ def _print_prune_result(result) -> None:
 
 
 def _main_config(argv) -> int:
-    from .config import DEFAULT_CONFIG_PATH, load_config, render_user_config
+    from .config import (
+        DEFAULT_CONFIG_PATH,
+        load_config,
+        render_user_config,
+        workflow_members,
+    )
     from .config_migrations import CURRENT_CONFIG_SCHEMA
     from .paths import AgentCollabHome
 
@@ -902,7 +907,11 @@ def _main_config(argv) -> int:
             policy = backend_policy(config, name)
             print(f"backend {name}: enabled={str(policy.enabled).lower()} source={policy.source}")
         for workflow_id, workflow in sorted(config.workflows.items()):
-            print(f"workflow {workflow_id}: {' -> '.join(workflow.sequence)}")
+            members = workflow_members(workflow)
+            if workflow.parallel is None:
+                print(f"workflow {workflow_id}: {' -> '.join(members)}")
+            else:
+                print(f"workflow {workflow_id} (parallel): {' + '.join(members)}")
     except Exception as exc:
         error(str(exc))
         return 1

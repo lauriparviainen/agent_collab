@@ -45,6 +45,12 @@ class WorkflowConfig:
     parallel: Optional[List[str]] = None
 
 
+def workflow_members(workflow: WorkflowConfig) -> List[str]:
+    """Return the workflow's ordered agents for execution and discovery."""
+
+    return list(workflow.parallel if workflow.parallel is not None else workflow.sequence)
+
+
 @dataclass
 class BackendPolicyConfig:
     canonical_backend: str
