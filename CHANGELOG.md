@@ -15,6 +15,9 @@ into a detailed work log.
 
 ## [0.7.0] - 2026-07-14 - Cross-model review skills and parallel dual review
 
+- Fix `./agent_collab.sh skills install|uninstall` without a client crashing
+  on Python 3.10: argparse there rejects an empty optional positional that
+  declares choices, so client validation moved out of the parser.
 - List `agent_collab_guidance` and `agent_collab_describe_options` first in
   the MCP tool catalog, and describe session start over the configured agent
   backends instead of only Claude/Codex. Declare the agent-collab MCP server

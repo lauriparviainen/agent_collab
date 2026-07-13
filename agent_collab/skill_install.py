@@ -306,10 +306,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     actions = parser.add_subparsers(dest="action", required=True)
     for action in ("install", "uninstall"):
         subparser = actions.add_parser(action)
+        # No argparse choices here: a positional with nargs="*" plus choices
+        # rejects the empty case on Python 3.10. _expand_clients validates.
         subparser.add_argument(
             "clients",
             nargs="*",
-            choices=list(CLIENT_SKILL_DIRS),
             metavar="CLIENT",
             help="claude, codex, antigravity, or grok; omit to manage all clients",
         )

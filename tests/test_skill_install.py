@@ -287,6 +287,16 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(install.call_args.kwargs["clients"], [])
 
+    def test_main_rejects_unknown_client_as_cli_error(self):
+        with (
+            mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": "/tmp/test-skill-home"}),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            code = main(["install", "cursor", "--repo-root", "/tmp/repo"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("unknown skill client: cursor", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
