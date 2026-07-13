@@ -221,13 +221,18 @@ class SessionListModel:
 
 @dataclass
 class EventModel:
-    """One event; mirrors ``events.Event.to_dict()``. ``raw`` is opaque."""
+    """One event; mirrors ``events.Event.to_dict()``. ``raw`` is opaque.
+
+    ``agent_id`` is an additive optional attribution field. Older persisted
+    events may omit it or carry null, and both forms decode as ``None``.
+    """
 
     timestamp: str
     source: str
     type: str
     text: str
     raw: Any = None
+    agent_id: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EventModel":
@@ -237,6 +242,7 @@ class EventModel:
             type=str(data["type"]),
             text=str(data["text"]),
             raw=data.get("raw"),
+            agent_id=data.get("agent_id"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -246,6 +252,7 @@ class EventModel:
             "type": self.type,
             "text": self.text,
             "raw": self.raw,
+            "agent_id": self.agent_id,
         }
 
 

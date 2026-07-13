@@ -228,6 +228,28 @@ class ModelRoundTripTests(unittest.TestCase):
                 }
             ],
         }
+        decoded = EventBatchModel.from_dict(payload)
+
+        self.assertIsNone(decoded.events[0].agent_id)
+        payload["events"][0]["agent_id"] = None
+        self.assertEqual(decoded.to_dict(), payload)
+
+    def test_event_batch_round_trips_agent_attribution(self):
+        payload = {
+            "session_id": "daemon-abc",
+            "cursor": 1,
+            "events": [
+                {
+                    "timestamp": "2026-07-09T00:00:00+00:00",
+                    "source": "claude",
+                    "type": "message",
+                    "text": "hi",
+                    "raw": None,
+                    "agent_id": "claude-reviewer",
+                }
+            ],
+        }
+
         self.assertEqual(EventBatchModel.from_dict(payload).to_dict(), payload)
 
     def test_current_event_batch_round_trips_structured_outcome_view(self):

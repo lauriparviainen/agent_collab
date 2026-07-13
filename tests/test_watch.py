@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from unittest import mock
 from agent_collab import cli
 from agent_collab.api_schema import EventBatchModel, SessionListModel, SessionStateModel
 from agent_collab.events import Event
-from agent_collab.watch import resolve_jsonl_path, watch_jsonl
+from agent_collab.watch import event_from_jsonl_line, resolve_jsonl_path, watch_jsonl
 
 
 def _session_dict(session_id, **overrides):
@@ -154,6 +155,17 @@ class WatchTests(unittest.TestCase):
             text = output.getvalue()
             self.assertIn("HUMAN   ok", text)
             self.assertIn("ERROR   malformed JSONL line 2: not-json", text)
+
+    def test_jsonl_reader_tolerates_missing_and_null_agent_id(self):
+        legacy = Event.create("claude", "message", "legacy").to_dict()
+        legacy.pop("agent_id")
+        missing = event_from_jsonl_line(json.dumps(legacy), 1)
+        explicit_null = event_from_jsonl_line(json.dumps({**legacy, "agent_id": None}), 2)
+        attributed = event_from_jsonl_line(json.dumps({**legacy, "agent_id": "claude-reviewer"}), 3)
+
+        self.assertIsNone(missing.agent_id)
+        self.assertIsNone(explicit_null.agent_id)
+        self.assertEqual(attributed.agent_id, "claude-reviewer")
 
     def test_cli_watch_no_follow(self):
         with tempfile.TemporaryDirectory() as tmp:

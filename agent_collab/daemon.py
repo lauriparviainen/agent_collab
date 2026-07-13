@@ -1287,6 +1287,9 @@ def _render_transcript(
     for event_id, event in enumerate(events):
         projected = _project_event(event, event_id, tool_output)
         label = str(projected.get("source", "error")).upper()
+        agent_id = projected.get("agent_id")
+        if agent_id and agent_id != projected.get("source"):
+            label += f" ({agent_id})"
         event_type = str(projected.get("type", "status"))
         text = str(projected.get("text", ""))
         parts.append(f"## {label} `{event_type}`\n\n{text}\n\n")

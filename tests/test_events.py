@@ -59,6 +59,15 @@ class EventCreateCoercionTests(unittest.TestCase):
 
         self.assertEqual((event.source, event.type), ("referee", "message"))
 
+    def test_agent_id_is_additive_and_defaults_to_null(self):
+        unattributed = Event.create("referee", "status", "ready")
+        attributed = Event.create("claude", "message", "review", agent_id="claude-reviewer")
+
+        self.assertIsNone(unattributed.agent_id)
+        self.assertIsNone(unattributed.to_dict()["agent_id"])
+        self.assertEqual(attributed.agent_id, "claude-reviewer")
+        self.assertEqual(attributed.to_dict()["agent_id"], "claude-reviewer")
+
 
 if __name__ == "__main__":
     unittest.main()

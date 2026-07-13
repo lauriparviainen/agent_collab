@@ -108,6 +108,16 @@
       "EventModel": {
         "additionalProperties": false,
         "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "raw": {},
           "source": {
             "type": "string"
@@ -127,7 +137,8 @@
           "source",
           "type",
           "text",
-          "raw"
+          "raw",
+          "agent_id"
         ],
         "type": "object"
       },

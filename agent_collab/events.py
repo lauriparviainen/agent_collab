@@ -57,13 +57,22 @@ class Event:
     type: str
     text: str
     raw: Any
+    agent_id: Optional[str] = None
     # Trusted in-process bookkeeping. This is deliberately not serialized: raw
     # provider output may contain identically named keys, but only backend code
     # can mark an Event as carrying a provider session identity.
     _provider_session: Optional[Dict[str, str]] = field(default=None, repr=False, compare=False)
 
     @classmethod
-    def create(cls, source: str, event_type: str, text: str, raw: Any = None) -> "Event":
+    def create(
+        cls,
+        source: str,
+        event_type: str,
+        text: str,
+        raw: Any = None,
+        *,
+        agent_id: Optional[str] = None,
+    ) -> "Event":
         # Coercion keeps malformed backend output from crashing a live session,
         # but it must never be silent: it hides backend normalization bugs.
         # Warnings carry the original (pre-coercion) source and type.
@@ -74,7 +83,7 @@ class Event:
         if event_type not in VALID_TYPES:
             _warn_coercion("type", event_type, "status", original_source, original_type)
             event_type = "status"
-        return cls(utc_timestamp(), source, event_type, text, raw)
+        return cls(utc_timestamp(), source, event_type, text, raw, agent_id)
 
     def to_dict(self) -> Dict[str, Any]:
         result = asdict(self)

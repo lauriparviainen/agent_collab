@@ -110,6 +110,7 @@ def event_from_jsonl_line(line: str, line_number: int) -> Optional[Event]:
         type=str(payload["type"]),
         text=str(payload["text"]),
         raw=payload.get("raw"),
+        agent_id=payload.get("agent_id"),
     )
 
 

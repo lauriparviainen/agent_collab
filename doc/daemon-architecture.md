@@ -27,7 +27,10 @@ This keeps the human terminal UI and the agent tool API separate while letting b
 
 ## Components
 
-- `agent_collab.events`: normalized event model and stream parsers.
+- `agent_collab.events`: normalized event model and stream parsers. Events have
+  an additive optional `agent_id` attribution field; old persisted events that
+  omit it or carry `null` remain valid, so this does not bump the REST API
+  major version.
 - `agent_collab.runners`: runner primitives (subprocess, dry-run, mock) and the registry-backed `configured_runner`.
 - `agent_collab.backends`: backend registry keyed by `(agent_type, backend_id)`, capabilities, live health probes, the `cli` subprocess backends, and the first-class Claude/Codex/Antigravity/xAI `sdk` backends (lazy-imported). An agent's provider (`type`) is separate from its execution mechanism (`backend`); the resolved per-agent backend map is computed once at start validation and threaded into execution.
 - `agent_collab.referee`: bounded turn loop.

@@ -33,6 +33,8 @@ class SessionLogger:
         self._jsonl.write(event.to_json() + "\n")
         self._jsonl.flush()
         label = event.source.upper()
+        if event.agent_id and event.agent_id != event.source:
+            label += f" ({event.agent_id})"
         self._markdown.write(f"## {label} `{event.type}`\n\n{event.text}\n\n")
         self._markdown.flush()
 
