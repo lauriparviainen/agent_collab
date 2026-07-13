@@ -66,13 +66,22 @@ class SessionsConfig:
 
 
 @dataclass
+class WorkdirConfig:
+    """Daemon-global workdir confinement policy; user config only."""
+
+    restrict_workdir_roots: List[Path] = field(default_factory=list)
+
+
+@dataclass
 class CollaborationConfig:
     agents: Dict[str, AgentConfig] = field(default_factory=dict)
     workflows: Dict[str, WorkflowConfig] = field(default_factory=dict)
     backends: Dict[str, BackendPolicyConfig] = field(default_factory=dict)
     sessions: SessionsConfig = field(default_factory=SessionsConfig)
+    workdir: WorkdirConfig = field(default_factory=WorkdirConfig)
     daemon_token: Optional[str] = None
     loaded_paths: List[Path] = field(default_factory=list)
+    warnings: List[Dict[str, str]] = field(default_factory=list)
 
 
 DEFAULT_WORKFLOW = "cross-review"
@@ -110,36 +119,68 @@ def load_config(
     home: Optional[AgentCollabHome] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> CollaborationConfig:
-    """Load built-ins, then user config, then project config.
+    """Load built-ins, user config, then the safe subset of project config.
 
-    The public lookup precedence is project config, user config, then built-ins.
-    Applying the files in reverse order lets project values override user values.
-    The project config always comes from ``workdir`` (the session workdir),
-    never from the caller's current shell directory.
+    Project config comes from ``workdir`` (the session workdir), never the
+    caller's current shell directory. It may rename globally known agents and
+    compose workflows from globally enabled agents, but execution-relevant
+    agent fields and daemon-global policy remain user-config-only.
     """
 
-    config = builtin_config()
-    project_path, user_path = config_search_paths(workdir, home, env)
-    if user_path.exists():
-        merge_config_data(
-            config,
-            migrate_config_data(load_toml_file(user_path), source=str(user_path), scope="user"),
-        )
-        config.loaded_paths.append(user_path)
+    config = load_user_config(home, env)
+    resolved_workdir = workdir.expanduser().resolve()
+    project_path = project_config_path(resolved_workdir)
+    validate_workdir_allowed(config, resolved_workdir)
     if project_path.exists():
+        project_warnings: List[Dict[str, str]] = []
         merge_config_data(
             config,
             migrate_config_data(
-                load_toml_file(project_path), source=str(project_path), scope="project"
+                load_toml_file(project_path),
+                source=str(project_path),
+                scope="project",
+                global_agent_ids=config.agents,
+                enabled_global_agent_ids=(
+                    agent_id for agent_id, agent in config.agents.items() if agent.enabled
+                ),
+                warnings=project_warnings,
             ),
         )
+        config.warnings.extend(project_warnings)
         config.loaded_paths.append(project_path)
 
     validate_config(config)
     return config
 
 
-KNOWN_TOP_LEVEL_KEYS = {"schema_version", "agents", "workflows", "backends", "daemon", "sessions"}
+def load_user_config(
+    home: Optional[AgentCollabHome] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> CollaborationConfig:
+    """Load built-ins plus global user config without selecting a project."""
+
+    config = builtin_config()
+    resolved_home = home or AgentCollabHome.resolve(env)
+    path = user_config_path(resolved_home)
+    if path.exists():
+        merge_config_data(
+            config,
+            migrate_config_data(load_toml_file(path), source=str(path), scope="user"),
+        )
+        config.loaded_paths.append(path)
+    validate_config(config)
+    return config
+
+
+KNOWN_TOP_LEVEL_KEYS = {
+    "schema_version",
+    "agents",
+    "workflows",
+    "backends",
+    "daemon",
+    "sessions",
+    "workdir",
+}
 
 
 def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> None:
@@ -204,6 +245,18 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
             if interval < 1:
                 raise ConfigError("sessions.cleanup_interval_hours must be >= 1")
             config.sessions.cleanup_interval_hours = interval
+
+    workdir = data.get("workdir", {})
+    if workdir is not None and workdir != {}:
+        if not isinstance(workdir, Mapping):
+            raise ConfigError("[workdir] must be a table")
+        unknown = sorted(set(workdir) - {"restrict_workdir_roots"})
+        if unknown:
+            raise ConfigError(f"unknown field workdir.{unknown[0]}")
+        if "restrict_workdir_roots" in workdir:
+            config.workdir.restrict_workdir_roots = _expect_absolute_path_list(
+                workdir["restrict_workdir_roots"], "workdir.restrict_workdir_roots"
+            )
 
     daemon = data.get("daemon", {})
     if daemon is not None and daemon != {}:
@@ -309,6 +362,30 @@ def backend_policy(config: CollaborationConfig, canonical_backend: str) -> Backe
     )
 
 
+def validate_workdir_allowed(config: CollaborationConfig, workdir: Path) -> None:
+    """Reject a resolved workdir outside the optional user-global allowlist."""
+
+    resolved = workdir.expanduser().resolve()
+    roots = config.workdir.restrict_workdir_roots
+    if not roots or any(resolved == root or root in resolved.parents for root in roots):
+        return
+    raise ConfigError(
+        f"workdir {resolved} is outside [workdir].restrict_workdir_roots; add that directory "
+        "to the user config to allow it"
+    )
+
+
+def resolve_existing_workdir(workdir: Path) -> Path:
+    """Resolve and validate a path intended to be used as a process cwd."""
+
+    resolved = workdir.expanduser().resolve()
+    if not resolved.exists():
+        raise ConfigError(f"workdir does not exist: {resolved}")
+    if not resolved.is_dir():
+        raise ConfigError(f"workdir is not a directory: {resolved}")
+    return resolved
+
+
 def render_user_config(token: Optional[str] = None) -> str:
     """Generate a user config with explicit policy for every registered backend."""
 
@@ -316,6 +393,15 @@ def render_user_config(token: Optional[str] = None) -> str:
     from .config_migrations import CURRENT_CONFIG_SCHEMA
 
     lines = [f"schema_version = {CURRENT_CONFIG_SCHEMA}", ""]
+    lines.extend(
+        (
+            "# Optional workdir confinement. Missing or empty keeps the daemon unrestricted;",
+            "# add a broad root or one specific exceptional directory to restrict it.",
+            "[workdir]",
+            "restrict_workdir_roots = []",
+            "",
+        )
+    )
     for name in registered_backend_names():
         lines.extend((f"[backends.{name}]", "enabled = true", ""))
     if token is not None:
@@ -618,6 +704,21 @@ def _expect_str_list(value: Any, label: str) -> List[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ConfigError(f"{label} must be an array of strings")
     return list(value)
+
+
+def _expect_absolute_path_list(value: Any, label: str) -> List[Path]:
+    paths = _expect_str_list(value, label)
+    resolved: List[Path] = []
+    for index, raw_path in enumerate(paths):
+        if not raw_path.strip():
+            raise ConfigError(f"{label}[{index}] must be a non-empty path")
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            raise ConfigError(f"{label}[{index}] must be absolute (or start with ~)")
+        normalized = path.resolve()
+        if normalized not in resolved:
+            resolved.append(normalized)
+    return resolved
 
 
 def _expect_str_dict(value: Any, label: str) -> Dict[str, str]:

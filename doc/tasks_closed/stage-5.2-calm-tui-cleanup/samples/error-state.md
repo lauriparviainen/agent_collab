@@ -5,7 +5,7 @@ in `activate_session` / `_post_referee_message` / `_dispatch` and to
 `format_activity_indicator`'s `read-only <status>` string.
 
 Note on rail state: `_submit_input` clears the rail *before* dispatch
-([tui.py](../../../agent_collab/tui.py) `_submit_input`), so every rejection
+([tui.py](../../../../agent_collab/tui.py) `_submit_input`), so every rejection
 below shows an **empty rail** with the guard text in the message slot — the
 submitted text is already gone.
 

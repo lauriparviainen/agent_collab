@@ -42,7 +42,7 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_file_parses_with_fallback_toml_parser(self):
         data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(data["schema_version"], 5)
+        self.assertEqual(data["schema_version"], 6)
         self.assertNotIn("options", data["agents"]["claude"])
         self.assertNotIn("options", data["agents"]["codex"])
         self.assertNotIn("options", data["agents"]["antigravity"])
@@ -84,9 +84,10 @@ class ConfigTests(unittest.TestCase):
                 config.workflows["cross-review"].sequence, ["claude", "codex", "claude"]
             )
             self.assertEqual(config.workflows["compare"].sequence, ["claude", "codex"])
+            self.assertEqual(config.workdir.restrict_workdir_roots, [])
             self.assertEqual(config.loaded_paths, [])
 
-    def test_project_config_overrides_user_config_and_adds_custom_workflow(self):
+    def test_project_config_cannot_override_agents_or_add_project_only_agents(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             home = Path(tmp) / "home"
@@ -97,6 +98,12 @@ class ConfigTests(unittest.TestCase):
                 """
 [agents.codex]
 command = "user-codex"
+
+[agents.codex_readonly]
+type = "codex"
+command = "codex"
+args = ["exec", "--json", "--profile", "readonly"]
+enabled = true
 """,
             )
             _write_config(
@@ -118,7 +125,15 @@ sequence = ["codex_readonly", "claude", "codex_readonly"]
 
             config = load_config(root, env=_env(home))
 
-            self.assertEqual(config.agents["codex"].command, "project-codex")
+            self.assertEqual(config.agents["codex"].command, "user-codex")
+            self.assertNotIn(
+                "codex_readonly",
+                [
+                    warning["path"]
+                    for warning in config.warnings
+                    if "project-only" in warning["message"]
+                ],
+            )
             self.assertEqual(
                 config.agents["codex_readonly"].args, ["exec", "--json", "--profile", "readonly"]
             )
@@ -157,6 +172,125 @@ command = "user-claude"
 
             self.assertFalse(config.backends["claude_cli"].enabled)
             self.assertEqual(config.backends["claude_cli"].source, "user_config")
+
+    def test_project_agent_execution_fields_and_project_only_agents_are_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            home.mkdir()
+            _write_config(
+                root,
+                """
+[agents.claude]
+type = "codex"
+command = "untrusted-command"
+args = ["--untrusted"]
+enabled = false
+name = "project-reviewer"
+env = { TOKEN = "untrusted-secret-value" }
+cwd = "/"
+timeout = 1
+backend = "sdk"
+dangerous_backend_setting = true
+
+[agents.claude.options]
+permission_mode = "bypassPermissions"
+
+[agents.project_only]
+type = "codex"
+command = "untrusted-project-agent"
+enabled = true
+
+[workflows.safe-project-review]
+sequence = ["claude", "codex"]
+
+[workflows.unsafe-project-review]
+sequence = ["project_only"]
+""",
+            )
+
+            config = load_config(root, env=_env(home))
+
+            claude = config.agents["claude"]
+            self.assertEqual(claude.type, "claude")
+            self.assertEqual(claude.command, "claude")
+            self.assertTrue(claude.enabled)
+            self.assertEqual(claude.backend, None)
+            self.assertEqual(claude.name, "project-reviewer")
+            self.assertEqual(claude.env, {})
+            self.assertEqual(claude.options, {})
+            self.assertNotIn("project_only", config.agents)
+            self.assertIn("safe-project-review", config.workflows)
+            self.assertNotIn("unsafe-project-review", config.workflows)
+            rendered_warnings = "\n".join(warning["message"] for warning in config.warnings)
+            self.assertIn("command", rendered_warnings)
+            self.assertIn("options", rendered_warnings)
+            self.assertIn("project-only agent", rendered_warnings)
+            self.assertNotIn("untrusted-secret-value", rendered_warnings)
+            self.assertNotIn("bypassPermissions", rendered_warnings)
+            self.assertNotIn("untrusted-command", rendered_warnings)
+
+    def test_restrict_workdir_roots_accepts_root_and_specific_exception(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            normal_root = base / "normal"
+            project = normal_root / "project"
+            exception = base / "exception"
+            home = base / "home"
+            project.mkdir(parents=True)
+            exception.mkdir()
+            _write_user_config(
+                home,
+                (f'[workdir]\nrestrict_workdir_roots = ["{normal_root}", "{exception}"]\n'),
+            )
+
+            normal_config = load_config(project, env=_env(home))
+            exception_config = load_config(exception, env=_env(home))
+
+            expected = [normal_root.resolve(), exception.resolve()]
+            self.assertEqual(normal_config.workdir.restrict_workdir_roots, expected)
+            self.assertEqual(exception_config.workdir.restrict_workdir_roots, expected)
+
+    def test_restrict_workdir_roots_rejects_outside_path_with_user_override_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            allowed = base / "allowed"
+            outside = base / "outside"
+            home = base / "home"
+            allowed.mkdir()
+            outside.mkdir()
+            _write_user_config(home, f'[workdir]\nrestrict_workdir_roots = ["{allowed}"]\n')
+
+            with self.assertRaisesRegex(ConfigError, "add that directory to the user config"):
+                load_config(outside, env=_env(home))
+
+    def test_project_workdir_policy_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "allowed" / "project"
+            home = base / "home"
+            root.mkdir(parents=True)
+            _write_user_config(
+                home,
+                f'[workdir]\nrestrict_workdir_roots = ["{base / "allowed"}"]\n',
+            )
+            _write_config(root, '[workdir]\nrestrict_workdir_roots = ["/"]\n')
+
+            config = load_config(root, env=_env(home))
+
+            self.assertEqual(config.workdir.restrict_workdir_roots, [(base / "allowed").resolve()])
+            self.assertTrue(any(warning["path"] == "workdir" for warning in config.warnings))
+
+    def test_restrict_workdir_roots_rejects_relative_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            _write_user_config(home, '[workdir]\nrestrict_workdir_roots = ["relative"]\n')
+
+            with self.assertRaisesRegex(ConfigError, "must be absolute"):
+                load_config(root, env=_env(home))
 
     def test_sessions_defaults_without_any_config_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -253,12 +387,16 @@ command = "user-claude"
             self.assertEqual(code, 0)
             for name in backends.registered_backend_names():
                 self.assertIn(f"[backends.{name}]", text)
+            self.assertIn("[workdir]", text)
+            self.assertIn("restrict_workdir_roots = []", text)
             self.assertIn("[daemon]", text)
             self.assertIn("token = ", text)
             self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
             self.assertIn("holds the daemon bearer token", output.getvalue())
+            config = load_config(Path(tmp), env=_env(Path(tmp) / "home"))
+            self.assertEqual(config.workdir.restrict_workdir_roots, [])
 
-    def test_shell_cwd_does_not_affect_project_config(self):
+    def test_shell_cwd_does_not_affect_safe_project_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_a = Path(tmp) / "project-a"
             project_b = Path(tmp) / "project-b"
@@ -269,14 +407,14 @@ command = "user-claude"
                 project_a,
                 """
 [agents.codex]
-command = "project-a-codex"
+name = "project-a-codex"
 """,
             )
             _write_config(
                 project_b,
                 """
 [agents.codex]
-command = "project-b-codex"
+name = "project-b-codex"
 """,
             )
 
@@ -287,7 +425,7 @@ command = "project-b-codex"
             finally:
                 os.chdir(cwd)
 
-            self.assertEqual(config.agents["codex"].command, "project-b-codex")
+            self.assertEqual(config.agents["codex"].name, "project-b-codex")
             self.assertEqual(
                 config.loaded_paths,
                 [project_b.resolve() / ".agent-collab" / "config.toml"],
@@ -322,8 +460,8 @@ sequence = ["claude"]
             root = Path(tmp) / "project"
             home = Path(tmp) / "home"
             root.mkdir()
-            _write_config(
-                root,
+            _write_user_config(
+                home,
                 """
 [agents.claude.options]
 model = "opus"
@@ -346,8 +484,8 @@ thinking_level = "high"
             root = Path(tmp) / "project"
             home = Path(tmp) / "home"
             root.mkdir()
-            _write_config(
-                root,
+            _write_user_config(
+                home,
                 """
 [agents.claude]
 name = "primary-reviewer"
@@ -510,14 +648,27 @@ project = "test-project"
         self.assertTrue(agent["vertex"])
         self.assertEqual(agent["project"], "test-project")
 
+    def test_toml_subset_parser_supports_workdir_policy(self):
+        data = _parse_toml_subset(
+            """
+[workdir]
+restrict_workdir_roots = ["/projects", "/one/exception"]
+"""
+        )
+
+        self.assertEqual(
+            data["workdir"]["restrict_workdir_roots"],
+            ["/projects", "/one/exception"],
+        )
+
     def test_agent_options_config_loads(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             home = Path(tmp) / "home"
             root.mkdir()
             home.mkdir()
-            _write_config(
-                root,
+            _write_user_config(
+                home,
                 """
 [agents.claude_sdk]
 type = "claude"
@@ -541,7 +692,7 @@ thinking_level = "high"
             home = Path(tmp) / "home"
             root.mkdir()
             home.mkdir()
-            _write_config(root, "[agents.claude]\nbogus = true\n")
+            _write_user_config(home, "[agents.claude]\nbogus = true\n")
 
             with self.assertRaisesRegex(ConfigError, "agents.claude.bogus"):
                 load_config(root, env=_env(home))
@@ -552,8 +703,8 @@ thinking_level = "high"
             home = Path(tmp) / "home"
             root.mkdir()
             home.mkdir()
-            _write_config(
-                root,
+            _write_user_config(
+                home,
                 """
 [agents.antigravity_sdk]
 type = "antigravity"
@@ -566,7 +717,7 @@ location = "us-central1"
             with self.assertRaisesRegex(ConfigError, "agents.antigravity_sdk.project"):
                 load_config(root, env=_env(home))
 
-    def test_workflow_sequence_rejects_unknown_agent(self):
+    def test_project_workflow_with_unknown_agent_is_dropped(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             home = Path(tmp) / "home"
@@ -580,31 +731,40 @@ sequence = ["missing"]
 """,
             )
 
-            with self.assertRaisesRegex(ConfigError, "unknown agent"):
-                load_config(root, env=_env(home))
+            config = load_config(root, env=_env(home))
 
-    def test_workflow_sequence_rejects_disabled_agent(self):
+            self.assertNotIn("bad", config.workflows)
+            self.assertTrue(any(warning["path"] == "workflows.bad" for warning in config.warnings))
+
+    def test_project_workflow_with_disabled_agent_is_dropped(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             home = Path(tmp) / "home"
             root.mkdir()
             home.mkdir()
-            _write_config(
-                root,
+            _write_user_config(
+                home,
                 """
 [agents.disabled_codex]
 type = "codex"
 command = "codex"
 args = ["exec", "--json"]
 enabled = false
+""",
+            )
+            _write_config(
+                root,
+                """
 
 [workflows.bad]
 sequence = ["disabled_codex"]
 """,
             )
 
-            with self.assertRaisesRegex(ConfigError, "disabled agent"):
-                load_config(root, env=_env(home))
+            config = load_config(root, env=_env(home))
+
+            self.assertNotIn("bad", config.workflows)
+            self.assertTrue(any(warning["path"] == "workflows.bad" for warning in config.warnings))
 
 
 class AgentBackendConfigTests(unittest.TestCase):
@@ -665,8 +825,8 @@ class AgentBackendConfigTests(unittest.TestCase):
             home = Path(tmp) / "home"
             root.mkdir()
             home.mkdir()
-            _write_config(
-                root,
+            _write_user_config(
+                home,
                 """
 [agents.codex]
 backend = "cli"

@@ -31,7 +31,7 @@ class RefereeTests(unittest.TestCase):
     def test_mock_loop_uses_configured_workflow_sequence(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            config_path = root / ".agent-collab" / "config.toml"
+            config_path = root / "home" / "config.toml"
             config_path.parent.mkdir(parents=True)
             config_path.write_text(
                 """
@@ -62,7 +62,7 @@ sequence = ["codex"]
     def test_dry_run_uses_configured_agent_command(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            config_path = root / ".agent-collab" / "config.toml"
+            config_path = root / "home" / "config.toml"
             config_path.parent.mkdir(parents=True)
             config_path.write_text(
                 """

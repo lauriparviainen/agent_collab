@@ -80,7 +80,12 @@ PROJECT/.agent-collab/
   config.toml
 ```
 
-Project `.agent-collab/config.toml` can be tracked in git and should be treated as shared project defaults or policy. Runtime files, temp review workdirs, daemon state, and session logs are not written under project `.agent-collab/` by default.
+Project `.agent-collab/config.toml` can be tracked in git. It may rename existing
+agents and define workflows from agents already enabled by built-in or global
+user config. Execution-relevant agent fields and daemon-global policy are
+ignored with sanitized warnings. Runtime files, temp review workdirs, daemon
+state, and session logs are not written under project `.agent-collab/` by
+default.
 
 Set `AGENT_COLLAB_HOME` to run an isolated daemon instance (tests do this so they never touch the real home):
 
@@ -93,16 +98,26 @@ times out waiting for daemon readiness on a slow cold start.
 
 ## Config Precedence
 
-For a session with `workdir = PROJECT`, effective config is:
+For a session with `workdir = PROJECT`, effective precedence is field-specific:
 
 ```text
-built-in defaults
-< ~/.agent-collab/config.toml
-< PROJECT/.agent-collab/config.toml
-< explicit session/start options
+agent execution: built-in defaults < global user config < explicit start options
+agent names:     built-in defaults < global user config < project config
+workflows:       built-in defaults < global user config < safe project workflows
+daemon policy:   built-in defaults < global user config
 ```
 
-The caller's current shell directory does not affect project config unless it is also the session `workdir`. Config files declare a `schema_version` (currently 4, missing means 1); `agent_collab/config_migrations.py` migrates known old shapes in memory before validation. Inspect the merged result with `agent-collab config show --workdir PROJECT`. Canonical `[backends.*].enabled` policy is user-config-only; a project copy is stripped with a warning so project precedence cannot re-enable a daemon-user-disabled backend.
+The caller's current shell directory does not affect project config unless it
+is also the session `workdir`. Config files declare a `schema_version`
+(currently 6, missing means 1); `agent_collab/config_migrations.py` migrates
+known old shapes in memory before validation. Inspect the merged result and any
+ignored-project warnings with `agent-collab config show --workdir PROJECT`.
+
+The optional global-user `[workdir].restrict_workdir_roots` list confines resolved
+session workdirs. A missing key or empty list means unrestricted, and each
+populated entry may be a broad root or one exact exceptional directory. Project
+config cannot widen the list. Workdir is a config root and default cwd, not an
+operating-system sandbox.
 
 The built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml). They are still the lowest-precedence layer, but they are an inspectable TOML file rather than an embedded Python dict.
 

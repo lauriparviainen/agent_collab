@@ -21,11 +21,18 @@ The trust model is local and small:
 - The daemon binds to loopback by default and authenticates requests with a
   bearer token generated into the user's `~/.agent-collab/config.toml`.
 - The agents a session launches run with the invoking user's local
-  permissions, in the working directory the session was given.
+  permissions. The session `workdir` selects project config and is the default
+  process cwd; it is not an operating-system sandbox or filesystem boundary.
+- Execution-relevant agent settings are accepted only from built-in and global
+  user config. Project config may rename known agents and compose workflows
+  from agents already enabled globally, but cannot change commands,
+  environment, cwd, backend, options, type, enablement, or timeouts.
 - Session state and transcripts live under `~/.agent-collab/`.
 
 Anything that breaks those boundaries is a finding: reaching the daemon
-without the token, leaking the token, escaping the session working directory,
-or the daemon deleting or writing files outside its managed state. Prompts
-and repository content being sent to the configured model providers is
-documented behavior, not a vulnerability.
+without the token, leaking the token, project config influencing agent
+execution fields, or the daemon deleting or writing files outside its managed
+state. Agents accessing paths outside `workdir` according to their configured
+provider permissions is expected behavior, not a workdir escape. Prompts and
+repository content being sent to configured model providers is also documented
+behavior.

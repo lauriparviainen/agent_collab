@@ -120,9 +120,14 @@ Read events incrementally with a cursor:
 1. call `agent_collab_read_events` with `cursor: 0` to get existing events
    and the next cursor,
 2. loop `agent_collab_wait_events` with the last returned `cursor` and a
-   bounded `timeout_ms` (for example 30000); it returns as soon as new
+   bounded `timeout_ms` (for example 20000); it returns as soon as new
    events exist or the timeout elapses,
-3. stop when `agent_collab_status` reports a terminal status and no new
+3. after a nonterminal response containing only routine progress or tool
+   events, wait at least 20 seconds before the next observation call; do not
+   immediately poll again merely because the long-poll returned early. Use a
+   tighter cadence only when the user requests it or an actionable event needs
+   an immediate follow-up,
+4. stop when `agent_collab_status` reports a terminal status and no new
    events arrive. `awaiting_input` is live, not terminal.
 
 Never make one unbounded blocking call. Always pass the cursor from the

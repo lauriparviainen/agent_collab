@@ -871,6 +871,26 @@ class PruneRouteTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(config.retention_days, 0)
 
+    async def test_retention_config_load_does_not_treat_daemon_home_as_a_workdir(self):
+        from agent_collab.server_http import _load_sessions_config
+
+        root = Path(self._tmp.name).resolve()
+        home = root / "home"
+        allowed = root / "projects"
+        home.mkdir()
+        allowed.mkdir()
+        (home / "config.toml").write_text(
+            (
+                f"[sessions]\nretention_days = 7\n\n[workdir]\n"
+                f'restrict_workdir_roots = ["{allowed}"]\n'
+            ),
+            encoding="utf-8",
+        )
+
+        config = _load_sessions_config(home)
+
+        self.assertEqual(config.retention_days, 7)
+
     async def test_preview_then_apply_uses_configured_retention(self):
         self._add_terminal_record("old-1")
         self._add_terminal_record("fresh", days_ago=1)

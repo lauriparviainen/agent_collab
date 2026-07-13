@@ -95,7 +95,9 @@ TOOLS = [
         "name": "agent_collab_wait_events",
         "description": (
             "Long-poll daemon session events after a numeric cursor offset. Tool payloads default to "
-            "one-line summaries; pass tool_output='full' only when the payload is needed."
+            "one-line summaries; pass tool_output='full' only when the payload is needed. After a "
+            "routine nonterminal response, wait at least 20 seconds before another observation call "
+            "unless the user requested tighter monitoring or an actionable event needs immediate follow-up."
         ),
         "inputSchema": {
             "type": "object",
@@ -473,7 +475,8 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                     "Resolve the intended project to an absolute workdir and call agent_collab_describe_options "
                     "before every start selection; its cached probe is advisory and start revalidates freshly per backend policy. "
                     "Use agent_collab_start with task, workdir, and workflow. "
-                    "Use agent_collab_wait_events with a cursor; do not make one blocking call. "
+                    "Use agent_collab_wait_events with a cursor and wait at least 20 seconds between "
+                    "routine nonterminal observation calls; do not rapid-poll or make one unbounded call. "
                     "On validation errors, fix the named field paths instead of guessing."
                 ),
                 "serverInfo": {"name": "agent-collab", "version": "0.1"},

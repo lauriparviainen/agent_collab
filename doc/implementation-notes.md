@@ -10,13 +10,21 @@ One global local daemon owns sessions. Runtime state lives under
 `~/.agent-collab/data/`; override with `AGENT_COLLAB_HOME`.
 
 Each session carries a `workdir`. The workdir selects project config from
-`WORKDIR/.agent-collab/config.toml` and is also the subprocess cwd.
+`WORKDIR/.agent-collab/config.toml` and is the default subprocess cwd, not an
+operating-system sandbox. Optional user-global `[workdir].restrict_workdir_roots`
+confinement limits which resolved directories sessions may use.
 
-Config precedence is:
+Config precedence is field-specific:
 
 ```text
-built-in defaults < user config < project config < explicit start options
+agent execution: built-in defaults < user config < explicit start options
+agent names:     built-in defaults < user config < project config
+workflows:       built-in defaults < user config < safe project workflows
 ```
+
+Project agent tables may set only `name`; all execution fields and project-only
+agents are ignored. Project workflows may reference only agents already enabled
+by built-in or global user config.
 
 Built-in defaults live in
 [agent_collab/default_config.toml](../agent_collab/default_config.toml).
@@ -24,8 +32,8 @@ Compatibility handling for old config shapes belongs in
 `agent_collab/config_migrations.py`; runtime code consumes the latest schema.
 
 Orchestration is a `workflow`, not a `mode`. Built-ins include `solo-claude`,
-`solo-codex`, `cross-review` (default), and `compare`. This repository also
-opts into `solo-antigravity` and `solo-xai` through its small project config.
+`solo-codex`, `cross-review` (default), and `compare`. Optional agents and their
+workflows are enabled in global user config.
 
 Sessions persist in `data/session-index.json` across daemon restarts. Sessions
 that were running or awaiting input when the daemon died are marked

@@ -525,7 +525,7 @@ def describe_options(
     provider_groups, compatibility_backends = _project_backend_groups(canonical_backends)
     generated_at = utc_timestamp()
 
-    return {
+    payload: Dict[str, Any] = {
         "discovery": {
             "protocol_version": 1,
             "method": "agent_collab_describe_options",
@@ -588,12 +588,17 @@ def describe_options(
             },
         ],
     }
+    if config.warnings:
+        payload["warnings"] = [dict(warning) for warning in config.warnings]
+    return payload
 
 
 def describe_options_for_workdir(
     workdir: Path, *, health_refresh: str = "cached"
 ) -> Dict[str, Any]:
-    root = workdir.expanduser().resolve()
+    from .config import resolve_existing_workdir
+
+    root = resolve_existing_workdir(workdir)
     return describe_options(load_config(root), root, health_refresh=health_refresh)
 
 

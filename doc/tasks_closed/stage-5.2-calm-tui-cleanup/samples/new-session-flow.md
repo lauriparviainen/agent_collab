@@ -71,7 +71,7 @@ activates it.
 
 If the entered workflow is not valid for the chosen workdir, the wizard sets
 `step` back to `workflow` and the error message, but **does not rebuild
-`overlay_lines`** ([tui.py](../../../agent_collab/tui.py) `_advance_new_wizard`).
+`overlay_lines`** ([tui.py](../../../../agent_collab/tui.py) `_advance_new_wizard`).
 So the body still shows the workdir-step overlay (`workflow: pair`,
 `workdir [...]`) while the rail prompt has already flipped to `[new workflow]`:
 

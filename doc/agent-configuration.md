@@ -31,17 +31,24 @@ SESSION_WORKDIR/.agent-collab/config.toml
 built-in defaults
 ```
 
-Project config wins over user config and comes from the session `workdir`, never the caller's shell directory. CLI flags win over both.
-Agent commands should be changed in `agent-collab` config, not through dedicated Claude/Codex path flags.
+Project config comes from the session `workdir`, never the caller's shell
+directory. For safety, it may only rename an existing agent and define workflows
+whose agents are already enabled by built-in or global user config. All
+execution-relevant agent fields — including type, command, args, enablement,
+environment, cwd, timeout, backend, options, and backend-specific settings — are
+global-user-only. Explicit start options remain highest precedence.
+
+Agent commands should be changed in the global `agent-collab` config, not
+through project config or dedicated Claude/Codex path flags.
 
 Built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml), so the base agent commands, option defaults, and built-in workflows are inspectable without reading Python code.
 
-Config files declare a top-level `schema_version` (currently `4`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
+Config files declare a top-level `schema_version` (currently `6`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
 ## Example
 
 ```toml
-schema_version = 4
+schema_version = 6
 
 [agents.claude]
 type = "claude"
@@ -88,6 +95,10 @@ sequence = ["codex_readonly", "claude", "codex_readonly"]
 ```
 
 ## Agent fields
+
+Agent fields belong in the global user config. A project copy of an existing
+agent table may set only `name`; other fields are ignored with a sanitized
+warning. A project-only agent table is ignored entirely.
 
 Required fields:
 
@@ -372,6 +383,31 @@ sequence = ["agent_a", "agent_b", "agent_a"]
 
 This removes hardcoded orchestration logic from the referee. Built-in workflows (`solo-claude`, `solo-codex`, `cross-review`, `compare`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
 
+Project workflows are safe shared composition: each referenced agent must
+already exist and be enabled in built-in or global user config. A workflow that
+references a project-only, unknown, or globally disabled agent is ignored with
+a warning.
+
+## Workdir policy
+
+The global user config may optionally confine session workdirs:
+
+```toml
+[workdir]
+restrict_workdir_roots = ["~/projects", "/path/to/one/exception"]
+```
+
+Missing or empty `restrict_workdir_roots` preserves unrestricted behavior. When
+populated, a resolved workdir must equal or be below one listed path. An entry
+can therefore be a broad normal root or one specific exceptional directory.
+Paths must be absolute after `~` expansion. Project config cannot set this
+section.
+
+Session start and workdir-scoped option discovery also require the path to
+exist and be a directory. `workdir` selects project config and is the default
+cwd; it is not an operating-system sandbox, and configured agents may access
+other paths according to their provider permissions.
+
 ## CLI commands
 
 ```bash
@@ -395,7 +431,8 @@ here, so no TOML dependency is required.
 ## Safety considerations
 
 - Config registration is not permission approval.
-- Do not automatically trust arbitrary project config in shared directories.
+- Keep execution-relevant agent settings in global user config; project config
+  is limited to display names and safe workflow composition.
 - Print the command prefix before launching an agent.
 - Do not print full prompts in process metadata unless verbose logging is requested.
 - Keep recursive-agent guardrails in generated prompts.

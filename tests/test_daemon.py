@@ -6,7 +6,12 @@ import tempfile
 import unittest
 from unittest import mock
 
-from agent_collab.daemon import StartSessionRequest, SessionManager, _ManagedSession
+from agent_collab.daemon import (
+    SessionManager,
+    SessionRequestError,
+    StartSessionRequest,
+    _ManagedSession,
+)
 from agent_collab.events import Event
 from agent_collab.options import StartOptionsError
 from agent_collab.paths import GlobalDataPaths
@@ -81,6 +86,85 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 for part in agent.get("command_preview", []):
                     self.assertNotIn("daemon mock task", part)
 
+    async def test_start_rejects_missing_and_non_directory_workdirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            regular_file = root / "not-a-directory"
+            regular_file.write_text("data", encoding="utf-8")
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with self.assertRaisesRegex(SessionRequestError, "does not exist"):
+                    await manager.start_session(
+                        StartSessionRequest(task="missing", mock=True, workdir=root / "missing")
+                    )
+                with self.assertRaisesRegex(SessionRequestError, "not a directory"):
+                    await manager.start_session(
+                        StartSessionRequest(task="file", mock=True, workdir=regular_file)
+                    )
+
+    def test_describe_rejects_missing_and_non_directory_workdirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            regular_file = root / "not-a-directory"
+            regular_file.write_text("data", encoding="utf-8")
+            manager = SessionManager()
+            with self.assertRaisesRegex(SessionRequestError, "does not exist"):
+                manager.describe_options(root / "missing")
+            with self.assertRaisesRegex(SessionRequestError, "not a directory"):
+                manager.describe_options(regular_file)
+
+    async def test_start_and_describe_reject_workdirs_outside_user_restrict_workdir_roots(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            allowed = root / "allowed"
+            outside = root / "outside"
+            home = root / "home"
+            allowed.mkdir()
+            outside.mkdir()
+            home.mkdir()
+            (home / "config.toml").write_text(
+                f'[workdir]\nrestrict_workdir_roots = ["{allowed}"]\n',
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                with self.assertRaisesRegex(SessionRequestError, "outside.*restrict_workdir_roots"):
+                    await manager.start_session(
+                        StartSessionRequest(task="outside", mock=True, workdir=outside)
+                    )
+                with self.assertRaisesRegex(SessionRequestError, "outside.*restrict_workdir_roots"):
+                    manager.describe_options(outside)
+
+    async def test_project_config_warnings_are_exposed_by_start_and_describe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / ".agent-collab" / "config.toml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                '[agents.claude]\ncommand = "ignored-command-value"\n',
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                described = manager.describe_options(root)
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="warning projection",
+                        mock=True,
+                        max_turns=1,
+                        timeout=5,
+                        workdir=root,
+                    )
+                )
+                await self._wait_for_terminal(manager, state.session_id)
+
+            self.assertEqual(described["warnings"][0]["code"], "ignored_project_config")
+            self.assertEqual(state.settings["warnings"][0]["code"], "ignored_project_config")
+            self.assertNotIn("ignored-command-value", str(described["warnings"]))
+            self.assertNotIn("ignored-command-value", str(state.settings["warnings"]))
+
     async def test_tool_output_defaults_to_summary_and_supports_single_full_refetch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -147,7 +231,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         # this exercises the validation path end to end.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            cfg = root / ".agent-collab" / "config.toml"
+            cfg = root / "home" / "config.toml"
             cfg.parent.mkdir(parents=True)
             cfg.write_text(
                 """
@@ -344,7 +428,7 @@ sequence = ["antigravity"]
     async def test_post_message_rejects_unknown_and_ambiguous_targets_in_manager_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            config_path = root / ".agent-collab" / "config.toml"
+            config_path = root / "home" / "config.toml"
             config_path.parent.mkdir(parents=True)
             config_path.write_text(
                 """

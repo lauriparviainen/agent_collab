@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import Any, Callable, Dict, Mapping
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set
 
-CURRENT_CONFIG_SCHEMA = 5
+CURRENT_CONFIG_SCHEMA = 6
 
 _logger = logging.getLogger("agent_collab.config")
 
@@ -29,6 +29,9 @@ def migrate_config_data(
     source: str = "",
     *,
     scope: str = "generic",
+    global_agent_ids: Iterable[str] = (),
+    enabled_global_agent_ids: Iterable[str] = (),
+    warnings: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Return a new dict migrated to ``CURRENT_CONFIG_SCHEMA``.
 
@@ -52,25 +55,175 @@ def migrate_config_data(
         version += 1
         result["schema_version"] = version
     result["schema_version"] = CURRENT_CONFIG_SCHEMA
-    if scope == "project" and "backends" in result:
-        _logger.warning(
-            "%s: ignoring project [backends.*] policy; backend enablement is allowed only in the user config",
+    if scope == "project":
+        _strip_project_only_sections(result, label, warnings)
+        _filter_project_agents(result, label, set(global_agent_ids), warnings)
+        _filter_project_workflows(
+            result,
             label,
+            set(enabled_global_agent_ids),
+            warnings,
         )
-        result.pop("backends", None)
-    if scope == "project" and "daemon" in result:
-        _logger.warning(
-            "%s: ignoring project [daemon] section; the daemon token is allowed only in the user config",
-            label,
-        )
-        result.pop("daemon", None)
-    if scope == "project" and "sessions" in result:
-        _logger.warning(
-            "%s: ignoring project [sessions] section; session retention is allowed only in the user config",
-            label,
-        )
-        result.pop("sessions", None)
     return result
+
+
+def _warning(
+    label: str,
+    path: str,
+    message: str,
+    warnings: Optional[List[Dict[str, str]]],
+) -> None:
+    rendered = f"{label}: {message}"
+    _logger.warning("%s", rendered)
+    if warnings is not None:
+        warnings.append(
+            {
+                "code": "ignored_project_config",
+                "path": path,
+                "message": message,
+            }
+        )
+
+
+def _strip_project_only_sections(
+    result: Dict[str, Any],
+    label: str,
+    warnings: Optional[List[Dict[str, str]]],
+) -> None:
+    sections = {
+        "backends": "backend enablement is allowed only in the user config",
+        "daemon": "the daemon token is allowed only in the user config",
+        "sessions": "session retention is allowed only in the user config",
+        "workdir": "workdir policy is allowed only in the user config",
+    }
+    for section, reason in sections.items():
+        if section not in result:
+            continue
+        display = "[backends.*] policy" if section == "backends" else f"[{section}] section"
+        _warning(
+            label,
+            section,
+            f"ignoring project {display}; {reason}",
+            warnings,
+        )
+        result.pop(section, None)
+
+
+def _filter_project_agents(
+    result: Dict[str, Any],
+    label: str,
+    global_agent_ids: Set[str],
+    warnings: Optional[List[Dict[str, str]]],
+) -> None:
+    agents = result.get("agents")
+    if not isinstance(agents, Mapping):
+        return
+    filtered: Dict[str, Any] = {}
+    for raw_agent_id, values in agents.items():
+        agent_id = str(raw_agent_id)
+        path = f"agents.{agent_id}"
+        if agent_id not in global_agent_ids:
+            _warning(
+                label,
+                path,
+                f"ignoring project-only agent {agent_id!r}; define agents in the user config",
+                warnings,
+            )
+            continue
+        if not isinstance(values, Mapping):
+            _warning(
+                label,
+                path,
+                f"ignoring malformed project agent {agent_id!r}",
+                warnings,
+            )
+            continue
+        ignored = {str(key) for key in values if str(key) != "name"}
+        if ignored:
+            known_fields = {
+                "type",
+                "command",
+                "args",
+                "enabled",
+                "env",
+                "cwd",
+                "timeout",
+                "options",
+                "backend",
+            }
+            categories = sorted(ignored & known_fields)
+            if ignored - known_fields:
+                categories.append("backend-specific fields")
+            _warning(
+                label,
+                path,
+                (
+                    f"ignoring execution-relevant fields for project agent {agent_id!r}: "
+                    + ", ".join(categories)
+                    + "; define them in the user config"
+                ),
+                warnings,
+            )
+        if "name" in values:
+            filtered[agent_id] = {"name": values["name"]}
+    if filtered:
+        result["agents"] = filtered
+    else:
+        result.pop("agents", None)
+
+
+def _filter_project_workflows(
+    result: Dict[str, Any],
+    label: str,
+    enabled_global_agent_ids: Set[str],
+    warnings: Optional[List[Dict[str, str]]],
+) -> None:
+    workflows = result.get("workflows")
+    if not isinstance(workflows, Mapping):
+        return
+    filtered: Dict[str, Any] = {}
+    for raw_workflow_id, values in workflows.items():
+        workflow_id = str(raw_workflow_id)
+        path = f"workflows.{workflow_id}"
+        if not isinstance(values, Mapping):
+            _warning(
+                label,
+                path,
+                f"ignoring malformed project workflow {workflow_id!r}",
+                warnings,
+            )
+            continue
+        sequence = values.get("sequence")
+        if (
+            set(values) != {"sequence"}
+            or not isinstance(sequence, list)
+            or not sequence
+            or not all(isinstance(item, str) for item in sequence)
+        ):
+            _warning(
+                label,
+                path,
+                f"ignoring malformed project workflow {workflow_id!r}",
+                warnings,
+            )
+            continue
+        unavailable = sorted(set(sequence) - enabled_global_agent_ids)
+        if unavailable:
+            _warning(
+                label,
+                path,
+                (
+                    f"ignoring project workflow {workflow_id!r}; it references agents not "
+                    "enabled by built-in or user config: " + ", ".join(unavailable)
+                ),
+                warnings,
+            )
+            continue
+        filtered[workflow_id] = values
+    if filtered:
+        result["workflows"] = filtered
+    else:
+        result.pop("workflows", None)
 
 
 def _migrate_v1_to_v2(data: Dict[str, Any], source: str) -> Dict[str, Any]:
@@ -104,9 +257,16 @@ def _migrate_v4_to_v5(data: Dict[str, Any], source: str) -> Dict[str, Any]:
     return data
 
 
+def _migrate_v5_to_v6(data: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """v6 adds optional user-config [workdir] confinement settings."""
+
+    return data
+
+
 MIGRATIONS: Dict[int, Callable[[Dict[str, Any], str], Dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
+    5: _migrate_v5_to_v6,
 }

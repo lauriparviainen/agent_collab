@@ -568,12 +568,12 @@ def _load_sessions_config(home: Path) -> SessionsConfig:
     works, and session starts will surface the underlying config error.
     """
 
-    from .config import ConfigError, load_config
+    from .config import ConfigError, load_user_config
     from .paths import AgentCollabHome
 
     resolved = AgentCollabHome(root=home, config_path=home / "config.toml")
     try:
-        return load_config(home, home=resolved).sessions
+        return load_user_config(home=resolved).sessions
     except (ConfigError, OSError) as exc:
         print(
             f"agent-collab daemon disabling automatic session retention; config error: {exc}",

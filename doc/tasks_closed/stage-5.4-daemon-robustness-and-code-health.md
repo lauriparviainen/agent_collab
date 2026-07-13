@@ -21,8 +21,8 @@ per-provider optional dependencies) lands in this stage.
 Fix concrete robustness, contract-integrity, and code-health defects found in
 review, plus close the tooling gap (no CI, no lint/type config). This stage
 adds no new features. Items already tracked by
-[stage-5-hardening.md](stage-5-hardening.md) (auth options, workdir allowlist,
-log pruning) and [sdk-session-control.md](sdk-session-control.md) (resume,
+[stage-5-hardening.md](../tasks_open/stage-5-hardening.md) (auth options, workdir allowlist,
+log pruning) and [sdk-session-control.md](../tasks_open/sdk-session-control.md) (resume,
 interrupt, tool gate) are out of scope here.
 
 ## High priority

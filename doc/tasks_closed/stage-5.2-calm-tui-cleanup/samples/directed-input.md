@@ -70,7 +70,7 @@ the same argument-entry mode as 2a (mode chip `-> codex`).
 `#reviewer take a look` was submitted; the rail cleared, the daemon rejected the
 target, and `_post_referee_message` put `str(exc)` in the slot. The exact daemon
 strings are `unknown target 'reviewer'; valid agent ids: claude, codex`
-([daemon.py](../../../agent_collab/daemon.py) `_resolve_message_target`) and, for
+([daemon.py](../../../../agent_collab/daemon.py) `_resolve_message_target`) and, for
 an ambiguous type (two `claude` agents), `ambiguous agent type 'claude'; valid
 agent ids: claude-a, claude-b`. The rail is empty because submit clears it before
 dispatch.

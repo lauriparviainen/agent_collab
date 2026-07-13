@@ -13,6 +13,15 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Validate session and discovery workdirs, add optional user-global
+  `[workdir].restrict_workdir_roots` confinement with missing-or-empty
+  unrestricted semantics plus exact-directory exceptions, and
+  clarify that workdir is a config root/default cwd rather than a sandbox (#13).
+- Prevent project config from changing any execution-relevant agent field or
+  defining project-only agents. Project config remains useful for display names
+  and workflows over globally enabled agents; ignored fields and unsafe
+  workflows produce sanitized start/discovery warnings (#13).
+
 ## [0.6.0] - 2026-07-13 - Optional SDK extras and session retention
 
 - Allow selecting the Fable model on the Claude `cli` and `sdk` backends by

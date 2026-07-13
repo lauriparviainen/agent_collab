@@ -11,7 +11,7 @@ prints a credential notice.
 **Issue:** [#8](https://github.com/lauriparviainen/agent_collab/issues/8)
 (milestone 0.4.0)
 
-**Related:** [stage-5-hardening.md](stage-5-hardening.md) (optional auth
+**Related:** [stage-5-hardening.md](../tasks_open/stage-5-hardening.md) (optional auth
 controls), [runtime-layout.md](../runtime-layout.md) (current token layout),
 [daemon-architecture.md](../daemon-architecture.md) (auth model).
 
@@ -74,7 +74,7 @@ token = "<generated once>"
    startup if present. Remove `mint_auth_token`.
 6. **Docs.** Update [runtime-layout.md](../runtime-layout.md) (layout tree,
    token semantics, manual rotation), [daemon-architecture.md](../daemon-architecture.md)
-   (auth model, remote-client guidance), [mcp-guidance.md](../mcp-guidance.md)
+   (auth model, remote-client guidance), [mcp-guidance.md](../../agent_collab/mcp-guidance.md)
    and the README security bullet if they reference the rotating token.
 
 ## Decisions

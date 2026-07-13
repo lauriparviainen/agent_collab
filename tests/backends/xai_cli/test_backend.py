@@ -39,11 +39,22 @@ class XaiCliBackendTests(unittest.TestCase):
         self.assertIn("xai", SUBPROCESS_AGENT_TYPES)
         self.assertEqual(backends.backend_name("xai", "cli"), "xai_cli")
 
-    def test_builtin_is_disabled_and_repository_project_opt_in_is_valid(self):
+    def test_builtin_is_disabled_and_user_config_can_opt_in(self):
         self.assertFalse(builtin_config().agents["xai"].enabled)
         repo = Path(__file__).parents[3]
         with tempfile.TemporaryDirectory() as tmp:
-            config = load_config(repo, env={"AGENT_COLLAB_HOME": tmp})
+            home = Path(tmp)
+            (home / "config.toml").write_text(
+                """
+[agents.xai]
+enabled = true
+
+[workflows.solo-xai]
+sequence = ["xai"]
+""",
+                encoding="utf-8",
+            )
+            config = load_config(repo, env={"AGENT_COLLAB_HOME": str(home)})
         self.assertTrue(config.agents["xai"].enabled)
         self.assertEqual(config.workflows["solo-xai"].sequence, ["xai"])
 

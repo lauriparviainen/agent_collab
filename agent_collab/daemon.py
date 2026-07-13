@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 import uuid
 
-from .config import DEFAULT_WORKFLOW, CollaborationConfig, load_config
+from .config import (
+    DEFAULT_WORKFLOW,
+    CollaborationConfig,
+    ConfigError,
+    load_config,
+    resolve_existing_workdir,
+)
 from .events import Event, compact_json, utc_timestamp
 from .options import (
     build_session_settings,
@@ -340,15 +346,19 @@ class SessionManager:
 
     def _prepare_session_start(self, request: StartSessionRequest) -> _PreparedSessionStart:
         """Load and validate start inputs outside the daemon event loop."""
-        workdir = Path(request.workdir).expanduser().resolve()
-        if str(request.workdir) == ".":
-            workdir = self.default_workdir
+        requested_workdir = (
+            self.default_workdir if str(request.workdir) == "." else Path(request.workdir)
+        )
+        try:
+            workdir = resolve_existing_workdir(requested_workdir)
+            collab_config = load_config(workdir)
+        except ConfigError as exc:
+            raise SessionRequestError(str(exc)) from exc
         log_dir = (
             Path(request.log_dir).expanduser().resolve()
             if request.log_dir
             else self.default_log_dir or GlobalDataPaths.resolve().session_dir
         )
-        collab_config = load_config(workdir)
         selection = validate_start_backends(
             collab_config,
             request.workflow,
@@ -371,7 +381,7 @@ class SessionManager:
             normalized_options,
             agent_backends=selection.agent_backends,
             agent_options=normalized.agent_options,
-            warnings=selection.warnings,
+            warnings=[*collab_config.warnings, *selection.warnings],
             interactive=interactive,
             interactive_idle_timeout=interactive_idle_timeout,
             workdir=workdir,
@@ -413,8 +423,13 @@ class SessionManager:
         *,
         health_refresh: str = "cached",
     ) -> Dict[str, Any]:
-        root = Path(workdir).expanduser().resolve() if workdir else self.default_workdir
-        return describe_options(load_config(root), root, health_refresh=health_refresh)
+        requested_workdir = Path(workdir) if workdir is not None else self.default_workdir
+        try:
+            root = resolve_existing_workdir(requested_workdir)
+            config = load_config(root)
+        except ConfigError as exc:
+            raise SessionRequestError(str(exc)) from exc
+        return describe_options(config, root, health_refresh=health_refresh)
 
     async def describe_options_async(
         self,

@@ -746,6 +746,11 @@ def _main_config(argv) -> int:
             f"sessions: retention_days={config.sessions.retention_days} "
             f"cleanup_interval_hours={config.sessions.cleanup_interval_hours}"
         )
+        roots = config.workdir.restrict_workdir_roots
+        rendered_roots = ", ".join(str(path) for path in roots) if roots else "(unrestricted)"
+        print("restrict_workdir_roots: " + rendered_roots)
+        for warning in config.warnings:
+            print(f"warning {warning['path']}: {warning['message']}")
         for agent_id, agent in sorted(config.agents.items()):
             command = " ".join([agent.command or ""] + list(agent.args)).strip()
             enabled = "" if agent.enabled else " (disabled)"

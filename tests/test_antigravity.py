@@ -19,8 +19,8 @@ from agent_collab.runners import MockRunner, _mock_source
 FIXTURES = Path(__file__).parent / "fixtures" / "antigravity"
 
 
-def _write_config(root: Path, text: str) -> None:
-    path = root / ".agent-collab" / "config.toml"
+def _write_user_config(home: Path, text: str) -> None:
+    path = home / "config.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
@@ -76,8 +76,8 @@ class AntigravityConfigTests(unittest.TestCase):
             home = Path(tmp) / "home"
             root.mkdir()
             home.mkdir()
-            _write_config(
-                root,
+            _write_user_config(
+                home,
                 """
 [agents.antigravity]
 enabled = true
@@ -93,8 +93,8 @@ sequence = ["antigravity"]
 
 class AntigravityOptionsTests(unittest.TestCase):
     def _config(self, root, home):
-        _write_config(
-            root,
+        _write_user_config(
+            home,
             """
 [agents.antigravity]
 enabled = true
@@ -227,8 +227,8 @@ class AntigravityMockSourceTests(unittest.TestCase):
     def test_referee_mock_run_emits_antigravity_sourced_events(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _write_config(
-                root,
+            _write_user_config(
+                root / "home",
                 """
 [agents.antigravity]
 enabled = true
@@ -259,8 +259,8 @@ sequence = ["antigravity"]
     def test_dry_run_uses_agy_command_for_antigravity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _write_config(
-                root,
+            _write_user_config(
+                root / "home",
                 """
 [agents.antigravity]
 enabled = true

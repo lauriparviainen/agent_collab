@@ -97,11 +97,11 @@ The server binds to `127.0.0.1:8765` by default.
 When launching real provider subprocesses, the server may need to run outside a
 restricted sandbox so the child CLIs can see normal user credentials.
 
-This repository tracks a small project config at `.agent-collab/config.toml`.
-It only opts into the disabled-by-default `antigravity` and `xai` agents and
-adds the `solo-antigravity` and `solo-xai` workflows; Claude and Codex run with
-the built-in defaults unless your user config overrides them. Grok Build runs
-as `grok --no-auto-update --output-format streaming-json -p`; xAI SDK starts
+Execution-relevant agent configuration is global-user-only. To opt into the
+disabled-by-default `antigravity` or `xai` agents for local development, enable
+them and add their workflows in `$AGENT_COLLAB_HOME/config.toml`; project config
+cannot enable agents. Grok Build runs as
+`grok --no-auto-update --output-format streaming-json -p`; xAI SDK starts
 require `backend="sdk"`, `XAI_API_KEY`, and an explicit
 `backend_options.xai_sdk.model`.
 

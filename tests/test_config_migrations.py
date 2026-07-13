@@ -85,7 +85,7 @@ class MigrateConfigDataTests(unittest.TestCase):
         self.assertNotIn("backends", migrated)
         self.assertIn("user config", "\n".join(logs.output))
 
-    def test_v4_config_is_stamped_to_v5(self):
+    def test_v4_config_is_stamped_to_current_schema(self):
         migrated = migrate_config_data({"schema_version": 4, "agents": {}})
 
         self.assertEqual(migrated["schema_version"], CURRENT_CONFIG_SCHEMA)
@@ -107,6 +107,27 @@ class MigrateConfigDataTests(unittest.TestCase):
 
         self.assertEqual(migrated["sessions"], {"retention_days": 7})
 
+    def test_malformed_project_workflows_are_dropped_with_warnings(self):
+        cases = (
+            {"sequence": "claude"},
+            {"sequence": []},
+            {"sequence": ["claude"], "unexpected": True},
+            "not-a-table",
+        )
+        for values in cases:
+            warnings = []
+            with self.subTest(values=values):
+                migrated = migrate_config_data(
+                    {"workflows": {"review": values}},
+                    scope="project",
+                    enabled_global_agent_ids={"claude"},
+                    warnings=warnings,
+                )
+
+                self.assertNotIn("workflows", migrated)
+                self.assertEqual(warnings[0]["path"], "workflows.review")
+                self.assertIn("malformed", warnings[0]["message"])
+
 
 class LoadConfigMigrationTests(unittest.TestCase):
     def test_load_config_migrates_versionless_file(self):
@@ -125,7 +146,8 @@ command = "project-claude"
 
             config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
 
-            self.assertEqual(config.agents["claude"].command, "project-claude")
+            self.assertEqual(config.agents["claude"].command, "claude")
+            self.assertTrue(config.warnings)
 
     def test_load_config_accepts_declared_schema_version(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -145,7 +167,8 @@ command = "project-claude"
 
             config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
 
-            self.assertEqual(config.agents["claude"].command, "project-claude")
+            self.assertEqual(config.agents["claude"].command, "claude")
+            self.assertTrue(config.warnings)
 
     def test_load_config_rejects_future_schema_version(self):
         with tempfile.TemporaryDirectory() as tmp:
