@@ -11,8 +11,7 @@ prints a credential notice.
 **Issue:** [#8](https://github.com/lauriparviainen/agent_collab/issues/8)
 (milestone 0.4.0)
 
-**Related:** [stage-5-hardening.md](../tasks_open/stage-5-hardening.md) (optional auth
-controls), [runtime-layout.md](../runtime-layout.md) (current token layout),
+**Related:** [runtime-layout.md](../runtime-layout.md) (current token layout) and
 [daemon-architecture.md](../daemon-architecture.md) (auth model).
 
 ## Context

@@ -1,9 +1,43 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
 *.egg-info/
 /build/
 /dist/
+
+# Local Python environments.
+.venv/
+venv/
+env/
+
+# Local environment files. Keep intentional public examples visible.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Coverage output.
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+coverage.json
+lcov.info
+
+# OS metadata.
+.DS_Store
+Thumbs.db
+
+# Common private-key and certificate-container files.
+*.key
+*.pem
+*.p12
+*.pfx
+
 .agents/
 .codex/
 .agent-collab/data/

@@ -180,11 +180,12 @@ optional follow-up if it can stay small and dependency-light.
 
 ### Prevent accidental secret and generated-file commits
 
-Extend `.gitignore` for common local artifacts that are currently unprotected,
-including local virtual environments, `.env` variants (while allowing an
-intentional example file), coverage output, OS metadata, and common private-key
-file extensions. Avoid ignoring broad configuration names that could hide
-intentional fixtures.
+**Completed 2026-07-13.** `.gitignore` now covers local virtual environments,
+Python tool caches, `.env` variants, coverage output, OS metadata, and common
+private-key/container extensions. Intentional `.env.example` and
+`.env.*.example` files remain allowlisted, and no broad configuration filename
+is ignored. Representative paths were verified with `git check-ignore`; a
+tracked-file scan found no intended fixture in the newly protected categories.
 
 After the repository becomes public, enable and verify GitHub secret scanning
 and push protection when available, alongside the dependency graph and

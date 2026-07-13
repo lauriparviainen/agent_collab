@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Harden public-release repository hygiene (#14) by ignoring local virtual
+  environments, environment files, coverage/tool output, OS metadata, and
+  common private-key containers. Remove the obsolete hardening umbrella task
+  after reconciling its completed and superseded scope.
 - Make xAI CLI supervision non-interactive and read-only by default (#17). Safe
   inspection commands no longer stall on approval, and cancelled or otherwise
   unsuccessful Grok terminal reasons are reported as fatal provider errors

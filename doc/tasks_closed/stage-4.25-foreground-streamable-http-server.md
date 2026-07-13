@@ -173,7 +173,8 @@ Defaults:
 - allow localhost origins,
 - reject non-local origins for `/mcp`.
 
-Auth is out of scope unless it stays very small and optional. A stronger auth/token model belongs in Stage 5 hardening.
+Auth is out of scope unless it stays very small and optional. A stronger
+auth/token model belongs in later dedicated hardening work.
 
 ## Tests
 

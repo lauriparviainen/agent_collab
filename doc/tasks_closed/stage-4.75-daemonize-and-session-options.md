@@ -127,7 +127,7 @@ Out of scope for this stage:
 - systemd/launchd service files.
 - Multi-user remote daemon deployment.
 - Public network binding.
-- Auth beyond any already planned Stage 5 hardening.
+- Auth beyond the separately planned daemon-token work.
 
 ## Server Logging
 
@@ -154,7 +154,8 @@ Logging rules:
 - Transcript content belongs in session JSONL/Markdown logs and event read APIs.
 - Keep enough log context to debug MCP client registration and failed start requests.
 
-Add retention later through Stage 5 hardening. Do not delete logs automatically in this stage.
+Add retention later through a dedicated retention task. Do not delete logs
+automatically in this stage.
 
 ## Agent Guidance
 
