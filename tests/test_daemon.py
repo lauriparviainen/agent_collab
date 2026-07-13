@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
+from agent_collab.config import AgentConfig, CollaborationConfig, ConfigError, WorkflowConfig
 from agent_collab.daemon import (
     SessionManager,
     SessionRequestError,
@@ -325,6 +325,96 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         zero_detail = zero_turns.exception.to_dict()["details"][0]
         self.assertEqual(zero_detail["path"], "max_turns")
         self.assertIn("max_turns must be at least 1", zero_detail["message"])
+        self.assertEqual(manager.list_sessions(), [])
+
+    async def test_start_rejects_unknown_workflow_with_structured_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                'schema_version = 7\n[workflows.review]\nsequence = ["claude"]\n',
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                with self.assertRaises(StartOptionsError) as ctx:
+                    await manager.start_session(
+                        StartSessionRequest(
+                            task="bogus workflow",
+                            workflow="solo-antigravity",
+                            mock=True,
+                            workdir=root,
+                        )
+                    )
+
+        payload = ctx.exception.to_dict()
+        self.assertEqual(payload["error"], "invalid_start_options")
+        self.assertEqual(len(payload["details"]), 1)
+        detail = payload["details"][0]
+        self.assertEqual(detail["path"], "workflow")
+        self.assertIn("solo-antigravity", detail["message"])
+        # The available workflow ids are listed so callers can pick a valid one.
+        self.assertIn("review", detail["message"])
+        self.assertEqual(manager.list_sessions(), [])
+
+    async def test_start_maps_known_workflow_config_error_to_sanitized_400(self):
+        # A *known* workflow that references a disabled agent must fail as a
+        # sanitized SessionRequestError (400), never escape as a bare 500.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                "schema_version = 7\n"
+                '[agents.helper]\ntype = "claude"\nenabled = false\n'
+                '[workflows.custom]\nsequence = ["helper"]\n',
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                with self.assertRaises(SessionRequestError) as ctx:
+                    await manager.start_session(
+                        StartSessionRequest(
+                            task="disabled member",
+                            workflow="custom",
+                            mock=True,
+                            workdir=root,
+                        )
+                    )
+
+        self.assertIn("references disabled agent 'helper'", str(ctx.exception))
+        self.assertEqual(manager.list_sessions(), [])
+
+    async def test_prepare_start_wraps_late_config_error_as_session_request_error(self):
+        # Directly cover the except-ConfigError wrapper around the backend
+        # validation calls: any ConfigError raised there for a *known* workflow
+        # (e.g. after a future refactor) must become a sanitized 400, not a 500.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                'schema_version = 7\n[workflows.review]\nsequence = ["claude"]\n',
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                with mock.patch(
+                    "agent_collab.daemon.validate_start_backends",
+                    side_effect=ConfigError("late validation boom"),
+                ):
+                    with self.assertRaises(SessionRequestError) as ctx:
+                        await manager.start_session(
+                            StartSessionRequest(
+                                task="late config error",
+                                workflow="review",
+                                mock=True,
+                                workdir=root,
+                            )
+                        )
+
+        self.assertIn("late validation boom", str(ctx.exception))
         self.assertEqual(manager.list_sessions(), [])
 
     async def test_parallel_stop_publishes_stopped_only_after_members_settle(self):

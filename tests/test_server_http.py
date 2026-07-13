@@ -741,6 +741,42 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             payload["details"][0]["path"], "backend_options.codex_cli.reasoning_effort"
         )
 
+    async def test_mcp_start_unknown_workflow_is_structured_not_internal_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = AgentCollabHttpServer(manager=SessionManager())
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                response = await server._dispatch(
+                    "POST",
+                    "/mcp",
+                    {},
+                    _mcp_body(
+                        13,
+                        "tools/call",
+                        {
+                            "name": "agent_collab_start",
+                            "arguments": {
+                                "task": "bogus workflow",
+                                "workdir": str(root),
+                                "workflow": "solo-antigravity",
+                                "mock": True,
+                            },
+                        },
+                    ),
+                )
+
+        # A structured tool result (isError), not the sanitized -32603 internal
+        # error that a bare 500 would produce: a 500 carries no "result" key.
+        self.assertIn("result", response)
+        result = response["result"]
+        payload = json.loads(result["content"][0]["text"])
+        self.assertTrue(result["isError"])
+        self.assertEqual(payload["error"], "invalid_start_options")
+        detail = payload["details"][0]
+        self.assertEqual(detail["path"], "workflow")
+        self.assertIn("solo-antigravity", detail["message"])
+
     async def test_mcp_start_rejects_non_object_option_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

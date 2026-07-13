@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Fix an unknown workflow name at session start surfacing as a raw HTTP 500 /
+  MCP internal error instead of the structured `invalid_start_options` shape
+  (#22): the start path now rejects an unknown workflow with a `workflow` field
+  error listing the available ids, and wraps other configuration errors from a
+  known workflow as a sanitized 400 rather than letting them escape as a 500.
 - Add portable solo and dual cross-model review skills (#18), with daemon-served
   diff-scoping, polling, attribution, and triage guidance; Claude and Codex
   plugin metadata; explicit model/backend confirmation before provider calls;

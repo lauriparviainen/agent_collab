@@ -395,7 +395,19 @@ class SessionManager:
         except ConfigError as exc:
             raise SessionRequestError(str(exc)) from exc
         workflow = collab_config.workflows.get(request.workflow)
-        if workflow is not None and workflow.parallel is not None:
+        if workflow is None:
+            available = ", ".join(sorted(collab_config.workflows)) or "(none)"
+            raise StartOptionsError(
+                [
+                    {
+                        "path": "workflow",
+                        "message": (
+                            f"unknown workflow {request.workflow!r}; available: {available}"
+                        ),
+                    }
+                ]
+            )
+        if workflow.parallel is not None:
             errors = []
             if request.interactive:
                 errors.append(
@@ -425,19 +437,26 @@ class SessionManager:
             if request.log_dir
             else self.default_log_dir or GlobalDataPaths.resolve().session_dir
         )
-        selection = validate_start_backends(
-            collab_config,
-            request.workflow,
-            request.backend,
-            request.backend_options,
-            health=None if (request.mock or request.dry_run) else self._backend_health,
-        )
-        normalized = normalize_start_options(
-            collab_config,
-            request.workflow,
-            request.backend_options,
-            agent_backends=selection.agent_backends,
-        )
+        # The unknown-workflow case is handled above with a structured
+        # ``workflow`` field error. Any ConfigError still raised here comes from
+        # validating a *known* workflow (e.g. a disabled member agent); surface
+        # its sanitized text as a 400 rather than letting it escape as a 500.
+        try:
+            selection = validate_start_backends(
+                collab_config,
+                request.workflow,
+                request.backend,
+                request.backend_options,
+                health=None if (request.mock or request.dry_run) else self._backend_health,
+            )
+            normalized = normalize_start_options(
+                collab_config,
+                request.workflow,
+                request.backend_options,
+                agent_backends=selection.agent_backends,
+            )
+        except ConfigError as exc:
+            raise SessionRequestError(str(exc)) from exc
         normalized_options = normalized.backend_options
         interactive = bool(request.interactive)
         interactive_idle_timeout = self._normalize_idle_timeout(request.interactive_idle_timeout)
