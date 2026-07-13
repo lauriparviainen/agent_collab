@@ -18,6 +18,25 @@ into a detailed work log.
   plugin metadata; explicit model/backend confirmation before provider calls;
   and documented copy-based installation for Claude Code, Codex, Antigravity,
   and Grok.
+- Remove the built-in `compare` workflow: its second turn saw the first answer
+  in the transcript, so it was a weaker `cross-review`, and independent
+  side-by-side answers are what `dual-review` now provides. User-config
+  workflows named `compare` keep working.
+- Rework the TUI around one menu language: band headers with column titles on
+  the palette, session picker, and `/new` wizard; accent-on-fill rows with the
+  selected bar; bottom-aligned short menus; combined picker header with
+  right-aligned key hints, aligned columns, and minute-precision timestamps.
+  The transcript gutter attributes parallel members (`codex-tool`), the task
+  row reads `prompt`, and the hardware cursor parks (and blinks) in the input
+  field.
+- `/new` offers workflows as a selectable list (↑↓ + Enter toggles ✓, each row
+  shows its members, a `continue` row proceeds; typing still works) with no
+  preselection, starts one session per selected workflow, and starts parallel
+  workflows non-interactively so `dual-review` works from the TUI. Choosing
+  the shape first and then its member backends is the follow-up (#21). The
+  TUI-side directed input (`/ask`, `#AGENT`) is removed — CLI backends run
+  each turn as a fresh one-shot; the daemon `post_message` target routing for
+  API callers is unchanged.
 - Add daemon-orchestrated parallel review workflows (#19): the built-in
   `dual-review` runs Claude and Codex concurrently over one frozen prompt,
   merges attributed events into one cursor stream, retains per-member terminal

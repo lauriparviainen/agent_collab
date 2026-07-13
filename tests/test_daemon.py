@@ -138,7 +138,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     state = await manager.start_session(
                         StartSessionRequest(
                             task="later failure",
-                            workflow="compare",
+                            workflow="cross-review",
                             max_turns=2,
                             timeout=5,
                             workdir=root,
@@ -811,7 +811,7 @@ sequence = ["antigravity"]
                     state = await manager.start_session(
                         StartSessionRequest(
                             task="queued note task",
-                            workflow="compare",
+                            workflow="cross-review",
                             max_turns=2,
                             timeout=5,
                             workdir=root,

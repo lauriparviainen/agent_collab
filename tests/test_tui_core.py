@@ -9,18 +9,14 @@ from agent_collab import cli
 from agent_collab.daemon import SessionManager, StartSessionRequest
 from agent_collab.events import Event
 from agent_collab.tui_core import (
-    MENU_HEADER_SOURCE,
     MENU_ROW_SOURCE,
     MENU_SELECTED_SOURCE,
     MENU_TITLE_SOURCE,
     PICKER_HEADER_LINES,
-    AgentRef,
     CursorState,
     ScrollState,
     accept_slash_completion,
     advance_cursor_state,
-    agents_from_options,
-    agents_from_session,
     build_new_session_payload,
     clamp_scroll,
     ensure_scroll_visible,
@@ -36,12 +32,12 @@ from agent_collab.tui_core import (
     make_session_picker,
     move_session_picker,
     move_slash_completion,
+    parallel_workflow_ids_from_options,
     parse_input,
     picker_menu_lines,
     picker_scroll,
     render_transcript_lines,
     reset_cursor_state,
-    resolve_agent_selector,
     scroll_by,
     select_latest_session_id,
     selected_picker_session_id,
@@ -73,14 +69,40 @@ class TuiCoreTests(unittest.TestCase):
         lines = render_transcript_lines(format_transcript_event(event))
 
         # Calm direction: lowercase gutter labels (was uppercase CLAUDE).
-        self.assertEqual(lines, ("claude      hello", "            world"))
+        self.assertEqual(lines, ("claude           hello", "                 world"))
 
         long_event = Event.create("tool", "command", "abcdef ghijkl mnop")
-        wrapped = wrap_transcript_lines(format_transcript_event(long_event), 17)
+        wrapped = wrap_transcript_lines(format_transcript_event(long_event), 22)
         rendered = render_transcript_lines(wrapped)
 
-        self.assertEqual(rendered[0], "tool        abcde")
-        self.assertTrue(rendered[1].startswith("        "))
+        self.assertEqual(rendered[0], "tool             abcde")
+        self.assertTrue(rendered[1].startswith("             "))
+
+    def test_transcript_attributes_parallel_member_rows(self):
+        tool_event = Event.create("tool", "tool_call", "Read file\ndetail", agent_id="claude")
+        (line,) = format_transcript_event(tool_event)
+        self.assertEqual(line.text, "claude-tool      Read file · +1 lines")
+        self.assertEqual(line.source, "tool")
+
+        member_event = Event.create("claude", "message", "review text", agent_id="claude-b")
+        lines = format_transcript_event(member_event)
+        self.assertEqual(lines[0].text, "claude-b         review text")
+        self.assertEqual(lines[0].source, "claude")
+
+        matching = Event.create("claude", "message", "review text", agent_id="claude")
+        lines = render_transcript_lines(format_transcript_event(matching))
+        self.assertEqual(lines, ("claude           review text",))
+
+        boundary = Event.create("referee", "status", "turn-1 claude completed", agent_id="claude")
+        lines = render_transcript_lines(format_transcript_event(boundary))
+        self.assertEqual(lines, ("referee          turn-1 claude completed",))
+
+    def test_human_source_renders_as_prompt_alias(self):
+        event = Event.create("human", "message", "Review the diff")
+        lines = format_transcript_event(event)
+        self.assertEqual(lines[0].text, "prompt           Review the diff")
+        # Wire source is untouched: band styling and colors key on it.
+        self.assertEqual(lines[0].source, "human")
 
     def test_terminal_provider_evidence_is_hidden_for_canonical_boundary(self):
         event = Event.create(
@@ -167,36 +189,26 @@ class TuiCoreTests(unittest.TestCase):
         self.assertIn("command_preview: codex --model gpt-5", text)
         self.assertNotIn("ended_at:", text)
 
-    def test_parse_input_covers_slash_plain_and_directed_forms(self):
+    def test_parse_input_covers_slash_and_plain_forms(self):
         self.assertEqual(parse_input("/help").command, "help")
         session = parse_input("/session daemon-1")
         self.assertEqual(session.kind, "slash")
         self.assertEqual(session.args, ("daemon-1",))
         self.assertEqual(parse_input("plain note").kind, "text")
-
-        directed = parse_input("#reviewer take a look")
-        self.assertEqual(directed.kind, "directed")
-        self.assertEqual(directed.agent, "reviewer")
-        self.assertEqual(directed.message, "take a look")
-
-        asked = parse_input("/ask claude compare the options")
-        self.assertEqual(asked.kind, "directed")
-        self.assertEqual(asked.command, "ask")
-        self.assertEqual(asked.agent, "claude")
-        self.assertEqual(asked.message, "compare the options")
-
+        # Directed input (/ask, #AGENT) was removed: CLI backends run each
+        # turn as a fresh one-shot, so a "#agent" note is just a plain note.
+        self.assertEqual(parse_input("#reviewer take a look").kind, "text")
+        self.assertEqual(parse_input("/ask claude anything").kind, "invalid")
         self.assertEqual(parse_input("/unknown").kind, "invalid")
-        self.assertEqual(parse_input("#reviewer").kind, "invalid")
-        self.assertEqual(parse_input("/ask claude").kind, "invalid")
 
     def test_slash_command_completion_filters_deterministically(self):
         all_matches = filter_slash_commands("/")
         s_matches = filter_slash_commands("/s")
 
         self.assertEqual(all_matches[0].name, "/help")
-        self.assertIn("/ask", [match.name for match in all_matches])
+        self.assertNotIn("/ask", [match.name for match in all_matches])
         self.assertEqual([match.name for match in s_matches], ["/sessions", "/session", "/stop"])
-        self.assertEqual(filter_slash_commands("/ask claude"), ())
+        self.assertEqual(filter_slash_commands("/session x"), ())
 
     def test_slash_completion_state_moves_and_accepts_selected_command(self):
         state = make_slash_completion("/s")
@@ -214,14 +226,13 @@ class TuiCoreTests(unittest.TestCase):
         self.assertTrue(slash_completion_matches_input("/session", state))
         self.assertTrue(slash_completion_matches_input("/SESSION", state))
         self.assertEqual(accept_slash_completion("/se", state), "/session ")
-        # Headerless menu with ▸ selection marker (Stage 1b amendment).
+        # Band-headed menu with ▸ selection marker.
         self.assertIn("▸ /session", "\n".join(format_slash_completion_lines(state, max_items=2)))
         self.assertEqual(move_slash_completion(state, 99).index, len(state.matches) - 1)
         self.assertEqual(move_slash_completion(state, -99).index, 0)
 
     def test_slash_completion_hides_for_arguments_and_keeps_no_match_state(self):
         self.assertIsNone(make_slash_completion("plain text"))
-        self.assertIsNone(make_slash_completion("/ask claude"))
         self.assertIsNone(make_slash_completion("/session "))
 
         state = make_slash_completion("/zz")
@@ -249,30 +260,6 @@ class TuiCoreTests(unittest.TestCase):
         )
         # Terminal sessions show just the status — the input chip carries "read-only".
         self.assertEqual(format_activity_indicator({"status": "done"}, tick=3), "done")
-
-    def test_agent_resolution_uses_active_session_settings(self):
-        session = {
-            "settings": {
-                "agents": {
-                    "claude-a": {"type": "claude"},
-                    "claude-b": {"type": "claude"},
-                    "worker": {"type": "codex"},
-                }
-            }
-        }
-        agents = agents_from_session(session)
-
-        self.assertEqual(resolve_agent_selector("worker", agents).agent_id, "worker")
-        self.assertEqual(resolve_agent_selector("codex", agents).agent_id, "worker")
-
-        ambiguous = resolve_agent_selector("claude", agents)
-        self.assertFalse(ambiguous.ok)
-        self.assertIn("claude-a", ambiguous.error)
-        self.assertIn("claude-b", ambiguous.error)
-
-        missing = resolve_agent_selector("reviewer", agents)
-        self.assertFalse(missing.ok)
-        self.assertIn("valid agent ids", missing.error)
 
     def test_scroll_follow_rules(self):
         state = follow_scroll(100, 10)
@@ -331,10 +318,11 @@ class TuiCoreTests(unittest.TestCase):
         state = picker_scroll(picker, state, 200, 10)
         self.assertEqual(state, ScrollState(top=PICKER_HEADER_LINES + 15 + 1 - 10, follow=False))
 
-        # Moving back up scrolls the selection back into view.
+        # Moving back up to the first row re-pins the top so the header
+        # (scrolled off while below the fold) comes back into view.
         picker = move_session_picker(picker, -15)
         state = picker_scroll(picker, state, 200, 10)
-        self.assertEqual(state, ScrollState(top=PICKER_HEADER_LINES, follow=False))
+        self.assertEqual(state, ScrollState(top=0, follow=False))
 
         # An empty picker pins to the top even from a following state.
         self.assertEqual(
@@ -363,13 +351,10 @@ class TuiCoreTests(unittest.TestCase):
         lines = format_session_picker_lines(picker)
 
         tagged = picker_menu_lines(lines, 200)
-        self.assertEqual(tagged[0].source, MENU_TITLE_SOURCE)
-        self.assertEqual(tagged[1].source, MENU_ROW_SOURCE)  # blank spacer
-        self.assertEqual(tagged[1].text, "")
-        self.assertEqual(tagged[2].source, MENU_HEADER_SOURCE)
-        self.assertEqual(tagged[3].source, MENU_SELECTED_SOURCE)
-        self.assertTrue(tagged[3].text.startswith("▸"))
-        self.assertEqual(tagged[4].source, MENU_ROW_SOURCE)
+        self.assertEqual(tagged[0].source, MENU_TITLE_SOURCE)  # combined header
+        self.assertEqual(tagged[1].source, MENU_SELECTED_SOURCE)
+        self.assertTrue(tagged[1].text.startswith("▸"))
+        self.assertEqual(tagged[2].source, MENU_ROW_SOURCE)
 
         # Narrow width: the selected row wraps and its continuations keep the
         # selected-bar role so the highlight spans the whole logical row.
@@ -440,22 +425,57 @@ class TuiCoreTests(unittest.TestCase):
         self.assertIn("session", rendered)
         self.assertIn("▸   new", rendered)
 
-    def test_options_helpers_extract_enabled_agents_and_workflows(self):
+    def test_picker_columns_align_and_trim_timestamps(self):
+        sessions = [
+            {
+                "session_id": "daemon-129d8368dc9047d6",
+                "status": "done",
+                "workflow": "solo-antigravity-cli",
+                "updated_at": "2026-07-13T19:21:27.187654+00:00",
+                "workdir": "/home/devel/projects/agent_collab",
+            },
+            {
+                "session_id": "daemon-7387a888e6034416",
+                "status": "failed",
+                "workflow": "dual-review",
+                "updated_at": "2026-07-13T20:38:18.614285+00:00",
+                "workdir": "/home/devel/projects/agent_collab",
+            },
+        ]
+        picker = make_session_picker(sessions)
+        lines = format_session_picker_lines(picker)
+        header, rows = lines[0], lines[1:]
+
+        self.assertIn("2026-07-13 20:38", rows[0])
+        self.assertNotIn("+00:00", "\n".join(rows))
+        # Every column starts where its header says, even when a value is
+        # wider than the header (long workflow names, wide session ids).
+        self.assertEqual(header.index("updated"), rows[1].index("2026-07-13 19:21"))
+        self.assertEqual(header.index("workdir"), rows[0].index("/home/devel"))
+        self.assertEqual(rows[0].index("/home/devel"), rows[1].index("/home/devel"))
+
+        # With a width, the key hints right-align into the header row; without
+        # (or when too narrow) they are dropped — the status line carries them.
+        wide = format_session_picker_lines(picker, 160)[0]
+        self.assertTrue(wide.endswith("Esc close"))
+        self.assertEqual(len(wide), 160)
+        self.assertNotIn("Esc close", format_session_picker_lines(picker, 40)[0])
+        self.assertNotIn("Esc close", header)
+
+    def test_options_helpers_extract_workflows(self):
         options = {
-            "agents": [
-                {"id": "claude", "type": "claude", "enabled": True},
-                {"id": "codex", "type": "codex", "enabled": False},
-            ],
             "workflows": [
-                {"id": "solo-claude", "sequence": ["claude"]},
-                {"id": "compare", "sequence": ["claude", "codex"]},
+                {"id": "solo-claude", "sequence": ["claude"], "parallel": None},
+                {
+                    "id": "dual-review",
+                    "sequence": ["claude", "codex"],
+                    "parallel": ["claude", "codex"],
+                },
             ],
         }
 
-        self.assertEqual(
-            agents_from_options(options), (AgentRef(id="claude", type="claude", enabled=True),)
-        )
-        self.assertEqual(workflow_ids_from_options(options), ("solo-claude", "compare"))
+        self.assertEqual(workflow_ids_from_options(options), ("solo-claude", "dual-review"))
+        self.assertEqual(parallel_workflow_ids_from_options(options), ("dual-review",))
 
     def test_new_session_payload_matches_daemon_start_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -524,7 +544,7 @@ class TuiCoreMockDaemonTests(unittest.IsolatedAsyncioTestCase):
 
         lines = render_transcript_lines(format_transcript_events(batch.events))
         self.assertGreater(batch.cursor, 0)
-        self.assertTrue(any(line.startswith("human") for line in lines))
+        self.assertTrue(any(line.startswith("prompt") for line in lines))
         self.assertIn("tui mock task", "\n".join(lines))
         self.assertTrue(session_is_terminal(final.to_dict()))
         self.assertFalse(should_start_poller(final.to_dict()))

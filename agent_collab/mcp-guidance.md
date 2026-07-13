@@ -40,7 +40,6 @@ sequence of agent turns or one concurrent review group. Built-in workflows:
 - `solo-codex` — one Codex turn,
 - `cross-review` — Claude, then Codex review, then Claude revision
   (the default),
-- `compare` — Claude and Codex each answer once.
 - `dual-review` — Claude and Codex independently, in parallel.
 
 Projects and users can define more under `[workflows.*]` in config. Call

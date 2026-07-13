@@ -593,6 +593,35 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(summary.raw["accepted_members"], [])
 
+    async def test_whitespace_only_message_is_not_accepted(self):
+        class Runner:
+            def __init__(self, source, text):
+                self.source = source
+                self.text = text
+
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create(self.source, "message", self.text))
+                return TurnOutcome("completed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee, _records, events, _turn_active = self._referee(
+                Path(tmp),
+                ["claude", "codex"],
+                {
+                    "claude": Runner("claude", "  \n\t"),
+                    "codex": Runner("codex", "real review"),
+                },
+            )
+            await referee.run("review task")
+
+        summary = next(
+            event
+            for event in events
+            if isinstance(event.raw, dict) and event.raw.get("parallel") is True
+        )
+        self.assertEqual(summary.raw["members"], {"claude": "completed", "codex": "completed"})
+        self.assertEqual(summary.raw["accepted_members"], ["codex"])
+
     async def test_failed_partial_message_is_not_accepted(self):
         class Runner:
             def __init__(self, source, outcome):

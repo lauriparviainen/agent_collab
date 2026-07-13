@@ -582,7 +582,7 @@ def describe_options(
             {
                 "task": "Review this repository",
                 "workdir": resolved_workdir,
-                "workflow": "compare",
+                "workflow": "dual-review",
                 "backend_options": {
                     "codex_cli": {"thinking_level": "medium", "sandbox": "workspace-write"},
                     "claude_cli": {"model": "opus", "thinking_level": "high"},

@@ -6,11 +6,10 @@ import queue
 import threading
 import time
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from .api_schema import SessionStateModel
 from .client import AgentCollabClient
-from .config import DEFAULT_WORKFLOW
 from .tui_core import (
     ACCENT_ANSI8,
     ACCENT_XTERM256,
@@ -31,13 +30,13 @@ from .tui_core import (
     classify_message,
     clip_with_marker,
     compose_status_right,
-    directed_entry_state,
     format_activity_indicator,
     format_context_line,
     format_details_overlay_lines,
     InfoSegment,
     follow_scroll,
     format_session_details,
+    format_session_picker_lines,
     format_slash_completion_lines,
     format_transcript_events,
     git_branch,
@@ -47,11 +46,13 @@ from .tui_core import (
     make_session_picker,
     move_session_picker,
     move_slash_completion,
-    MENU_HEADER_SOURCE,
+    MENU_ACCENT_TITLE_SOURCE,
     MENU_ROW_SOURCE,
     MENU_SELECTED_SOURCE,
+    MENU_TEXT_ROW_SOURCE,
     MENU_TITLE_SOURCE,
     overlay_body_lines,
+    parallel_workflow_ids_from_options,
     parse_input,
     picker_menu_lines,
     picker_scroll,
@@ -66,6 +67,7 @@ from .tui_core import (
     should_start_poller,
     slash_completion_matches_input,
     visible_scroll_top,
+    wizard_menu_lines,
     workflow_ids_from_options,
     wrap_plain_lines,
     wrap_transcript_lines,
@@ -83,11 +85,9 @@ HELP_LINES = (
     "/follow                  jump to tail and resume follow",
     "/refresh                 re-read active session from cursor 0",
     "/stop                    stop active daemon session",
-    "/ask AGENT message       ask one directed question",
     "/quit                    exit",
     "",
     "input",
-    "#AGENT message           ask one directed question",
     "plain text               append a referee note",
     "",
     "keys",
@@ -95,7 +95,6 @@ HELP_LINES = (
 )
 
 SOURCE_LABEL_WIDTH = GUTTER_WIDTH + 1  # gutter column + separating space
-SLASH_MENU_MAX_ROWS = 8
 
 # Box-drawing chrome (rounded when UTF-8 capable, ASCII fallback otherwise).
 _BOX_UTF8 = {"tl": "╭", "tr": "╮", "bl": "╰", "br": "╯", "h": "─", "v": "│"}
@@ -237,6 +236,7 @@ class TuiApp:
             styles["error"] = self._pair(_CELL_ERROR) | A_BOLD
             styles["border"] = self._pair(_CELL_BORDER)
             styles["band"] = self._pair(_CELL_MUTED, _CELL_BAND)
+            styles["band_accent"] = self._pair(ACCENT_XTERM256, _CELL_BAND)
             styles["menu"] = self._pair(_CELL_TEXT, _CELL_MENU_FILL)
             styles["menu_name"] = self._pair(ACCENT_XTERM256, _CELL_MENU_FILL)
             styles["menu_desc"] = self._pair(_CELL_MUTED, _CELL_MENU_FILL)
@@ -250,6 +250,7 @@ class TuiApp:
             styles["error"] = self._pair(curses.COLOR_RED) | A_BOLD
             styles["border"] = A_DIM
             styles["band"] = A_REVERSE
+            styles["band_accent"] = self._pair(ACCENT_ANSI8) | A_REVERSE
             styles["menu"] = 0
             styles["menu_name"] = self._pair(ACCENT_ANSI8)
             styles["menu_desc"] = 0
@@ -263,6 +264,7 @@ class TuiApp:
             styles["error"] = A_BOLD
             styles["border"] = A_DIM
             styles["band"] = A_REVERSE
+            styles["band_accent"] = A_REVERSE | A_BOLD
             styles["menu"] = 0
             styles["menu_name"] = A_BOLD
             styles["menu_desc"] = 0
@@ -438,12 +440,6 @@ class TuiApp:
             if self._current_slash_completion() is not None:
                 self.slash_completion_dismissed_for = self.input_text
                 return
-            entry = directed_entry_state(self.input_text)
-            if entry is not None and entry.awaiting_arg:
-                # Approved interaction change: cancel directed argument-entry mode
-                # back to referee mode, clearing the rail.
-                self._set_input_text("")
-                return
             # Esc pops only the topmost open state per press. The wizard owns
             # its overlay lines, so cancelling it clears both together.
             if self.new_wizard:
@@ -464,6 +460,13 @@ class TuiApp:
                 # Approved interaction change: Esc dismisses /details, matching
                 # how it already closes the palette and picker.
                 self.details_visible = False
+            return
+        if (
+            self.new_wizard is not None
+            and self.new_wizard.get("step") == "workflow"
+            and key in (curses.KEY_UP, curses.KEY_DOWN)
+        ):
+            self._move_wizard_choice(-1 if key == curses.KEY_UP else 1)
             return
         if self.picker is not None:
             if key in (curses.KEY_UP, ord("k")):
@@ -591,9 +594,6 @@ class TuiApp:
         if parsed.kind == "text":
             self._post_referee_message(parsed.text)
             return
-        if parsed.kind == "directed":
-            self._handle_directed_input(parsed)
-            return
         if parsed.kind != "slash":
             return
         command = parsed.command
@@ -644,10 +644,7 @@ class TuiApp:
         elif command == "quit":
             self.done = True
 
-    def _handle_directed_input(self, parsed: ParsedInput) -> None:
-        self._post_referee_message(parsed.message, target=parsed.agent)
-
-    def _post_referee_message(self, text: str, target: Optional[str] = None) -> None:
+    def _post_referee_message(self, text: str) -> None:
         if not self.session_id or not self.session:
             self.message = "no active session"
             return
@@ -661,7 +658,7 @@ class TuiApp:
             return
         self._stop_poller()
         try:
-            batch = self.client.post_message(self.session_id, text, source="referee", target=target)
+            batch = self.client.post_message(self.session_id, text, source="referee")
             self.cursor_state = CursorState(
                 session_id=self.session_id,
                 cursor=max(0, int(batch.cursor)),
@@ -673,11 +670,7 @@ class TuiApp:
                 self.scroll = follow_scroll(len(self.transcript_lines), self._body_height())
             raw = events[0].raw if events else None
             queued = isinstance(raw, Mapping) and bool(raw.get("queued"))
-            resolved = raw.get("resolved_target") if isinstance(raw, Mapping) else None
-            if resolved:
-                self.message = f"queued for {resolved}" if queued else f"asked {resolved}"
-            else:
-                self.message = "queued note" if queued else "sent note"
+            self.message = "queued note" if queued else "sent note"
             self._refresh_session_status()
         except Exception as exc:
             self.message = str(exc)
@@ -709,11 +702,89 @@ class TuiApp:
         )
 
     def _start_new_wizard(self) -> None:
-        self.new_wizard = {"step": "task", "task": "", "workflow": "", "workdir": ""}
+        self.new_wizard = {"step": "task", "task": "", "workflows": [], "workdir": ""}
         self._set_input_text("")
-        self.overlay_lines = ("new session", "enter task")
+        self._refresh_wizard_overlay("task")
         self.picker = None
         self.message = "new session task"
+
+    WIZARD_CONTINUE_ROW = "continue"
+
+    def _refresh_wizard_overlay(self, question: str) -> None:
+        """Rebuild the wizard menu block: band header, answers, question last.
+
+        Questions ask from the bottom and answered steps stack up above them,
+        matching the bottom-anchored read of the palette and picker menus.
+        """
+        wizard = self.new_wizard or {}
+        lines = ["new session"]
+        if wizard.get("task"):
+            lines.append(f"task: {wizard['task']}")
+        for workflow_id in wizard.get("workflows", ()):
+            lines.append(f"workflow: {workflow_id}")
+        lines.append(question)
+        self.overlay_lines = tuple(lines)
+
+    def _enter_workflow_step(self, options: Mapping[str, Any]) -> None:
+        wizard = self.new_wizard
+        if wizard is None:
+            return
+        raw = options.get("workflows") if isinstance(options.get("workflows"), Sequence) else []
+        members = {}
+        for workflow in raw:
+            if isinstance(workflow, Mapping) and workflow.get("id"):
+                # describe_options fills "sequence" with the member list for
+                # parallel workflows too; the "parallel" fallback covers
+                # payloads that only carry the parallel shape.
+                found = workflow.get("sequence") or workflow.get("parallel") or ()
+                members[str(workflow["id"])] = [str(item) for item in found]
+        wizard["step"] = "workflow"
+        wizard["choices"] = workflow_ids_from_options(options)
+        wizard["members"] = members
+        wizard["index"] = 0
+        # No preselected workflow: the choice is deliberate; continue is
+        # rejected until at least one workflow is selected.
+        self._refresh_workflow_choices()
+        self.message = "↑↓ choose · Enter select"
+
+    def _wizard_choice_rows(self) -> list:
+        wizard = self.new_wizard or {}
+        return list(wizard.get("choices") or ()) + [self.WIZARD_CONTINUE_ROW]
+
+    def _refresh_workflow_choices(self) -> None:
+        """Rebuild the workflow step as a selectable list.
+
+        ↑↓ moves the ▸ highlight, Enter toggles the highlighted workflow
+        (marked ✓) or, on the final ``continue`` row, proceeds. Each row shows
+        the workflow's configured members so the shape is visible before
+        selecting. Typing a workflow id still works.
+        """
+        wizard = self.new_wizard or {}
+        index = int(wizard.get("index") or 0)
+        selected = wizard.get("workflows") or []
+        members = wizard.get("members") or {}
+        lines = ["new session"]
+        if wizard.get("task"):
+            lines.append(f"task: {wizard['task']}")
+        for row_index, label in enumerate(self._wizard_choice_rows()):
+            marker = "▸" if row_index == index else " "
+            if label == self.WIZARD_CONTINUE_ROW:
+                lines.append(f"{marker} {label}")
+                continue
+            annotation = " + ".join(members.get(label) or ())
+            check = " ✓" if label in selected else ""
+            suffix = f" · {annotation}" if annotation else ""
+            lines.append(f"{marker} {label}{check}{suffix}")
+        self.overlay_lines = tuple(lines)
+
+    def _move_wizard_choice(self, delta: int) -> None:
+        wizard = self.new_wizard
+        if wizard is None:
+            return
+        rows = self._wizard_choice_rows()
+        index = max(0, min(len(rows) - 1, int(wizard.get("index") or 0) + delta))
+        wizard["index"] = index
+        self._refresh_workflow_choices()
 
     def _advance_new_wizard(self, value: str) -> None:
         wizard = self.new_wizard
@@ -727,68 +798,91 @@ class TuiApp:
                 return
             wizard["task"] = value
             workdir = str(self._default_workdir())
-            options = self._describe_options_for_workdir(workdir)
-            workflows = workflow_ids_from_options(options)
-            default_workflow = self._default_workflow(workflows)
-            wizard["step"] = "workflow"
-            wizard["default_workflow"] = default_workflow
-            self.overlay_lines = (
-                "new session",
-                f"task: {wizard['task']}",
-                f"workflow [{default_workflow}]",
-                f"choices: {', '.join(workflows) if workflows else '(daemon default)'}",
-            )
-            self.message = f"workflow [{default_workflow}]"
+            try:
+                options = self._describe_options_for_workdir(workdir)
+            except Exception as exc:
+                # A failed daemon call must not crash the curses app; stay on
+                # the task step so submitting again retries.
+                wizard["task"] = ""
+                self.message = str(exc)
+                return
+            self._enter_workflow_step(options)
             return
         if step == "workflow":
-            workflow = value or str(wizard.get("default_workflow") or DEFAULT_WORKFLOW)
-            wizard["workflow"] = workflow
-            default_workdir = str(self._default_workdir())
-            wizard["default_workdir"] = default_workdir
-            wizard["step"] = "workdir"
-            self.overlay_lines = (
-                "new session",
-                f"task: {wizard['task']}",
-                f"workflow: {workflow}",
-                f"workdir [{default_workdir}]",
-            )
-            self.message = f"workdir [{default_workdir}]"
+            choices = wizard.get("choices") or ()
+            if not value:
+                rows = self._wizard_choice_rows()
+                label = rows[min(int(wizard.get("index") or 0), len(rows) - 1)]
+                if label != self.WIZARD_CONTINUE_ROW:
+                    # Enter toggles the highlighted workflow.
+                    if label in wizard["workflows"]:
+                        wizard["workflows"].remove(label)
+                    else:
+                        wizard["workflows"].append(label)
+                    self._refresh_workflow_choices()
+                    picked = ", ".join(wizard["workflows"]) or "(none)"
+                    self.message = f"selected: {picked}"
+                    return
+                if not wizard["workflows"]:
+                    self.message = "workflow is required"
+                    return
+                default_workdir = str(self._default_workdir())
+                wizard["step"] = "workdir"
+                wizard["default_workdir"] = default_workdir
+                self._refresh_wizard_overlay(f"workdir [{default_workdir}]")
+                self.message = f"workdir [{default_workdir}]"
+                return
+            if choices and value not in choices:
+                self.message = f"unknown workflow {value!r}; choices: {', '.join(choices)}"
+                return
+            if value in wizard["workflows"]:
+                self.message = f"workflow {value!r} already added"
+                return
+            wizard["workflows"].append(value)
+            self._refresh_workflow_choices()
+            self.message = f"selected: {', '.join(wizard['workflows'])}"
             return
         if step == "workdir":
             workdir = value or str(wizard.get("default_workdir") or self._default_workdir())
             try:
                 options = self._describe_options_for_workdir(workdir)
                 workflows = workflow_ids_from_options(options)
-                if workflows and wizard["workflow"] not in workflows:
-                    wizard["step"] = "workflow"
-                    wizard["default_workflow"] = workflows[0]
+                selected = list(wizard["workflows"])
+                unknown = [item for item in selected if workflows and item not in workflows]
+                if unknown:
+                    # The final workdir's config may differ from the default
+                    # workdir the choices came from: re-ask with its list, and
+                    # keep the typed workdir as the next default so it is not
+                    # silently discarded on the way back.
+                    wizard["workflows"] = [item for item in selected if item in workflows]
+                    wizard["default_workdir"] = workdir
+                    self._enter_workflow_step(options)
                     self.message = (
-                        f"unknown workflow {wizard['workflow']!r}; choices: {', '.join(workflows)}"
+                        f"unknown workflow {unknown[0]!r}; choices: {', '.join(workflows)}"
                     )
                     return
-                payload = build_new_session_payload(
-                    task=wizard["task"],
-                    workflow=wizard["workflow"],
-                    workdir=workdir,
-                    interactive=True,
-                )
-                result = self.client.start_session(payload)
+                parallel = set(parallel_workflow_ids_from_options(options))
+                started = []
+                for workflow_id in selected:
+                    payload = build_new_session_payload(
+                        task=wizard["task"],
+                        workflow=workflow_id,
+                        workdir=workdir,
+                        # A parallel workflow is non-interactive by contract,
+                        # and a multi-session start is watched, not driven.
+                        interactive=len(selected) == 1 and workflow_id not in parallel,
+                    )
+                    started.append(self.client.start_session(payload).session_id)
                 self.new_wizard = None
                 self.overlay_lines = None
-                self.activate_session(result.session_id)
+                self.activate_session(started[0])
+                if len(started) > 1:
+                    self.message = f"started {len(started)} sessions · watching {started[0]}"
             except Exception as exc:
                 self.message = str(exc)
 
     def _describe_options_for_workdir(self, workdir: str) -> Mapping[str, Any]:
         return self.client.describe_options({"workdir": str(Path(workdir).expanduser().resolve())})
-
-    def _default_workflow(self, workflows: Sequence[str]) -> str:
-        current = session_workflow_name(self.session) if self.session else ""
-        if current and (not workflows or current in workflows):
-            return current
-        if DEFAULT_WORKFLOW in workflows:
-            return DEFAULT_WORKFLOW
-        return workflows[0] if workflows else DEFAULT_WORKFLOW
 
     def _default_workdir(self) -> Path:
         if self.session and self.session.workdir:
@@ -816,7 +910,14 @@ class TuiApp:
         body_lines = self._active_body_lines(max(1, transcript_width - 1))
         self.scroll = clamp_scroll(self.scroll, len(body_lines), body_height)
         start = visible_scroll_top(self.scroll, len(body_lines), body_height)
-        for row, line in enumerate(body_lines[start : start + body_height], start=body_top):
+        first_row = body_top
+        menu_open = self.picker is not None or self.new_wizard is not None
+        if menu_open and len(body_lines) < body_height:
+            # A short menu block (session list, /new wizard) reads bottom-up
+            # next to the input box, like the slash palette, instead of
+            # floating at the top.
+            first_row = body_top + body_height - len(body_lines)
+        for row, line in enumerate(body_lines[start : start + body_height], start=first_row):
             self._render_body_line(row, line, transcript_width)
 
         if details_width:
@@ -826,8 +927,15 @@ class TuiApp:
 
         # Region 5-6: bordered input box (3 rows) + status/hint line.
         box_top = height - 4
-        self._render_input_box(box_top, width)
+        input_cursor = self._render_input_box(box_top, width)
         self._render_status_line(height - 1, width)
+        # Park the hardware cursor in the input field as the last move before
+        # refresh: curses shows (and the terminal blinks) the cursor wherever
+        # the final draw leaves it, so any draw after this would strand it.
+        try:
+            self.stdscr.move(*input_cursor)
+        except curses.error:
+            pass
         self.stdscr.refresh()
 
     def _hairline(self, width: int) -> str:
@@ -857,23 +965,32 @@ class TuiApp:
         text_width = max(0, width - 1)
         if line.source in (
             MENU_TITLE_SOURCE,
-            MENU_HEADER_SOURCE,
+            MENU_ACCENT_TITLE_SOURCE,
             MENU_ROW_SOURCE,
+            MENU_TEXT_ROW_SOURCE,
             MENU_SELECTED_SOURCE,
         ):
-            # Session picker: a colored menu block, like the slash palette.
-            if line.source == MENU_TITLE_SOURCE:
+            # Menu blocks (picker, /new wizard), like the slash palette.
+            if line.source in (MENU_TITLE_SOURCE, MENU_ACCENT_TITLE_SOURCE):
                 # Raised band caps the menu: one shade lighter than the row
-                # fill, matching the referee/human band tone.
+                # fill, matching the referee/human band tone. The wizard title
+                # carries the accent color on that band.
+                text_style = (
+                    self._style("band_accent")
+                    if line.source == MENU_ACCENT_TITLE_SOURCE
+                    else self._style("band")
+                )
                 self._add(row, 0, " " * width, width, self._style("band"))
-                self._add(row, 1, line.text, text_width, self._style("band"))
+                self._add(row, 1, line.text, text_width, text_style)
                 return
             if line.source == MENU_SELECTED_SOURCE:
                 style = self._style("menu_selected")
-            elif line.source == MENU_HEADER_SOURCE:
-                style = self._style("menu_desc")
-            else:
+            elif line.source == MENU_TEXT_ROW_SOURCE:
+                # Wizard answers read as plain text on the fill.
                 style = self._style("menu")
+            else:
+                # Unselected rows read accent-on-fill like palette items.
+                style = self._style("menu_name")
             self._add(row, 0, " " * width, width, style)
             self._add(row, 1, line.text, text_width, style)
             return
@@ -923,11 +1040,18 @@ class TuiApp:
         completion = self._current_slash_completion()
         if completion is None:
             return
-        max_rows = max(1, min(SLASH_MENU_MAX_ROWS, body_height))
-        lines = format_slash_completion_lines(completion, max_items=max_rows)[:max_rows]
+        # No fixed row cap: show every match that fits the body; the window
+        # (centred on the selection) only kicks in when the screen is shorter.
+        max_rows = max(1, body_height - 1)
+        lines = format_slash_completion_lines(completion, max_items=max_rows)[: max_rows + 1]
         start_y = body_top + body_height - len(lines)
         for offset, line in enumerate(lines):
             y = start_y + offset
+            if offset == 0:
+                # Band header caps the menu, matching the session picker.
+                self._add(y, 0, " " * width, width, self._style("band"))
+                self._add(y, 1, line, max(0, width - 1), self._style("band"))
+                continue
             selected = line.startswith("▸")
             fill = self._style("menu_selected") if selected else self._style("menu")
             self._add(y, 0, " " * width, width, fill)
@@ -984,7 +1108,7 @@ class TuiApp:
             return self._style("dim")
         return self._style("muted")
 
-    def _render_input_box(self, box_top: int, width: int) -> None:
+    def _render_input_box(self, box_top: int, width: int) -> Tuple[int, int]:
         box = _BOX_UTF8 if self.utf8 else _BOX_ASCII
         border = self._style("border")
         inner = max(0, width - 2)
@@ -1010,10 +1134,7 @@ class TuiApp:
             text_width = content_width
         self._add(mid, content_x, typed, max(0, text_width), self._style("text"))
         cursor_x = min(content_x + max(0, text_width), content_x + len(typed))
-        try:
-            self.stdscr.move(mid, max(content_x, min(width - 2, cursor_x)))
-        except curses.error:
-            pass
+        return mid, max(content_x, min(width - 2, cursor_x))
 
     def _input_chip(self) -> str:
         return input_mode_chip(
@@ -1030,14 +1151,8 @@ class TuiApp:
         return self._style("accent")
 
     def _render_status_line(self, y: int, width: int) -> None:
-        entry = directed_entry_state(self.input_text)
-        if entry is not None and entry.awaiting_arg:
-            # Live guidance while entering a directed argument (not an error).
-            message = entry.usage_hint
-            message_style = self._style("muted")
-        else:
-            message = self.message
-            message_style = self._message_style(message)
+        message = self.message
+        message_style = self._message_style(message)
 
         activity = (
             format_activity_indicator(self.session, int(time.monotonic() * 4), utf8=self.utf8)
@@ -1083,15 +1198,19 @@ class TuiApp:
         details_overlay = None
         if self._details_mode(screen_width) == "narrow" and self.session:
             details_overlay = format_details_overlay_lines(self.session)
+        if self.picker is not None:
+            # The picker renders as a colored menu, not plain overlay text;
+            # width lets the header row right-align its key hints.
+            return picker_menu_lines(format_session_picker_lines(self.picker, width), width)
+        if self.new_wizard is not None and self.overlay_lines is not None:
+            # The /new wizard renders as a menu block: accent band header,
+            # answered steps as text rows, the current question at the bottom.
+            return wizard_menu_lines(self.overlay_lines, width)
         overlay = overlay_body_lines(
-            picker=self.picker,
             overlay_lines=self.overlay_lines,
             details_overlay=details_overlay,
         )
         if overlay is not None:
-            if self.picker is not None:
-                # The picker renders as a colored menu, not plain overlay text.
-                return picker_menu_lines(overlay, width)
             return tuple(_ui_line(line) for line in wrap_plain_lines(overlay, width))
         return wrap_transcript_lines(self.transcript_lines, width)
 

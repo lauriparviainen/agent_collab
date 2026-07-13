@@ -178,7 +178,7 @@ class McpServerTests(unittest.TestCase):
     def test_start_maps_to_client_start_session(self):
         args = {
             "task": "mcp test",
-            "workflow": "compare",
+            "workflow": "cross-review",
             "workdir": "/repo",
             "max_turns": 5,
             "timeout": 120,

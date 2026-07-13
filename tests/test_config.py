@@ -171,8 +171,8 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(
                 config.workflows["cross-review"].sequence, ["claude", "codex", "claude"]
             )
-            self.assertEqual(config.workflows["compare"].sequence, ["claude", "codex"])
             self.assertEqual(config.workflows["dual-review"].parallel, ["claude", "codex"])
+            self.assertNotIn("compare", config.workflows)
             self.assertEqual(config.workdir.restrict_workdir_roots, [])
             self.assertEqual(config.loaded_paths, [])
 

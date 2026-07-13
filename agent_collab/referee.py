@@ -438,7 +438,7 @@ class Referee:
         produced_messages: set[str] = set()
 
         def observe(agent_id: str, event: Event) -> None:
-            if event.type == "message" and event.source != "error":
+            if event.type == "message" and event.source != "error" and event.text.strip():
                 produced_messages.add(agent_id)
 
         occurrences = [(agent_id, self._allocate_occurrence()) for agent_id in members]

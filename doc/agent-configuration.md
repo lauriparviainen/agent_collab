@@ -87,9 +87,6 @@ sequence = ["codex"]
 [workflows.cross-review]
 sequence = ["claude", "codex", "claude"]
 
-[workflows.compare]
-sequence = ["claude", "codex"]
-
 [workflows.dual-review]
 parallel = ["claude", "codex"]
 
@@ -429,7 +426,7 @@ A workflow names an orchestration pattern: the ordered agent sequence a session 
 sequence = ["agent_a", "agent_b", "agent_a"]
 ```
 
-This removes hardcoded orchestration logic from the referee. Built-in workflows (`solo-claude`, `solo-codex`, `cross-review`, `compare`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
+This removes hardcoded orchestration logic from the referee. Built-in workflows (`solo-claude`, `solo-codex`, `cross-review`, `dual-review`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
 
 Project workflows are safe shared composition: each referenced agent must
 already exist and be enabled in built-in or global user config. A workflow that

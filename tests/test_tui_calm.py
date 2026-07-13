@@ -1,5 +1,5 @@
 """Stage 5.2 calm-TUI cleanup: focused tests for the new formatting helpers,
-the shared overlay, hint precedence, the spinner, directed argument-entry mode,
+the shared overlay, hint precedence, the spinner, the input mode chip,
 Esc-closes-/details, the /details clip marker, narrow rendering, the one-row
 tool summary, and the hex -> xterm-256 / 8-color brand mapping.
 
@@ -8,13 +8,13 @@ not touch a real curses screen (the Esc key paths render nothing).
 """
 
 import unittest
+from unittest import mock
 
 from agent_collab.api_schema import SessionStateModel
 from agent_collab.events import Event
 from agent_collab.tui import TuiApp
 from agent_collab.tui_core import (
     AgentInfo,
-    DirectedEntryState,
     ScrollState,
     ansi8_from_hex,
     ascii_fallback,
@@ -23,7 +23,6 @@ from agent_collab.tui_core import (
     classify_message,
     clip_with_marker,
     compose_status_right,
-    directed_entry_state,
     format_activity_indicator,
     format_context_line,
     format_details_overlay_lines,
@@ -128,6 +127,11 @@ class ContextAgentClusterTests(unittest.TestCase):
         segments = build_context_agent_segments([reviewer], 100)
         self.assertEqual(_info_text(segments), "reviewer codex_cli: gpt-5")
 
+    def test_agent_id_equal_to_canonical_name_is_not_duplicated(self):
+        agent = AgentInfo("antigravity_cli", "antigravity", "Gemini 3.1 Pro (High)", "cli")
+        segments = build_context_agent_segments([agent], 100)
+        self.assertEqual(_info_text(segments), "antigravity_cli: Gemini 3.1 Pro (High)")
+
     def test_agent_without_backend_falls_back_to_bare_id(self):
         mock = AgentInfo("mock", "mock", "", "")
         segments = build_context_agent_segments([mock], 100)
@@ -192,21 +196,21 @@ class ContextLineTests(unittest.TestCase):
 
 
 class PaletteFormatterTests(unittest.TestCase):
-    def test_headerless_menu_with_marker_and_windowing(self):
+    def test_menu_has_band_header_with_marker_and_windowing(self):
         state = make_slash_completion("/")
         assert state is not None
         lines = format_slash_completion_lines(state, max_items=7)
-        # No "commands  Tab/Enter accepts" header anymore.
-        self.assertFalse(any("Tab/Enter accepts" in line for line in lines))
-        self.assertEqual(len(lines), 7)  # 10 commands, window of 7
-        self.assertTrue(lines[0].startswith("▸"))  # selected row marked ▸
-        self.assertIn("/help", lines[0])
+        # Band header carries the column titles, matching the session picker.
+        self.assertEqual(lines[0], "  command        description")
+        self.assertEqual(len(lines), 8)  # header + 10 commands, window of 7
+        self.assertTrue(lines[1].startswith("▸"))  # selected row marked ▸
+        self.assertIn("/help", lines[1])
 
-    def test_no_match_state_has_no_header(self):
+    def test_no_match_state_keeps_the_header(self):
         state = make_slash_completion("/zzz")
         assert state is not None
         lines = format_slash_completion_lines(state)
-        self.assertEqual(lines, ("  no matches",))
+        self.assertEqual(lines, ("  command        description", "  no matches"))
 
 
 class SharedOverlayTests(unittest.TestCase):
@@ -295,32 +299,8 @@ class SpinnerTests(unittest.TestCase):
         self.assertEqual(format_activity_indicator({"status": "awaiting_input"}), "awaiting input")
 
 
-class DirectedEntryTests(unittest.TestCase):
-    def test_hash_agent_awaiting_message(self):
-        state = directed_entry_state("#codex ")
-        self.assertEqual(state, DirectedEntryState("codex", "message codex directly", True))
-
-    def test_hash_agent_with_message_is_not_awaiting(self):
-        state = directed_entry_state("#codex fix the poller")
-        self.assertIsNotNone(state)
-        self.assertFalse(state.awaiting_arg)
-
-    def test_ask_form_without_agent(self):
-        state = directed_entry_state("/ask ")
-        self.assertEqual(state, DirectedEntryState("ask AGENT", "usage: /ask AGENT message", True))
-
-    def test_ask_form_with_agent_awaiting_message(self):
-        state = directed_entry_state("/ask codex ")
-        self.assertEqual(state.target_label, "codex")
-        self.assertTrue(state.awaiting_arg)
-
-    def test_plain_text_is_not_directed(self):
-        self.assertIsNone(directed_entry_state("plain note"))
-        self.assertIsNone(directed_entry_state("/help"))
-
-    def test_mode_chip_reflects_directed_target(self):
-        self.assertEqual(input_mode_chip("#codex "), "-> codex")
-        self.assertEqual(input_mode_chip("/ask "), "-> ask AGENT")
+class InputModeChipTests(unittest.TestCase):
+    def test_mode_chip_reflects_input_state(self):
         self.assertEqual(input_mode_chip("hello"), "referee note")
         self.assertEqual(input_mode_chip("hi", new_wizard=True), "new session")
         self.assertEqual(input_mode_chip("hi", picker_open=True), "picking")
@@ -343,7 +323,7 @@ class ToolSummaryTests(unittest.TestCase):
     def test_single_line_tool_event_has_no_size_suffix(self):
         event = Event.create("tool", "command", "Read options.py:281")
         rendered = render_transcript_lines(format_transcript_event(event))[0]
-        self.assertEqual(rendered, "tool        Read options.py:281")
+        self.assertEqual(rendered, "tool             Read options.py:281")
 
 
 class DetailsClipMarkerTests(unittest.TestCase):
@@ -385,6 +365,7 @@ class _FakeScreen:
 
     def _reset(self):
         self.grid = [[" "] * self.width for _ in range(self.height)]
+        self.moved = None
 
     def getmaxyx(self):
         return (self.height, self.width)
@@ -396,7 +377,7 @@ class _FakeScreen:
         pass
 
     def move(self, y, x):
-        pass
+        self.moved = (y, x)
 
     def addnstr(self, y, x, text, width, attr=0):
         if y < 0 or y >= self.height:
@@ -477,6 +458,56 @@ class RenderIntegrationTests(unittest.TestCase):
         self.assertIn("referee note", out)  # mode chip
         self.assertIn("running · Enter send · / cmds", out)  # status/hint
 
+    def test_hardware_cursor_parks_in_the_input_field(self):
+        app, screen = _app_with_transcript(24, 100)
+        app._render()
+        # Input row is box_top + 1 = height - 3; the cursor sits right after
+        # the "> " prompt. It must be the render's final move so the terminal
+        # blinks it inside the input field, not on the status line.
+        self.assertEqual(screen.moved, (21, 4))
+        app.input_text = "hi"
+        app._render()
+        self.assertEqual(screen.moved, (21, 6))
+
+    def test_palette_shows_every_command_when_it_fits(self):
+        app, screen = _app_with_transcript(24, 100)
+        app.input_text = "/"
+        app._render()
+        out = screen.text()
+        self.assertIn("  command        description", out)
+        for name in (
+            "/help",
+            "/sessions",
+            "/new",
+            "/details",
+            "/follow",
+            "/refresh",
+            "/stop",
+            "/quit",
+        ):
+            self.assertIn(name, out)
+
+    def test_short_session_list_bottom_aligns_next_to_the_input_box(self):
+        app, screen = _app_with_transcript(24, 100)
+        app.picker = make_session_picker(
+            [
+                {
+                    "session_id": "daemon-1",
+                    "status": "done",
+                    "workflow": "solo-claude",
+                    "updated_at": "2026-07-13T20:38:18+00:00",
+                    "workdir": "/w",
+                }
+            ]
+        )
+        app._render()
+        rows = screen.text().splitlines()
+        # Body rows are 3..19; header + one session fill the last two so the
+        # short list sits next to the input box instead of floating at the top.
+        self.assertIn("session", rows[18])
+        self.assertIn("daemon-1", rows[19])
+        self.assertEqual(rows[3].strip(), "")
+
     def test_band_covers_every_wrapped_row_of_human_and_referee_messages(self):
         class _AttrScreen(_FakeScreen):
             def _reset(self):
@@ -516,7 +547,7 @@ class RenderIntegrationTests(unittest.TestCase):
         out = screen.text()
         # Transcript stays on the left (regression guard: details mode must read
         # the screen width, not the transcript width).
-        self.assertIn("claude      the epoch guard drops stale batches", out)
+        self.assertIn("claude           the epoch guard drops stale batches", out)
         self.assertIn("│", out)  # hairline separator column
         self.assertIn("…", out)  # clip marker on overflow
 
@@ -559,19 +590,6 @@ class EscBehaviourTests(unittest.TestCase):
         app._handle_key(27)
         self.assertFalse(app.details_visible)
 
-    def test_esc_cancels_directed_argument_entry_and_clears_rail(self):
-        app = self._app()
-        app.input_text = "#codex "
-        app._handle_key(27)
-        self.assertEqual(app.input_text, "")
-
-    def test_esc_does_not_clear_a_complete_directed_turn(self):
-        app = self._app()
-        app.input_text = "#codex fix it"
-        app._handle_key(27)
-        # A complete turn is not argument-entry, so Esc leaves the rail as-is.
-        self.assertEqual(app.input_text, "#codex fix it")
-
 
 class EscPopsTopmostTests(unittest.TestCase):
     """Esc pops only the topmost open state per press (review finding)."""
@@ -599,19 +617,150 @@ class EscPopsTopmostTests(unittest.TestCase):
 
     def test_esc_cancels_wizard_with_its_overlay_in_one_press(self):
         app = self._app()
-        app.new_wizard = {"step": "task", "task": "", "workflow": "", "workdir": ""}
-        app.overlay_lines = ("new session", "enter task")
+        app.new_wizard = {"step": "task", "task": "", "workflows": [], "workdir": ""}
+        app.overlay_lines = ("new session", "task")
         app._handle_key(27)
         self.assertIsNone(app.new_wizard)
         self.assertIsNone(app.overlay_lines)
         self.assertEqual(app.message, "new session cancelled")
 
 
+class NewWizardFlowTests(unittest.TestCase):
+    """/new renders as a menu block and can start several sessions at once."""
+
+    class _Client:
+        def __init__(self):
+            self.started = []
+
+        def describe_options(self, payload):
+            return {
+                "workflows": [
+                    {"id": "cross-review", "sequence": ["claude", "codex", "claude"]},
+                    {"id": "dual-review", "parallel": ["claude", "codex"]},
+                    {"id": "solo-xai-cli", "sequence": ["xai"]},
+                ]
+            }
+
+        def start_session(self, payload):
+            self.started.append(payload)
+            from types import SimpleNamespace
+
+            return SimpleNamespace(session_id=f"daemon-{len(self.started)}")
+
+    def _app(self):
+        client = self._Client()
+        app = TuiApp(_DummyScreen(), client, initial_session_id=None)
+        app.activated = []
+        app.activate_session = app.activated.append
+        return app, client
+
+    def test_wizard_selects_workflows_and_starts_one_session_each(self):
+        app, client = self._app()
+        app._start_new_wizard()
+        app._advance_new_wizard("review the diff")
+        # Choice rows: cross-review, dual-review, solo-xai-cli, continue.
+        self.assertEqual(app.overlay_lines[0], "new session")
+        self.assertEqual(app.overlay_lines[1], "task: review the diff")
+        self.assertEqual(app.overlay_lines[2], "▸ cross-review · claude + codex + claude")
+        app._move_wizard_choice(1)  # ▸ dual-review
+        app._advance_new_wizard("")  # Enter toggles ✓
+        app._move_wizard_choice(1)  # ▸ solo-xai-cli
+        app._advance_new_wizard("")
+        self.assertIn("  dual-review ✓", "\n".join(app.overlay_lines))
+        self.assertIn("▸ solo-xai-cli ✓ · xai", "\n".join(app.overlay_lines))
+        app._move_wizard_choice(1)  # ▸ continue
+        app._advance_new_wizard("")
+        self.assertTrue(app.overlay_lines[-1].startswith("workdir ["))
+        app._advance_new_wizard("")  # default workdir starts the sessions
+
+        self.assertEqual([p["workflow"] for p in client.started], ["dual-review", "solo-xai-cli"])
+        # Multi-session starts are watched, not driven.
+        self.assertFalse(any(p["interactive"] for p in client.started))
+        self.assertEqual(app.activated, ["daemon-1"])
+        self.assertIn("started 2 sessions", app.message)
+
+    def test_wizard_toggle_deselects_and_requires_a_selection(self):
+        app, client = self._app()
+        app._start_new_wizard()
+        app._advance_new_wizard("review the diff")
+        app._advance_new_wizard("")  # toggle cross-review on
+        self.assertEqual(app.new_wizard["workflows"], ["cross-review"])
+        app._advance_new_wizard("")  # toggle it back off
+        self.assertEqual(app.new_wizard["workflows"], [])
+        app._move_wizard_choice(99)  # clamp onto continue
+        app._advance_new_wizard("")
+        self.assertEqual(app.message, "workflow is required")
+        self.assertEqual(app.new_wizard["step"], "workflow")
+
+    def test_wizard_single_parallel_workflow_starts_non_interactive(self):
+        app, client = self._app()
+        app._start_new_wizard()
+        app._advance_new_wizard("review the diff")
+        app._move_wizard_choice(1)  # ▸ dual-review
+        app._advance_new_wizard("")
+        app._move_wizard_choice(99)  # ▸ continue
+        app._advance_new_wizard("")
+        app._advance_new_wizard("")
+        self.assertEqual([p["workflow"] for p in client.started], ["dual-review"])
+        self.assertFalse(client.started[0]["interactive"])
+
+    def test_wizard_single_sequential_workflow_stays_interactive(self):
+        app, client = self._app()
+        app._start_new_wizard()
+        app._advance_new_wizard("review the diff")
+        app._advance_new_wizard("")  # ▸ cross-review toggled
+        app._move_wizard_choice(99)
+        app._advance_new_wizard("")
+        app._advance_new_wizard("")
+        self.assertEqual([p["workflow"] for p in client.started], ["cross-review"])
+        self.assertTrue(client.started[0]["interactive"])
+
+    def test_wizard_survives_describe_options_failure_at_task_step(self):
+        app, client = self._app()
+        client.describe_options = mock.Mock(side_effect=RuntimeError("daemon unreachable"))
+        app._start_new_wizard()
+        app._advance_new_wizard("review the diff")
+        # The failure surfaces as a message; the wizard stays on the task
+        # step (no crash) so submitting again retries.
+        self.assertEqual(app.message, "daemon unreachable")
+        self.assertEqual(app.new_wizard["step"], "task")
+
+    def test_wizard_workdir_reentry_keeps_typed_workdir_and_truncates(self):
+        app, client = self._app()
+        app._start_new_wizard()
+        app._advance_new_wizard("review the diff")
+        app._advance_new_wizard("dual-review")
+        app._move_wizard_choice(99)
+        app._advance_new_wizard("")  # continue → workdir step
+        # The custom workdir's config no longer knows dual-review.
+        client.describe_options = mock.Mock(
+            return_value={"workflows": [{"id": "solo-xai-cli", "sequence": ["xai"]}]}
+        )
+        app._advance_new_wizard("/custom/workdir")
+        self.assertEqual(app.new_wizard["step"], "workflow")
+        self.assertEqual(app.new_wizard["workflows"], [])  # unknown truncated
+        self.assertIn("unknown workflow", app.message)
+        # The typed workdir survives as the next default instead of being
+        # silently replaced by the global default.
+        self.assertEqual(app.new_wizard["default_workdir"], "/custom/workdir")
+
+    def test_wizard_typed_entry_rejects_unknown_and_duplicate_workflows(self):
+        app, client = self._app()
+        app._start_new_wizard()
+        app._advance_new_wizard("review the diff")
+        app._advance_new_wizard("nope")
+        self.assertIn("unknown workflow", app.message)
+        app._advance_new_wizard("dual-review")
+        app._advance_new_wizard("dual-review")
+        self.assertIn("already added", app.message)
+        self.assertEqual(app.new_wizard["workflows"], ["dual-review"])
+
+
 class GutterLabelTests(unittest.TestCase):
     def test_long_source_is_ellipsized_into_the_fixed_gutter(self):
-        self.assertEqual(gutter_label("antigravity"), "antigravity")  # 11 fits exactly
-        self.assertEqual(len(gutter_label("antigravity_sdk")), GUTTER_WIDTH)
-        self.assertEqual(gutter_label("antigravity_sdk"), "antigravit…")
+        self.assertEqual(gutter_label("antigravity-tool"), "antigravity-tool")  # 16 fits exactly
+        self.assertEqual(len(gutter_label("antigravity_sdk-tool")), GUTTER_WIDTH)
+        self.assertEqual(gutter_label("antigravity_sdk-tool"), "antigravity_sdk…")
         self.assertEqual(gutter_label("referee"), "referee")
         self.assertEqual(gutter_label("claude"), "claude")
 

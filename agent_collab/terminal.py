@@ -22,6 +22,8 @@ def print_event(event: Event, color: bool = True) -> None:
         # line. Provider evidence remains in JSONL for diagnostics.
         return
     label = event.source.upper()
+    if event.agent_id and event.agent_id != event.source:
+        label += f" ({event.agent_id})"
     prefix = f"{label:<7}"
     if color and sys.stdout.isatty():
         prefix = f"{COLORS.get(event.source, '')}{prefix}{RESET}"

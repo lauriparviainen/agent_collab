@@ -11,12 +11,11 @@ SLASH_COMMANDS = {
     "help": "show help",
     "sessions": "pick from daemon sessions",
     "session": "switch active session",
-    "new": "start an interactive daemon session",
+    "new": "start a daemon session",
     "details": "toggle session details",
     "follow": "jump to tail and follow",
     "refresh": "re-read the active session",
     "stop": "stop the active session",
-    "ask": "ask one agent a directed question",
     "quit": "exit",
 }
 
@@ -35,24 +34,7 @@ class ParsedInput:
     command: Optional[str] = None
     args: Tuple[str, ...] = ()
     text: str = ""
-    agent: Optional[str] = None
-    message: str = ""
     error: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class AgentRef:
-    id: str
-    type: str
-    enabled: bool = True
-
-
-@dataclass(frozen=True)
-class AgentResolution:
-    ok: bool
-    agent_id: Optional[str] = None
-    error: Optional[str] = None
-    valid_agent_ids: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -103,24 +85,7 @@ def parse_input(raw: str) -> ParsedInput:
                 kind="invalid", command=name, error=f"unknown command /{name}; type /help"
             )
         args = tuple(part for part in rest.split() if part)
-        if name == "ask":
-            agent, sep, message = rest.strip().partition(" ")
-            if not sep or not agent.strip() or not message.strip():
-                return ParsedInput(kind="invalid", command=name, error="usage: /ask AGENT message")
-            return ParsedInput(
-                kind="directed",
-                command=name,
-                args=args,
-                agent=agent.strip(),
-                message=message.strip(),
-            )
         return ParsedInput(kind="slash", command=name, args=args, text=rest.strip())
-    if value.startswith("#"):
-        target, _, message = value.partition(" ")
-        if len(target) > 1:
-            if not message.strip():
-                return ParsedInput(kind="invalid", error="usage: #AGENT message")
-            return ParsedInput(kind="directed", agent=target[1:], message=message.strip())
     return ParsedInput(kind="text", text=value)
 
 
@@ -209,19 +174,22 @@ def ascii_fallback(text: str) -> str:
 def format_slash_completion_lines(
     state: SlashCompletionState, max_items: int = 6
 ) -> Tuple[str, ...]:
-    """Render the palette menu rows.
+    """Render the palette menu: a band header row, then the windowed rows.
 
-    Headerless (Stage 1b amendment): the typed ``/`` in the input box is the
-    label and the keys live on the status/hint line. Selected row is marked
-    ``▸`` (was ``>``). Windowing/filter behaviour is unchanged.
+    The header carries the column titles, matching the session picker's
+    combined header so every menu reads the same. The typed ``/`` in the
+    input box remains the mode label and the keys live on the status/hint
+    line. Selected row is marked ``▸``; windowing/filter behaviour is
+    unchanged.
     """
+    header = f"  {'command':<14} description"
     if not state.matches:
-        return ("  no matches",)
+        return (header, "  no matches")
 
     item_count = max(1, int(max_items))
     start = max(0, min(state.index - item_count // 2, len(state.matches) - item_count))
     end = min(len(state.matches), start + item_count)
-    lines = []
+    lines = [header]
     for index, match in enumerate(state.matches[start:end], start=start):
         marker = SLASH_SELECTED_MARKER if index == state.index else " "
         lines.append(f"{marker} {match.name:<14} {match.description}")
@@ -252,10 +220,15 @@ def format_activity_indicator(session: Any, tick: int = 0, *, utf8: bool = True)
     return status or "live"
 
 
-# Wide enough for the longest built-in provider name ("antigravity"); longer
-# custom agent ids still ellipsize via gutter_label.
-GUTTER_WIDTH = 11
+# Wide enough for the longest built-in member tool label ("antigravity-tool");
+# longer custom agent ids still ellipsize via gutter_label.
+GUTTER_WIDTH = 16
 BAND_SOURCES = {"referee", "human"}
+# Display-only gutter aliases; the wire source is untouched (band styling,
+# brand colors, and JSONL key on it). The "human" event carries the task
+# prompt, which an MCP caller rather than a person may have posted —
+# "prompt" says what the row is instead of guessing who sent it.
+GUTTER_ALIASES = {"human": "prompt"}
 
 
 def gutter_label(source: str) -> str:
@@ -298,8 +271,17 @@ def format_transcript_event(event: Any) -> Tuple[TranscriptLine, ...]:
     if isinstance(raw, Mapping) and raw.get("fatal") is True:
         return ()
     source = str(_value(event, "source", "error"))
-    label = gutter_label(source)
     text = str(_value(event, "text", "") or "")
+    agent_id = str(_value(event, "agent_id", "") or "")
+    # Member attribution follows the Markdown renderers' agent_id-differs rule,
+    # rendered in the gutter: `codex-tool` for a member's tool rows, the agent
+    # id for a member's stream rows. Band rows are referee-authored prose that
+    # already names the member.
+    attributed = bool(agent_id) and agent_id != source and source not in BAND_SOURCES
+    if source == "tool":
+        label = gutter_label(f"{agent_id}-tool" if attributed else source)
+    else:
+        label = gutter_label(agent_id if attributed else GUTTER_ALIASES.get(source, source))
     stamp = short_time(_value(event, "timestamp", "")) if source in BAND_SOURCES else ""
 
     if source == "tool":
@@ -526,16 +508,30 @@ def selected_picker_session_id(picker: SessionPickerState) -> Optional[str]:
 
 
 # Lines before the first session row in format_session_picker_lines' output:
-# title, blank, column header.
-PICKER_HEADER_LINES = 3
+# one combined title row carrying the column headers and right-aligned hints.
+PICKER_HEADER_LINES = 1
+PICKER_HEADER_HINTS = "↑↓ choose · Enter switch · Esc close"
 
 
-def format_session_picker_lines(picker: SessionPickerState) -> Tuple[str, ...]:
+def _picker_timestamp(value: Any) -> str:
+    """Minute-precision ``YYYY-MM-DD HH:MM`` for picker rows (display-only)."""
+    text = str(value or "")
+    if len(text) >= 16 and text[10] == "T":
+        clock = text[11:16]
+        if len(clock) == 5 and clock[2] == ":":
+            return f"{text[:10]} {clock}"
+    return text
+
+
+def format_session_picker_lines(picker: SessionPickerState, width: int = 0) -> Tuple[str, ...]:
     """Render the session picker as shared-overlay body lines.
 
     Behaviour (latest-first sort, pre-selection, activation) is unchanged; the
-    title/columns are lowercase and the selected row is marked ``▸`` (target
-    delta from today's uppercase headers and ``>`` marker).
+    selected row is marked ``▸``. One combined header row carries the column
+    titles, with the key hints right-aligned into it when ``width`` (> 0)
+    leaves room. Column widths fit the widest value over reserved floors so
+    long workflow names or custom session ids never push later columns out of
+    line; timestamps render at minute precision.
     """
     if not picker.sessions:
         return (
@@ -543,67 +539,50 @@ def format_session_picker_lines(picker: SessionPickerState) -> Tuple[str, ...]:
             "",
             "    no daemon sessions found — /new to start one",
         )
-    lines = ["    sessions · ↑↓ choose · Enter switch · Esc close", ""]
-    lines.append(f"    {'session':<24} {'status':<15} {'workflow':<14} {'updated':<25} workdir")
-    for index, session in enumerate(picker.sessions):
+    header = ("session", "status", "workflow", "updated")
+    rows = []
+    for session in picker.sessions:
+        rows.append(
+            (
+                str(_value(session, "session_id", None) or ""),
+                str(_value(session, "status", None) or ""),
+                session_workflow_name(session),
+                _picker_timestamp(
+                    _value(session, "updated_at", None) or _value(session, "created_at", None)
+                ),
+                str(_value(session, "workdir", None) or ""),
+            )
+        )
+    # Reserved floors keep the columns from shifting between session lists:
+    # the daemon session-id shape, the longest built-in workflow name, and the
+    # minute-precision timestamp. Status stays dynamic — statuses are short
+    # and an "awaiting_input"-wide floor reads as wasted space. Wider values
+    # (custom ids or workflow names) still grow their column.
+    floors = (
+        len("daemon-0123456789abcdef"),
+        0,
+        len("solo-antigravity-cli"),
+        len("2026-07-13 20:38"),
+    )
+    widths = [
+        max(floors[column], len(title), max(len(row[column]) for row in rows))
+        for column, title in enumerate(header)
+    ]
+    header_line = (
+        "    " + " ".join(f"{title:<{widths[i]}}" for i, title in enumerate(header)) + " workdir"
+    )
+    if width > 0 and len(header_line) + 2 + len(PICKER_HEADER_HINTS) <= width:
+        padding = width - len(header_line) - len(PICKER_HEADER_HINTS)
+        header_line += " " * padding + PICKER_HEADER_HINTS
+    lines = [header_line]
+    for index, row in enumerate(rows):
         marker = SLASH_SELECTED_MARKER if index == picker.index else " "
         lines.append(
-            f"{marker}   {str(_value(session, 'session_id', None) or ''):<24} "
-            f"{str(_value(session, 'status', None) or ''):<15} "
-            f"{session_workflow_name(session):<14} "
-            f"{str(_value(session, 'updated_at', None) or _value(session, 'created_at', None) or ''):<25} "
-            f"{str(_value(session, 'workdir', None) or '')}"
+            f"{marker}   "
+            + " ".join(f"{row[i]:<{widths[i]}}" for i in range(len(header)))
+            + f" {row[4]}"
         )
     return tuple(lines)
-
-
-def agents_from_session(session: Any) -> Tuple[AgentRef, ...]:
-    raw_settings = _value(session, "settings", None)
-    settings = raw_settings if isinstance(raw_settings, Mapping) else {}
-    agents = settings.get("agents") if isinstance(settings.get("agents"), Mapping) else {}
-    refs = []
-    for agent_id, agent in agents.items():
-        agent_type = ""
-        if isinstance(agent, Mapping):
-            agent_type = str(agent.get("type") or "")
-        refs.append(AgentRef(id=str(agent_id), type=agent_type, enabled=True))
-    return tuple(refs)
-
-
-def agents_from_options(options: Mapping[str, Any]) -> Tuple[AgentRef, ...]:
-    refs = []
-    agents = options.get("agents") if isinstance(options.get("agents"), Sequence) else []
-    for agent in agents:
-        if not isinstance(agent, Mapping) or not agent.get("enabled", False):
-            continue
-        agent_id = agent.get("id")
-        if agent_id:
-            refs.append(AgentRef(id=str(agent_id), type=str(agent.get("type") or ""), enabled=True))
-    return tuple(refs)
-
-
-def resolve_agent_selector(selector: str, agents: Sequence[AgentRef]) -> AgentResolution:
-    enabled = tuple(agent for agent in agents if agent.enabled)
-    valid_ids = tuple(agent.id for agent in enabled)
-    needle = selector.lower()
-    id_matches = [agent for agent in enabled if agent.id.lower() == needle]
-    if id_matches:
-        return AgentResolution(ok=True, agent_id=id_matches[0].id, valid_agent_ids=valid_ids)
-    type_matches = [agent for agent in enabled if agent.type.lower() == needle and agent.type]
-    if len(type_matches) == 1:
-        return AgentResolution(ok=True, agent_id=type_matches[0].id, valid_agent_ids=valid_ids)
-    if len(type_matches) > 1:
-        return AgentResolution(
-            ok=False,
-            error=f"ambiguous agent type {selector!r}; valid agent ids: {', '.join(valid_ids)}",
-            valid_agent_ids=valid_ids,
-        )
-    valid = ", ".join(valid_ids) if valid_ids else "(none)"
-    return AgentResolution(
-        ok=False,
-        error=f"unknown agent {selector!r}; valid agent ids: {valid}",
-        valid_agent_ids=valid_ids,
-    )
 
 
 def max_scroll_top(total_lines: int, viewport_height: int) -> int:
@@ -659,12 +638,15 @@ def picker_scroll(
 
     Row spans are computed on the wrapped display lines because picker rows
     (long workdir paths) can wrap on narrow terminals. Tail-follow is never
-    right here: it hides the title, the column header, and the latest-first
-    top rows — including the pre-selected current session.
+    right here: it hides the header row and the latest-first top rows —
+    including the pre-selected current session. Selecting the first row
+    re-pins the top so the header scrolls back into view.
     """
     if not picker.sessions:
         return ScrollState(top=0, follow=False)
-    lines = format_session_picker_lines(picker)
+    if picker.index == 0:
+        return ScrollState(top=0, follow=False)
+    lines = format_session_picker_lines(picker, width)
     selected = PICKER_HEADER_LINES + picker.index
     row_start = len(wrap_plain_lines(lines[:selected], width))
     row_end = row_start + len(wrap_plain_lines(lines[selected : selected + 1], width))
@@ -673,31 +655,53 @@ def picker_scroll(
 
 
 MENU_TITLE_SOURCE = "menu_title"
-MENU_HEADER_SOURCE = "menu_header"
 MENU_ROW_SOURCE = "menu_row"
 MENU_SELECTED_SOURCE = "menu_selected"
+# Wizard variant: the rows are answers rather than selectable items, so they
+# read as plain text on the fill while the title carries the accent.
+MENU_ACCENT_TITLE_SOURCE = "menu_accent_title"
+MENU_TEXT_ROW_SOURCE = "menu_text_row"
 
 
 def picker_menu_lines(lines: Sequence[str], width: int) -> Tuple[TranscriptLine, ...]:
-    """Wrap picker overlay lines and tag each wrapped row with a menu role.
+    """Wrap menu-block lines and tag each wrapped row with a menu role.
 
-    The picker renders as a colored menu (matching the slash palette) rather
-    than plain overlay text: the hint line stays chrome-dim, the column header
-    reads muted on the menu fill, the selected row gets the selected bar —
-    wrapped continuations included — and every other row gets the menu fill.
-    Line positions follow format_session_picker_lines: hint, blank, column
-    header, then session rows.
+    Shared by the session picker and the /new wizard: line 0 is the
+    band-styled header, a ``▸``-marked row gets the selected bar — wrapped
+    continuations included — and every other row reads accent-on-fill like a
+    palette item.
     """
     tagged = []
     for index, line in enumerate(lines):
         if index == 0:
             source = MENU_TITLE_SOURCE
-        elif index == PICKER_HEADER_LINES - 1:
-            source = MENU_HEADER_SOURCE
         elif line.startswith(SLASH_SELECTED_MARKER):
             source = MENU_SELECTED_SOURCE
         else:
             source = MENU_ROW_SOURCE
+        for wrapped_index, text in enumerate(wrap_plain_lines((line,), width)):
+            tagged.append(TranscriptLine(source=source, text=text, continuation=wrapped_index > 0))
+    return tuple(tagged)
+
+
+def wizard_menu_lines(lines: Sequence[str], width: int) -> Tuple[TranscriptLine, ...]:
+    """Wrap /new wizard lines and tag each row with its menu role.
+
+    Line 0 is the accent band title. A ``▸``-marked row is the highlighted
+    choice; a marker-column row (leading space) is an unselected choice and
+    reads accent-on-fill like a palette item; everything else (answers,
+    questions) reads as plain text on the fill.
+    """
+    tagged = []
+    for index, line in enumerate(lines):
+        if index == 0:
+            source = MENU_ACCENT_TITLE_SOURCE
+        elif line.startswith(SLASH_SELECTED_MARKER):
+            source = MENU_SELECTED_SOURCE
+        elif line.startswith(" "):
+            source = MENU_ROW_SOURCE
+        else:
+            source = MENU_TEXT_ROW_SOURCE
         for wrapped_index, text in enumerate(wrap_plain_lines((line,), width)):
             tagged.append(TranscriptLine(source=source, text=text, continuation=wrapped_index > 0))
     return tuple(tagged)
@@ -760,6 +764,16 @@ def workflow_ids_from_options(options: Mapping[str, Any]) -> Tuple[str, ...]:
     ids = []
     for workflow in workflows:
         if isinstance(workflow, Mapping) and workflow.get("id"):
+            ids.append(str(workflow["id"]))
+    return tuple(ids)
+
+
+def parallel_workflow_ids_from_options(options: Mapping[str, Any]) -> Tuple[str, ...]:
+    """Ids of workflows with a ``parallel`` member list (never interactive)."""
+    workflows = options.get("workflows") if isinstance(options.get("workflows"), Sequence) else []
+    ids = []
+    for workflow in workflows:
+        if isinstance(workflow, Mapping) and workflow.get("id") and workflow.get("parallel"):
             ids.append(str(workflow["id"]))
     return tuple(ids)
 
@@ -889,13 +903,14 @@ def _agent_chip_segments(agent: AgentInfo) -> Tuple[InfoSegment, ...]:
     ``{type}_{backend}`` is the registry's canonical backend name and doubles
     as the agent label in the common case where the agent id equals its type.
     A custom agent id stays in front so workflow identity is never lost
-    (``reviewer codex_cli: gpt-5``); agents without a backend (mock) fall back
-    to the bare id.
+    (``reviewer codex_cli: gpt-5``) — unless it equals the canonical name
+    itself (an ``antigravity_cli`` agent id would print twice); agents without
+    a backend (mock) fall back to the bare id.
     """
     segments: list = []
     if agent.type and agent.backend:
         canonical = f"{agent.type}_{agent.backend}"
-        if agent.name and agent.name != agent.type:
+        if agent.name and agent.name not in (agent.type, canonical):
             segments.append(InfoSegment(agent.name, "agent", agent.brand_color))
             segments.append(InfoSegment(f" {canonical}", "backend"))
         else:
@@ -1009,38 +1024,8 @@ def git_branch(workdir: Any) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Input mode chip + directed argument-entry mode (region 5)
+# Input mode chip (region 5)
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class DirectedEntryState:
-    target_label: str
-    usage_hint: str
-    awaiting_arg: bool
-
-
-def directed_entry_state(input_text: Any) -> Optional[DirectedEntryState]:
-    """Detect the directed argument-entry mode for the rail contents.
-
-    ``#agent …`` and ``/ask AGENT …`` forms yield the target label and the live
-    usage hint; ``awaiting_arg`` is True while the message (or agent) is still
-    missing, which is when ``Esc`` cancels back to referee mode.
-    """
-    text = str(input_text or "")
-    if text.startswith("#"):
-        tag, _, rest = text.partition(" ")
-        agent = tag[1:]
-        if not agent:
-            return None
-        return DirectedEntryState(agent, f"message {agent} directly", not rest.strip())
-    if text.startswith("/ask "):
-        agent, _, message = text[5:].partition(" ")
-        agent = agent.strip()
-        if not agent:
-            return DirectedEntryState("ask AGENT", "usage: /ask AGENT message", True)
-        return DirectedEntryState(agent, "usage: /ask AGENT message", not message.strip())
-    return None
 
 
 def input_mode_chip(
@@ -1051,7 +1036,7 @@ def input_mode_chip(
     has_session: bool = True,
     accepts_input: bool = True,
 ) -> str:
-    """The right-aligned mode/target chip inside the input box."""
+    """The right-aligned mode chip inside the input box."""
     if new_wizard:
         return "new session"
     if picker_open:
@@ -1060,9 +1045,6 @@ def input_mode_chip(
         return "no session"
     if not accepts_input:
         return "read-only"
-    directed = directed_entry_state(input_text)
-    if directed is not None:
-        return f"-> {directed.target_label}"
     return "referee note"
 
 
