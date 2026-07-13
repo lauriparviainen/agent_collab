@@ -1,6 +1,16 @@
 # Parallel review workflow
 
-**Status:** Designed; not started.
+**Status:** Designed and design-reviewed; not started.
+
+Design review 2026-07-13: independent read-only reviews by xAI Grok Build and
+Gemini 3.1 Pro (High) through agent-collab, both APPROVE WITH CHANGES; all
+required changes are folded into this document. Both reviewers independently
+caught the same factual error (the TOML fallback parser does not handle
+nested arrays — goal 1 correction) and the missing all-members-fail
+mechanism (goal 8: `ParallelStageFailed` + produced-output predicate). Grok
+additionally required the machine-readable stage-summary event (goal 8), the
+`turn_active` suppression for group members, and the pinned rejection site
+for interactive parallel starts (goal 12).
 
 **Created:** 2026-07-13
 
@@ -61,12 +71,20 @@ fan-out.
    `stages` list of singletons, so there is one execution model internally.
 
    A workflow declares **exactly one** of `sequence` or `stages`; declaring both
-   is a config error. `sequence` remains the canonical, untouched sequential
-   form (constraint: existing config stays valid). The TOML fallback parser
-   already handles this shape: `_parse_toml_value` parses a mixed array of
-   strings and nested arrays recursively (`stages = [["a","b"], "c"]` yields
-   `[["a","b"], "c"]`), so no fallback-parser change is required (inference,
-   verified against `config.py:_parse_toml_value`/`_split_top_level`).
+   is a config error. `sequence` remains the canonical sequential form and its
+   behavior is unchanged (constraint: existing config stays valid) — note this
+   is a behavior-level promise verified by tests, not a claim that
+   `config.py`'s workflow functions go untouched; `WorkflowConfig`,
+   `_merge_workflow`, and `validate_workflow` all need surgery to add the
+   `stages` shape (see Implementation notes).
+
+   **The TOML fallback parser must be extended** (correction from design
+   review — the original claim that it already handles nested arrays was
+   wrong): `_split_top_level` tracks quotes but not bracket nesting, so
+   `stages = [["claude", "codex"]]` splits on the inner comma and fails to
+   parse on Python without `tomllib` (< 3.11). `_split_top_level` gains
+   bracket-depth tracking alongside its quote tracking, with fallback-parser
+   tests over nested arrays. (Found independently by both design reviewers.)
 
 2. **`CURRENT_CONFIG_SCHEMA` bumps to 7 with a no-op stamp migration.** Strictly,
    a bump is not *required* for correctness: `stages` is a new optional field, so
@@ -173,6 +191,29 @@ fan-out.
      reviews that succeeded — the opposite of what a "second/third opinion"
      caller wants. If **every** member of a group fails, the stage produced
      nothing and the session is `failed`.
+
+     The predicate and mechanism are explicit (added after design review —
+     both reviewers flagged that today the referee swallows per-turn timeout
+     errors and `daemon._run_session` unconditionally sets `done` when
+     `Referee.run` returns, so "all fail → failed" cannot fall out of the
+     existing paths): a member **produced output** iff it emitted at least one
+     non-`error` event of type `message` during its stage run. The parallel
+     group path tracks per-member outcomes; when a group of size ≥ 2 ends
+     with zero producing members, `Referee.run` raises a dedicated
+     `ParallelStageFailed` exception, which the existing
+     `daemon._run_session` exception path converts to `failed` — no new
+     daemon status logic.
+
+     **Degradation is machine-readable, not prose-only** (design review,
+     Grok finding 9): at group end the referee emits one structured
+     stage-summary `status` event whose `raw` payload is
+     `{"stage": N, "parallel": true, "members": {"<agent_id>":
+     "completed" | "timed_out" | "failed"}}`. A consumer that needs "did I
+     get all N opinions?" checks this single event instead of parsing
+     per-member prose; the review skills (#18) are required to check it and
+     report degraded groups explicitly. `SessionState.status` stays
+     unchanged — `done` means "at least one opinion arrived", and the
+     stage summary is the authoritative full-vs-degraded signal.
    - **Start-time ineligibility** (a member's backend is unavailable or disabled
      at start) keeps the existing all-or-nothing gate: `validate_start_backends`
      already rejects the *start* before any session exists, and `_describe_workflow`
@@ -249,6 +290,15 @@ fan-out.
     workflow therefore never enters `awaiting_input`. Interactive parallel is
     deferred (Open questions).
 
+    The rejection site and message are pinned (design review, Grok finding
+    12): validation happens in the daemon's start preparation
+    (`_prepare_session_start`), next to the existing start-time backend
+    validation, with the error
+    `workflow '<id>' contains a parallel stage; interactive sessions are not
+    supported for parallel workflows — start it with interactive=false`.
+    Field-path detail follows the existing validation-error shape so MCP
+    callers can fix the named field.
+
 13. **Compatibility: sequential workflows and parallel-unaware clients are
     untouched.** Because a workflow is selected by *name* and parallelism lives
     entirely in server-side config, the **start wire shape does not change** —
@@ -262,9 +312,11 @@ fan-out.
     | `SessionState` / `SessionStateModel` (incl. `agent_sessions`) | none |
     | TUI, `agent-collab watch`, MCP clients unaware of parallelism | none — they read the same cursor-ordered stream; interleaving is just more events, rendered per-source as today |
     | `events.Event` + `api_schema.EventModel` | **additive**: optional `agent_id` (regenerates API docs; compat note) |
-    | `config.WorkflowConfig`, `_merge_workflow`, `validate_workflow` | parse/validate `stages`; enforce sequence-xor-stages |
+    | `config.WorkflowConfig`, `_merge_workflow`, `validate_workflow` | parse/validate `stages`; enforce sequence-xor-stages (non-trivial: new `_expect_stages` helper, flattened-member validation, every `.sequence` call site audited) |
+    | `config.py` TOML fallback parser (`_split_top_level`) | **required fix**: bracket-depth tracking for nested arrays |
     | `config_migrations` | bump to 7 (no-op stamp); project filter stays sequence-only |
-    | `referee.py` (`_sequence`→stage normalization, group execution) | new parallel path; sequential path preserved as stages-of-one |
+    | `referee.py` (`_sequence`→stage normalization, group execution) | new parallel path with per-member outcome tracking + `ParallelStageFailed`; sequential path preserved as stages-of-one |
+    | `daemon.py` `turn_active` wiring | parallel members must not toggle the shared `turn_active` bool (see Implementation notes) |
     | `options.describe_options` / `build_session_settings` | surface `stages`; eligibility already correct |
     | `logging.py` + `daemon._render_transcript` | attribution suffix when `agent_id != source` |
 
@@ -320,15 +372,26 @@ stages = [["codex", "xai"], "claude"]
   `CURRENT_CONFIG_SCHEMA = 7`; update `render_user_config`. Leave
   `_filter_project_workflows` unchanged so project `stages` are dropped with the
   existing warning.
+- `config.py` fallback parser: extend `_split_top_level` with bracket-depth
+  tracking (`[`/`]` outside quotes adjust a depth counter; split only at
+  depth 0). Add fallback-parser tests for `[["a","b"], "c"]`,
+  `[["a"], ["b","c"]]`, and strings containing brackets.
 - `referee.py`: replace `_sequence()` with a `_stages()` normalization that maps
   either form to `List[List[str]]`. The main loop iterates `stages[:max_turns]`.
   For a singleton stage, keep the current single-agent path (including the
   turn-index role selection) untouched. For a group of size ≥ 2: freeze one
   transcript snapshot, build one shared prompt (reviewer role), launch one
   `_run_agent_turn` per member via `asyncio.gather(return_exceptions=True)`, each
-  wrapped in its own `wait_for(timeout)` exactly as today. Emit `referee`/`status`
-  boundary events at group start and per-member completion/timeout. Tag emitted
-  events with `agent_id`.
+  wrapped in its own `wait_for(timeout)` exactly as today — but with the
+  `turn_active` callback suppressed for group members: the shared bool has
+  no per-member meaning and concurrent toggling races (design review, Grok
+  finding 4); the group path signals stage-level activity once at group
+  start/end instead. Track per-member outcomes (produced-output predicate:
+  ≥ 1 non-`error` `message` event); emit the structured stage-summary
+  `status` event at group end (goal 8); raise `ParallelStageFailed` when a
+  group of size ≥ 2 has zero producing members. Emit `referee`/`status`
+  boundary events at group start and per-member completion/timeout. Tag
+  emitted events with `agent_id`.
 - `events.Event`: add `agent_id: Optional[str] = None`, include it in
   `to_dict`/`to_json` (additive). `api_schema.EventModel`: add the optional
   field to `from_dict`/`to_dict`. Regenerate `doc/daemon_api_doc/` via
@@ -361,8 +424,16 @@ stages = [["codex", "xai"], "claude"]
 - Per-agent `timeout` cuts a slow member at its own deadline while faster members
   still return; the session reaches `done` with an attributed timeout `error`
   event for the straggler.
-- All-members-fail yields `failed`; `stop` mid-group cancels all members and
-  reaches `stopped` with attributed cancellation events.
+- All-members-fail raises `ParallelStageFailed` and yields `failed` (the
+  sequential single-agent timeout behavior — error event, session `done` — is
+  explicitly unchanged); `stop` mid-group cancels all members and reaches
+  `stopped` with attributed cancellation events.
+- The group-end stage-summary `status` event carries the machine-readable
+  member outcome map, and a degraded group (one of two members timed out)
+  is detectable from that single event.
+- The TOML fallback parser parses nested `stages` arrays correctly
+  (dedicated tests, including strings containing `[`/`]`).
+- Parallel group members do not toggle the session `turn_active` flag.
 - Sequential workflows (`solo-claude`, `cross-review`, `compare`) are byte-for-byte
   unchanged in config, execution, events, and rendering.
 - `describe_options` marks a parallel workflow start-eligible only when all
