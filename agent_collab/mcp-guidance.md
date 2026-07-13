@@ -2,7 +2,7 @@
 
 Guidance for agents using the agent-collab MCP tools. Fetch a single topic
 with `agent_collab_guidance` and `topic` set to one of: `overview`, `start`,
-`watch`, `options`, `errors`, `workflows`. Calling it without a topic (or
+`watch`, `options`, `errors`, `workflows`, `review-recipe`. Calling it without a topic (or
 with `overview`) returns this whole document.
 
 ## Overview
@@ -165,3 +165,125 @@ sequential or directed turn continues the workflow only when its outcome is
 for remediation. Provider identity, partial transcript prose, raw terminal
 payloads, an exit-zero status, and the absence of a Python exception do not
 prove success. Do not infer `refused` from model prose.
+
+## Review recipe
+
+Use this recipe for solo and parallel cross-model review skills. The option
+schema returned by `agent_collab_describe_options` is authoritative; never
+invent model or option values.
+
+### 1. Freeze the scope
+
+1. Resolve the repository to an absolute `workdir`.
+2. Choose and state exactly one base:
+   - default current diff: working tree, staged changes, and untracked files
+     against `HEAD`, or
+   - an explicit base ref supplied by the user.
+3. Parse `git diff --name-status -z <base>` plus
+   `git ls-files --others --exclude-standard -z`. Build a de-duplicated,
+   one-path-per-line list:
+   - modified, added, or copied: destination path,
+   - deleted: deleted path,
+   - renamed: source and destination as separate paths,
+   - untracked: untracked path.
+4. Freeze that list before starting reviewers. It is the primary scope, not a
+   hard visibility wall: a reviewer may open a direct dependency needed to
+   prove a finding, but must not run repository-wide searches.
+
+### 2. Select and confirm reviewers
+
+1. Call `agent_collab_describe_options` with the absolute workdir.
+2. Use only enabled, `start_eligible` workflows. Identify each reviewer by
+   agent id, underlying configured model, and canonical backend. Backend or
+   provider names alone do not prove model diversity; Antigravity can run a
+   Claude model.
+3. Honor models named by the user. If a reviewer model is unclear, show each
+   eligible workflow member's configured model plus schema-allowed model
+   overrides and ask. Ask for a backend only when the selected model is
+   ambiguous across eligible backends. Do not silently pick the strongest or
+   cheapest.
+4. Before the paid start, show the workflow, agent ids, models, canonical
+   backends, effective configured defaults, and overrides. Ask for explicit
+   confirmation. Defaults need no separate choice.
+
+### 3. Build the prompt
+
+Use this template, filling every placeholder:
+
+```text
+Review the current diff read-only.
+Workdir: <absolute-workdir>
+Base: <HEAD-or-explicit-ref>
+Changed files (one path per line):
+<changed-file-list>
+
+Focus on correctness, security, regressions, and missing tests. Stay within
+the listed files except for a direct dependency needed to prove a finding; do
+not run repository-wide searches. Report only high- or medium-severity
+findings. Every finding must include severity, a resolvable file:line, and a
+concrete failure scenario. For a deleted file, cite the base-side line. Do not
+propose stylistic rewrites. Do not edit files. If there are no qualifying
+findings, say so.
+```
+
+Prompt-level read-only instructions are behavioral, not a security boundary.
+Use a backend's sandbox, mode, or permission option where the discovery schema
+offers one, and include the effective value in the pre-start confirmation.
+
+### 4. Start and watch
+
+Pass `interactive: false` so a review cannot park in `awaiting_input`. For dual
+review, make one start call for a two-member `parallel` workflow; the daemon
+starts both reviewers over one frozen prompt and emits one attributed stream.
+
+```text
+session = agent_collab_start(..., interactive=false)
+batch = agent_collab_read_events(session_id=session.session_id, cursor=0)
+cursor = batch.cursor
+consume(batch.events)
+
+while not batch.terminal:
+    batch = agent_collab_wait_events(
+        session_id=session.session_id,
+        cursor=cursor,
+        timeout_ms=20000,
+    )
+    cursor = batch.cursor                 # always advance to returned cursor
+    consume(batch.events)
+    inspect(batch.status, batch.failure, batch.turn_outcomes)
+    if batch is routine and nonterminal:
+        wait at least 20 seconds before the next observation call
+```
+
+Terminate only when `terminal` is true, never because `events` is empty. For a
+parallel workflow, key member events and outcomes by `agent_id`, reconcile only
+after terminal status, and map each member to its canonical backend. Prefix
+every surfaced reviewer finding with `[<session_id> <canonical_backend>]`.
+
+### 5. Triage and reconcile
+
+For every candidate finding:
+
+1. Reject it if severity is not high/medium or `file:line` does not resolve.
+2. Open the cited location and trace the concrete scenario through the real
+   code and relevant tests. For a deletion, inspect the base blob and diff.
+3. Keep it only when confirmed. Downgrade high to medium when impact is real
+   but narrower than claimed; drop unconfirmed claims.
+4. Never auto-apply a reviewer suggestion.
+
+For dual review, label same/overlapping-location findings with the same failure
+scenario as `Agreement`; agreement raises confidence but is not proof. Label
+conflicts and single-reviewer findings as `Disagreement`, then adjudicate by
+reading code and tests, never by majority vote.
+
+### Advisory backend quirks (2026-07-14)
+
+| Provider | Behavioral guidance not expressed by the schema |
+| --- | --- |
+| Antigravity | Prefer `mode=plan` for read-only review. |
+| xAI | Prefer `permission_mode=auto`; `plan` can cancel silently when headless. |
+| Codex | Include the explicit file list and prohibit broad repository greps. |
+
+Re-read allowed values, defaults, and models from
+`agent_collab_describe_options` at runtime. If this dated matrix conflicts with
+the schema, the schema wins.

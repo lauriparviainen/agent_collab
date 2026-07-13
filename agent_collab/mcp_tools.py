@@ -156,7 +156,15 @@ TOOLS = [
             "properties": {
                 "topic": {
                     "type": "string",
-                    "enum": ["overview", "start", "watch", "options", "errors", "workflows"],
+                    "enum": [
+                        "overview",
+                        "start",
+                        "watch",
+                        "options",
+                        "errors",
+                        "workflows",
+                        "review-recipe",
+                    ],
                 }
             },
         },
@@ -338,7 +346,15 @@ def text_content(text: str, is_error: bool = False) -> Dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
-GUIDANCE_TOPICS = ("overview", "start", "watch", "options", "errors", "workflows")
+GUIDANCE_TOPICS = (
+    "overview",
+    "start",
+    "watch",
+    "options",
+    "errors",
+    "workflows",
+    "review-recipe",
+)
 # Shipped as package data (see pyproject.toml) so installed daemons can serve
 # it; a repo-relative ``doc/`` path would not exist under site-packages.
 _GUIDANCE_PATH = Path(__file__).with_name("mcp-guidance.md")
@@ -349,6 +365,7 @@ _GUIDANCE_HEADINGS = {
     "errors": "## Errors",
     "workflows": "## Workflows",
     "overview": "## Overview",
+    "review-recipe": "## Review recipe",
 }
 
 
@@ -471,12 +488,16 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
                 "instructions": (
-                    "Call agent_collab_guidance for full usage guidance. "
-                    "Resolve the intended project to an absolute workdir and call agent_collab_describe_options "
-                    "before every start selection; its cached probe is advisory and start revalidates freshly per backend policy. "
-                    "Use agent_collab_start with task, workdir, and workflow. "
-                    "Use agent_collab_wait_events with a cursor and wait at least 20 seconds between "
-                    "routine nonterminal observation calls; do not rapid-poll or make one unbounded call. "
+                    "Resolve the intended project to an absolute workdir. Call "
+                    "agent_collab_describe_options before every start and use only enabled, "
+                    "start-eligible configured workflows and schema values. Watch with bounded "
+                    "agent_collab_wait_events calls, always advance the returned cursor, and stop "
+                    "only on terminal status, never an empty batch. Call agent_collab_guidance "
+                    "for the full contract and its review-recipe topic for diff-review workflow. "
+                    "Discovery is advisory; start revalidates freshly per backend policy. Before a "
+                    "paid review, confirm the selected models, canonical backends, and effective "
+                    "options with the user. Use interactive=false for parallel review workflows, "
+                    "and wait at least 20 seconds between routine nonterminal observation calls. "
                     "On validation errors, fix the named field paths instead of guessing."
                 ),
                 "serverInfo": {"name": "agent-collab", "version": "0.1"},

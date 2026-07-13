@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Collab Solo Review"
+  short_description: "One cross-model review of the current diff"
+  default_prompt: "Use $agent-collab-solo-review to get a second opinion on my current diff."

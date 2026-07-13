@@ -1,0 +1,25 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agent-collab",
+  "description": "Cross-model review skills. Requires the agent-collab daemon to be installed, running, and registered as an MCP server.",
+  "owner": {
+    "name": "Lauri Parviainen"
+  },
+  "plugins": [
+    {
+      "name": "agent-collab",
+      "description": "Run one or two independent model reviews of the current diff through an installed, running, MCP-connected agent-collab daemon.",
+      "author": {
+        "name": "Lauri Parviainen"
+      },
+      "category": "development",
+      "source": "./skills",
+      "strict": false,
+      "skills": [
+        "./agent-collab-solo-review",
+        "./agent-collab-dual-review"
+      ],
+      "homepage": "https://github.com/lauriparviainen/agent_collab"
+    }
+  ]
+}

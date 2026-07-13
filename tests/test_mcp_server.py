@@ -121,6 +121,26 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("## Watch", text)
         self.assertIn("invalid_start_options", text)
 
+    def test_review_recipe_guidance_is_discoverable_and_mechanical(self):
+        response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+        topics = tools["agent_collab_guidance"]["inputSchema"]["properties"]["topic"]["enum"]
+        self.assertIn("review-recipe", topics)
+
+        result = handle_tool("agent_collab_guidance", {"topic": "review-recipe"})
+        text = result["content"][0]["text"]
+        self.assertFalse(result.get("isError"))
+        self.assertTrue(text.startswith("## Review recipe"))
+        for required in (
+            "git diff --name-status -z",
+            "interactive: false",
+            "timeout_ms=20000",
+            "[<session_id> <canonical_backend>]",
+            "Advisory backend quirks (2026-07-14)",
+        ):
+            self.assertIn(required, text)
+        self.assertNotIn("## Errors", text)
+
     def test_guidance_document_ships_inside_the_package(self):
         """Installed daemons must find the guidance file under site-packages.
 
@@ -148,6 +168,12 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_guidance", instructions)
         self.assertIn("workflow", instructions)
         self.assertIn("agent_collab_describe_options", instructions)
+        self.assertLess(len(instructions), 1000)
+        standalone = instructions[:500]
+        self.assertIn("absolute workdir", standalone)
+        self.assertIn("agent_collab_describe_options", standalone)
+        self.assertIn("returned cursor", standalone)
+        self.assertIn("agent_collab_guidance", standalone)
 
     def test_start_maps_to_client_start_session(self):
         args = {

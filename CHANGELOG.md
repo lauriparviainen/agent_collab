@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add portable solo and dual cross-model review skills (#18), with daemon-served
+  diff-scoping, polling, attribution, and triage guidance; Claude and Codex
+  plugin metadata; explicit model/backend confirmation before provider calls;
+  and documented copy-based installation for Claude Code, Codex, Antigravity,
+  and Grok.
 - Add daemon-orchestrated parallel review workflows (#19): the built-in
   `dual-review` runs Claude and Codex concurrently over one frozen prompt,
   merges attributed events into one cursor stream, retains per-member terminal

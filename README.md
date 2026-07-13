@@ -234,6 +234,46 @@ The agent can discover the configured reviewers, start the session, follow its
 events, and bring the findings back into the conversation you already have.
 You do not need to learn a second interactive tool to use it.
 
+### Install the review skills
+
+This repository ships two thin skills:
+
+- `agent-collab-solo-review` runs one independent review (one provider turn).
+- `agent-collab-dual-review` runs two reviewers concurrently and has the
+  calling agent reconcile their findings (two provider turns).
+
+Both require agent-collab to be installed, the daemon to be running, and its
+MCP server to be registered as described above. They ask you to select a
+reviewer model when the request is ambiguous and show the effective models,
+backends, and options for confirmation before making provider calls.
+
+Claude Code can install both from this repository's marketplace:
+
+```text
+/plugin marketplace add lauriparviainen/agent_collab
+/plugin install agent-collab@agent-collab
+```
+
+The universal fallback is to copy both directories under `skills/` into the
+client's user skill directory:
+
+| Client | User skill directory |
+| --- | --- |
+| Claude Code | `~/.claude/skills/` |
+| Codex | `~/.agents/skills/` |
+| Antigravity | `~/.gemini/antigravity/skills/` |
+| Grok | `~/.grok/skills/` |
+
+For example, for Codex:
+
+```bash
+cp -R skills/agent-collab-solo-review skills/agent-collab-dual-review \
+  ~/.agents/skills/
+```
+
+The installer deliberately does not copy skills into another tool's config
+directory. Skill installation is a separate, explicit choice.
+
 ## See it work without provider accounts
 
 Run a simulated session from the terminal. This makes no model call:

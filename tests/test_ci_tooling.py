@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 import unittest
@@ -27,6 +28,30 @@ class StaticToolingContractTests(unittest.TestCase):
         package_data = pyproject.split("[tool.setuptools.package-data]", 1)[1]
         self.assertIn('"mcp-guidance.md"', package_data)
         self.assertTrue((ROOT / "agent_collab" / "mcp-guidance.md").is_file())
+
+    def test_cross_agent_review_skills_and_plugin_manifests_ship(self):
+        skill_names = ("agent-collab-solo-review", "agent-collab-dual-review")
+        for skill_name in skill_names:
+            skill = ROOT / "skills" / skill_name / "SKILL.md"
+            metadata = ROOT / "skills" / skill_name / "agents" / "openai.yaml"
+            self.assertTrue(skill.is_file())
+            self.assertTrue(metadata.is_file())
+            text = skill.read_text(encoding="utf-8")
+            self.assertIn(f"name: {skill_name}", text)
+            self.assertIn('topic: "review-recipe"', text)
+            self.assertRegex(text, r"without\s+explicit")
+            self.assertNotIn("[TODO:", text)
+
+        claude_marketplace = json.loads(
+            (ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
+        )
+        codex_plugin = json.loads(
+            (ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(claude_marketplace["plugins"][0]["source"], "./skills")
+        self.assertFalse(claude_marketplace["plugins"][0]["strict"])
+        self.assertIn("daemon", claude_marketplace["description"])
+        self.assertEqual(codex_plugin["skills"], "./skills/")
 
     def test_pyproject_pins_and_configures_ruff_lint_and_format(self):
         pyproject = PYPROJECT_PATH.read_text(encoding="utf-8")

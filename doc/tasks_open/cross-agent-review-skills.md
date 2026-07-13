@@ -1,6 +1,6 @@
 # Cross-agent review skills
 
-**Status:** Designed; not started.
+**Status:** Implemented; automated verification complete, live provider smoke pending.
 
 **Created:** 2026-07-13
 
@@ -89,8 +89,13 @@ Build); their consensus and dissents are folded into the decisions below.
 
 4. **Backend selection by underlying model, not backend name.** The skills
    pick reviewers from what `agent_collab_describe_options` reports as
-   enabled and start-eligible, preferring vendors different from the host
-   agent, with an explicit argument override (e.g. `/solo-review xai`).
+   enabled and start-eligible. Owner decision (2026-07-14): when the user has
+   not already named the reviewer model(s), show eligible model/backend pairs
+   and ask; never silently choose the strongest or cheapest. Ask for a backend
+   only when the selected model maps to multiple eligible backends. Before the
+   provider call, show the workflow, selected model(s), canonical backend(s),
+   and effective default/override options and obtain explicit confirmation;
+   minor defaults do not each require a separate choice.
    Antigravity can run Claude models, so a genuine second opinion must
    compare the *model*, or dual-review silently becomes
    Claude-reviewing-Claude.
@@ -126,10 +131,11 @@ Build); their consensus and dissents are folded into the decisions below.
    Decision (2026-07-13): implement
    [#19](https://github.com/lauriparviainen/agent_collab/issues/19) first —
    design in the task document `parallel-review-workflow` — so the dual
-   (and triple) review skill is a single `agent_collab_start` of a
-   `stages` workflow plus one watch loop, and the client-side
+   (and triple) review skill is a single `agent_collab_start` of a flat
+   `parallel` workflow plus one watch loop, and the client-side
    parallel-session hygiene rules in the recipe reduce to per-agent
-   attribution handling. This task is blocked on #19.
+   attribution handling. The dependency shipped on 2026-07-13; this task is no
+   longer blocked.
 
 ## Implementation notes
 
@@ -148,6 +154,17 @@ Build); their consensus and dissents are folded into the decisions below.
   private memory and task docs; the guidance topic becomes its public,
   canonical home.
 
+## Implementation verification
+
+Implemented 2026-07-14 with two top-level skills, the daemon-served
+`review-recipe` guidance topic, expanded MCP initialization instructions,
+Claude marketplace and Codex plugin metadata, and README installation guidance.
+Both skills and the Codex manifest pass the bundled validators. An isolated
+Claude home installed the repository marketplace and reported both skills in
+the plugin inventory. In an isolated staged worktree, the supported Python 3.12
+environment passes the full development gate with 802 hermetic tests, and
+`build --check` passes.
+
 ## Verification
 
 - `agent_collab_guidance` returns the review-recipe topic, and the hermetic
@@ -161,10 +178,12 @@ Build); their consensus and dissents are folded into the decisions below.
 - README documents the skills, prerequisites, and the per-agent install
   table.
 
-## Open questions
+## Resolved questions
 
-- Whether `.codex-plugin/plugin.json` should ship in the first iteration or
-  wait until the Codex plugin flow is manually verified end to end.
-- Whether the solo skill should default to the cheapest eligible reviewer
-  or the strongest; current lean: strongest available non-host vendor, with
-  the argument override for cost control.
+- Resolved 2026-07-14: ship `.codex-plugin/plugin.json` in the first iteration;
+  its current manifest validates locally, while copy installation remains the
+  documented universal fallback until a repo marketplace is deliberately
+  added.
+- Resolved 2026-07-14: solo review has no cheapest/strongest default. Ask for
+  the reviewer model when it is unclear from the request, then confirm the
+  effective backend and options before the provider call.

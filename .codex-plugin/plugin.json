@@ -1,0 +1,27 @@
+{
+  "name": "agent-collab",
+  "version": "0.1.0",
+  "description": "Cross-model diff review skills for an installed, MCP-connected agent-collab daemon",
+  "author": {
+    "name": "Lauri Parviainen",
+    "url": "https://github.com/lauriparviainen"
+  },
+  "homepage": "https://github.com/lauriparviainen/agent_collab",
+  "repository": "https://github.com/lauriparviainen/agent_collab",
+  "license": "Apache-2.0",
+  "keywords": ["code-review", "cross-model", "agent-collab"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Collab Reviews",
+    "shortDescription": "Independent cross-model reviews for code diffs",
+    "longDescription": "Run one or two independent model reviews of the current diff through a locally installed and MCP-connected agent-collab daemon, then validate and reconcile the findings.",
+    "developerName": "Lauri Parviainen",
+    "category": "Developer Tools",
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/lauriparviainen/agent_collab",
+    "defaultPrompt": [
+      "Get a second model's review of my current diff.",
+      "Run two independent reviews and reconcile the findings."
+    ]
+  }
+}
