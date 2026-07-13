@@ -47,6 +47,18 @@ class RequiredTurnFailed(RuntimeError):
         return SessionFailure.from_record(self.record)
 
 
+class ParallelStageFailed(RuntimeError):
+    """A parallel stage ended without an accepted member review."""
+
+    def __init__(self, stage_index: int):
+        self.stage_index = stage_index
+        self.failure = SessionFailure(
+            code="parallel_stage_no_accepted_member",
+            stage_index=stage_index,
+        )
+        super().__init__(self.failure.message)
+
+
 class RefereeStopSignal:
     """Daemon-owned stop cause registered before task cancellation."""
 
@@ -180,8 +192,11 @@ class Referee:
             return dict(self.config.agent_options[agent_id])
         return {}
 
-    def _sequence(self) -> List[str]:
-        return list(self.collab_config.workflows[self.config.workflow].sequence)
+    def _stages(self) -> List[List[str]]:
+        workflow = self.collab_config.workflows[self.config.workflow]
+        if workflow.parallel is not None:
+            return [list(workflow.parallel)]
+        return [[agent_id] for agent_id in workflow.sequence]
 
     def _guardrails(self) -> str:
         return (
@@ -210,6 +225,11 @@ class Referee:
         else:
             role = "Lead/reviser: produce a concise revision that accounts for the review."
         return f"{guardrails}\n{role}\n\nTASK:\n{task}\n\nRECENT TRANSCRIPT:\n{prior}\n"
+
+    def _parallel_prompt_for(self, task: str, transcript: List[Event]) -> str:
+        prior = self._recent_transcript(transcript)
+        role = "Reviewer agent: critique, identify gaps, and improve the previous response."
+        return f"{self._guardrails()}\n{role}\n\nTASK:\n{task}\n\nRECENT TRANSCRIPT:\n{prior}\n"
 
     def _directed_prompt_for(
         self, task: str, agent: str, question: str, transcript: List[Event]
@@ -276,6 +296,7 @@ class Referee:
             "status",
             f"{record.turn_id} {record.agent_id} {record.outcome}{detail}",
             {"turn_outcome": record.to_dict()},
+            agent_id=record.agent_id,
         )
         if self._emit_lock is None:
             self._emit_lock = asyncio.Lock()
@@ -327,8 +348,15 @@ class Referee:
         agent_id: str,
         stage_index: int,
         turn_id: str,
+        manage_turn_active: bool = True,
+        event_observer: Optional[Callable[[Event], None]] = None,
     ) -> TurnOutcomeRecord:
         async def emit(event: Event) -> None:
+            # Workflow ownership is authoritative. Backends cannot attribute
+            # their stream to another configured member.
+            event.agent_id = agent_id
+            if event_observer is not None:
+                event_observer(event)
             await self._emit(logger, transcript, event)
 
         runner_task = asyncio.create_task(
@@ -341,7 +369,8 @@ class Referee:
         local_outcome: Optional[TurnOutcome] = None
         unexpected_cancel = False
 
-        await self._set_turn_active(True)
+        if manage_turn_active:
+            await self._set_turn_active(True)
         try:
             try:
                 await asyncio.wait(
@@ -400,7 +429,96 @@ class Referee:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(deadline_task, stop_task, policy_task, return_exceptions=True)
+            if manage_turn_active:
+                await self._set_turn_active(False)
+
+    async def _run_parallel_stage(
+        self,
+        logger: SessionLogger,
+        transcript: List[Event],
+        runners: Dict[str, AgentRunner],
+        task: str,
+        members: List[str],
+        stage_index: int,
+    ) -> None:
+        snapshot = list(transcript)
+        prompt = self._parallel_prompt_for(task, snapshot)
+        produced_messages: set[str] = set()
+
+        def observe(agent_id: str, event: Event) -> None:
+            if event.type == "message" and event.source != "error":
+                produced_messages.add(agent_id)
+
+        occurrences = [(agent_id, self._allocate_occurrence()) for agent_id in members]
+        await self._set_turn_active(True)
+        member_tasks: List[asyncio.Task] = []
+        try:
+            member_tasks = [
+                asyncio.create_task(
+                    self._run_agent_turn(
+                        logger,
+                        transcript,
+                        runners[agent_id],
+                        prompt,
+                        agent_id=agent_id,
+                        stage_index=stage_index,
+                        turn_id=turn_id,
+                        manage_turn_active=False,
+                        event_observer=lambda event, member=agent_id: observe(member, event),
+                    ),
+                    name=f"agent-collab-stage-{stage_index}-{agent_id}",
+                )
+                for agent_id, turn_id in occurrences
+            ]
+            try:
+                results = await asyncio.gather(*member_tasks, return_exceptions=True)
+            except asyncio.CancelledError:
+                for member_task in member_tasks:
+                    if not member_task.done():
+                        member_task.cancel()
+                await asyncio.gather(*member_tasks, return_exceptions=True)
+                raise
+        finally:
             await self._set_turn_active(False)
+
+        if self.stop_signal.is_set():
+            raise asyncio.CancelledError
+
+        records: Dict[str, TurnOutcomeRecord] = {}
+        for (agent_id, _turn_id), result in zip(occurrences, results):
+            if isinstance(result, TurnOutcomeRecord):
+                records[agent_id] = result
+            elif isinstance(result, RequiredTurnFailed):
+                records[agent_id] = result.record
+            elif isinstance(result, BaseException):
+                raise result
+            else:
+                raise RuntimeError("parallel member returned an invalid turn result")
+
+        accepted = [
+            agent_id
+            for agent_id in members
+            if records[agent_id].outcome == "completed" and agent_id in produced_messages
+        ]
+        member_outcomes = {agent_id: records[agent_id].outcome for agent_id in members}
+        await self._emit(
+            logger,
+            transcript,
+            Event.create(
+                "referee",
+                "status",
+                f"stage {stage_index} (parallel) completed: "
+                f"{len(accepted)}/{len(members)} accepted",
+                {
+                    "stage": stage_index,
+                    "parallel": True,
+                    "members": member_outcomes,
+                    "accepted_members": accepted,
+                },
+            ),
+        )
+        if not accepted:
+            raise ParallelStageFailed(stage_index)
 
     async def _process_input_item(
         self,
@@ -413,7 +531,14 @@ class Referee:
         if not item.target:
             return None
         await self._emit(
-            logger, transcript, Event.create("referee", "status", f"directed turn: {item.target}")
+            logger,
+            transcript,
+            Event.create(
+                "referee",
+                "status",
+                f"directed turn: {item.target}",
+                agent_id=item.target,
+            ),
         )
         prompt = self._directed_prompt_for(task, item.target, item.event.text, transcript)
         turn_id = self._allocate_occurrence()
@@ -505,7 +630,7 @@ class Referee:
 
         transcript: List[Event] = []
         runners = self._runners()
-        sequence = self._sequence()[: max(0, self.config.max_turns)]
+        stages = self._stages()[: max(0, self.config.max_turns)]
 
         with SessionLogger(self.log_dir, task, self.config.session_id) as logger:
             await self._emit(
@@ -525,13 +650,38 @@ class Referee:
                     lambda event: self._emit(logger, transcript, event)
                 )
             try:
-                for turn, agent_name in enumerate(sequence, start=1):
+                for turn, stage in enumerate(stages, start=1):
                     if self.config.interactive:
                         await self._process_pending_inputs(logger, transcript, runners, task)
+                    if len(stage) > 1:
+                        await self._emit(
+                            logger,
+                            transcript,
+                            Event.create(
+                                "referee",
+                                "status",
+                                f"stage {turn} (parallel): {', '.join(stage)}",
+                            ),
+                        )
+                        await self._run_parallel_stage(
+                            logger,
+                            transcript,
+                            runners,
+                            task,
+                            stage,
+                            turn,
+                        )
+                        continue
+                    agent_name = stage[0]
                     await self._emit(
                         logger,
                         transcript,
-                        Event.create("referee", "status", f"turn {turn}: {agent_name}"),
+                        Event.create(
+                            "referee",
+                            "status",
+                            f"turn {turn}: {agent_name}",
+                            agent_id=agent_name,
+                        ),
                     )
                     prompt = self._prompt_for(task, agent_name, turn, transcript)
                     turn_id = self._allocate_occurrence()
@@ -550,10 +700,10 @@ class Referee:
                     await self._process_pending_inputs(logger, transcript, runners, task)
                     await self._set_status("awaiting_input")
                     await self._await_interactive_input(logger, transcript, runners, task)
-                    await self._emit_final_summary(logger, transcript, len(sequence))
+                    await self._emit_final_summary(logger, transcript, len(stages))
                     await self._set_status("done")
                 else:
-                    await self._emit_final_summary(logger, transcript, len(sequence))
+                    await self._emit_final_summary(logger, transcript, len(stages))
             finally:
                 if self.config.interactive:
                     await self._register_event_appender(None)

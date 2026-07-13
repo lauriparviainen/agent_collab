@@ -29,6 +29,7 @@ from .options import (
 from .paths import GlobalDataPaths
 from .referee import (
     EventAppender,
+    ParallelStageFailed,
     Referee,
     RefereeConfig,
     RefereeInput,
@@ -879,6 +880,8 @@ class SessionManager:
                 failure = SessionFailure(code="referee_cancelled_unexpected")
                 await self._set_status(managed, FAILED, failure=failure)
         except RequiredTurnFailed as exc:
+            await self._set_status(managed, FAILED, failure=exc.failure)
+        except ParallelStageFailed as exc:
             await self._set_status(managed, FAILED, failure=exc.failure)
         except Exception as exc:
             self._record_event(

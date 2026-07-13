@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.daemon import (
     SessionManager,
     SessionRequestError,
@@ -151,6 +152,80 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.failure["backend"], "codex_cli")
         self.assertEqual(final.failure["code"], "provider_terminal_failure")
         self.assertEqual(final.error, "The provider reported a terminal failure")
+
+    async def test_parallel_stage_failure_uses_canonical_stage_level_record(self):
+        class EmptyRunner:
+            async def run_turn(self, prompt, workdir, emit):
+                return TurnOutcome("completed")
+
+        config = CollaborationConfig(
+            agents={
+                name: AgentConfig(id=name, type=name, command=name, backend="cli")
+                for name in ("claude", "codex")
+            },
+            workflows={"parallel": WorkflowConfig(id="parallel", parallel=["claude", "codex"])},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager(
+                index_path=root / "session-index.json",
+                default_log_dir=root,
+            )
+            request = StartSessionRequest(
+                task="empty parallel review",
+                workflow="parallel",
+                workdir=root,
+                max_turns=1,
+                timeout=5,
+                collab_config=config,
+                resolved_backends={"claude": "cli", "codex": "cli"},
+                agent_options={},
+            )
+            now = "2026-07-13T00:00:00+00:00"
+            state = manager._state_from_record(
+                {
+                    "session_id": "parallel-failure",
+                    "status": "running",
+                    "task": request.task,
+                    "workflow": request.workflow,
+                    "workdir": str(root),
+                    "jsonl_path": str(root / "parallel-failure.jsonl"),
+                    "markdown_path": str(root / "parallel-failure.md"),
+                    "created_at": now,
+                    "updated_at": now,
+                    "max_turns": 1,
+                    "timeout": 5,
+                    "turn_outcomes": [],
+                }
+            )
+            managed = _ManagedSession(
+                request=request,
+                state=state,
+                events=[],
+                condition=asyncio.Condition(),
+            )
+            manager._sessions[state.session_id] = managed
+            with mock.patch.object(
+                Referee,
+                "_runners",
+                return_value={"claude": EmptyRunner(), "codex": EmptyRunner()},
+            ):
+                await manager._run_session(managed)
+
+        self.assertEqual(state.status, "failed")
+        self.assertEqual(state.error, "No parallel reviewer produced an accepted review")
+        self.assertEqual(state.failure["code"], "parallel_stage_no_accepted_member")
+        self.assertEqual(state.failure["stage_index"], 1)
+        self.assertIsNone(state.failure["turn_id"])
+        self.assertIsNone(state.failure["agent_id"])
+        self.assertIsNone(state.failure["backend"])
+        self.assertEqual(len(state.turn_outcomes), 2)
+        summary = next(
+            event
+            for event in managed.events
+            if isinstance(event.get("raw"), dict) and event["raw"].get("parallel") is True
+        )
+        self.assertEqual(summary["raw"]["accepted_members"], [])
 
     async def test_stop_records_active_interruption_before_stopped(self):
         started = asyncio.Event()

@@ -5,7 +5,7 @@ import asyncio
 from pathlib import Path
 from unittest import mock
 
-from agent_collab.referee import Referee, RefereeConfig
+from agent_collab.referee import ParallelStageFailed, Referee, RefereeConfig
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.runners import BackendDryRunRunner
 from agent_collab.events import Event
@@ -372,6 +372,319 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(runner_task, timeout=0.2)
         await asyncio.sleep(0)
         self.assertNotIn(runner_task, referee._reaper_tasks)
+
+
+class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
+    def _config(self, members, provider_types=None):
+        provider_types = provider_types or {}
+        agents = {}
+        for agent_id in members:
+            agent_type = provider_types.get(agent_id, agent_id)
+            agents[agent_id] = AgentConfig(
+                id=agent_id,
+                type=agent_type,
+                command=agent_type,
+                backend="cli",
+            )
+        return CollaborationConfig(
+            agents=agents,
+            workflows={"parallel": WorkflowConfig(id="parallel", parallel=list(members))},
+        )
+
+    def _referee(
+        self,
+        root,
+        members,
+        runners,
+        *,
+        timeout=5,
+        provider_types=None,
+    ):
+        records = []
+        events = []
+        turn_active = []
+
+        async def commit(record, boundary):
+            records.append((record, boundary))
+
+        async def set_turn_active(active):
+            turn_active.append(active)
+
+        referee = Referee(
+            RefereeConfig(
+                workflow="parallel",
+                collab_config=self._config(members, provider_types),
+                workdir=root,
+                log_dir=root,
+                max_turns=3,
+                timeout=timeout,
+                color=False,
+                outcome_commit_callback=commit,
+                turn_active_callback=set_turn_active,
+            ),
+            printer=events.append,
+        )
+        referee._runners = lambda: runners
+        return referee, records, events, turn_active
+
+    async def test_three_members_run_concurrently_with_one_frozen_prompt(self):
+        members = ["claude-primary", "claude-secondary", "codex"]
+        provider_types = {
+            "claude-primary": "claude",
+            "claude-secondary": "claude",
+            "codex": "codex",
+        }
+        started = set()
+        all_started = asyncio.Event()
+        release = asyncio.Event()
+        prompts = {}
+
+        class Runner:
+            def __init__(self, agent_id, source):
+                self.agent_id = agent_id
+                self.source = source
+
+            async def run_turn(self, prompt, workdir, emit):
+                prompts[self.agent_id] = prompt
+                started.add(self.agent_id)
+                if len(started) == len(members):
+                    all_started.set()
+                await all_started.wait()
+                await release.wait()
+                await emit(
+                    Event.create(
+                        self.source,
+                        "message",
+                        f"{self.agent_id} review",
+                        agent_id="forged",
+                    )
+                )
+                return TurnOutcome("completed")
+
+        runners = {agent_id: Runner(agent_id, provider_types[agent_id]) for agent_id in members}
+        with tempfile.TemporaryDirectory() as tmp:
+            referee, records, events, turn_active = self._referee(
+                Path(tmp),
+                members,
+                runners,
+                provider_types=provider_types,
+            )
+            task = asyncio.create_task(referee.run("review task"))
+            await asyncio.wait_for(all_started.wait(), timeout=0.5)
+            self.assertFalse(task.done())
+            self.assertEqual(turn_active, [True])
+            release.set()
+            await task
+
+        self.assertEqual(len(set(prompts.values())), 1)
+        self.assertIn("Reviewer agent:", next(iter(prompts.values())))
+        self.assertEqual(turn_active, [True, False])
+        self.assertEqual(
+            {record.turn_id for record, _boundary in records},
+            {"turn-1", "turn-2", "turn-3"},
+        )
+        self.assertTrue(all(record.stage_index == 1 for record, _boundary in records))
+        self.assertTrue(all(boundary.agent_id == record.agent_id for record, boundary in records))
+
+        messages = [event for event in events if event.agent_id in members]
+        self.assertEqual({event.agent_id for event in messages}, set(members))
+        self.assertNotIn("forged", {event.agent_id for event in messages})
+        self.assertEqual(
+            {event.agent_id for event in messages if event.source == "claude"},
+            {"claude-primary", "claude-secondary"},
+        )
+        stage_start = next(event for event in events if "stage 1 (parallel):" in event.text)
+        summary = next(
+            event
+            for event in events
+            if isinstance(event.raw, dict) and event.raw.get("parallel") is True
+        )
+        self.assertIsNone(stage_start.agent_id)
+        self.assertIsNone(summary.agent_id)
+        self.assertEqual(summary.raw["stage"], 1)
+        self.assertEqual(summary.raw["members"], {member: "completed" for member in members})
+        self.assertEqual(summary.raw["accepted_members"], members)
+
+    async def test_member_timeout_degrades_when_another_review_is_accepted(self):
+        started = asyncio.Event()
+
+        class FastRunner:
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "message", "fast review"))
+                return TurnOutcome("completed")
+
+        class SlowRunner:
+            async def run_turn(self, prompt, workdir, emit):
+                started.set()
+                await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee, records, events, _turn_active = self._referee(
+                Path(tmp),
+                ["claude", "codex"],
+                {"claude": FastRunner(), "codex": SlowRunner()},
+                timeout=0,
+            )
+            await referee.run("review task")
+
+        self.assertTrue(started.is_set())
+        outcomes = {record.agent_id: record.outcome for record, _boundary in records}
+        self.assertEqual(outcomes, {"claude": "completed", "codex": "timed_out"})
+        summary = next(
+            event
+            for event in events
+            if isinstance(event.raw, dict) and event.raw.get("parallel") is True
+        )
+        self.assertEqual(summary.raw["members"], outcomes)
+        self.assertEqual(summary.raw["accepted_members"], ["claude"])
+
+    async def test_completed_turns_without_review_output_fail_the_stage(self):
+        class EmptyRunner:
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("error", "error", "no review"))
+                return TurnOutcome("completed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee, records, events, _turn_active = self._referee(
+                Path(tmp),
+                ["claude", "codex"],
+                {"claude": EmptyRunner(), "codex": EmptyRunner()},
+            )
+            with self.assertRaises(ParallelStageFailed) as caught:
+                await referee.run("review task")
+
+        self.assertEqual([record.outcome for record, _boundary in records], ["completed"] * 2)
+        failure = caught.exception.failure.to_dict()
+        self.assertEqual(failure["code"], "parallel_stage_no_accepted_member")
+        self.assertEqual(failure["stage_index"], 1)
+        self.assertIsNone(failure["turn_id"])
+        self.assertIsNone(failure["agent_id"])
+        self.assertIsNone(failure["backend"])
+        summary = next(
+            event
+            for event in events
+            if isinstance(event.raw, dict) and event.raw.get("parallel") is True
+        )
+        self.assertEqual(summary.raw["accepted_members"], [])
+
+    async def test_failed_partial_message_is_not_accepted(self):
+        class Runner:
+            def __init__(self, source, outcome):
+                self.source = source
+                self.outcome = outcome
+
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create(self.source, "message", "partial review"))
+                return self.outcome
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee, _records, events, _turn_active = self._referee(
+                Path(tmp),
+                ["claude", "codex"],
+                {
+                    "claude": Runner("claude", TurnOutcome("failed", "provider_terminal_failure")),
+                    "codex": Runner("codex", TurnOutcome("completed")),
+                },
+            )
+            await referee.run("review task")
+
+        summary = next(
+            event
+            for event in events
+            if isinstance(event.raw, dict) and event.raw.get("parallel") is True
+        )
+        self.assertEqual(summary.raw["accepted_members"], ["codex"])
+
+    async def test_registered_stop_interrupts_and_settles_every_member(self):
+        started = {"claude": asyncio.Event(), "codex": asyncio.Event()}
+        cleaned = {"claude": asyncio.Event(), "codex": asyncio.Event()}
+
+        class BlockingRunner:
+            def __init__(self, agent_id):
+                self.agent_id = agent_id
+
+            async def run_turn(self, prompt, workdir, emit):
+                started[self.agent_id].set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cleaned[self.agent_id].set()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee, records, _events, turn_active = self._referee(
+                Path(tmp),
+                ["claude", "codex"],
+                {
+                    "claude": BlockingRunner("claude"),
+                    "codex": BlockingRunner("codex"),
+                },
+            )
+            task = asyncio.create_task(referee.run("review task"))
+            await asyncio.gather(*(event.wait() for event in started.values()))
+            referee.request_stop()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        self.assertTrue(all(event.is_set() for event in cleaned.values()))
+        self.assertEqual(turn_active, [True, False])
+        outcomes = {record.agent_id: record.outcome for record, _boundary in records}
+        self.assertEqual(outcomes, {"claude": "interrupted", "codex": "interrupted"})
+
+    async def test_sequential_prompts_and_order_remain_unchanged(self):
+        calls = []
+        prompts = []
+        emitted = []
+
+        class Runner:
+            def __init__(self, source):
+                self.source = source
+
+            async def run_turn(self, prompt, workdir, emit):
+                calls.append(self.source)
+                prompts.append(prompt)
+                await emit(
+                    Event.create(
+                        self.source,
+                        "message",
+                        f"{self.source} output",
+                        agent_id="forged",
+                    )
+                )
+                return TurnOutcome("completed")
+
+        config = CollaborationConfig(
+            agents={
+                name: AgentConfig(id=name, type=name, command=name, backend="cli")
+                for name in ("claude", "codex")
+            },
+            workflows={"sequence": WorkflowConfig(id="sequence", sequence=["claude", "codex"])},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            referee = Referee(
+                RefereeConfig(
+                    workflow="sequence",
+                    collab_config=config,
+                    workdir=Path(tmp),
+                    log_dir=Path(tmp),
+                    max_turns=2,
+                    timeout=5,
+                    color=False,
+                ),
+                printer=emitted.append,
+            )
+            referee._runners = lambda: {
+                "claude": Runner("claude"),
+                "codex": Runner("codex"),
+            }
+            self.assertEqual(referee._stages(), [["claude"], ["codex"]])
+            await referee.run("task")
+
+        self.assertEqual(calls, ["claude", "codex"])
+        self.assertIn("Lead agent:", prompts[0])
+        self.assertIn("Reviewer agent:", prompts[1])
+        messages = [event for event in emitted if event.source in {"claude", "codex"}]
+        self.assertEqual([event.agent_id for event in messages], ["claude", "codex"])
 
 
 if __name__ == "__main__":
