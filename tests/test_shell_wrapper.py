@@ -78,6 +78,7 @@ class UserShellWrapperTests(ShellWrapperHarness):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("./agent_collab.sh install", result.stdout)
         self.assertIn("./agent_collab.sh uninstall", result.stdout)
+        self.assertIn("./agent_collab.sh skills install [CLIENT]", result.stdout)
         self.assertIn("./agent_collab.sh daemon start", result.stdout)
         self.assertIn("-m agent_collab.cli", result.stdout)
         self.assertIn("agent_collab_dev.sh", result.stdout)
@@ -114,6 +115,22 @@ class UserShellWrapperTests(ShellWrapperHarness):
                 "uninstall",
                 "--venv",
                 str(Path.home() / ".agent-collab" / "venv"),
+            ],
+        )
+
+    def test_skills_dispatches_to_skill_installer(self):
+        result, captured = self._run_with_fake_python(["skills", "install", "codex"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            captured["args"],
+            [
+                "-m",
+                "agent_collab.skill_install",
+                "install",
+                "codex",
+                "--repo-root",
+                str(ROOT),
             ],
         )
 

@@ -114,7 +114,7 @@ Build); their consensus and dissents are folded into the decisions below.
      description states the daemon + MCP registration prerequisite.
    - `.codex-plugin/plugin.json` for Codex plugin packaging.
    - README "Skills" section with a per-agent copy-destination table
-     (`~/.claude/skills/`, `~/.agents/skills/`, Antigravity skills dir,
+     (`~/.claude/skills/`, `~/.agents/skills/`, `~/.gemini/config/skills/`,
      `~/.grok/skills/`) as the universal fallback.
    - Core protocol invariants (absolute workdir, discovery first, bounded
      cursor polling, guidance pointer) also go into the MCP server
@@ -123,6 +123,10 @@ Build); their consensus and dissents are folded into the decisions below.
      stand alone.
    - Install stays out of other tools' config directories: no automatic
      copying into `~/.claude/` or `~/.agents/` by `./agent_collab.sh`.
+     Explicit `./agent_collab.sh skills install|uninstall [client]` commands
+     manage both review skills independently, refuse to overwrite foreign or
+     locally modified copies, and keep their ownership state under
+     `~/.agent-collab/`; omitting the client selects all supported clients.
 
 7. **The dual skill builds on the daemon-side parallel workflow (#19).**
    Gemini reported client-side parallel session management is error-prone
@@ -159,6 +163,9 @@ Build); their consensus and dissents are folded into the decisions below.
 Implemented 2026-07-14 with two top-level skills, the daemon-served
 `review-recipe` guidance topic, expanded MCP initialization instructions,
 Claude marketplace and Codex plugin metadata, and README installation guidance.
+An explicit checkout CLI installs, upgrades, and safely uninstalls both skills
+for Claude Code, Codex, Antigravity, Grok, or all four without coupling those
+writes to the main runtime installer.
 Both skills and the Codex manifest pass the bundled validators. An isolated
 Claude home installed the repository marketplace and reported both skills in
 the plugin inventory. In an isolated staged worktree, the supported Python 3.12

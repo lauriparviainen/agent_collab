@@ -16,8 +16,8 @@ into a detailed work log.
 - Add portable solo and dual cross-model review skills (#18), with daemon-served
   diff-scoping, polling, attribution, and triage guidance; Claude and Codex
   plugin metadata; explicit model/backend confirmation before provider calls;
-  and documented copy-based installation for Claude Code, Codex, Antigravity,
-  and Grok.
+  and explicit managed install/uninstall commands for Claude Code, Codex,
+  Antigravity, and Grok.
 - Remove the built-in `compare` workflow: its second turn saw the first answer
   in the transcript, so it was a weaker `cross-review`, and independent
   side-by-side answers are what `dual-review` now provides. User-config

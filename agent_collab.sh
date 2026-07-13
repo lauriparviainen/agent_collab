@@ -14,6 +14,8 @@ Usage:
   ./agent_collab.sh help
   ./agent_collab.sh install
   ./agent_collab.sh uninstall
+  ./agent_collab.sh skills install [CLIENT]
+  ./agent_collab.sh skills uninstall [CLIENT]
   ./agent_collab.sh serve
   ./agent_collab.sh daemon start [--workdir DIR]
   ./agent_collab.sh daemon status
@@ -34,6 +36,9 @@ Getting started:
 install upgrades everything in place and restarts a running daemon, which
 interrupts active sessions. uninstall removes the installation but keeps
 config and session data under ~/.agent-collab.
+
+skills installs or uninstalls the solo and dual review skills. CLIENT can be
+claude, codex, antigravity, or grok; omitting it manages all four clients.
 
 Most commands pass through to:
   ~/.agent-collab/venv/bin/python -m agent_collab.cli
@@ -63,6 +68,12 @@ case "${1:-help}" in
     cd "$repo_root"
     exec "$python_bin" -m agent_collab.user_install uninstall \
       --venv "$default_venv" "$@"
+    ;;
+  skills)
+    shift
+    cd "$repo_root"
+    exec "$python_bin" -m agent_collab.skill_install "$@" \
+      --repo-root "$repo_root"
     ;;
   *)
     run_cli "$@"

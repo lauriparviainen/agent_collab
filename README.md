@@ -254,25 +254,43 @@ Claude Code can install both from this repository's marketplace:
 /plugin install agent-collab@agent-collab
 ```
 
-The universal fallback is to copy both directories under `skills/` into the
-client's user skill directory:
+From a source checkout, install both skills for one client with:
+
+```bash
+./agent_collab.sh skills install codex
+```
+
+Replace `codex` with `claude`, `antigravity`, or `grok`. Omit the client to
+install for every listed client. Re-run the command after `git pull` to upgrade
+managed copies. Remove them with the matching explicit command:
+
+```bash
+./agent_collab.sh skills uninstall codex
+```
+
+Likewise, `./agent_collab.sh skills uninstall` removes the managed copies from
+all four clients.
+
+The command leaves locally modified or unmanaged skill directories in place.
+Its destinations are:
 
 | Client | User skill directory |
 | --- | --- |
 | Claude Code | `~/.claude/skills/` |
 | Codex | `~/.agents/skills/` |
-| Antigravity | `~/.gemini/antigravity/skills/` |
+| Antigravity and Antigravity CLI | `~/.gemini/config/skills/` |
 | Grok | `~/.grok/skills/` |
 
-For example, for Codex:
+Manual copying remains available when the checkout command cannot be used:
 
 ```bash
 cp -R skills/agent-collab-solo-review skills/agent-collab-dual-review \
   ~/.agents/skills/
 ```
 
-The installer deliberately does not copy skills into another tool's config
-directory. Skill installation is a separate, explicit choice.
+The main `./agent_collab.sh install` deliberately does not copy skills into
+another tool's config directory. Skill installation is a separate, explicit
+choice.
 
 ## See it work without provider accounts
 
