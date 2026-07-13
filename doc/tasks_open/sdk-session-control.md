@@ -1,6 +1,20 @@
 # SDK session control: resume, interrupt, and tool approval
 
-**Status:** Open design and implementation task.
+**Status:** Open — design refresh required before implementation.
+
+**Created:** 2026-07-10.
+
+**Issue:** [#20](https://github.com/lauriparviainen/agent_collab/issues/20)
+
+> **Design refresh required (2026-07-13).** This task predates substantial
+> changes to backend packaging and options, the runner/referee boundary, daemon
+> state and persistence, the versioned REST contract, MCP tools, session outcome
+> work, installation, and configuration trust. Its capability definitions and
+> safety requirements remain useful, but provider facts, illustrative APIs,
+> proposed types, sequencing, and verification details must be reconciled with
+> the current codebase and installed SDK versions before implementation begins.
+> Do not implement directly from the older plan below without first recording
+> that refreshed design in this document and issue #20.
 
 ## Purpose
 

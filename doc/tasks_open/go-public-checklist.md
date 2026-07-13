@@ -193,12 +193,17 @@ Dependabot alerts.
 
 ### Public repository metadata and tracking
 
-- Replace the stale GitHub description with the current product positioning
-  and add a small set of accurate repository topics.
-- Ensure issue #13 is explicitly tracked as a public-release blocker and that
-  issue #14 remains in the `Public release` milestone until this document
-  closes.
-- Reconcile active task documents that lack a matching issue.
+- Replace the stale GitHub description with the current product positioning.
+- **Topics completed 2026-07-13.** Added `ai-agents`, `multi-agent`,
+  `developer-tools`, `model-context-protocol`, `claude-code`, `codex`, `python`,
+  and `local-first`.
+- **Release tracking verified 2026-07-13.** Closed issue #13 and open issue #14
+  are both in the `Public release` milestone; keep #14 there until this
+  document closes.
+- **Task tracking reconciled 2026-07-13.** Every active task document has a
+  matching issue. The older `sdk-session-control.md` design now links issue #20
+  and prominently requires a refresh against the current codebase before
+  implementation.
 - After the flip, verify the CI badge, community profile, vulnerability-report
   link, dependency/security settings, and branch protection.
 
