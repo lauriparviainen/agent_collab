@@ -13,6 +13,13 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-14 - Cross-model review skills and parallel dual review
+
+- List `agent_collab_guidance` and `agent_collab_describe_options` first in
+  the MCP tool catalog, and describe session start over the configured agent
+  backends instead of only Claude/Codex. Declare the agent-collab MCP server
+  as a dependency in the Codex skill metadata and tell users to restart their
+  agent after MCP registration changes.
 - Fix an unknown workflow name at session start surfacing as a raw HTTP 500 /
   MCP internal error instead of the structured `invalid_start_options` shape
   (#22): the start path now rejects an unknown workflow with a `workflow` field

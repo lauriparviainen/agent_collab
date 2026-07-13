@@ -21,9 +21,46 @@ SUPPORTED_PROTOCOL_VERSIONS = {"2025-03-26", "2025-06-18", PROTOCOL_VERSION}
 
 TOOLS = [
     {
+        "name": "agent_collab_guidance",
+        "description": "Return Markdown guidance for using agent-collab MCP tools safely and effectively.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "enum": [
+                        "overview",
+                        "start",
+                        "watch",
+                        "options",
+                        "errors",
+                        "workflows",
+                        "review-recipe",
+                    ],
+                }
+            },
+        },
+    },
+    {
+        "name": "agent_collab_describe_options",
+        "description": (
+            "Run the versioned pre-start discovery protocol for one absolute workdir, including canonical "
+            "backends, effective workflow selections, probe evidence, policy, remediation, and accepted options."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workdir": {"type": "string"},
+                "health_refresh": {"type": "string", "enum": ["cached", "fresh"]},
+            },
+            "required": ["workdir"],
+        },
+    },
+    {
         "name": "agent_collab_start",
         "description": (
-            "Start a supervised Claude/Codex collaboration session and return a session id. "
+            "Start a supervised collaboration session over the configured agent backends "
+            "(Claude, Codex, Antigravity, xAI, ...) and return a session id. "
             "workdir is required because it selects project config and subprocess cwd. "
             "Call agent_collab_describe_options first before passing non-default backend_options."
         ),
@@ -43,21 +80,6 @@ TOOLS = [
                 "backend": {"type": "string"},
             },
             "required": ["task", "workdir"],
-        },
-    },
-    {
-        "name": "agent_collab_describe_options",
-        "description": (
-            "Run the versioned pre-start discovery protocol for one absolute workdir, including canonical "
-            "backends, effective workflow selections, probe evidence, policy, remediation, and accepted options."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "workdir": {"type": "string"},
-                "health_refresh": {"type": "string", "enum": ["cached", "fresh"]},
-            },
-            "required": ["workdir"],
         },
     },
     {
@@ -146,27 +168,6 @@ TOOLS = [
             "type": "object",
             "properties": {"session_id": {"type": "string"}},
             "required": ["session_id"],
-        },
-    },
-    {
-        "name": "agent_collab_guidance",
-        "description": "Return Markdown guidance for using agent-collab MCP tools safely and effectively.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "topic": {
-                    "type": "string",
-                    "enum": [
-                        "overview",
-                        "start",
-                        "watch",
-                        "options",
-                        "errors",
-                        "workflows",
-                        "review-recipe",
-                    ],
-                }
-            },
         },
     },
 ]

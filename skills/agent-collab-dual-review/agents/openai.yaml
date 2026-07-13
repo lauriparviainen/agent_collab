@@ -2,3 +2,9 @@ interface:
   display_name: "Agent Collab Dual Review"
   short_description: "Two parallel reviews with local reconciliation"
   default_prompt: "Use $agent-collab-dual-review to compare two independent reviews of my current diff."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "agent_collab"
+      description: "Local agent-collab daemon MCP server; see the skill preflight or the agent-collab README for registration."

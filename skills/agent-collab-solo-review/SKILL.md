@@ -41,6 +41,9 @@ the code, and report only confirmed high- or medium-severity findings.
    [mcp_servers.agent-collab]
    command = "agent-collab"
    args = ["mcp"]
+
+   After changing MCP configuration, restart the agent: a running session
+   does not pick up newly registered MCP servers.
    ```
 
 3. Fetch `agent_collab_guidance` with `topic: "review-recipe"`. Follow that

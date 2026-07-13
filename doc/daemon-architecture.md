@@ -59,7 +59,7 @@ Human terminal -----------------> CLI client
                                       v
                                agent-collab serve/daemon
                                       |
-                    starts Claude/Codex subprocesses
+                 starts configured agent subprocesses
                                       |
                                       v
                               JSONL/Markdown logs

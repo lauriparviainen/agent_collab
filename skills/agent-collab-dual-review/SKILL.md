@@ -41,6 +41,9 @@ and reconcile agreements and disagreements by reading the code.
    [mcp_servers.agent-collab]
    command = "agent-collab"
    args = ["mcp"]
+
+   After changing MCP configuration, restart the agent: a running session
+   does not pick up newly registered MCP servers.
    ```
 
 3. Fetch `agent_collab_guidance` with `topic: "review-recipe"`. Follow that
