@@ -20,7 +20,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set
 
-CURRENT_CONFIG_SCHEMA = 6
+CURRENT_CONFIG_SCHEMA = 7
 
 _logger = logging.getLogger("agent_collab.config")
 
@@ -268,12 +268,19 @@ def _migrate_v5_to_v6(data: Dict[str, Any], source: str) -> Dict[str, Any]:
     return data
 
 
+def _migrate_v6_to_v7(data: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """v7 adds flat parallel workflows."""
+
+    return data
+
+
 MIGRATIONS: Dict[int, Callable[[Dict[str, Any], str], Dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
     5: _migrate_v5_to_v6,
+    6: _migrate_v6_to_v7,
 }
 
 

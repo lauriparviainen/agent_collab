@@ -12,13 +12,18 @@ from agent_collab import backends
 from agent_collab.backends.base import BackendCapabilities, BackendHealth
 from agent_collab.config import (
     DEFAULT_CONFIG_PATH,
+    MAX_PARALLEL_WORKFLOW_WIDTH,
     AgentConfig,
+    CollaborationConfig,
     ConfigError,
+    WorkflowConfig,
     _parse_toml_subset,
     ensure_daemon_token,
     load_config,
     load_daemon_token,
+    merge_config_data,
     validate_agent,
+    validate_workflow,
 )
 from agent_collab.paths import AgentCollabHome
 
@@ -42,12 +47,94 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_file_parses_with_fallback_toml_parser(self):
         data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(data["schema_version"], 6)
+        self.assertEqual(data["schema_version"], 7)
         self.assertNotIn("options", data["agents"]["claude"])
         self.assertNotIn("options", data["agents"]["codex"])
         self.assertNotIn("options", data["agents"]["antigravity"])
         self.assertNotIn("options", data["agents"]["xai"])
         self.assertEqual(data["workflows"]["solo-claude"]["sequence"], ["claude"])
+
+    def test_fallback_toml_parser_accepts_flat_parallel_array(self):
+        data = _parse_toml_subset('[workflows.review]\nparallel = ["a", "b"]\n')
+
+        self.assertEqual(data["workflows"]["review"]["parallel"], ["a", "b"])
+
+    def test_parallel_workflow_validation(self):
+        agents = {name: AgentConfig(id=name, type="mock") for name in ("a", "b", "c", "d", "e")}
+        invalid = {
+            "empty": ([], "must not be empty"),
+            "single": (["a"], "use sequence for a single agent"),
+            "duplicate": (["a", "a"], "must not contain duplicate agents"),
+            "wide": (
+                ["a", "b", "c", "d", "e"],
+                f"maximum width of {MAX_PARALLEL_WORKFLOW_WIDTH}",
+            ),
+            "missing": (["a", "missing"], "references unknown agent 'missing'"),
+        }
+        for workflow_id, (members, message) in invalid.items():
+            with self.subTest(workflow=workflow_id):
+                config = CollaborationConfig(
+                    agents=agents,
+                    workflows={workflow_id: WorkflowConfig(id=workflow_id, parallel=members)},
+                )
+                with self.assertRaisesRegex(ConfigError, message):
+                    validate_workflow(config, workflow_id)
+
+        valid = CollaborationConfig(
+            agents=agents,
+            workflows={"valid": WorkflowConfig(id="valid", parallel=["a", "b"])},
+        )
+        validate_workflow(valid, "valid")
+
+        agents["b"].enabled = False
+        config = CollaborationConfig(
+            agents=agents,
+            workflows={"disabled": WorkflowConfig(id="disabled", parallel=["a", "b"])},
+        )
+        with self.assertRaisesRegex(ConfigError, "references disabled agent 'b'"):
+            validate_workflow(config, "disabled")
+
+    def test_workflow_table_rejects_both_shapes(self):
+        config = CollaborationConfig()
+
+        with self.assertRaisesRegex(ConfigError, "exactly one of sequence or parallel"):
+            merge_config_data(
+                config,
+                {"workflows": {"review": {"sequence": ["a"], "parallel": ["a", "b"]}}},
+            )
+
+    def test_workflow_validator_rejects_both_shapes(self):
+        config = CollaborationConfig(
+            agents={name: AgentConfig(id=name, type="mock") for name in ("a", "b")},
+            workflows={
+                "review": WorkflowConfig(
+                    id="review",
+                    sequence=["a"],
+                    parallel=["a", "b"],
+                )
+            },
+        )
+
+        with self.assertRaisesRegex(ConfigError, "exactly one of sequence or parallel"):
+            validate_workflow(config, "review")
+
+    def test_workflow_shape_override_clears_inherited_shape(self):
+        config = CollaborationConfig()
+        merge_config_data(
+            config,
+            {"workflows": {"review": {"parallel": ["a", "b"]}}},
+        )
+        merge_config_data(config, {"workflows": {"review": {"sequence": ["a"]}}})
+
+        self.assertEqual(config.workflows["review"].sequence, ["a"])
+        self.assertIsNone(config.workflows["review"].parallel)
+
+        merge_config_data(
+            config,
+            {"workflows": {"review": {"parallel": ["a", "b"]}}},
+        )
+        self.assertEqual(config.workflows["review"].sequence, [])
+        self.assertEqual(config.workflows["review"].parallel, ["a", "b"])
 
     def test_builtin_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:

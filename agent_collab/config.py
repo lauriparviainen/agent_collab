@@ -42,6 +42,7 @@ class AgentConfig:
 class WorkflowConfig:
     id: str
     sequence: List[str] = field(default_factory=list)
+    parallel: Optional[List[str]] = None
 
 
 @dataclass
@@ -90,6 +91,7 @@ DEFAULT_CONFIG_PATH = Path(__file__).with_name("default_config.toml")
 
 SUBPROCESS_AGENT_TYPES = {"claude", "codex", "antigravity", "xai"}
 AGENT_TYPES = SUBPROCESS_AGENT_TYPES | {"mock"}
+MAX_PARALLEL_WORKFLOW_WIDTH = 4
 
 
 def builtin_config() -> CollaborationConfig:
@@ -330,14 +332,26 @@ def _merge_agent(
 def _merge_workflow(
     existing: Optional[WorkflowConfig], workflow_id: str, values: Mapping[str, Any]
 ) -> WorkflowConfig:
+    if "sequence" in values and "parallel" in values:
+        raise ConfigError(
+            f"workflows.{workflow_id} must define exactly one of sequence or parallel"
+        )
     workflow = (
         WorkflowConfig(id=workflow_id)
         if existing is None
-        else WorkflowConfig(id=existing.id, sequence=list(existing.sequence))
+        else WorkflowConfig(
+            id=existing.id,
+            sequence=list(existing.sequence),
+            parallel=None if existing.parallel is None else list(existing.parallel),
+        )
     )
     for key, value in values.items():
         if key == "sequence":
             workflow.sequence = _expect_str_list(value, f"workflows.{workflow_id}.sequence")
+            workflow.parallel = None
+        elif key == "parallel":
+            workflow.parallel = _expect_str_list(value, f"workflows.{workflow_id}.parallel")
+            workflow.sequence = []
         else:
             raise ConfigError(f"unknown field workflows.{workflow_id}.{key}")
     return workflow
@@ -536,6 +550,36 @@ def validate_workflow(config: CollaborationConfig, workflow_id: str) -> None:
     workflow = config.workflows.get(workflow_id)
     if workflow is None:
         raise ConfigError(f"unknown workflow {workflow_id!r}")
+    if workflow.parallel is not None:
+        if workflow.sequence:
+            raise ConfigError(
+                f"workflows.{workflow_id} must define exactly one of sequence or parallel"
+            )
+        if not workflow.parallel:
+            raise ConfigError(f"workflows.{workflow_id}.parallel must not be empty")
+        if len(workflow.parallel) == 1:
+            raise ConfigError(
+                f"workflows.{workflow_id}.parallel must contain at least two agents; "
+                "use sequence for a single agent"
+            )
+        if len(set(workflow.parallel)) != len(workflow.parallel):
+            raise ConfigError(f"workflows.{workflow_id}.parallel must not contain duplicate agents")
+        if len(workflow.parallel) > MAX_PARALLEL_WORKFLOW_WIDTH:
+            raise ConfigError(
+                f"workflows.{workflow_id}.parallel exceeds the maximum width "
+                f"of {MAX_PARALLEL_WORKFLOW_WIDTH}"
+            )
+        for agent_id in workflow.parallel:
+            agent = config.agents.get(agent_id)
+            if agent is None:
+                raise ConfigError(
+                    f"workflows.{workflow_id}.parallel references unknown agent {agent_id!r}"
+                )
+            if not agent.enabled:
+                raise ConfigError(
+                    f"workflows.{workflow_id}.parallel references disabled agent {agent_id!r}"
+                )
+        return
     if not workflow.sequence:
         raise ConfigError(f"workflows.{workflow_id}.sequence must not be empty")
     for agent_id in workflow.sequence:

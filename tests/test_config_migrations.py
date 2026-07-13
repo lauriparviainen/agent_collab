@@ -93,6 +93,17 @@ class MigrateConfigDataTests(unittest.TestCase):
 
         self.assertEqual(migrated["schema_version"], CURRENT_CONFIG_SCHEMA)
 
+    def test_v6_config_is_stamped_to_v7_without_other_changes(self):
+        data = {
+            "schema_version": 6,
+            "workflows": {"review": {"parallel": ["claude", "codex"]}},
+        }
+
+        migrated = migrate_config_data(data, source="user.toml", scope="user")
+
+        self.assertEqual(migrated["schema_version"], 7)
+        self.assertEqual(migrated["workflows"], data["workflows"])
+
     def test_project_sessions_section_is_stripped_with_warning(self):
         with self.assertLogs("agent_collab.config", level="WARNING") as logs:
             migrated = migrate_config_data(
@@ -130,6 +141,21 @@ class MigrateConfigDataTests(unittest.TestCase):
                 self.assertNotIn("workflows", migrated)
                 self.assertEqual(warnings[0]["path"], "workflows.review")
                 self.assertIn("malformed", warnings[0]["message"])
+
+    def test_project_parallel_workflow_is_dropped_with_sanitized_warning(self):
+        warnings = []
+
+        migrated = migrate_config_data(
+            {"workflows": {"review": {"parallel": ["claude", "codex"]}}},
+            source="project.toml",
+            scope="project",
+            enabled_global_agent_ids={"claude", "codex"},
+            warnings=warnings,
+        )
+
+        self.assertNotIn("workflows", migrated)
+        self.assertEqual(warnings[0]["path"], "workflows.review")
+        self.assertEqual(warnings[0]["message"], "ignoring malformed project workflow 'review'")
 
 
 class LoadConfigMigrationTests(unittest.TestCase):
@@ -227,6 +253,26 @@ class MigrateUserConfigFileTests(unittest.TestCase):
             self.assertIsNone(result.backup_path)
             self.assertEqual(path.read_text(encoding="utf-8"), text)
             self.assertFalse(path.with_name("config.toml.bak").exists())
+
+    def test_v6_file_is_stamped_to_v7_without_other_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = (
+                "# keep this comment\n"
+                "schema_version = 6\n\n"
+                "[workflows.review]\n"
+                'parallel = ["claude", "codex"]\n'
+            )
+            path = self._write(Path(tmp), text)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "migrated")
+            self.assertEqual(result.previous_version, 6)
+            self.assertEqual(result.backup_path.read_text(encoding="utf-8"), text)
+            self.assertEqual(
+                path.read_text(encoding="utf-8"),
+                text.replace("schema_version = 6", "schema_version = 7"),
+            )
 
     def test_missing_schema_version_is_stamped_with_backup(self):
         with tempfile.TemporaryDirectory() as tmp:
