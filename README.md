@@ -105,6 +105,65 @@ pip install 'agent-collab[all]'          # everything
 A missing SDK never crashes the daemon: the backend reports itself unavailable
 with the matching install hint.
 
+## Install the review skills
+
+This repository ships two thin skills that teach a coding agent the review
+workflow:
+
+- `agent-collab-solo-review` runs one independent review (one provider turn).
+- `agent-collab-dual-review` runs two reviewers concurrently and has the
+  calling agent reconcile their findings (two provider turns).
+
+To actually run a review they need the daemon running and the agent-collab MCP
+server registered with your coding agent, described in
+[Give your coding agent a second opinion](#give-your-coding-agent-a-second-opinion).
+The skills ask you to select a reviewer model when the request is ambiguous
+and show the effective models, backends, and options for confirmation before
+making provider calls.
+
+The main `./agent_collab.sh install` deliberately does not copy skills into
+another tool's config directory. Skill installation is this separate,
+explicit step:
+
+```bash
+./agent_collab.sh skills install codex
+```
+
+Replace `codex` with `claude`, `antigravity`, or `grok`. Omit the client to
+install for every listed client. Re-run the command after `git pull` to upgrade
+managed copies. Remove them with the matching explicit command:
+
+```bash
+./agent_collab.sh skills uninstall codex
+```
+
+Likewise, `./agent_collab.sh skills uninstall` removes the managed copies from
+all four clients.
+
+The command leaves locally modified or unmanaged skill directories in place.
+Its destinations are:
+
+| Client | User skill directory |
+| --- | --- |
+| Claude Code | `~/.claude/skills/` |
+| Codex | `~/.agents/skills/` |
+| Antigravity and Antigravity CLI | `~/.gemini/config/skills/` |
+| Grok | `~/.grok/skills/` |
+
+Claude Code can alternatively install both from this repository's marketplace:
+
+```text
+/plugin marketplace add lauriparviainen/agent_collab
+/plugin install agent-collab@agent-collab
+```
+
+Manual copying remains available when the checkout command cannot be used:
+
+```bash
+cp -R skills/agent-collab-solo-review skills/agent-collab-dual-review \
+  ~/.agents/skills/
+```
+
 ## Upgrade
 
 Install is also the upgrade command. After every `git pull`, re-run it:
@@ -120,7 +179,10 @@ formatting are preserved), and restarts the daemon if it was running before
 install. Restarting interrupts active sessions; session history under
 `~/.agent-collab/data` and all configuration are preserved. If your config
 has a problem, install is where you hear about it, as a plain warning or
-error with the file path.
+error with the file path. If you use the
+[review skills](#install-the-review-skills), also re-run
+`./agent_collab.sh skills install` — the managed copies in your agents' skill
+directories do not upgrade on their own.
 
 ## Uninstall
 
@@ -131,7 +193,9 @@ error with the file path.
 This stops the daemon, disables autostart, removes `~/.agent-collab/venv` and
 the `~/.local/bin/agent-collab` command. Your configuration and session data
 under `~/.agent-collab` are kept; the command prints the path so you can
-delete it yourself if you want everything gone.
+delete it yourself if you want everything gone. Installed
+[review skills](#install-the-review-skills) are also kept; remove them first
+with `./agent_collab.sh skills uninstall` while the checkout still works.
 
 As a standard packaging alternative, `pipx install '.[all]'` also installs
 the declared console commands in an isolated environment. A Docker image is
@@ -256,63 +320,9 @@ The agent can discover the configured reviewers, start the session, follow its
 events, and bring the findings back into the conversation you already have.
 You do not need to learn a second interactive tool to use it.
 
-### Install the review skills
-
-This repository ships two thin skills:
-
-- `agent-collab-solo-review` runs one independent review (one provider turn).
-- `agent-collab-dual-review` runs two reviewers concurrently and has the
-  calling agent reconcile their findings (two provider turns).
-
-Both require agent-collab to be installed, the daemon to be running, and its
-MCP server to be registered as described above. They ask you to select a
-reviewer model when the request is ambiguous and show the effective models,
-backends, and options for confirmation before making provider calls.
-
-Claude Code can install both from this repository's marketplace:
-
-```text
-/plugin marketplace add lauriparviainen/agent_collab
-/plugin install agent-collab@agent-collab
-```
-
-From a source checkout, install both skills for one client with:
-
-```bash
-./agent_collab.sh skills install codex
-```
-
-Replace `codex` with `claude`, `antigravity`, or `grok`. Omit the client to
-install for every listed client. Re-run the command after `git pull` to upgrade
-managed copies. Remove them with the matching explicit command:
-
-```bash
-./agent_collab.sh skills uninstall codex
-```
-
-Likewise, `./agent_collab.sh skills uninstall` removes the managed copies from
-all four clients.
-
-The command leaves locally modified or unmanaged skill directories in place.
-Its destinations are:
-
-| Client | User skill directory |
-| --- | --- |
-| Claude Code | `~/.claude/skills/` |
-| Codex | `~/.agents/skills/` |
-| Antigravity and Antigravity CLI | `~/.gemini/config/skills/` |
-| Grok | `~/.grok/skills/` |
-
-Manual copying remains available when the checkout command cannot be used:
-
-```bash
-cp -R skills/agent-collab-solo-review skills/agent-collab-dual-review \
-  ~/.agents/skills/
-```
-
-The main `./agent_collab.sh install` deliberately does not copy skills into
-another tool's config directory. Skill installation is a separate, explicit
-choice.
+The [review skills](#install-the-review-skills) installed earlier package this
+workflow: they teach your agent to discover the configured reviewers, confirm
+models and options with you, and triage the findings.
 
 ## See it work without provider accounts
 
