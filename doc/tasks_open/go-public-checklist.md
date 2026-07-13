@@ -37,6 +37,25 @@ recorded in the closed `workdir-limits-and-workspace-trust.md`; issue #14 owns
 the combined release gate and must stay synchronized with material scope
 changes.
 
+## Current continuation point
+
+**Updated 2026-07-13.** The pre-flip remediation work is complete, but the
+go-public checklist is not complete and the repository remains private. The
+next concrete action is visibility-flip checklist item 2: rerun the complete
+pre-flip content audit on the actual final release commit. Do not change
+visibility as part of that audit.
+
+After the content audit, run the final verification and release gates on the
+same commit, confirm CI is green, and choose and prepare the release version,
+changelog, tag, and GitHub Release under the release skill. The visibility
+change still requires explicit maintainer approval. Public-only security,
+rendering, and community-profile checks follow the flip; issue #14 and this
+task remain open until those checks are complete.
+
+Issue #14 was reconciled at this checkpoint: it records issue #13 as completed
+and uses the current `./agent_collab_dev.sh test` and
+`./agent_collab_dev.sh build --check` verification commands.
+
 ## Audit baseline
 
 Evidence captured on 2026-07-13:
@@ -211,13 +230,14 @@ Dependabot alerts.
 
 ## Implementation sequence
 
-1. Expand issue #13 and implement the complete untrusted-project-config policy
-   with tests and documentation.
-2. Decide the historical identity/path disposition; apply only the approved
-   current-tree or history-level remediation.
-3. Correct the MCP installation contract and verify both documented client
-   registrations.
-4. Fix ignore rules, task tracking, and public metadata.
+1. **Completed 2026-07-13.** Expand issue #13 and implement the complete
+   untrusted-project-config policy with tests and documentation.
+2. **Completed 2026-07-13.** Decide the historical identity/path disposition;
+   apply only the approved current-tree remediation and preserve history.
+3. **Completed 2026-07-13.** Correct the MCP installation contract and verify
+   both documented client registrations.
+4. **Completed 2026-07-13.** Fix ignore rules, task tracking, and public
+   metadata.
 5. Rerun the complete verification matrix below on the final commit.
 6. Choose the next version according to the release skill: fixes alone may be
    a patch; a new user-visible trust/confinement feature requires a pre-1.0
