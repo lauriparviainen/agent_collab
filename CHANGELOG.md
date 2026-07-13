@@ -13,6 +13,13 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add daemon-orchestrated parallel review workflows (#19): the built-in
+  `dual-review` runs Claude and Codex concurrently over one frozen prompt,
+  merges attributed events into one cursor stream, retains per-member terminal
+  outcomes, reports degraded groups through a structured stage summary, and
+  fails canonically when no reviewer produces an accepted review. Config schema
+  7 adds bounded flat `parallel` groups while project workflows remain
+  sequence-only.
 - Harden public-release repository hygiene (#14) by ignoring local virtual
   environments, environment files, coverage/tool output, OS metadata, and
   common private-key containers. Remove the obsolete hardening umbrella task

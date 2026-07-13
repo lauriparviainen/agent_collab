@@ -271,6 +271,25 @@ Already use only one provider? The built-in `solo-claude` and `solo-codex`
 workflows are useful for supervised runs, but the cross-vendor review idea is
 the reason this project exists.
 
+## Run independent reviews in parallel
+
+The built-in `dual-review` workflow starts Claude and Codex concurrently over
+the same frozen task context. The daemon merges both reviewers' attributed
+events into one cursor stream and emits one structured stage summary when they
+settle:
+
+```bash
+agent-collab start --workflow dual-review --watch --workdir /path/to/project \
+  "Independently review the current diff for correctness, security, and missing tests."
+```
+
+Parallel reviews are non-interactive. Each reviewer has its own turn deadline;
+one runtime failure degrades the group instead of discarding a completed peer
+review. The session is `done` when at least one reviewer completed and produced
+a message, and `failed` when none did. The calling human or agent remains the
+reconciler—it should inspect the stage summary and decide which findings to
+accept.
+
 ## Keep sessions running
 
 One-shot mode is the shortest path. The local daemon adds persistent sessions,
@@ -296,7 +315,7 @@ also means no restriction.
 ## What you get
 
 - **Different reviewers, one bounded session.** Workflows define exactly which
-  agents run and in what order.
+  agents run sequentially or in one concurrent review group.
 - **Visible execution.** Messages, tool calls, commands, status, and errors are
   normalized into one event stream.
 - **Explicit turn results.** Every new backend invocation records one
@@ -348,7 +367,8 @@ backend also documents itself in `agent_collab/backends/<provider>_<backend>/REA
 - `agent-collab` does not provide or broker model accounts. Each provider CLI
   or SDK needs its own credentials.
 - A workflow with three agent turns consumes roughly three turns' worth of
-  provider usage. Start with Claude and Codex before adding more reviewers.
+  provider usage. Parallel groups also run those turns concurrently. Start
+  with Claude and Codex before adding more reviewers.
 - The daemon is local, but the provider tools it launches may send prompts and
   repository content to their vendors. Their data policies still apply.
 - The daemon is not a durable archive by default: terminal sessions older than

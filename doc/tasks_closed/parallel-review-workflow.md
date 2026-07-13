@@ -1,6 +1,6 @@
 # Parallel review workflow
 
-**Status:** Designed and design-reviewed; not started.
+**Status:** Implemented and verified.
 
 **Implementation dependency:** The shared turn-outcome contract in
 `backend-turn-outcomes.md` (#17) is complete and is the foundation for this
@@ -61,6 +61,17 @@ and the ship-together rule for the config slice (header dependency note).
 **Created:** 2026-07-13
 
 **Issue:** [#19](https://github.com/lauriparviainen/agent_collab/issues/19)
+
+## Implementation verification
+
+Implemented in five independently reviewed slices: schema-7 workflow
+configuration, event attribution, referee parallel-stage execution, daemon and
+CLI integration, and the built-in `dual-review` workflow with user-facing
+documentation. The hermetic suite passes 800 tests, generated daemon API
+artifacts are current, and both successful and all-members-timeout mock runs
+were verified through a foreground daemon using one session and cursor stream.
+The all-timeout run retained both terminal member outcomes and reported the
+canonical `parallel_stage_no_accepted_member` session failure.
 
 ## Context
 

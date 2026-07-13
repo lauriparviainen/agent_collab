@@ -32,8 +32,11 @@ Compatibility handling for old config shapes belongs in
 `agent_collab/config_migrations.py`; runtime code consumes the latest schema.
 
 Orchestration is a `workflow`, not a `mode`. Built-ins include `solo-claude`,
-`solo-codex`, `cross-review` (default), and `compare`. Optional agents and their
-workflows are enabled in global user config.
+`solo-codex`, `cross-review` (default), `compare`, and the concurrent
+`dual-review` group. Sequential workflows normalize to singleton stages; a flat
+`parallel` workflow normalizes to one group of two to four distinct agents.
+Additional parallel workflows are global-user-only, while safe project
+workflows remain sequential.
 
 Sessions persist in `data/session-index.json` across daemon restarts. Sessions
 that were running or awaiting input when the daemon died are marked

@@ -538,6 +538,32 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.raw["members"], outcomes)
         self.assertEqual(summary.raw["accepted_members"], ["claude"])
 
+    async def test_all_member_timeouts_fail_with_committed_stage_outcomes(self):
+        class SlowRunner:
+            async def run_turn(self, prompt, workdir, emit):
+                await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee, records, events, _turn_active = self._referee(
+                Path(tmp),
+                ["claude", "codex"],
+                {"claude": SlowRunner(), "codex": SlowRunner()},
+                timeout=0,
+            )
+            with self.assertRaises(ParallelStageFailed) as caught:
+                await referee.run("review task")
+
+        self.assertEqual(caught.exception.failure.code, "parallel_stage_no_accepted_member")
+        outcomes = {record.agent_id: record.outcome for record, _boundary in records}
+        self.assertEqual(outcomes, {"claude": "timed_out", "codex": "timed_out"})
+        summary = next(
+            event
+            for event in events
+            if isinstance(event.raw, dict) and event.raw.get("parallel") is True
+        )
+        self.assertEqual(summary.raw["members"], outcomes)
+        self.assertEqual(summary.raw["accepted_members"], [])
+
     async def test_completed_turns_without_review_output_fail_the_stage(self):
         class EmptyRunner:
             async def run_turn(self, prompt, workdir, emit):

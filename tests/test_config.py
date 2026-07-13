@@ -53,6 +53,7 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn("options", data["agents"]["antigravity"])
         self.assertNotIn("options", data["agents"]["xai"])
         self.assertEqual(data["workflows"]["solo-claude"]["sequence"], ["claude"])
+        self.assertEqual(data["workflows"]["dual-review"]["parallel"], ["claude", "codex"])
 
     def test_fallback_toml_parser_accepts_flat_parallel_array(self):
         data = _parse_toml_subset('[workflows.review]\nparallel = ["a", "b"]\n')
@@ -171,6 +172,7 @@ class ConfigTests(unittest.TestCase):
                 config.workflows["cross-review"].sequence, ["claude", "codex", "claude"]
             )
             self.assertEqual(config.workflows["compare"].sequence, ["claude", "codex"])
+            self.assertEqual(config.workflows["dual-review"].parallel, ["claude", "codex"])
             self.assertEqual(config.workdir.restrict_workdir_roots, [])
             self.assertEqual(config.loaded_paths, [])
 

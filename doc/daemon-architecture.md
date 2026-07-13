@@ -33,7 +33,7 @@ This keeps the human terminal UI and the agent tool API separate while letting b
   major version.
 - `agent_collab.runners`: runner primitives (subprocess, dry-run, mock) and the registry-backed `configured_runner`.
 - `agent_collab.backends`: backend registry keyed by `(agent_type, backend_id)`, capabilities, live health probes, the `cli` subprocess backends, and the first-class Claude/Codex/Antigravity/xAI `sdk` backends (lazy-imported). An agent's provider (`type`) is separate from its execution mechanism (`backend`); the resolved per-agent backend map is computed once at start validation and threaded into execution.
-- `agent_collab.referee`: bounded turn loop.
+- `agent_collab.referee`: bounded sequential-stage and parallel-group supervision.
 - `agent_collab.logging`: JSONL and Markdown session logs.
 - `agent_collab.cli`: one-shot runner plus foreground server/client commands.
 - `agent_collab.server_http`: local HTTP server for session control and event reads.
@@ -76,10 +76,12 @@ hardcoded to exactly one Claude runner and one Codex runner. See
 
 1. A client asks the server to start a session.
 2. The server creates a `session_id`.
-3. The server loads config from the session `workdir`, validates typed start options, and builds the effective settings confirmation (workflow sequence, per-agent options, prompt-free command previews) before creating session state. Session logs go to the global `~/.agent-collab/data/sessions/`.
-4. The server runs the existing `Referee` in a background task. Each backend
-   turn streams through an awaited event sink and returns one typed terminal
-   outcome after bounded cleanup.
+3. The server loads config from the session `workdir`, validates typed start options, and builds the effective settings confirmation (ordered workflow members, optional parallel group, per-agent options, prompt-free command previews) before creating session state. Session logs go to the global `~/.agent-collab/data/sessions/`.
+4. The server runs the existing `Referee` in a background task. Sequential
+   workflows normalize to singleton stages; a flat parallel workflow normalizes
+   to one concurrent group over a frozen prompt. Each backend turn streams
+   through an awaited event sink and returns one typed terminal outcome after
+   bounded cleanup.
 5. Each emitted event is:
    - appended to in-memory session history,
    - sent to live watchers,

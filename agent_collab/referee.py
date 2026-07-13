@@ -313,23 +313,14 @@ class Referee:
     async def _cancel_runner_bounded(self, runner_task: asyncio.Task) -> None:
         runner_task.cancel()
         try:
-            await asyncio.wait_for(
-                asyncio.shield(runner_task), timeout=RUNNER_CLEANUP_GRACE_SECONDS
-            )
-        except asyncio.TimeoutError:
-            self._adopt_runner_reaper(runner_task)
+            done, _pending = await asyncio.wait({runner_task}, timeout=RUNNER_CLEANUP_GRACE_SECONDS)
         except asyncio.CancelledError:
-            current = asyncio.current_task()
-            if current is not None and current.cancelling():
-                self._adopt_runner_reaper(runner_task)
-                raise
-            # The awaited runner acknowledged our cancellation. This is the
-            # expected cleanup result, not cancellation of the cleanup owner.
+            self._adopt_runner_reaper(runner_task)
+            raise
+        if done:
             _consume_task_result(runner_task)
-        except Exception:
-            # Awaiting the task retrieved its exception; the turn outcome is
-            # still determined by the causal local timeout/stop/policy event.
-            pass
+        else:
+            self._adopt_runner_reaper(runner_task)
 
     def _adopt_runner_reaper(self, runner_task: asyncio.Task) -> None:
         if runner_task.done():

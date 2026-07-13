@@ -33,18 +33,20 @@ affect a session's config.
 
 ## Workflows
 
-A `workflow` names the orchestration pattern a session runs: the ordered
-sequence of agents that take turns on the task. Built-in workflows:
+A `workflow` names the orchestration pattern a session runs: either an ordered
+sequence of agent turns or one concurrent review group. Built-in workflows:
 
 - `solo-claude` — one Claude turn,
 - `solo-codex` — one Codex turn,
 - `cross-review` — Claude, then Codex review, then Claude revision
   (the default),
 - `compare` — Claude and Codex each answer once.
+- `dual-review` — Claude and Codex independently, in parallel.
 
 Projects and users can define more under `[workflows.*]` in config. Call
 `agent_collab_describe_options` to list the workflows that exist for a
-given `workdir`, including each workflow's sequence and agent types.
+given `workdir`, including each workflow's ordered member list, optional
+`parallel` list, and agent types. Parallel workflows are non-interactive.
 
 ## Options
 
@@ -94,7 +96,8 @@ authority for provider-side failures a side-effect-free probe cannot establish.
 The response is your confirmation of what the server is about to run. Check
 it before watching:
 
-- `workflow` and `settings.workflow.sequence` — the effective turn order,
+- `workflow` and `settings.workflow.sequence` — the effective ordered members,
+- `settings.workflow.parallel` — the concurrent group, or null for a sequential workflow,
 - `settings.agents.<id>` — the effective typed options per agent (model,
   thinking level, permission/sandbox settings where applicable),
 - `settings.agents.<id>.backend_summary` — the selected backend's own summary

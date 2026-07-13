@@ -43,12 +43,12 @@ through project config or dedicated Claude/Codex path flags.
 
 Built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml), so the base agent commands, option defaults, and built-in workflows are inspectable without reading Python code.
 
-Config files declare a top-level `schema_version` (currently `6`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
+Config files declare a top-level `schema_version` (currently `7`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
 ## Example
 
 ```toml
-schema_version = 6
+schema_version = 7
 
 [agents.claude]
 type = "claude"
@@ -90,9 +90,50 @@ sequence = ["claude", "codex", "claude"]
 [workflows.compare]
 sequence = ["claude", "codex"]
 
+[workflows.dual-review]
+parallel = ["claude", "codex"]
+
 [workflows.readonly-review]
 sequence = ["codex_readonly", "claude", "codex_readonly"]
 ```
+
+## Workflow shapes
+
+A workflow defines exactly one shape:
+
+- `sequence = [...]` runs one agent at a time in the listed order. Repeated
+  members are allowed.
+- `parallel = [...]` runs one flat group of two to four distinct agents
+  concurrently. Every member receives the same reviewer prompt over a frozen
+  transcript snapshot.
+
+The built-in `dual-review` uses Claude and Codex. To configure a three-reviewer
+group, first enable an opt-in provider in the global user config and then add a
+global-user workflow:
+
+```toml
+schema_version = 7
+
+[agents.xai]
+enabled = true
+
+[workflows.triple-review]
+parallel = ["claude", "codex", "xai"]
+```
+
+Parallel workflows are user-config-only: project config may continue to define
+`sequence` workflows, but a project `parallel` table is ignored with a sanitized
+warning because concurrent fan-out changes execution posture. Parallel sessions
+must use `interactive = false` and `max_turns >= 1`. `max_turns` counts stages,
+so any positive value runs the parallel workflow's single group; `timeout`
+applies independently to each member.
+
+At runtime, each member retains its six-value turn outcome. A member review is
+accepted only when its outcome is `completed` and it emitted a non-error message.
+The group can finish in a degraded `done` state when at least one review is
+accepted. Its final referee status event carries `raw.members` and
+`raw.accepted_members`; zero accepted members produces the canonical
+`parallel_stage_no_accepted_member` session failure.
 
 ## Agent fields
 

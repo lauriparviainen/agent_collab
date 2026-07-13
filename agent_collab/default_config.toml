@@ -41,3 +41,6 @@ sequence = ["claude", "codex", "claude"]
 
 [workflows.compare]
 sequence = ["claude", "codex"]
+
+[workflows.dual-review]
+parallel = ["claude", "codex"]
