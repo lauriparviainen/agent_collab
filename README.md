@@ -337,16 +337,35 @@ You will see the referee hand the task between agents and print each event as
 it happens. A readable Markdown transcript and the original JSONL events are
 written under `~/.agent-collab/data/sessions/`.
 
+## Run independent reviews in parallel
+
+The built-in `dual-review` workflow starts Claude and Codex concurrently over
+the same frozen task context — this is also the workflow the
+`agent-collab-dual-review` skill drives. Install and sign in to the Claude
+Code and Codex CLIs, then point it at code you care about. The daemon merges
+both reviewers' attributed events into one cursor stream and emits one
+structured stage summary when they settle:
+
+```bash
+agent-collab start --workflow dual-review --watch --workdir /path/to/project \
+  "Independently review the current diff for correctness, security, and missing tests."
+```
+
+Parallel reviews are non-interactive. Each reviewer has its own turn deadline;
+one runtime failure degrades the group instead of discarding a completed peer
+review. The session is `done` when at least one reviewer completed and produced
+a message, and `failed` when none did. The calling human or agent remains the
+reconciler—it should inspect the stage summary and decide which findings to
+accept.
+
 ## Run a real cross-review
 
-The default `cross-review` workflow is:
+The default `cross-review` workflow runs the same signed-in CLIs sequentially,
+so the reviewers see and challenge each other's answers:
 
 ```text
 Claude drafts/reviews → Codex challenges → Claude revises
 ```
-
-Install and sign in to the Claude Code and Codex CLIs, then point the session at
-code you care about:
 
 ```bash
 agent-collab --workflow cross-review --workdir /path/to/project \
@@ -360,25 +379,6 @@ ends after the configured turns.
 Already use only one provider? The built-in `solo-claude` and `solo-codex`
 workflows are useful for supervised runs, but the cross-vendor review idea is
 the reason this project exists.
-
-## Run independent reviews in parallel
-
-The built-in `dual-review` workflow starts Claude and Codex concurrently over
-the same frozen task context. The daemon merges both reviewers' attributed
-events into one cursor stream and emits one structured stage summary when they
-settle:
-
-```bash
-agent-collab start --workflow dual-review --watch --workdir /path/to/project \
-  "Independently review the current diff for correctness, security, and missing tests."
-```
-
-Parallel reviews are non-interactive. Each reviewer has its own turn deadline;
-one runtime failure degrades the group instead of discarding a completed peer
-review. The session is `done` when at least one reviewer completed and produced
-a message, and `failed` when none did. The calling human or agent remains the
-reconciler—it should inspect the stage summary and decide which findings to
-accept.
 
 ## Keep sessions running
 
