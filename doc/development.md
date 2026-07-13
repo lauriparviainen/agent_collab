@@ -9,6 +9,13 @@ hermetic unit suite):
 ./agent_collab_dev.sh test
 ```
 
+A green local gate is necessary but not sufficient: CI also runs the suite on
+Python 3.10 and 3.11 and on an SDK-free base install, so version- and
+dependency-specific failures pass locally. After every push, confirm the CI
+run is green (`gh run list --branch main`, or `gh run watch` on the new run)
+instead of assuming the local result carries over. Never tag a release
+without a green run on the release commit.
+
 Run only the hermetic unit suite:
 
 ```bash
