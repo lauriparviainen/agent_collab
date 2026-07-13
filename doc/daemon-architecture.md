@@ -121,7 +121,7 @@ The local server API binds to `127.0.0.1` by default. The shared DTOs and
 source of truth for the complete REST surface; the server dispatch table and
 typed client both consume that registry. The generated human-readable and
 OpenAPI outputs live under [`doc/daemon_api_doc/`](daemon_api_doc/http-api.md)
-and are refreshed by `./agent_collab.sh setup`.
+and are refreshed by `./agent_collab_dev.sh build`.
 
 `POST /sessions` and `/options` require an explicit non-blank `workdir`; the
 `workdir` selects project config and the session subprocess cwd.

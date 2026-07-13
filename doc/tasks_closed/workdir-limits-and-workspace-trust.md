@@ -100,8 +100,8 @@ comparison. A project `[workdir]` section is ignored.
 
 Completed 2026-07-13:
 
-- `./agent_collab.sh test` — Ruff checks and 707 hermetic tests passed.
-- `./agent_collab.sh setup --check` — effective config and generated API
+- `./agent_collab_dev.sh test` — Ruff checks and 707 hermetic tests passed.
+- `./agent_collab_dev.sh build --check` — effective config and generated API
   artifacts verified.
 - `git diff --check` — passed.
 - Independent re-review by Grok Build and Gemini 3.1 Pro High found no remaining

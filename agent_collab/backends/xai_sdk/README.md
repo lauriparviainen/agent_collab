@@ -21,4 +21,4 @@ interrupt, and tool-gate capabilities are all false. Credential values and SDK
 responses are never logged by health probes.
 
 Hermetic tests: `python3 -m unittest tests.backends.xai_sdk.test_backend`.
-Credentialed test: `./agent_collab.sh integration-test xai_sdk --strict`.
+Credentialed test: `./agent_collab_dev.sh integration-test xai_sdk --strict`.

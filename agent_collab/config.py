@@ -545,7 +545,10 @@ def validate_workflow(config: CollaborationConfig, workflow_id: str) -> None:
 
 
 def load_toml_file(path: Path) -> Dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
+    return load_toml_text(path.read_text(encoding="utf-8"), source=str(path))
+
+
+def load_toml_text(text: str, source: str = "config") -> Dict[str, Any]:
     try:
         import tomllib  # type: ignore
     except ModuleNotFoundError:
@@ -553,7 +556,7 @@ def load_toml_file(path: Path) -> Dict[str, Any]:
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:  # type: ignore[name-defined]
-        raise ConfigError(f"{path}: {exc}") from exc
+        raise ConfigError(f"{source}: {exc}") from exc
 
 
 def _parse_toml_subset(text: str) -> Dict[str, Any]:

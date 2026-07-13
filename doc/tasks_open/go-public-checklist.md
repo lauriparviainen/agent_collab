@@ -52,9 +52,9 @@ Evidence captured on 2026-07-13:
   integration design material has since been removed from this working tree;
 - the built wheel contained only the intended package modules, backend
   manifests/readmes, MCP guidance, license, and distribution metadata;
-- `./agent_collab.sh test` passed Ruff lint, Ruff formatting, and 695 hermetic
+- `./agent_collab_dev.sh test` passed Ruff lint, Ruff formatting, and 695 hermetic
   tests;
-- `./agent_collab.sh setup --check` passed;
+- `./agent_collab_dev.sh build --check` passed;
 - an isolated SDK-free wheel installation imported and rendered CLI help;
 - the latest CI run on `main` passed; and
 - `git fsck --full --no-dangling` reported no repository-integrity errors.
@@ -122,12 +122,12 @@ Affected current-tree categories include closed task documents, one captured
 CLI fixture, and a TUI test; deleted versions of README/design files retain
 additional occurrences in history.
 
-The maintainer must explicitly choose one of these outcomes before the flip:
-
-- accept the author identity and historical path disclosure as intentional;
-  sanitize current documentation/fixtures while recording that old versions
-  remain in history; or
-- perform an approved history/privacy remediation with a release and tag plan.
+**Decision recorded 2026-07-13.** The maintainer accepts the author identity
+and historical machine-local paths as intentional public metadata. Preserve
+the existing commit history, annotated tags, and GitHub Releases; do not
+perform history/privacy remediation. Current documentation, fixtures, and
+tests must still replace machine-local examples with neutral public-safe
+values before the visibility flip. Historical versions will remain unchanged.
 
 Do not rewrite history, move tags, delete releases, or re-tag as an incidental
 cleanup. Existing releases and annotated tags make that an outward-facing
@@ -264,8 +264,8 @@ Ordered; the audit comes first because the flip publishes all history at once.
 Required before closing issue #14 or changing repository visibility:
 
 ```bash
-./agent_collab.sh test
-./agent_collab.sh setup --check
+./agent_collab_dev.sh test
+./agent_collab_dev.sh build --check
 git status --short
 git fsck --full --no-dangling
 ```
@@ -293,7 +293,5 @@ calls.
 
 ## Open questions
 
-1. Are the existing commit/tag identity and historical machine-local paths
-   acceptable public metadata, or is dedicated history remediation required?
-2. Should the installer expose `agent-collab-mcp` beside `agent-collab`, or
+1. Should the installer expose `agent-collab-mcp` beside `agent-collab`, or
    should documentation point directly into the durable environment?

@@ -71,11 +71,11 @@ The design below rests on these facts, checked against the current code:
 - **The API workflow is fixed.** A new route means: DTOs in
   `api_schema.py`, a `ROUTES` entry, a `_route_<handler>` method in
   `server_http.py`, a typed method in `client.py`, registering the new DTOs
-  in `project_setup.py`'s hardcoded `_MODELS` / `_REQUEST_MODELS` tuples
+  in `project_build.py`'s hardcoded `_MODELS` / `_REQUEST_MODELS` tuples
   (plus `_FIELD_SCHEMAS` entries for constrained fields) — schema generation
   does not discover models dynamically — and regenerating
   `doc/daemon_api_doc/{openapi.json,http-api.md}` with
-  `./agent_collab.sh setup`. Contract tests pin routes to client methods
+  `./agent_collab_dev.sh build`. Contract tests pin routes to client methods
   (`SERVER_ONLY_ROUTES` is the only exemption list). `POST /sessions/prune`
   does not collide with any existing route template, and session IDs like
   `prune` cannot be created over the wire (`session_id` is not a wire field).
@@ -320,7 +320,7 @@ so runs never overlap.
 ## Implementation plan
 
 Each stage is independently committable and reviewable; run
-`./agent_collab.sh test` and `./agent_collab.sh setup --check` before each
+`./agent_collab_dev.sh test` and `./agent_collab_dev.sh build --check` before each
 commit. CI has no vendor SDKs installed — none of these stages may depend on
 provider packages.
 
@@ -362,7 +362,7 @@ converges).
 Touches: `agent_collab/api_schema.py` (request/response DTOs, `ROUTES`
 entry), `agent_collab/server_http.py` (`_route_prune_sessions`),
 `agent_collab/client.py` (`prune_sessions`),
-`agent_collab/project_setup.py` (add the new DTOs to `_MODELS` and the
+`agent_collab/project_build.py` (add the new DTOs to `_MODELS` and the
 request model to `_REQUEST_MODELS`; add `_FIELD_SCHEMAS` entries for
 constrained fields such as `keep >= 0` and the disposition enum — the OpenAPI
 generator only emits schemas for models listed there), regenerate
@@ -425,7 +425,7 @@ Hermetic tests must cover:
   logging, and cancellation tolerance;
 - root and subcommand help plus documented examples.
 
-Run the full repository gate and `setup --check` before every commit.
+Run the full repository gate and `build --check` before every commit.
 
 ## Resolved questions
 

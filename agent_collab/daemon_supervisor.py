@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterator, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from . import __version__
 from .events import utc_timestamp
 from .paths import GlobalDataPaths, atomic_write_private_text
 
@@ -45,11 +46,19 @@ def start_daemon(
     host: str = "127.0.0.1",
     port: int = 8765,
     default_workdir: Optional[Path] = None,
+    interpreter: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    """Spawn the detached daemon; ``interpreter`` defaults to this process's.
+
+    Install passes the durable venv interpreter explicitly: the installer may
+    run under a bootstrap system Python whose environment lacks the provider
+    SDKs, and the daemon must not inherit that.
+    """
+
     paths = paths or GlobalDataPaths.resolve()
     paths.ensure_dirs()
     with _daemon_start_lock(paths):
-        return _start_daemon_locked(paths, host, port, default_workdir)
+        return _start_daemon_locked(paths, host, port, default_workdir, interpreter)
 
 
 def run_managed_daemon(
@@ -111,6 +120,7 @@ def _start_daemon_locked(
     host: str,
     port: int,
     default_workdir: Optional[Path],
+    interpreter: Optional[Path] = None,
 ) -> Dict[str, Any]:
     state = _read_state(paths)
     pid = _state_pid(state) or _read_pid(paths)
@@ -136,7 +146,7 @@ def _start_daemon_locked(
     stdout = paths.daemon_log_path.open("a", encoding="utf-8")
     stderr = paths.daemon_stderr_path.open("a", encoding="utf-8")
     argv = [
-        sys.executable,
+        str(interpreter) if interpreter else sys.executable,
         "-m",
         "agent_collab.cli",
         "serve",
@@ -278,6 +288,35 @@ def stop_daemon(
     return DaemonStatus(False, state, f"agent-collab daemon killed pid {pid}")
 
 
+def count_running_sessions(state: Dict[str, Any]) -> Optional[int]:
+    """Best-effort count of running sessions via the daemon HTTP API."""
+
+    try:
+        from .config import load_daemon_token
+
+        token = load_daemon_token()
+        server_url = state.get("server_url")
+        if not token or not server_url:
+            return None
+        request = Request(
+            f"{server_url}/sessions",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            method="GET",
+        )
+        with urlopen(request, timeout=1.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        sessions = payload.get("sessions", [])
+        if not isinstance(sessions, list):
+            return None
+        return sum(
+            1
+            for session in sessions
+            if isinstance(session, dict) and session.get("status") == "running"
+        )
+    except Exception:
+        return None
+
+
 def tail_daemon_log(
     paths: Optional[GlobalDataPaths] = None, tail: int = 100, stderr: bool = False
 ) -> str:
@@ -301,6 +340,7 @@ def _build_state(
 ) -> Dict[str, Any]:
     return {
         "pid": pid,
+        "version": __version__,
         "host": host,
         "port": port,
         "home": str(paths.home),

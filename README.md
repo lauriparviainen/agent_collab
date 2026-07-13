@@ -68,10 +68,11 @@ cd agent_collab
 ```
 
 This installs the current checkout into `~/.agent-collab/venv` and exposes the
-existing `agent-collab` console command through `~/.local/bin`. If that
-directory is not on `PATH`, the installer prints the change you need to make;
-it never edits shell startup files. It also refuses to replace an unrelated
-command unless you explicitly pass `--force`.
+`agent-collab` console command through `~/.local/bin`. Install takes no
+options and narrates each step: what it did and whether it succeeded. If
+`~/.local/bin` is not on `PATH`, the installer prints the change you need to
+make; it never edits shell startup files, and it refuses to replace an
+unrelated command (the error tells you exactly what to remove).
 
 You can now run the TUI or other commands from any directory:
 
@@ -96,12 +97,37 @@ pip install 'agent-collab[all]'          # everything
 A missing SDK never crashes the daemon: the backend reports itself unavailable
 with the matching install hint.
 
-Re-run `./agent_collab.sh install` to update a source-based installation. Use
-`--editable` when you deliberately want the installed command to follow edits
-in this checkout. As a standard packaging alternative, `pipx install '.[all]'`
-also installs the declared console commands in an isolated environment.
+## Upgrade
 
-A Docker image is planned but not available yet.
+Install is also the upgrade command. After every `git pull`, re-run it:
+
+```bash
+git pull
+./agent_collab.sh install
+```
+
+Each run reinstalls the checkout into the venv, migrates your user config to
+the current schema (a `config.toml.bak` backup is written first; comments and
+formatting are preserved), and restarts the daemon if it was running before
+install. Restarting interrupts active sessions; session history under
+`~/.agent-collab/data` and all configuration are preserved. If your config
+has a problem, install is where you hear about it, as a plain warning or
+error with the file path.
+
+## Uninstall
+
+```bash
+./agent_collab.sh uninstall
+```
+
+This stops the daemon, disables autostart, removes `~/.agent-collab/venv` and
+the `~/.local/bin/agent-collab` command. Your configuration and session data
+under `~/.agent-collab` are kept; the command prints the path so you can
+delete it yourself if you want everything gone.
+
+As a standard packaging alternative, `pipx install '.[all]'` also installs
+the declared console commands in an isolated environment. A Docker image is
+planned but not available yet.
 
 ## Give your coding agent a second opinion
 
@@ -345,15 +371,15 @@ The README is deliberately short. Detailed behavior lives here:
 From a source checkout:
 
 ```bash
-./agent_collab.sh test
-./agent_collab.sh setup --check
+./agent_collab_dev.sh test
+./agent_collab_dev.sh build --check
 ```
 
 Two additional checks serve different purposes:
 
 ```bash
-./agent_collab.sh smoke
-./agent_collab.sh integration-test claude_cli
+./agent_collab_dev.sh smoke
+./agent_collab_dev.sh integration-test claude_cli
 ```
 
 `smoke` is a fast mock session: no credentials, no model call. `integration-test`

@@ -55,8 +55,8 @@ class DaemonCliTests(unittest.TestCase):
             code = main(["daemon", "autostart", "status"])
 
         self.assertEqual(code, 1)
-        self.assertIn("installed: true", stdout.getvalue())
-        self.assertIn("healthy: false", stdout.getvalue())
+        self.assertRegex(stdout.getvalue(), r"(?m)^  installed\s+true$")
+        self.assertRegex(stdout.getvalue(), r"(?m)^  healthy\s+false$")
 
     def test_autostart_enable_passes_service_options(self):
         with (

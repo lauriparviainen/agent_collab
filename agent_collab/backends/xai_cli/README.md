@@ -22,4 +22,4 @@ action record, so tool, command, and file-change fidelity is intentionally not
 claimed. Resume, interrupt, and tool-gate capabilities are all false.
 
 Hermetic tests: `python3 -m unittest tests.backends.xai_cli.test_backend`.
-Credentialed test: `./agent_collab.sh integration-test xai_cli --strict`.
+Credentialed test: `./agent_collab_dev.sh integration-test xai_cli --strict`.

@@ -20,4 +20,4 @@ Typed text/tool/result blocks map to normalized events. Thinking signatures are 
 
 ## Testing
 
-Hermetic: `./agent_collab.sh test -k claude_sdk`. Live: `./agent_collab.sh integration-test claude_sdk`.
+Hermetic: `./agent_collab_dev.sh test -k claude_sdk`. Live: `./agent_collab_dev.sh integration-test claude_sdk`.

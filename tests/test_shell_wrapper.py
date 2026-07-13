@@ -7,10 +7,65 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "agent_collab.sh"
+DEV_SCRIPT = ROOT / "agent_collab_dev.sh"
 
 
-class ShellWrapperTests(unittest.TestCase):
-    def test_help_prints_common_workflows(self):
+class ShellWrapperHarness(unittest.TestCase):
+    script = SCRIPT
+
+    def _run_with_fake_python(self, args, cwd=ROOT):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            capture_path = tmp_path / "capture.txt"
+            fake_python = bin_dir / "python3"
+            fake_python.write_text(
+                """#!/usr/bin/env bash
+{
+  printf 'cwd=%s\\n' "$PWD"
+  printf 'PYTHONPATH=%s\\n' "${PYTHONPATH:-}"
+  printf 'argc=%s\\n' "$#"
+  i=0
+  for arg in "$@"; do
+    printf 'arg%s=%s\\n' "$i" "$arg"
+    i=$((i + 1))
+  done
+} > "$AGENT_COLLAB_CAPTURE"
+exit 0
+""",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+            env["AGENT_COLLAB_CAPTURE"] = str(capture_path)
+            env["AGENT_COLLAB_PYTHON"] = str(fake_python)
+            result = subprocess.run(
+                [str(self.script), *args],
+                cwd=cwd,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            captured = self._read_capture(capture_path) if capture_path.exists() else {}
+            return result, captured
+
+    def _read_capture(self, capture_path):
+        values = {}
+        for line in capture_path.read_text(encoding="utf-8").splitlines():
+            key, value = line.split("=", 1)
+            values[key] = value
+        argc = int(values["argc"])
+        values["args"] = [values[f"arg{i}"] for i in range(argc)]
+        return values
+
+
+class UserShellWrapperTests(ShellWrapperHarness):
+    def test_help_lists_user_commands_only(self):
         result = subprocess.run(
             [str(SCRIPT), "help"],
             cwd=ROOT,
@@ -21,13 +76,17 @@ class ShellWrapperTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("./agent_collab.sh smoke", result.stdout)
         self.assertIn("./agent_collab.sh install", result.stdout)
+        self.assertIn("./agent_collab.sh uninstall", result.stdout)
         self.assertIn("./agent_collab.sh daemon start", result.stdout)
         self.assertIn("-m agent_collab.cli", result.stdout)
+        self.assertIn("agent_collab_dev.sh", result.stdout)
+        self.assertNotIn("./agent_collab.sh test", result.stdout)
+        self.assertNotIn("./agent_collab.sh smoke", result.stdout)
+        self.assertNotIn("./agent_collab.sh build", result.stdout)
 
-    def test_install_dispatches_to_user_installer(self):
-        result, captured = self._run_with_fake_python(["install", "--editable"])
+    def test_install_dispatches_switchless_to_user_installer(self):
+        result, captured = self._run_with_fake_python(["install"])
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
@@ -35,11 +94,26 @@ class ShellWrapperTests(unittest.TestCase):
             [
                 "-m",
                 "agent_collab.user_install",
+                "install",
                 "--repo-root",
                 str(ROOT),
                 "--venv",
                 str(Path.home() / ".agent-collab" / "venv"),
-                "--editable",
+            ],
+        )
+
+    def test_uninstall_dispatches_to_user_installer(self):
+        result, captured = self._run_with_fake_python(["uninstall"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            captured["args"],
+            [
+                "-m",
+                "agent_collab.user_install",
+                "uninstall",
+                "--venv",
+                str(Path.home() / ".agent-collab" / "venv"),
             ],
         )
 
@@ -121,6 +195,44 @@ exit 1
         )
         self.assertEqual(captured["args"].count("--workdir"), 1)
 
+
+class DevShellWrapperTests(ShellWrapperHarness):
+    script = DEV_SCRIPT
+
+    def test_help_lists_developer_commands(self):
+        result = subprocess.run(
+            [str(DEV_SCRIPT), "help"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("./agent_collab_dev.sh build", result.stdout)
+        self.assertIn("./agent_collab_dev.sh test", result.stdout)
+        self.assertIn("./agent_collab_dev.sh integration-test", result.stdout)
+        self.assertIn("./agent_collab_dev.sh smoke", result.stdout)
+        self.assertIn("./agent_collab.sh", result.stdout)
+
+    def test_unknown_command_fails_instead_of_passing_through(self):
+        result, captured = self._run_with_fake_python(["daemon", "status"])
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown developer command", result.stderr)
+        # Only the interpreter version probe may have run; nothing dispatched.
+        self.assertNotIn("-m", captured.get("args", []))
+
+    def test_build_dispatches_to_project_build(self):
+        result, captured = self._run_with_fake_python(["build", "--check"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            captured["args"],
+            ["-m", "agent_collab.project_build", "--check"],
+        )
+
     def test_test_command_runs_static_checks_then_unittest_from_repo_root(self):
         result, commands = self._run_test_with_recording_python(cwd=Path(tempfile.gettempdir()))
 
@@ -158,7 +270,7 @@ exit 0
             env = os.environ.copy()
             env["AGENT_COLLAB_PYTHON"] = str(fake_python)
             result = subprocess.run(
-                [str(SCRIPT), "test"],
+                [str(DEV_SCRIPT), "test"],
                 cwd=ROOT,
                 env=env,
                 text=True,
@@ -188,47 +300,6 @@ exit 0
             ["-m", "agent_collab.cli", "--mock", "--workdir", ".", "Smoke test"],
         )
 
-    def _run_with_fake_python(self, args, cwd=ROOT):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            bin_dir = tmp_path / "bin"
-            bin_dir.mkdir()
-            capture_path = tmp_path / "capture.txt"
-            fake_python = bin_dir / "python3"
-            fake_python.write_text(
-                """#!/usr/bin/env bash
-{
-  printf 'cwd=%s\\n' "$PWD"
-  printf 'PYTHONPATH=%s\\n' "${PYTHONPATH:-}"
-  printf 'argc=%s\\n' "$#"
-  i=0
-  for arg in "$@"; do
-    printf 'arg%s=%s\\n' "$i" "$arg"
-    i=$((i + 1))
-  done
-} > "$AGENT_COLLAB_CAPTURE"
-exit 0
-""",
-                encoding="utf-8",
-            )
-            fake_python.chmod(0o755)
-
-            env = os.environ.copy()
-            env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
-            env["AGENT_COLLAB_CAPTURE"] = str(capture_path)
-            env["AGENT_COLLAB_PYTHON"] = str(fake_python)
-            result = subprocess.run(
-                [str(SCRIPT), *args],
-                cwd=cwd,
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
-            captured = self._read_capture(capture_path) if capture_path.exists() else {}
-            return result, captured
-
     def _run_test_with_recording_python(self, cwd=ROOT):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -252,7 +323,7 @@ printf '\n' >> "$AGENT_COLLAB_CAPTURE"
             env["AGENT_COLLAB_PYTHON"] = str(fake_python)
             env["AGENT_COLLAB_CAPTURE"] = str(capture_path)
             result = subprocess.run(
-                [str(SCRIPT), "test"],
+                [str(DEV_SCRIPT), "test"],
                 cwd=cwd,
                 env=env,
                 text=True,
@@ -265,15 +336,6 @@ printf '\n' >> "$AGENT_COLLAB_CAPTURE"
                 command_cwd, *args = line.split("\x1f")
                 commands.append((command_cwd, args))
             return result, commands
-
-    def _read_capture(self, capture_path):
-        values = {}
-        for line in capture_path.read_text(encoding="utf-8").splitlines():
-            key, value = line.split("=", 1)
-            values[key] = value
-        argc = int(values["argc"])
-        values["args"] = [values[f"arg{i}"] for i in range(argc)]
-        return values
 
 
 if __name__ == "__main__":

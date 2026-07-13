@@ -17,7 +17,12 @@ authors = [{ name = "agent-collab prototype" }]
 # (only inside probe()/runner), so a missing wheel degrades to an unavailable
 # backend with an install hint rather than an import-time crash. Install a
 # per-provider extra below (or `all`) to enable the matching `sdk` backend.
-dependencies = []
+# tomlkit is the one small base dependency: install-time config migration
+# rewrites the user config while preserving comments and formatting, which
+# stdlib tomllib cannot do. It is lazy-imported only on the write-back path.
+dependencies = [
+    "tomlkit>=0.13,<1",
+]
 
 # SDK ranges are bounded to the minor line verified during Stage 5.1 A1 on
 # Python 3.12.13. Codex needs an explicit prerelease floor; 0.1.0b3 installs the

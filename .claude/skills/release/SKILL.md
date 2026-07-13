@@ -25,8 +25,8 @@ Read this together with `.claude/skills/github-issues/SKILL.md`.
 
 ## Release Procedure
 
-1. Confirm `main` is green: `./agent_collab.sh test` and
-   `./agent_collab.sh setup --check` pass, and CI on the release commit is
+1. Confirm `main` is green: `./agent_collab_dev.sh test` and
+   `./agent_collab_dev.sh build --check` pass, and CI on the release commit is
    green.
 2. Bump the version in **both** `pyproject.toml` and
    `agent_collab/__init__.py` — they must stay identical.

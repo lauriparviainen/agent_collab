@@ -7,7 +7,7 @@ REST route, and the API version constants. It is intentionally dependency-light
 ``client`` can import it without a cycle.
 
 See ``doc/tasks_closed/stage-5.3-daemon-api-contract.md`` (Workstream A).
-``./agent_collab.sh setup`` generates the documentation artifacts under
+``./agent_collab_dev.sh build`` generates the documentation artifacts under
 ``doc/daemon_api_doc/`` from these DTOs and :data:`ROUTES`.
 
 Deliberate non-coverage (documented, not accidental):

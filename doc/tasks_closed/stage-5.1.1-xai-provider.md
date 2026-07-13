@@ -534,8 +534,8 @@ Extend `integration_tests/harness.py`:
 The canonical selectors then work without changing the integration CLI:
 
 ```bash
-./agent_collab.sh integration-test xai_cli --strict
-./agent_collab.sh integration-test xai_sdk --strict
+./agent_collab_dev.sh integration-test xai_cli --strict
+./agent_collab_dev.sh integration-test xai_sdk --strict
 ```
 
 Each live test uses the existing disposable workspace and isolated
@@ -584,13 +584,13 @@ message-only SDK limitation. Do not document provider-wide `xai_options`.
 Closure evidence from 2026-07-10:
 
 - `python3 -m compileall -q agent_collab integration_tests tests`: passed;
-- `./agent_collab.sh test`: 473 tests passed;
-- `./agent_collab.sh smoke`: passed;
+- `./agent_collab_dev.sh test`: 473 tests passed;
+- `./agent_collab_dev.sh smoke`: passed;
 - `python -m pip check`: no broken requirements;
 - wheel/package-data verification: passed, including both xAI manifests;
-- `./agent_collab.sh integration-test xai_cli --strict`: passed against
+- `./agent_collab_dev.sh integration-test xai_cli --strict`: passed against
   `grok-build` and persisted the Grok session identity;
-- `./agent_collab.sh integration-test xai_sdk --strict`: expected exit `2`
+- `./agent_collab_dev.sh integration-test xai_sdk --strict`: expected exit `2`
   because `XAI_API_KEY` is absent; the installed `xai-sdk` 1.17.0 contract is
   captured in `tests/fixtures/xai/sdk-introspection.json` and exercised through
   hermetic async response/identity tests;
@@ -601,8 +601,8 @@ Hermetic and packaging checks:
 
 ```bash
 python3 -m compileall -q agent_collab integration_tests tests
-./agent_collab.sh test
-./agent_collab.sh smoke
+./agent_collab_dev.sh test
+./agent_collab_dev.sh smoke
 python -m pip check
 python -c "from agent_collab import backends; print(backends.registered_backend_names())"
 ```
@@ -610,8 +610,8 @@ python -c "from agent_collab import backends; print(backends.registered_backend_
 Credentialed, opt-in checks:
 
 ```bash
-./agent_collab.sh integration-test xai_cli --strict
-./agent_collab.sh integration-test xai_sdk --strict
+./agent_collab_dev.sh integration-test xai_cli --strict
+./agent_collab_dev.sh integration-test xai_sdk --strict
 ```
 
 ## Acceptance criteria

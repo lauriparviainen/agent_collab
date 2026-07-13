@@ -36,4 +36,4 @@ Typed text becomes messages; tool calls/results become tool, command, file-chang
 
 ## Testing
 
-Hermetic: `./agent_collab.sh test -k antigravity_sdk`. Live: `./agent_collab.sh integration-test antigravity_sdk`.
+Hermetic: `./agent_collab_dev.sh test -k antigravity_sdk`. Live: `./agent_collab_dev.sh integration-test antigravity_sdk`.

@@ -1,7 +1,9 @@
 import copy
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from agent_collab.config import (
     ConfigError,
@@ -14,6 +16,7 @@ from agent_collab.config_migrations import (
     CURRENT_CONFIG_SCHEMA,
     ConfigMigrationError,
     migrate_config_data,
+    migrate_user_config_file,
 )
 
 
@@ -180,6 +183,154 @@ command = "project-claude"
 
             with self.assertRaisesRegex(ConfigMigrationError, "config.toml"):
                 load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
+
+
+def _tomlkit_available() -> bool:
+    try:
+        import tomlkit  # noqa: F401
+    except ModuleNotFoundError:
+        return False
+    return True
+
+
+def _tomllib_available() -> bool:
+    try:
+        import tomllib  # noqa: F401
+    except ModuleNotFoundError:
+        return False
+    return True
+
+
+class MigrateUserConfigFileTests(unittest.TestCase):
+    def _write(self, directory: Path, text: str) -> Path:
+        path = directory / "config.toml"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_absent_file_reports_absent_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "absent")
+            self.assertFalse(path.exists())
+
+    def test_current_file_is_left_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = f"schema_version = {CURRENT_CONFIG_SCHEMA}\n\n[agents.claude]\nname = 'C'\n"
+            path = self._write(Path(tmp), text)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "current")
+            self.assertIsNone(result.backup_path)
+            self.assertEqual(path.read_text(encoding="utf-8"), text)
+            self.assertFalse(path.with_name("config.toml.bak").exists())
+
+    def test_missing_schema_version_is_stamped_with_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = "# my config\n[agents.claude]\nname = 'C'\n"
+            path = self._write(Path(tmp), text)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "migrated")
+            self.assertEqual(result.previous_version, 1)
+            self.assertEqual(result.backup_path.read_text(encoding="utf-8"), text)
+            migrated = path.read_text(encoding="utf-8")
+            self.assertTrue(migrated.startswith(f"schema_version = {CURRENT_CONFIG_SCHEMA}\n"))
+            self.assertIn("# my config", migrated)
+            self.assertIn("[agents.claude]", migrated)
+
+    @unittest.skipUnless(_tomlkit_available(), "tomlkit is not installed")
+    def test_old_schema_version_is_updated_preserving_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = (
+                "# keep this comment\n"
+                "schema_version = 4  # trailing note\n"
+                "\n"
+                "[agents.claude]\n"
+                'name = "Claude"\n'
+            )
+            path = self._write(Path(tmp), text)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "migrated")
+            self.assertEqual(result.previous_version, 4)
+            self.assertEqual(result.backup_path.read_text(encoding="utf-8"), text)
+            migrated = path.read_text(encoding="utf-8")
+            self.assertIn(f"schema_version = {CURRENT_CONFIG_SCHEMA}", migrated)
+            self.assertIn("# keep this comment", migrated)
+            self.assertIn("# trailing note", migrated)
+            self.assertIn('name = "Claude"', migrated)
+            self.assertNotIn("schema_version = 4", migrated)
+
+    def test_permissive_current_config_is_tightened_to_owner_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = f"schema_version = {CURRENT_CONFIG_SCHEMA}\n"
+            path = self._write(Path(tmp), text)
+            path.chmod(0o644)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "current")
+            self.assertTrue(result.permissions_fixed)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_symlinked_config_is_migrated_through_to_its_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "dotfiles" / "config.toml"
+            target.parent.mkdir()
+            target.write_text("# linked\n[agents.claude]\nname = 'C'\n", encoding="utf-8")
+            link = root / "config.toml"
+            link.symlink_to(target)
+
+            result = migrate_user_config_file(link)
+
+            self.assertEqual(result.status, "migrated")
+            self.assertTrue(link.is_symlink())
+            migrated = target.read_text(encoding="utf-8")
+            self.assertTrue(migrated.startswith(f"schema_version = {CURRENT_CONFIG_SCHEMA}\n"))
+            self.assertEqual(result.backup_path.parent, target.parent)
+
+    def test_version_stamp_works_without_tomlkit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = "schema_version = 4  # note\n\n[agents.claude]\nname = 'C'\n"
+            path = self._write(Path(tmp), text)
+
+            with mock.patch.dict(sys.modules, {"tomlkit": None}):
+                result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "migrated")
+            migrated = path.read_text(encoding="utf-8")
+            self.assertIn(f"schema_version = {CURRENT_CONFIG_SCHEMA}  # note", migrated)
+            self.assertIn("[agents.claude]", migrated)
+
+    @unittest.skipUnless(_tomllib_available(), "multi-line TOML needs stdlib tomllib")
+    def test_fallback_stamp_refuses_lookalike_inside_multiline_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = 'banner = """\nschema_version = 4\n"""\nschema_version = 4\n'
+            path = self._write(Path(tmp), text)
+
+            with mock.patch.dict(sys.modules, {"tomlkit": None}):
+                with self.assertRaisesRegex(ConfigMigrationError, "tomlkit"):
+                    migrate_user_config_file(path)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_newer_schema_version_is_rejected_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = f"schema_version = {CURRENT_CONFIG_SCHEMA + 1}\n"
+            path = self._write(Path(tmp), text)
+
+            with self.assertRaisesRegex(ConfigMigrationError, "newer than supported"):
+                migrate_user_config_file(path)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), text)
+            self.assertFalse(path.with_name("config.toml.bak").exists())
 
 
 if __name__ == "__main__":

@@ -394,7 +394,7 @@ Unit tests:
 Integration tests:
 
 - `python3 -m unittest discover -s tests`,
-- `./agent_collab.sh smoke`,
+- `./agent_collab_dev.sh smoke`,
 - SDK import smoke in the project environment,
 - live Claude SDK one-turn smoke when `ANTHROPIC_API_KEY` or supported auth is
   present,

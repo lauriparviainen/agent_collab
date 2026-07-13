@@ -110,7 +110,11 @@ daemon policy:   built-in defaults < global user config
 The caller's current shell directory does not affect project config unless it
 is also the session `workdir`. Config files declare a `schema_version`
 (currently 6, missing means 1); `agent_collab/config_migrations.py` migrates
-known old shapes in memory before validation. Inspect the merged result and any
+known old shapes in memory before validation, so old files keep loading even
+if nobody reinstalls. `./agent_collab.sh install` additionally migrates the
+**user** config file on disk to the current schema — a `config.toml.bak`
+backup is written first and comments/formatting are preserved via tomlkit;
+project configs are never rewritten. Inspect the merged result and any
 ignored-project warnings with `agent-collab config show --workdir PROJECT`.
 
 The optional global-user `[workdir].restrict_workdir_roots` list confines resolved

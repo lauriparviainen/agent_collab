@@ -1,6 +1,25 @@
 # Install UX simplification
 
-**Status:** Designed; not started.
+**Status:** Implemented, reviewed, and verified.
+
+Verified 2026-07-13: `./agent_collab_dev.sh test` (728 hermetic tests + Ruff)
+and `./agent_collab_dev.sh build --check` pass; a real `./agent_collab.sh
+install` run on this machine migrated a live schema-3 user config to 6 with
+an identical-content `.bak` backup (0600 perms preserved) and restarted the
+systemd-managed daemon to a healthy state.
+
+Reviewed 2026-07-13 through three agent-collab review rounds (xAI Grok Build
+and Gemini 3.1 Pro High, read-only sessions). Round-1/2 findings fixed:
+daemon restart now passes the durable venv interpreter; the config write-back
+resolves symlinked configs to their target, falls back to a parse-verified
+regex stamp when tomlkit is unavailable, and tightens permissive permissions
+even on schema-current files; the foreign-command refusal runs before any
+install work; uninstall aborts before venv removal when daemon/autostart
+teardown fails; the systemd daemon lifecycle branches print the live state
+block and version; install.log is forced owner-only. Both reviewers
+confirmed all fixes in the final round. Accepted as-is: TOCTOU between the
+command-link check and replace (the directory is user-owned) and the
+info-marker output when `daemon stop` finds nothing to stop.
 
 **Created:** 2026-07-13
 
@@ -153,8 +172,8 @@ mental model must be one sentence — *clone the repo, run
   running — keep the rule simple and predictable).
 - Update every reference to moved commands in the same change: `AGENTS.md`,
   `doc/development.md`, `doc/runtime-layout.md`, CI workflows, and any
-  task-document instructions that say `./agent_collab.sh test` or
-  `setup --check`.
+  task-document instructions that say `./agent_collab_dev.sh test` or
+  `build --check`.
 - `agent_collab_dev.sh` and the user script must both work from a fresh clone
   before install (bootstrap Python detection lives in the shared library).
 - Shell entrypoint rules, the marker convention, and the bash-is-only-an-
@@ -186,4 +205,4 @@ mental model must be one sentence — *clone the repo, run
   `smoke` work; the user script no longer exposes them.
 - No duplicated preamble: both scripts source `scripts/agent_collab_lib.sh`.
 - Docs and CI reference the new command layout; `rg` finds no stale
-  `agent_collab.sh setup` or user-script `test` references.
+  `agent_collab_dev.sh build` or user-script `test` references.

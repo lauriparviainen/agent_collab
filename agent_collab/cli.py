@@ -4,8 +4,9 @@ import argparse
 import json
 from pathlib import Path
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+from .cli_output import error, fail, info, ok, print_kv, step, warn
 from .config import DEFAULT_WORKFLOW
 from .referee import RefereeConfig, run_sync
 
@@ -352,10 +353,11 @@ def _main_watch(argv) -> int:
                 color=not args.no_color,
             )
     except KeyboardInterrupt:
-        print("\nERROR   interrupted", file=sys.stderr)
+        print(file=sys.stderr)
+        error("interrupted")
         return 130
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 0
 
@@ -370,7 +372,7 @@ def _main_tui(argv) -> int:
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
 
 
@@ -474,7 +476,7 @@ def _main_start(argv) -> int:
                 color=not args.no_color,
             )
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 0
 
@@ -512,7 +514,7 @@ def _main_options(argv) -> int:
                 f"workflow {workflow.get('id')}: {selected} eligible={str(workflow.get('start_eligible')).lower()}"
             )
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 0
 
@@ -573,50 +575,57 @@ def _main_daemon(argv) -> int:
         systemd_managed = systemd_owns_daemon()
         if args.action == "start":
             if systemd_managed:
+                step("Starting daemon (systemd)")
                 status = start_systemd_daemon()
+                _print_live_daemon()
                 _print_autostart_status(status)
                 return 0
+            step("Starting daemon")
             state = start_daemon(host=args.host, port=args.port, default_workdir=default_workdir)
-            print(f"started agent-collab daemon pid {state['pid']}")
-            print(f"server_url: {state['server_url']}")
-            print(f"mcp_url: {state['mcp_url']}")
-            print(f"data_dir: {state['data_dir']}")
+            ok("Daemon running")
+            _print_daemon_state(state)
             return 0
         if args.action == "status":
             if systemd_managed:
                 status = autostart_status()
+                _print_live_daemon()
                 _print_autostart_status(status)
                 return 0 if status.active and status.healthy else 1
             status = daemon_status()
-            print(status.message)
-            if status.state:
-                for key in (
-                    "server_url",
-                    "mcp_url",
-                    "data_dir",
-                    "daemon_log_path",
-                    "daemon_stderr_path",
-                ):
-                    if key in status.state:
-                        print(f"{key}: {status.state[key]}")
-            return 0 if status.running else 1
+            if status.running:
+                ok("Daemon running")
+                _print_daemon_state(status.state, live=True)
+                _warn_on_version_skew(status.state)
+                return 0
+            fail("Daemon not running")
+            if status.message != "global agent-collab daemon is not running":
+                info(status.message)
+            return 1
         if args.action == "stop":
             if systemd_managed:
+                step("Stopping daemon (systemd)")
                 status = stop_systemd_daemon()
                 _print_autostart_status(status)
                 return 0
-            print(stop_daemon().message)
+            result = stop_daemon()
+            if "stopped" in result.message or "killed" in result.message:
+                version = result.state.get("version") or _installed_version()
+                ok(f"Daemon stopped (pid {result.state.get('pid', 'unknown')}, was {version})")
+            else:
+                info(result.message)
             return 0
         if args.action == "restart":
             if systemd_managed:
+                step("Restarting daemon (systemd)")
                 status = restart_systemd_daemon()
+                _print_live_daemon()
                 _print_autostart_status(status)
                 return 0
+            step("Restarting daemon")
             stop_daemon()
             state = start_daemon(host=args.host, port=args.port, default_workdir=default_workdir)
-            print(f"restarted agent-collab daemon pid {state['pid']}")
-            print(f"server_url: {state['server_url']}")
-            print(f"mcp_url: {state['mcp_url']}")
+            ok("Daemon restarted")
+            _print_daemon_state(state)
             return 0
         if args.action == "logs":
             text = tail_daemon_log(tail=args.tail, stderr=args.stderr)
@@ -624,23 +633,106 @@ def _main_daemon(argv) -> int:
                 print(text)
             return 0
     except (AutostartError, DaemonSupervisorError) as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 1
 
 
+def _installed_version() -> str:
+    from . import __version__
+
+    return __version__
+
+
+def _print_live_daemon() -> None:
+    """Render the running daemon's state block; used by the systemd branches."""
+
+    from .daemon_supervisor import daemon_status
+
+    live = daemon_status()
+    if live.running:
+        ok("Daemon running")
+        _print_daemon_state(live.state, live=True)
+        _warn_on_version_skew(live.state)
+    else:
+        fail("Daemon not running")
+
+
+def _print_daemon_state(state: Dict[str, Any], live: bool = False) -> None:
+    from .daemon_supervisor import count_running_sessions
+
+    pairs = [
+        ("version", state.get("version") or _installed_version()),
+        ("pid", state.get("pid")),
+    ]
+    if live:
+        pairs.append(("uptime", _format_uptime(state.get("started_at"))))
+        sessions = count_running_sessions(state)
+        if sessions is not None:
+            plural = "s" if sessions != 1 else ""
+            pairs.append(("sessions", f"{sessions} active session{plural}"))
+    pairs.extend(
+        (key, state.get(key)) for key in ("server_url", "mcp_url", "data_dir", "daemon_log_path")
+    )
+    print_kv(pairs)
+
+
+def _warn_on_version_skew(state: Dict[str, Any]) -> None:
+    daemon_version = state.get("version")
+    installed = _installed_version()
+    if daemon_version and daemon_version != installed:
+        warn(
+            f"daemon runs {daemon_version} but {installed} is installed; "
+            "apply the upgrade with: agent-collab daemon restart"
+        )
+
+
+def _format_uptime(started_at: Any) -> Optional[str]:
+    from datetime import datetime, timezone
+
+    try:
+        started = datetime.fromisoformat(str(started_at))
+    except (TypeError, ValueError):
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    seconds = int((datetime.now(timezone.utc) - started).total_seconds())
+    if seconds < 0:
+        return None
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
 def _print_autostart_status(status) -> None:
-    print(f"unit: {status.unit_path}")
-    print(f"installed: {str(status.installed).lower()}")
-    print(f"enabled: {str(status.enabled).lower()}")
-    print(f"active: {str(status.active).lower()}")
-    print(f"healthy: {str(status.healthy).lower()}")
-    print(f"definition_current: {str(status.definition_current).lower()}")
-    if status.detail:
-        print(f"detail: {status.detail}")
+    if status.installed and status.enabled and status.active and status.healthy:
+        ok("Daemon autostart enabled and healthy")
+    elif not status.installed:
+        info("Daemon autostart not installed")
+    else:
+        fail("Daemon autostart is not healthy")
+    print_kv(
+        [
+            ("version", _installed_version()),
+            ("unit", status.unit_path),
+            ("installed", str(status.installed).lower()),
+            ("enabled", str(status.enabled).lower()),
+            ("active", str(status.active).lower()),
+            ("healthy", str(status.healthy).lower()),
+            ("definition_current", str(status.definition_current).lower()),
+            ("detail", status.detail or None),
+        ]
+    )
 
 
 def _main_sessions(argv) -> int:
@@ -661,7 +753,7 @@ def _main_sessions(argv) -> int:
             return 0
         _print_prune_result(result)
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 0
 
@@ -783,7 +875,7 @@ def _main_config(argv) -> int:
         for workflow_id, workflow in sorted(config.workflows.items()):
             print(f"workflow {workflow_id}: {' -> '.join(workflow.sequence)}")
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 0
 
@@ -801,7 +893,7 @@ def _main_list(argv) -> int:
                 f"{_format_agents_summary(session.settings)}"
             )
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 0
 
@@ -812,7 +904,7 @@ def _main_status(argv) -> int:
     try:
         _print_session(_client(args.server_url).get_session(args.session_id))
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 0
 
@@ -837,7 +929,7 @@ def _main_events(argv) -> int:
                 print_event(Event(**event.to_dict()), color=not args.no_color)
             print(f"cursor: {batch.cursor}")
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 0
 
@@ -848,7 +940,7 @@ def _main_stop(argv) -> int:
     try:
         _print_session(_client(args.server_url).stop_session(args.session_id))
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 0
 
@@ -929,10 +1021,11 @@ def main(argv=None) -> int:
     try:
         run_sync(args.task, config)
     except KeyboardInterrupt:
-        print("\nERROR   interrupted", file=sys.stderr)
+        print(file=sys.stderr)
+        error("interrupted")
         return 130
     except Exception as exc:
-        print(f"ERROR   {exc}", file=sys.stderr)
+        error(str(exc))
         return 1
     return 0
 

@@ -5,14 +5,19 @@ migrates each parsed TOML file to ``CURRENT_CONFIG_SCHEMA`` before merging and
 validating, so the rest of the runtime only ever consumes the latest shape.
 
 Migrations are lazy and in-memory: they normalize known old shapes and emit
-warnings, but never rewrite files. Ambiguous or unknown data is left in place
-for the latest-schema validator to reject.
+warnings without touching files, so old configs keep loading even when nobody
+re-runs install. ``migrate_user_config_file`` is the one deliberate exception:
+install calls it to write the user config forward (with a backup) so the file
+on disk stays current. Ambiguous or unknown data is left in place for the
+latest-schema validator to reject.
 """
 
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 import logging
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set
 
 CURRENT_CONFIG_SCHEMA = 6
@@ -270,3 +275,121 @@ MIGRATIONS: Dict[int, Callable[[Dict[str, Any], str], Dict[str, Any]]] = {
     4: _migrate_v4_to_v5,
     5: _migrate_v5_to_v6,
 }
+
+
+@dataclass(frozen=True)
+class UserConfigWriteBack:
+    """Result of ``migrate_user_config_file``."""
+
+    status: str  # "absent" | "current" | "migrated"
+    path: Path
+    backup_path: Optional[Path] = None
+    previous_version: Optional[int] = None
+    permissions_fixed: bool = False
+
+
+def migrate_user_config_file(path: Path) -> UserConfigWriteBack:
+    """Migrate the user config file on disk to ``CURRENT_CONFIG_SCHEMA``.
+
+    Write-back is the install-time convenience on top of the lazy in-memory
+    layer, never a replacement for it. The original file is backed up to
+    ``<name>.bak`` first, and user comments and formatting are preserved: an
+    existing ``schema_version`` value is updated through tomlkit, a missing
+    one is prepended as text. Every migration so far only stamps the version;
+    a future shape-changing migration must implement a comment-preserving
+    counterpart here before it ships.
+    """
+
+    path = path.expanduser()
+    if not path.exists():
+        return UserConfigWriteBack(status="absent", path=path)
+    # Operate on the symlink target so a dotfile-managed config keeps its
+    # link: os.replace on the symlink path itself would sever it.
+    path = path.resolve()
+    from .config import load_toml_file
+    from .paths import atomic_write_private_text
+
+    text = path.read_text(encoding="utf-8")
+    data = load_toml_file(path)
+    migrate_config_data(data, source=str(path), scope="user")
+    permissions_fixed = _tighten_private_permissions(path)
+    raw_version = data.get("schema_version", 1)
+    if raw_version == CURRENT_CONFIG_SCHEMA:
+        return UserConfigWriteBack(status="current", path=path, permissions_fixed=permissions_fixed)
+
+    backup_path = path.with_name(path.name + ".bak")
+    atomic_write_private_text(backup_path, text)
+    if "schema_version" in data:
+        new_text = _stamp_schema_version(text, path)
+    else:
+        new_text = f"schema_version = {CURRENT_CONFIG_SCHEMA}\n\n{text}"
+    atomic_write_private_text(path, new_text)
+    return UserConfigWriteBack(
+        status="migrated",
+        path=path,
+        backup_path=backup_path,
+        previous_version=int(raw_version),
+        permissions_fixed=permissions_fixed,
+    )
+
+
+def _tighten_private_permissions(path: Path) -> bool:
+    """Chmod a group/world-readable user config to 0600.
+
+    The file can hold the daemon bearer token; a restored backup or copy made
+    with a loose umask must not stay world-readable just because its schema
+    is already current.
+    """
+
+    import os
+    import stat
+
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if mode & 0o077:
+            os.chmod(path, 0o600)
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def _stamp_schema_version(text: str, path: Path) -> str:
+    """Update an existing ``schema_version`` value, preserving everything else.
+
+    tomlkit is the primary, fully style-preserving writer. The regex fallback
+    is exactly equivalent while every migration only stamps the version — it
+    lets a bootstrap Python without tomlkit (fresh machine, dotfile-carried
+    old config) still complete install. The first shape-changing migration
+    must drop the fallback and require tomlkit here.
+    """
+
+    try:
+        import tomlkit
+    except ImportError:
+        import re
+
+        from .config import load_toml_text
+
+        new_text, count = re.subn(
+            r"(?m)^(\s*schema_version\s*=\s*)\d+",
+            lambda match: f"{match.group(1)}{CURRENT_CONFIG_SCHEMA}",
+            text,
+            count=1,
+        )
+        # The single replacement may have hit a lookalike line inside a
+        # multi-line string instead of the real top-level key; reparsing
+        # proves the stamp landed (one replacement cannot do both).
+        if (
+            count != 1
+            or load_toml_text(new_text, source=str(path)).get("schema_version")
+            != CURRENT_CONFIG_SCHEMA
+        ):
+            raise ConfigMigrationError(
+                f"{path}: could not safely update schema_version without tomlkit; "
+                "install it with: pip install tomlkit"
+            )
+        return new_text
+    document = tomlkit.parse(text)
+    document["schema_version"] = CURRENT_CONFIG_SCHEMA
+    return tomlkit.dumps(document)

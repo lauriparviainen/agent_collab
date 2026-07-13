@@ -6,7 +6,7 @@ Run the complete local gate (Ruff lint, Ruff format verification, then the
 hermetic unit suite):
 
 ```bash
-./agent_collab.sh test
+./agent_collab_dev.sh test
 ```
 
 Run only the hermetic unit suite:
@@ -18,38 +18,51 @@ python3 -m unittest discover -s tests -t .
 Validate repository configuration and generate the daemon REST API artifacts:
 
 ```bash
-./agent_collab.sh setup
-./agent_collab.sh setup --check
+./agent_collab_dev.sh build
+./agent_collab_dev.sh build --check
 ```
 
-`setup --check` does not write and fails if `doc/daemon_api_doc/` is stale.
+`build --check` does not write and fails if `doc/daemon_api_doc/` is stale.
 
-Source checkout helper:
+Entrypoint scripts:
 
 ```bash
-./agent_collab.sh help
-./agent_collab.sh install [--editable]
-./agent_collab.sh test
-./agent_collab.sh integration-test [claude_cli|claude_sdk|codex_cli|codex_sdk|antigravity_cli|antigravity_sdk|xai_cli|xai_sdk] [--strict]
-./agent_collab.sh smoke
+./agent_collab.sh help                 # user commands: install, uninstall, daemon, sessions
+./agent_collab.sh install
+./agent_collab.sh uninstall
+./agent_collab_dev.sh help             # developer commands
+./agent_collab_dev.sh build [--check]
+./agent_collab_dev.sh test
+./agent_collab_dev.sh integration-test [claude_cli|claude_sdk|codex_cli|codex_sdk|antigravity_cli|antigravity_sdk|xai_cli|xai_sdk] [--strict]
+./agent_collab_dev.sh smoke
 ```
 
-The source helper prefers a persistent virtual environment at
-`~/.agent-collab/venv` when one exists. Override its interpreter with `AGENT_COLLAB_PYTHON` or
-its environment directory with `AGENT_COLLAB_VENV`. Startup rejects any selected
-interpreter older than Python 3.10. Without a configured environment it tries
-`python3.12`, `python3.11`, `python3.10`, then `python3` in that order.
+Both scripts source `scripts/agent_collab_lib.sh` for interpreter selection;
+shell stays a thin dispatch layer and all real logic lives in Python (see
+`.claude/skills/cli-scripting/SKILL.md`). The library prefers a persistent
+virtual environment at `~/.agent-collab/venv` when one exists. Override its
+interpreter with `AGENT_COLLAB_PYTHON` or its environment directory with
+`AGENT_COLLAB_VENV`. Startup rejects any selected interpreter older than
+Python 3.10. Without a configured environment it tries `python3.12`,
+`python3.11`, `python3.10`, then `python3` in that order.
 
-`install` creates or updates the persistent environment, installs a normal
-non-editable copy of the checkout with the `all` extra (every provider SDK, so
-the `sdk` backends work out of the box), and atomically exposes its
-`agent-collab` entry point under `~/.local/bin`. The base package itself is
-SDK-free; per-provider extras (`claude`, `codex`, `antigravity`, `xai`, `all`)
-enable the `sdk` backends, and a missing SDK degrades to an unavailable backend
-with an install hint. It does not edit shell startup files or enable
-daemon autostart. `--editable` is available for active development;
-`AGENT_COLLAB_BIN_DIR` or `--bin-dir` selects a different user command
-directory for isolated tests or custom layouts.
+`install` is switchless and is also the upgrade command: re-run it after
+every `git pull`. It creates or updates the persistent environment, installs
+a normal non-editable copy of the checkout with the `all` extra (every
+provider SDK, so the `sdk` backends work out of the box), atomically exposes
+the `agent-collab` entry point under `~/.local/bin`, migrates the user config
+to the current schema (with a `config.toml.bak` backup, preserving comments),
+and restarts the daemon if it was running before install — which interrupts
+active sessions. It does not edit shell startup files, never starts a stopped
+daemon, and never enables autostart. Verbose pip output is captured to
+`~/.agent-collab/install.log` and shown only on failure. For active
+development set `AGENT_COLLAB_INSTALL_EDITABLE=1`; `AGENT_COLLAB_BIN_DIR`
+selects a different user command directory for isolated tests or custom
+layouts.
+
+`uninstall` reverses install: it stops the daemon, disables autostart,
+removes the venv and the command link (only when the link points into the
+venv). Config and session data under `~/.agent-collab` are always kept.
 
 `test` runs Ruff lint and format checks before the hermetic suite, which
 discovers only `tests/`; install the `dev` extra to provide the pinned Ruff

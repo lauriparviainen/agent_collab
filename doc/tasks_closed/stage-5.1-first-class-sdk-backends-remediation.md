@@ -521,7 +521,7 @@ Hermetic checks:
 
 ```bash
 python3 -m unittest discover -s tests
-AGENT_COLLAB_HOME=/tmp/agent-collab-smoke ./agent_collab.sh smoke
+AGENT_COLLAB_HOME=/tmp/agent-collab-smoke ./agent_collab_dev.sh smoke
 ```
 
 Installed-SDK checks run with the Python >=3.10 virtual environment's `python`,

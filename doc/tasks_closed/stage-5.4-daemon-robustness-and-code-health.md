@@ -57,7 +57,7 @@ oversized rejection, huge numeric lengths, malformed and duplicate headers,
 incomplete bodies, header count/byte ceilings, invalid header whitespace,
 unsupported transfer encoding, overlong individual request/header lines, and
 full structured 413/431 wire responses. The full hermetic suite passes (517
-tests), and `./agent_collab.sh setup --check` passes. Iterative Antigravity
+tests), and `./agent_collab_dev.sh build --check` passes. Iterative Antigravity
 reviews using Gemini 3.1 Pro first identified the aggregate-header allocation
 gap, then confirmed its remediation and the final overlong-line coverage with
 an explicit ship-ready verdict.
@@ -89,7 +89,7 @@ Verification:
 - `test_restored_event_and_transcript_reads_do_not_block_loop` proves slow JSONL
   event and transcript reads leave the event loop responsive.
 - The latest full hermetic suite passes (517 tests), and the
-  `./agent_collab.sh setup --check` validation passes.
+  `./agent_collab_dev.sh build --check` validation passes.
 - A follow-up Antigravity review using Claude Opus 4.6 Thinking found no
   blocking defects and marked the change ready to land.
 
@@ -114,7 +114,7 @@ mismatch, and unavailable evidence:
 Verification covers lock contention, exact and legacy-argv identity matching,
 refusal to signal a recycled PID, preservation under unavailable identity
 evidence, and the identity recheck before `SIGKILL`. The latest full hermetic
-suite passes (517 tests), and `./agent_collab.sh setup --check` passes. Two
+suite passes (517 tests), and `./agent_collab_dev.sh build --check` passes. Two
 iterative Antigravity reviews using Claude Opus 4.6 Thinking found no blocking
 issues; the final review confirmed the cross-source identity fallback and
 marked H3 ship-ready for a cautious maintainer.
@@ -144,7 +144,7 @@ paths are absent from the wire but present in server diagnostics, verifies the
 intentional 400/404 contracts, proves HTTP MCP preserves its JSON-RPC id and
 error envelope, and directly verifies stdio MCP stdout/stderr behavior. Focused
 HTTP/MCP/daemon tests pass, the full hermetic suite passes (523 tests), and
-`./agent_collab.sh setup --check` passes.
+`./agent_collab_dev.sh build --check` passes.
 
 Five iterative read-only Antigravity reviews used Gemini 3.1 Pro (High). The
 first two found the broad built-in-exception and MCP tool-content leaks; a later
@@ -176,7 +176,7 @@ Regression tests remove each required attribute in turn and verify registration
 fails, cover invalid boolean/string values (including integers masquerading as
 booleans), and clean up registry state defensively. The focused backend
 contract/config/gating suite passes (91 tests), the full hermetic suite passes
-(525 tests), and `./agent_collab.sh setup --check` passes. A read-only
+(525 tests), and `./agent_collab_dev.sh build --check` passes. A read-only
 Antigravity review using Gemini 3.1 Pro (High) found no blocking or substantive
 issues and gave the explicit verdict **SHIP-READY / NO BLOCKERS**.
 
@@ -203,7 +203,7 @@ failing `aclose()` variants; the Antigravity test additionally records and
 asserts exact `response_closed` then `agent_exited` ordering. These tests fail
 without the runner-level cleanup because custom async iterators are not closed
 automatically. The focused four-SDK suite passes (79 tests), the full hermetic
-suite passes (529 tests), and `./agent_collab.sh setup --check` passes.
+suite passes (529 tests), and `./agent_collab_dev.sh build --check` passes.
 
 Four iterative read-only Antigravity reviews used Gemini 3.1 Pro (High). They
 identified close-error cancellation masking and the need for explicit coverage
@@ -242,7 +242,7 @@ agent attribution, Claude duplicate and verbose behavior, raw-key state and
 prompt-filter spoofing, deduplication poisoning, marker serialization, and the
 Antigravity no-invention contract. The focused backend/daemon/referee suite
 passes (68 tests), the full hermetic suite passes (541 tests),
-`./agent_collab.sh setup --check` passes, and `git diff --check` passes.
+`./agent_collab_dev.sh build --check` passes, and `git diff --check` passes.
 
 Four concurrent two-reviewer loops used Gemini 3.1 Pro (High) and the highest
 Flash model advertised by local option discovery, Gemini 3.5 Flash (High)
@@ -259,7 +259,7 @@ were inspected and removed.
 least-privilege GitHub Actions CI workflow for every push and pull request,
 matrixed across the supported floor, Python 3.10, and primary development
 version, Python 3.12. Each matrix job runs Ruff lint,
-Ruff format verification, the hermetic unit suite, and `setup --check`.
+Ruff format verification, the hermetic unit suite, and `build --check`.
 
 - `actions/checkout` and `actions/setup-python` use immutable full commit SHAs;
   the workflow grants only `contents: read` and does not persist checkout
@@ -275,13 +275,13 @@ Ruff format verification, the hermetic unit suite, and `setup --check`.
   Python matrix, required CI gates, least-privilege settings, or immutable
   action pinning drift or disappear. Every action reference is checked without
   constraining future workflows to an exact action count.
-- `./agent_collab.sh test` runs Ruff lint and format verification before unit
+- `./agent_collab_dev.sh test` runs Ruff lint and format verification before unit
   discovery, so the standard local test command enforces the same static gates;
   shell-wrapper regression coverage proves the checks run first and in order.
 
 Focused CI/tooling, setup, and shell-wrapper coverage passes (14 tests). Ruff
 lint and format checks pass across all 118 discovered files. The full hermetic
-suite passes (543 tests), `./agent_collab.sh setup --check` passes, and
+suite passes (543 tests), `./agent_collab_dev.sh build --check` passes, and
 `git diff --check` passes.
 
 Three concurrent two-reviewer loops used Gemini 3.1 Pro (High) and Gemini 3.5
@@ -331,7 +331,7 @@ non-oversized stderr becomes an error event without becoming a transport
 failure, and known noisy stderr is suppressed normally but emitted as
 provider-status events in verbose mode. The focused CLI/runner suite passes (37
 tests), the full hermetic suite passes (561 tests), Ruff lint and format checks
-pass across 118 files, `./agent_collab.sh setup --check` passes, and
+pass across 118 files, `./agent_collab_dev.sh build --check` passes, and
 `git diff --check` passes.
 
 Two concurrent two-reviewer loops used Gemini 3.1 Pro (High) and Gemini 3.5
@@ -385,7 +385,7 @@ unthrottled warning flood risk) and two were rejected with evidence (an
 non-verbose stderr `"error"` source, which is the reviewed M3 contract). The
 second round verified the fixes and both rejections and returned the explicit
 verdict **SHIP-READY / NO BLOCKERS**. The full hermetic suite passes (613
-tests) including Ruff lint/format gates, and `./agent_collab.sh setup --check`
+tests) including Ruff lint/format gates, and `./agent_collab_dev.sh build --check`
 passes.
 
 ### Related fix landed in this stage: installed daemons could not serve MCP guidance
@@ -451,6 +451,6 @@ the next reinstall and restart.
 - 500 responses carry no internal exception text.
 - Backend registration fails loudly when a contract attribute is missing.
 - Every SDK runner closes its stream on cancellation.
-- CI runs hermetic tests, `setup --check`, and lint on every push.
+- CI runs hermetic tests, `build --check`, and lint on every push.
 - New tests cover each fixed defect; existing CLI, log, and MCP workflows keep
   working.

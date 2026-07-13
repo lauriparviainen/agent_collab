@@ -13,8 +13,8 @@ and the working conventions, for humans and coding agents alike.
 Run both gates from the repository root; CI runs the same checks:
 
 ```bash
-./agent_collab.sh test          # Ruff lint + format gates, then the hermetic suite
-./agent_collab.sh setup --check # fails if generated API artifacts are stale
+./agent_collab_dev.sh test          # Ruff lint + format gates, then the hermetic suite
+./agent_collab_dev.sh build --check # fails if generated API artifacts are stale
 ```
 
 Two constraints worth knowing up front:
@@ -24,7 +24,7 @@ Two constraints worth knowing up front:
   provider packages; anything that needs credentials or a real model call
   belongs under `integration_tests/`.
 - Files under `doc/daemon_api_doc/` are generated. Never edit them by hand;
-  regenerate them with `./agent_collab.sh setup`.
+  regenerate them with `./agent_collab_dev.sh build`.
 
 ## Commits
 

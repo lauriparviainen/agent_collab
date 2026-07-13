@@ -86,11 +86,11 @@ integration_tests/             # credentialed live calls only
   backends/                    # all six pairs
 ```
 
-`./agent_collab.sh test` runs `unittest discover -s tests -t .` and cannot
+`./agent_collab_dev.sh test` runs `unittest discover -s tests -t .` and cannot
 discover `integration_tests/`. The former live smoke module was removed from the
 hermetic tree.
 
-`./agent_collab.sh integration-test [PROVIDER] [BACKEND] [--strict]` runs only
+`./agent_collab_dev.sh integration-test [PROVIDER] [BACKEND] [--strict]` runs only
 the live package. Environment selection is also supported through
 `AGENT_COLLAB_IT_PROVIDERS` and `AGENT_COLLAB_IT_BACKENDS`. Model overrides use
 `AGENT_COLLAB_IT_<PROVIDER>_MODEL`.
@@ -117,7 +117,7 @@ split.
 
 ```bash
 python3 -m compileall -q agent_collab integration_tests tests
-./agent_collab.sh test
+./agent_collab_dev.sh test
 python3 -m integration_tests antigravity sdk --strict  # exit 2 when wheel absent
 python3 -c "from agent_collab import backends; print(backends.registered_backend_names())"
 ```

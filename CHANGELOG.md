@@ -13,6 +13,21 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Make `./agent_collab.sh install` switchless and the documented upgrade
+  command (#15): it migrates the user config to the current schema in place
+  (tomlkit-based, comment-preserving, with a `config.toml.bak` backup),
+  captures pip output to `~/.agent-collab/install.log`, and restarts the
+  daemon when it was running before install. Add a switchless `uninstall`
+  that reverses install while keeping config and session data.
+- Split developer commands into `agent_collab_dev.sh` and rename `setup` to
+  `build` (#15). Shared shell setup lives in `scripts/agent_collab_lib.sh`;
+  `agent_collab/project_setup.py` is now `agent_collab/project_build.py`.
+- Give install, uninstall, and the daemon lifecycle commands consistent,
+  step-by-step CLI output with the marker convention from
+  `.claude/skills/cli-scripting/SKILL.md` (#15). `daemon status` now renders
+  an aligned summary including the daemon's version, uptime, and running
+  session count, and warns when the running daemon is older than the
+  installed version.
 - Validate session and discovery workdirs, add optional user-global
   `[workdir].restrict_workdir_roots` confinement with missing-or-empty
   unrestricted semantics plus exact-directory exceptions, and

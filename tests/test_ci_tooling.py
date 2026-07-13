@@ -48,7 +48,12 @@ class StaticToolingContractTests(unittest.TestCase):
         pyproject = PYPROJECT_PATH.read_text(encoding="utf-8")
 
         project = self._toml_table(pyproject, "project")
-        self.assertRegex(project, r"(?m)^dependencies\s*=\s*\[\]\s*$")
+        base_match = re.search(r"(?ms)^dependencies\s*=\s*\[(.*?)\]", project)
+        self.assertIsNotNone(base_match, "missing [project] dependencies list")
+        base_pins = re.findall(r'"([^"]+)"', base_match.group(1))
+        # tomlkit powers comment-preserving config write-back at install time;
+        # it is the only permitted base dependency and never a vendor SDK.
+        self.assertEqual(base_pins, ["tomlkit>=0.13,<1"])
 
         extras = self._toml_table(pyproject, "project.optional-dependencies")
         provider_pins = set()
@@ -70,7 +75,7 @@ class StaticToolingContractTests(unittest.TestCase):
         self.assertIn("ruff check --output-format=github .", workflow)
         self.assertIn("ruff format --check .", workflow)
         self.assertIn("python -m unittest discover -s tests -t .", workflow)
-        self.assertIn("./agent_collab.sh setup --check", workflow)
+        self.assertIn("./agent_collab_dev.sh build --check", workflow)
         self.assertIn("python -m pip install .", workflow)
         self.assertIn("agent-collab --help", workflow)
 

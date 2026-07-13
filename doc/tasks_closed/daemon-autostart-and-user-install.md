@@ -20,7 +20,7 @@ own one foreground process. Installation and autostart belong in one plan
 because the generated service must point at a durable installed interpreter,
 not a checkout-only `PYTHONPATH` inherited from the shell helper.
 
-`./agent_collab.sh setup` is not the right installation hook. It currently
+`./agent_collab_dev.sh build` is not the right installation hook. It currently
 validates repository configuration and writes or checks generated daemon API
 documentation. It is a development operation, can be run repeatedly in CI,
 and must not mutate a user's PATH or service-manager state.
@@ -226,9 +226,9 @@ the final symlink, with a regression test using the same symlink layout. The
 complete 598-test gate, API artifact check, durability probe, and native systemd
 unit verification pass after the fix.
 
-- `./agent_collab.sh test`: Ruff and format checks pass; all 598 hermetic tests
+- `./agent_collab_dev.sh test`: Ruff and format checks pass; all 598 hermetic tests
   pass.
-- `./agent_collab.sh setup --check`: effective config and generated REST API
+- `./agent_collab_dev.sh build --check`: effective config and generated REST API
   artifacts verify cleanly.
 - A clean Python 3.12 venv installed the local wheel without dependencies and
   ran both `agent-collab --help` and `agent-collab daemon autostart --help`

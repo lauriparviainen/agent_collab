@@ -20,4 +20,4 @@ Text becomes `claude/message`; tool blocks become `tool/tool_call`, `command`, o
 
 ## Testing
 
-Hermetic: `./agent_collab.sh test -k claude_cli`. Live: `./agent_collab.sh integration-test claude_cli`.
+Hermetic: `./agent_collab_dev.sh test -k claude_cli`. Live: `./agent_collab_dev.sh integration-test claude_cli`.

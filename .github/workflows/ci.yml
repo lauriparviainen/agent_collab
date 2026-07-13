@@ -27,6 +27,8 @@ jobs:
           cache: pip
       - name: Install static tooling
         run: python -m pip install 'ruff==0.15.20'
+      - name: Install base dependencies for the hermetic suite
+        run: python -m pip install 'tomlkit>=0.13,<1'
       - name: Run Ruff lint
         run: ruff check --output-format=github .
       - name: Run Ruff format check
@@ -34,7 +36,7 @@ jobs:
       - name: Run hermetic tests
         run: python -m unittest discover -s tests -t .
       - name: Verify generated API artifacts
-        run: ./agent_collab.sh setup --check
+        run: ./agent_collab_dev.sh build --check
       - name: Verify SDK-free base install
         run: |
           python -m pip install .
