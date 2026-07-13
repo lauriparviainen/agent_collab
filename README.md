@@ -225,6 +225,28 @@ tool_timeout_sec = 60
 enabled = true
 ```
 
+For Antigravity, merge this server into
+`~/.gemini/config/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "agent-collab": {
+      "command": "agent-collab",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+For Grok, add this to `~/.grok/config.toml`:
+
+```toml
+[mcp_servers.agent-collab]
+command = "agent-collab"
+args = ["mcp"]
+```
+
 Now ask your coding agent:
 
 > Use agent-collab to get a second opinion on the current diff. Have the

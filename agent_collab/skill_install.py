@@ -74,11 +74,14 @@ def install_skills(
             else:
                 expected = _recorded_fingerprint(recorded, key)
                 if current is not None and current != expected:
-                    raise SkillInstallError(
-                        f"managed skill has local changes: {destination}; "
-                        "move or remove it before installing again"
-                    )
-                if current is None:
+                    if current == source_fingerprints[name]:
+                        action = "recover"
+                    else:
+                        raise SkillInstallError(
+                            f"managed skill has local changes: {destination}; "
+                            "move or remove it before installing again"
+                        )
+                elif current is None:
                     action = "install"
                 elif current == source_fingerprints[name]:
                     action = "current"
@@ -106,15 +109,20 @@ def install_skills(
             "skill": item["name"],
             "fingerprint": item["fingerprint"],
         }
+        # Make every completed destination recoverable before touching the
+        # next one. If a later client fails, this fingerprint still matches
+        # the directory already replaced above.
+        _write_state(state_path, state)
         if action == "current":
             info(f"Already current: {destination}")
+        elif action == "recover":
+            ok(f"Recovered managed state: {destination}")
         elif action == "adopt":
             ok(f"Now managed: {destination}")
         elif action == "update":
             ok(f"Updated: {destination}")
         else:
             ok(f"Installed: {destination}")
-    _write_state(state_path, state)
     ok("Review skill installation complete")
 
 
@@ -169,15 +177,16 @@ def uninstall_skills(
         if action == "remove":
             shutil.rmtree(destination)
             installs.pop(item["key"], None)
+            _write_state(state_path, state)
             ok(f"Removed: {destination}")
         elif action == "missing":
             installs.pop(item["key"], None)
+            _write_state(state_path, state)
             info(f"Already absent: {destination}")
         elif action == "unmanaged":
             info(f"Left unmanaged skill in place: {destination}")
         else:
             info(f"Not installed: {destination}")
-    _write_state(state_path, state)
     ok("Review skill uninstall complete")
 
 

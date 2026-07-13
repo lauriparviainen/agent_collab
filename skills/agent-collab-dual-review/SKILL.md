@@ -26,6 +26,21 @@ and reconcile agreements and disagreements by reading the code.
    startup_timeout_sec = 10
    tool_timeout_sec = 60
    enabled = true
+
+   For Antigravity, merge this into ~/.gemini/config/mcp_config.json:
+   {
+     "mcpServers": {
+       "agent-collab": {
+         "command": "agent-collab",
+         "args": ["mcp"]
+       }
+     }
+   }
+
+   For Grok, add this to ~/.grok/config.toml:
+   [mcp_servers.agent-collab]
+   command = "agent-collab"
+   args = ["mcp"]
    ```
 
 3. Fetch `agent_collab_guidance` with `topic: "review-recipe"`. Follow that

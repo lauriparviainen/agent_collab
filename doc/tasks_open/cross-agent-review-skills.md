@@ -1,6 +1,7 @@
 # Cross-agent review skills
 
-**Status:** Implemented; automated verification complete, live provider smoke pending.
+**Status:** Implemented; automated verification and live solo-provider smoke complete,
+dual/preflight smoke pending.
 
 **Created:** 2026-07-13
 
@@ -165,12 +166,19 @@ Implemented 2026-07-14 with two top-level skills, the daemon-served
 Claude marketplace and Codex plugin metadata, and README installation guidance.
 An explicit checkout CLI installs, upgrades, and safely uninstalls both skills
 for Claude Code, Codex, Antigravity, Grok, or all four without coupling those
-writes to the main runtime installer.
+writes to the main runtime installer. Managed state is persisted after each
+completed destination so a later client failure cannot strand an earlier
+upgrade as an apparent local modification. Preflight remediation covers native
+MCP configuration for all four clients.
 Both skills and the Codex manifest pass the bundled validators. An isolated
 Claude home installed the repository marketplace and reported both skills in
 the plugin inventory. In an isolated staged worktree, the supported Python 3.12
-environment passes the full development gate with 802 hermetic tests, and
-`build --check` passes.
+environment passes the full development gate with 829 hermetic tests, and
+`build --check` passes. A live installed solo skill selected Gemini 3.1 Pro
+High through `antigravity_cli`, completed one read-only provider turn, and
+confirmed the global Antigravity skill destination. The resulting
+partial-upgrade and missing Antigravity/Grok MCP-remediation findings were fixed
+and covered by regression tests.
 
 ## Verification
 
@@ -180,6 +188,10 @@ environment passes the full development gate with 802 hermetic tests, and
 - Manual: install the skills into Claude Code via the marketplace manifest
   and via plain copy; run solo review and dual review against a real diff
   in this repo; confirm preflight failure output with the daemon stopped.
+- Completed 2026-07-14: installed-skill solo review against a real diff through
+  Gemini 3.1 Pro High on `antigravity_cli`.
+- Remaining: live dual review, daemon-stopped preflight, and plain-copy loading
+  checks.
 - Dual review reconciliation labels agreements and disagreements and cites
   `[session_id backend]` per finding.
 - README documents the skills, prerequisites, and the per-agent install

@@ -164,6 +164,96 @@ class SkillInstallTests(unittest.TestCase):
             for name in SKILL_NAMES:
                 self.assertTrue((home / ".grok" / "skills" / name).exists())
 
+    def test_completed_upgrade_remains_managed_when_later_client_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            home = root / "user"
+            state = root / "state.json"
+            _make_sources(repo)
+            install_skills(
+                repo_root=repo,
+                clients=["claude", "codex"],
+                user_home=home,
+                state_path=state,
+            )
+            _make_sources(repo, version="two")
+
+            from agent_collab import skill_install
+
+            replace = skill_install._replace_directory
+            calls = 0
+
+            def fail_on_codex(source, destination):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    raise SkillInstallError("simulated Codex permission error")
+                replace(source, destination)
+
+            with mock.patch(
+                "agent_collab.skill_install._replace_directory",
+                side_effect=fail_on_codex,
+            ):
+                with self.assertRaisesRegex(SkillInstallError, "simulated Codex"):
+                    install_skills(
+                        repo_root=repo,
+                        clients=["claude", "codex"],
+                        user_home=home,
+                        state_path=state,
+                    )
+
+            # Both completed Claude replacements were persisted before the
+            # Codex failure, so the next managed operation accepts them.
+            install_skills(
+                repo_root=repo,
+                clients=["claude"],
+                user_home=home,
+                state_path=state,
+            )
+            for name in SKILL_NAMES:
+                self.assertIn(
+                    "two",
+                    (home / ".claude" / "skills" / name / "SKILL.md").read_text(encoding="utf-8"),
+                )
+
+    def test_source_matching_destination_recovers_stale_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            home = root / "user"
+            state = root / "state.json"
+            _make_sources(repo)
+            install_skills(
+                repo_root=repo,
+                clients=["claude"],
+                user_home=home,
+                state_path=state,
+            )
+            _make_sources(repo, version="two")
+
+            # Simulate a process exit after replacing one destination but
+            # before its new fingerprint reached the state file.
+            destination = home / ".claude" / "skills" / SKILL_NAMES[0]
+            shutil.rmtree(destination)
+            shutil.copytree(repo / "skills" / SKILL_NAMES[0], destination)
+
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                install_skills(
+                    repo_root=repo,
+                    clients=["claude"],
+                    user_home=home,
+                    state_path=state,
+                )
+
+            self.assertIn("✓ Recovered managed state:", stdout.getvalue())
+            install_skills(
+                repo_root=repo,
+                clients=["claude"],
+                user_home=home,
+                state_path=state,
+            )
+
     def test_uninstall_leaves_unmanaged_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

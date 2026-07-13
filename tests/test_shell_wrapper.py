@@ -134,6 +134,22 @@ class UserShellWrapperTests(ShellWrapperHarness):
             ],
         )
 
+    def test_skills_uninstall_dispatches_to_skill_installer(self):
+        result, captured = self._run_with_fake_python(["skills", "uninstall", "codex"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            captured["args"],
+            [
+                "-m",
+                "agent_collab.skill_install",
+                "uninstall",
+                "codex",
+                "--repo-root",
+                str(ROOT),
+            ],
+        )
+
     def test_rejects_selected_python_older_than_310(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake_python = Path(tmp) / "python"
