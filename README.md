@@ -175,31 +175,54 @@ On first start the daemon generates a permanent bearer token into
 `~/.agent-collab/config.toml`; it stays valid across daemon restarts (see
 [runtime layout](doc/runtime-layout.md) for the semantics and rotation).
 
-Then register agent-collab with your MCP client. Either launch the stdio
-adapter, which reads the token automatically — in Claude Code:
+Then register agent-collab with your MCP client. **Direct Streamable HTTP is
+the preferred transport**: it connects the client straight to the daemon and
+does not need a per-client adapter process. The daemon must be running first:
 
 ```bash
-claude mcp add agent-collab -- /absolute/path/to/agent_collab/.venv/bin/agent-collab-mcp
+agent-collab daemon start
 ```
 
-or in Codex configuration:
-
-```toml
-[mcp_servers.agent_collab]
-command = "/absolute/path/to/agent_collab/.venv/bin/python"
-args = ["-m", "agent_collab.mcp_server"]
-cwd = "/absolute/path/to/agent_collab"
-startup_timeout_sec = 10
-tool_timeout_sec = 60
-enabled = true
-```
-
-Or connect directly to the daemon's Streamable HTTP endpoint, passing the
-token from `~/.agent-collab/config.toml` — in Claude Code:
+For Claude Code, pass the permanent token as an HTTP header:
 
 ```bash
 claude mcp add --transport http agent-collab http://127.0.0.1:8765/mcp \
   --header "Authorization: Bearer <your [daemon].token value>"
+```
+
+For Codex, configure the same Streamable HTTP URL and header. The
+[`http_headers` setting](https://learn.chatgpt.com/docs/config-file/config-reference#configtoml)
+is part of Codex's MCP HTTP configuration:
+
+```toml
+[mcp_servers.agent_collab]
+url = "http://127.0.0.1:8765/mcp"
+http_headers = { Authorization = "Bearer <your [daemon].token value>" }
+tool_timeout_sec = 60
+enabled = true
+```
+
+These client configurations contain a credential; keep them private. Codex
+also supports `bearer_token_env_var` or `env_http_headers` if you prefer to
+source the token from the environment instead of storing it in `config.toml`.
+
+If you do not want to configure direct HTTP headers, use the secondary stdio
+adapter. It reads the daemon URL and token from the agent-collab configuration
+and still requires the daemon to be running. In Claude Code:
+
+```bash
+claude mcp add agent-collab -- agent-collab mcp
+```
+
+Or in Codex configuration:
+
+```toml
+[mcp_servers.agent_collab]
+command = "agent-collab"
+args = ["mcp"]
+startup_timeout_sec = 10
+tool_timeout_sec = 60
+enabled = true
 ```
 
 Now ask your coding agent:

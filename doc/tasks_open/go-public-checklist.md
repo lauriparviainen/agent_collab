@@ -142,21 +142,24 @@ target was not part of the parser behavior under test.
 
 ### 4. Make the documented MCP installation path work
 
-The README says `./agent_collab.sh install` creates a durable environment under
-`~/.agent-collab/venv` and exposes `agent-collab` under `~/.local/bin`. Its MCP
-examples instead invoke a checkout-local `.venv` that this installer does not
-create. The user installer currently links only `agent-collab`, even though
-the installed package also creates `agent-collab-mcp` inside the durable venv.
+**Completed 2026-07-13.** Direct authenticated Streamable HTTP is the preferred
+installed-user transport: Claude and Codex connect straight to the running
+daemon's loopback `/mcp` endpoint using the permanent user-config token. The
+README now documents both clients and calls out that their saved headers are
+credentials.
 
-Choose and test one public contract:
+For users who do not want to configure direct HTTP headers, the secondary
+stdio adapter is `agent-collab mcp`. It reads the daemon URL and token from
+agent-collab configuration and still connects to the daemon; it does not own
+sessions. The package and durable installer expose one public executable,
+`agent-collab`. The separate `agent-collab-mcp` console script and hidden
+`--mcp-server` flag were removed before public release, with no compatibility
+alias by decision.
 
-- expose both console commands from the installer and document the stable user
-  command path; or
-- keep only the main CLI link and document the actual durable MCP entry point
-  or module invocation.
-
-Cover the selected behavior in `tests/test_user_install.py` and verify the
-Claude and Codex registration examples from a fresh isolated installation.
+CLI dispatch/help and MCP behavior are covered by hermetic tests. A fresh
+isolated installation verified that the package exposes only the intended
+console command and that both `agent-collab mcp` stdio initialization and
+authenticated Streamable HTTP initialization succeed.
 
 ## Repository hygiene and documentation
 
@@ -274,8 +277,9 @@ Also verify:
 
 - project-scope config tests prove every execution- and permission-affecting
   field is ignored/rejected unless explicit user trust is established;
-- a clean source install can register and launch the stdio MCP adapter using
-  the exact README commands;
+- a clean source install can initialize the preferred authenticated Streamable
+  HTTP endpoint and launch the secondary `agent-collab mcp` stdio adapter using
+  the documented contracts;
 - the built wheel contains only intended files and an SDK-free isolated install
   can run `agent-collab --help`;
 - relative Markdown links resolve;
@@ -290,8 +294,3 @@ Also verify:
 Credentialed integration tests are required only for behavior changed in a
 provider backend; otherwise keep the final gate hermetic and avoid paid model
 calls.
-
-## Open questions
-
-1. Should the installer expose `agent-collab-mcp` beside `agent-collab`, or
-   should documentation point directly into the durable environment?

@@ -23,6 +23,7 @@ PUBLIC_COMMANDS = (
     ("stop", "Stop a daemon-owned session."),
     ("sessions", "Manage stored sessions, including pruning old terminal sessions."),
     ("config", "Show the merged config files for a workdir, or create the user config."),
+    ("mcp", "Run the stdio MCP adapter (direct Streamable HTTP is preferred)."),
     ("serve", "Run the daemon in the foreground for debugging."),
 )
 
@@ -63,11 +64,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Session log directory. Defaults to the global AGENT_COLLAB_HOME data/sessions directory.",
     )
     parser.add_argument("--session-id", help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--mcp-server",
-        action="store_true",
-        help="Run the stdio MCP server instead of the CLI loop.",
-    )
     return parser
 
 
@@ -142,6 +138,16 @@ def build_serve_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workdir", type=Path, default=Path("."), help=argparse.SUPPRESS)
     parser.add_argument("--session-log-dir", type=Path, help=argparse.SUPPRESS)
     return parser
+
+
+def build_mcp_parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        prog="agent-collab mcp",
+        description=(
+            "Run the stdio MCP adapter for clients that do not connect directly "
+            "to the daemon's preferred Streamable HTTP endpoint."
+        ),
+    )
 
 
 def build_start_parser() -> argparse.ArgumentParser:
@@ -379,6 +385,15 @@ def _main_tui(argv) -> int:
     except Exception as exc:
         error(str(exc))
         return 1
+
+
+def _main_mcp(argv) -> int:
+    parser = build_mcp_parser()
+    parser.parse_args(argv)
+    from .mcp_server import serve
+
+    serve()
+    return 0
 
 
 def _watch_should_use_file(args) -> bool:
@@ -1020,13 +1035,8 @@ def main(argv=None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.mcp_server:
-        from .mcp_server import serve
-
-        serve()
-        return 0
     if not args.task:
-        parser.error("task is required unless --mcp-server is used")
+        parser.error("task is required")
 
     config = RefereeConfig(
         workflow=args.workflow,
@@ -1078,6 +1088,7 @@ def _command_handlers():
         "stop": _main_stop,
         "sessions": _main_sessions,
         "config": _main_config,
+        "mcp": _main_mcp,
     }
 
 

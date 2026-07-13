@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Make direct authenticated Streamable HTTP the preferred MCP registration
+  path and expose the stdio fallback as `agent-collab mcp` (#14). Remove the
+  separate `agent-collab-mcp` console script and checkout-local README commands
+  so the durable install has one stable public executable.
 - Reject unknown bare-word commands instead of running them as one-shot
   collaboration tasks (#16): `agent-collab install` (or a typo like
   `statsu`) used to silently launch a full multi-agent workflow against the

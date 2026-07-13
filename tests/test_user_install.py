@@ -66,6 +66,8 @@ class UserInstallTests(unittest.TestCase):
             (venv / "bin").mkdir(parents=True)
             (venv / "bin" / "python").touch()
             (venv / "bin" / "agent-collab").touch()
+            obsolete = venv / "bin" / "agent-collab-mcp"
+            obsolete.touch()
             bin_dir = root / "bin"
             bin_dir.mkdir()
             link = bin_dir / "agent-collab"
@@ -84,6 +86,7 @@ class UserInstallTests(unittest.TestCase):
                 )
 
             self.assertEqual(result, link)
+            self.assertFalse(obsolete.exists())
             self.assertEqual(
                 run.call_args.args[0],
                 [

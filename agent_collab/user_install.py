@@ -79,6 +79,7 @@ def install_user_command(
     # SDK-free and selects per-provider extras instead.
     install_args.append(f"{repo_root}[all]")
     _run_logged(install_args, log_path or _default_log_path(), action="package installation")
+    _remove_obsolete_entrypoints(venv)
     ok(f"Installed agent-collab {__version__}" + (" (editable)" if editable else ""))
 
     step("Exposing the agent-collab command")
@@ -90,6 +91,16 @@ def install_user_command(
     if not _path_contains(link.parent):
         warn(f"{link.parent} is not on PATH; add it to use agent-collab in new shells")
     return link
+
+
+def _remove_obsolete_entrypoints(venv: Path) -> None:
+    obsolete = venv / "bin" / "agent-collab-mcp"
+    if not os.path.lexists(obsolete):
+        return
+    if not obsolete.is_file() and not obsolete.is_symlink():
+        raise UserInstallError(f"obsolete managed entry point is not a file: {obsolete}")
+    obsolete.unlink()
+    info(f"Removed obsolete command: {_display(obsolete)}")
 
 
 def _install_link(link: Path, target: Path) -> None:

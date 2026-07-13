@@ -55,7 +55,6 @@ dev = [
 
 [project.scripts]
 agent-collab = "agent_collab.cli:main"
-agent-collab-mcp = "agent_collab.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["agent_collab*"]

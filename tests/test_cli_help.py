@@ -54,6 +54,13 @@ class CommandDispatchTests(unittest.TestCase):
         run.assert_not_called()
         self.assertIn("task is required", stderr.getvalue())
 
+    def test_mcp_subcommand_runs_stdio_adapter(self):
+        with mock.patch("agent_collab.mcp_server.serve") as serve:
+            code = main(["mcp"])
+
+        self.assertEqual(code, 0)
+        serve.assert_called_once_with()
+
 
 class CliHelpTests(unittest.TestCase):
     def test_root_help_is_provider_neutral_and_lists_every_public_command(self):
@@ -101,6 +108,19 @@ class CliHelpTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("usage: agent-collab tui", result.stdout)
         self.assertIn("interactive daemon session TUI", result.stdout)
+
+    def test_mcp_command_specific_help_is_reachable(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "agent_collab.cli", "mcp", "--help"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("stdio MCP adapter", result.stdout)
+        self.assertIn("Streamable HTTP", result.stdout)
 
 
 if __name__ == "__main__":

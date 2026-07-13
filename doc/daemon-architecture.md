@@ -39,7 +39,10 @@ This keeps the human terminal UI and the agent tool API separate while letting b
 - `agent_collab.mcp_tools`: shared MCP tool schemas and dispatch.
 - `agent_collab.mcp_server`: stdio MCP adapter that connects to the local server.
 
-The MCP process does not own live referee execution. MCP clients can connect directly to `agent-collab serve` at `/mcp`, and the stdio adapter remains available for clients that launch servers as subprocesses.
+The MCP process does not own live referee execution. The preferred client path
+connects directly to the daemon's Streamable HTTP `/mcp` endpoint. The
+`agent-collab mcp` stdio adapter remains available as a secondary transport for
+clients that do not use direct HTTP.
 
 ## Ownership model
 
@@ -222,21 +225,22 @@ This makes it useful even without a running server.
 
 ## MCP shape
 
-Recommended local MCP shape (the adapter reads the config token automatically):
+Recommended local MCP shape (configure the client with the permanent
+`[daemon].token` value):
 
 ```text
 MCP client
-  -> stdio agent_collab.mcp_server
-  -> authenticated local HTTP
+  -> authenticated Streamable HTTP http://127.0.0.1:8765/mcp
   -> SessionManager
 ```
 
-Direct MCP shape (configure the client with the permanent `[daemon].token`
-value, or `AGENT_COLLAB_TOKEN` for remote servers):
+Secondary stdio shape (the adapter reads the daemon URL and token from
+agent-collab configuration):
 
 ```text
 MCP client
-  -> authenticated http://127.0.0.1:8765/mcp
+  -> stdio agent-collab mcp
+  -> authenticated local HTTP
   -> SessionManager
 ```
 
