@@ -193,7 +193,9 @@ Dependabot alerts.
 
 ### Public repository metadata and tracking
 
-- Replace the stale GitHub description with the current product positioning.
+- **Description completed 2026-07-13.** GitHub now describes agent-collab as a
+  local CLI and daemon for supervising collaboration between Claude Code,
+  Codex, Grok, Gemini, and other AI coding agents over MCP.
 - **Topics completed 2026-07-13.** Added `ai-agents`, `multi-agent`,
   `developer-tools`, `model-context-protocol`, `claude-code`, `codex`, `python`,
   and `local-first`.
