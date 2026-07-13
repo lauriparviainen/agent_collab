@@ -88,8 +88,8 @@ Codex config can still use stdio MCP:
 [mcp_servers.agent_collab]
 command = "python3"
 args = ["-m", "agent_collab.mcp_server"]
-cwd = "/home/devel/projects/agent_collab"
-env = { PYTHONPATH = "/home/devel/projects/agent_collab", AGENT_COLLAB_SERVER = "http://127.0.0.1:8765" }
+cwd = "/home/user/projects/agent_collab"
+env = { PYTHONPATH = "/home/user/projects/agent_collab", AGENT_COLLAB_SERVER = "http://127.0.0.1:8765" }
 startup_timeout_sec = 10
 tool_timeout_sec = 60
 enabled = true

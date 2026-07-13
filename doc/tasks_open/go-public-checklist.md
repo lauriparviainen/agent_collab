@@ -125,9 +125,9 @@ additional occurrences in history.
 **Decision recorded 2026-07-13.** The maintainer accepts the author identity
 and historical machine-local paths as intentional public metadata. Preserve
 the existing commit history, annotated tags, and GitHub Releases; do not
-perform history/privacy remediation. Current documentation, fixtures, and
-tests must still replace machine-local examples with neutral public-safe
-values before the visibility flip. Historical versions will remain unchanged.
+perform history/privacy remediation. Historical versions will remain unchanged;
+current documentation, fixtures, and tests were separately subject to
+neutralization before the visibility flip.
 
 Do not rewrite history, move tags, delete releases, or re-tag as an incidental
 cleanup. Existing releases and annotated tags make that an outward-facing
@@ -135,9 +135,10 @@ release operation governed by the release skill, and the repository rule is
 never to force-move a published tag. If the disclosure is unacceptable, stop
 and agree on a dedicated migration procedure before changing any ref.
 
-At minimum, replace current machine-local examples with neutral placeholders
-and remove the local-only link embedded in the captured CLI fixture unless its
-exact presence is necessary to a parser test.
+**Current-tree cleanup completed 2026-07-13.** Closed task-document examples
+and the TUI wrapping test now use neutral paths. The captured CLI fixture's
+machine-local documentation link was replaced with neutral prose; its exact
+target was not part of the parser behavior under test.
 
 ### 4. Make the documented MCP installation path work
 
@@ -205,8 +206,7 @@ Dependabot alerts.
    current-tree or history-level remediation.
 3. Correct the MCP installation contract and verify both documented client
    registrations.
-4. Fix current-tree machine-local examples, ignore rules, task tracking, and
-   public metadata.
+4. Fix ignore rules, task tracking, and public metadata.
 5. Rerun the complete verification matrix below on the final commit.
 6. Choose the next version according to the release skill: fixes alone may be
    a patch; a new user-visible trust/confinement feature requires a pre-1.0

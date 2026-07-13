@@ -25,7 +25,7 @@ a target delta** (see section 5).
     session                   status          workflow       updated    workdir
  ▸  daemon-80958c73c2e04baa   running         cross-review   09:22:41   ~/projects/agent_collab
     daemon-1f7c02aa9b3d4e18   awaiting_input  solo-codex     09:15:03   ~/projects/agent_collab
-    daemon-6b9911c4e0a24f7d   done            compare        08:47:58   ~/projects/david_ai_git
+    daemon-6b9911c4e0a24f7d   done            compare        08:47:58   ~/projects/example_project
     daemon-3c02d7f5a1884b6e   failed          solo-claude    08:31:12   ~/projects/agent_collab
 ──────────────────────────────────────────────────────────────────────────────────────────────
  [referee] ▏                                                                          picking

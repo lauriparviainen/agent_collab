@@ -8,8 +8,9 @@ mapper. Parsers/mappers are written against these samples, not guessed.
 - Binary: `agy`, version **1.1.0** (`agy-version.txt`).
 - Command: `agy --mode accept-edits -p "<prompt>"` in a throwaway git repo,
   signed in via the cached `~/.gemini` OAuth token.
-- `agy-print-sample.stdout.txt` — real stdout. `agy-print-sample.stderr.txt` —
-  real stderr (empty).
+- `agy-print-sample.stdout.txt` — real stdout with one machine-local
+  documentation link replaced by neutral prose. `agy-print-sample.stderr.txt`
+  — real stderr (empty).
 
 **Finding (matches the plan's "Verified provider facts"):** print mode emits
 **free-form plain text / Markdown prose** — multiple lines, blank lines, `###`

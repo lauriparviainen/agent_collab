@@ -56,6 +56,9 @@ from agent_collab.tui_core import (
 )
 
 
+LONG_TEST_WORKDIR = "/workspace/projects/example-agent-collab"
+
+
 class TuiCoreTests(unittest.TestCase):
     def setUp(self):
         self._home_tmp = tempfile.TemporaryDirectory()
@@ -313,7 +316,7 @@ class TuiCoreTests(unittest.TestCase):
                 "status": "running",
                 "workflow": "solo-xai",
                 "updated_at": "2026-07-08T00:00:02+00:00",
-                "workdir": "/home/devel/projects/agent_collab",
+                "workdir": LONG_TEST_WORKDIR,
             },
         ]
         picker = make_session_picker(sessions)  # newest ("two") preselected

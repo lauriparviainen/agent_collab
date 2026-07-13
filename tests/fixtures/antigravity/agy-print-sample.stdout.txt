@@ -19,7 +19,7 @@ To launch the CLI in direct-edit mode:
 agy --mode accept-edits
 ```
 
-For more CLI usage options, refer to the [Antigravity CLI Reference](file:///home/devel/.gemini/antigravity-cli/builtin/skills/antigravity_guide/references/cli.md) or run:
+For more CLI usage options, refer to the Antigravity CLI documentation or run:
 ```bash
 agy --help
 ```

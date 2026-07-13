@@ -34,11 +34,11 @@ until the ANSI screenshots are approved.
   [../../../agent_collab/tui_core.py](../../../agent_collab/tui_core.py)
 - Typed daemon data layer this TUI consumes (do its "slice 3" here — see Stage 2):
   [../stage-5.3-daemon-api-contract.md](../stage-5.3-daemon-api-contract.md)
-- David AI design system:
-  `/home/devel/projects/david_ai_git/doc/david_ai_design_system`
+- Private design-system reference used during development; not retained in
+  this repository.
 
 The Grok CLI screenshot was layout inspiration only. The agent-collab TUI
-palette must come from the David AI design system.
+palette was informed by that private design-system reference.
 
 ## Resolved Decisions
 

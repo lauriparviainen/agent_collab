@@ -69,8 +69,8 @@ The caller's current shell directory should not affect project config unless it 
 Examples:
 
 ```bash
-cd /home/devel/projects/project-a
-agent-collab start --workdir /home/devel/projects/project-b "Review project B"
+cd /home/user/projects/project-a
+agent-collab start --workdir /home/user/projects/project-b "Review project B"
 ```
 
 This should load:
@@ -78,7 +78,7 @@ This should load:
 ```text
 built-in defaults
 ~/.agent-collab/config.toml
-/home/devel/projects/project-b/.agent-collab/config.toml
+/home/user/projects/project-b/.agent-collab/config.toml
 ```
 
 It should not load project A config.
@@ -110,7 +110,7 @@ Start payloads should use `workflow`:
 ```json
 {
   "task": "Review project B",
-  "workdir": "/home/devel/projects/project-b",
+  "workdir": "/home/user/projects/project-b",
   "workflow": "cross-review"
 }
 ```
@@ -148,7 +148,7 @@ Session records should include:
   "session_id": "daemon-abc123",
   "status": "running",
   "task": "Review project B",
-  "workdir": "/home/devel/projects/project-b",
+  "workdir": "/home/user/projects/project-b",
   "workflow": "cross-review",
   "jsonl_path": "~/.agent-collab/data/sessions/daemon-abc123.jsonl",
   "markdown_path": "~/.agent-collab/data/sessions/daemon-abc123.md",
@@ -211,7 +211,7 @@ Example compact CLI view:
 
 ```text
 SESSION_ID          STATUS   WORKFLOW       WORKDIR                         AGENTS
-daemon-abc123      running  cross-review   /home/devel/projects/project-b  claude(opus/high), codex(high)
+daemon-abc123      running  cross-review   /home/user/projects/project-b   claude(opus/high), codex(high)
 ```
 
 Example MCP/session JSON shape:
@@ -220,7 +220,7 @@ Example MCP/session JSON shape:
 {
   "session_id": "daemon-abc123",
   "status": "running",
-  "workdir": "/home/devel/projects/project-b",
+  "workdir": "/home/user/projects/project-b",
   "workflow": "cross-review",
   "settings": {
     "workflow": {
