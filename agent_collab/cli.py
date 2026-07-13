@@ -15,14 +15,14 @@ PUBLIC_COMMANDS = (
     ("tui", "Open the interactive session TUI."),
     ("daemon", "Manage the global daemon and login autostart."),
     ("start", "Start a daemon-owned collaboration session."),
-    ("options", "Inspect configured workflows, agents, and backend health."),
+    ("options", "Show live backend health and start-eligible workflows (asks the daemon)."),
     ("list", "List daemon-owned sessions."),
     ("status", "Show one daemon-owned session."),
     ("events", "Read events for a daemon-owned session."),
     ("watch", "Watch a live session or stored JSONL transcript."),
     ("stop", "Stop a daemon-owned session."),
     ("sessions", "Manage stored sessions, including pruning old terminal sessions."),
-    ("config", "Inspect or initialize agent-collab configuration."),
+    ("config", "Show the merged config files for a workdir, or create the user config."),
     ("serve", "Run the daemon in the foreground for debugging."),
 )
 
@@ -180,7 +180,10 @@ def build_start_parser() -> argparse.ArgumentParser:
 def build_options_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-collab options",
-        description="Inspect the daemon's workdir-scoped backend discovery snapshot.",
+        description="Show what would work right now: per-backend health and start-eligible "
+        "workflows for a workdir, from the running daemon's discovery snapshot. "
+        "For the configuration itself and where each value comes from, use "
+        "'agent-collab config show'.",
     )
     parser.add_argument("--server-url")
     parser.add_argument("--workdir", type=Path, default=Path("."))
@@ -794,7 +797,11 @@ def _main_config(argv) -> int:
     from .paths import AgentCollabHome
 
     parser = argparse.ArgumentParser(
-        prog="agent-collab config", description="Inspect effective configuration."
+        prog="agent-collab config",
+        description="Inspect the effective merged configuration (built-in defaults, user "
+        "config, safe project config) from local files — works without the daemon — "
+        "or initialize the user config. For live backend health use "
+        "'agent-collab options'.",
     )
     subparsers = parser.add_subparsers(dest="action", required=True)
     show = subparsers.add_parser("show", help="Print the effective merged config for a workdir.")
