@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Make xAI CLI supervision non-interactive and read-only by default (#17). Safe
+  inspection commands no longer stall on approval, and cancelled or otherwise
+  unsuccessful Grok terminal reasons are reported as fatal provider errors
+  instead of empty successful turns. Expose Grok's separate internal
+  model/tool-loop limit as `provider_max_turns`.
 - Make direct authenticated Streamable HTTP the preferred MCP registration
   path and expose the stdio fallback as `agent-collab mcp` (#14). Remove the
   separate `agent-collab-mcp` console script and checkout-local README commands

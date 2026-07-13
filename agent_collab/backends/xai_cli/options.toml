@@ -7,10 +7,12 @@ inferred = true
 [options.permission_mode]
 type = "string"
 allowed = ["default", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "plan"]
+default = "bypassPermissions"
 inferred = true
 
 [options.sandbox]
 type = "string"
+default = "read-only"
 inferred = true
 
 [options.thinking_level]
@@ -21,4 +23,9 @@ inferred = true
 [options.reasoning_effort]
 type = "string"
 allowed = ["low", "medium", "high", "xhigh"]
+inferred = true
+
+[options.provider_max_turns]
+type = "integer"
+min = 1
 inferred = true

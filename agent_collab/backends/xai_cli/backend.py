@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from ...backend_contract import (
+    BackendOptionError,
     OptionSpec,
     load_option_schema,
     normalize_declared_options,
@@ -26,6 +27,12 @@ from ..common.options import canonical_reasoning
 from .parser import XaiStreamingParser
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
+
+HEADLESS_READ_ONLY_RULES = (
+    "This is a non-interactive supervised run. For repository inspection, use one "
+    "read-only tool or shell command per tool call. The subprocess working directory "
+    "is already the project root: do not prepend cd or chain commands."
+)
 
 
 class XaiCliBackend:
@@ -62,6 +69,15 @@ class XaiCliBackend:
             value = flag_value(agent.args, flag)
             if value is not None:
                 inferred[field] = value
+        provider_max_turns = flag_value(agent.args, "--max-turns")
+        if provider_max_turns is not None:
+            try:
+                inferred["provider_max_turns"] = int(provider_max_turns)
+            except ValueError as exc:
+                raise BackendOptionError(
+                    "provider_max_turns",
+                    f"configured --max-turns value {provider_max_turns!r} must be an integer",
+                ) from exc
         normalized = normalize_declared_options(
             requested,
             self.option_schema(agent),
@@ -83,6 +99,16 @@ class XaiCliBackend:
         if effort is not None:
             command = remove_flag(command, "--effort", has_value=True)
             command = set_flag_value_before_print_prompt(command, "--reasoning-effort", str(effort))
+        provider_max_turns = options.get("provider_max_turns")
+        if provider_max_turns is not None:
+            command = set_flag_value_before_print_prompt(
+                command, "--max-turns", str(provider_max_turns)
+            )
+        configured_rules = flag_value(command, "--rules")
+        rules = HEADLESS_READ_ONLY_RULES
+        if configured_rules:
+            rules = f"{configured_rules}\n\n{rules}"
+        command = set_flag_value_before_print_prompt(command, "--rules", rules)
         return command
 
     def command_preview(

@@ -62,20 +62,41 @@ sequence = ["xai"]
         schema = self.backend.option_schema(self.agent())
         self.assertEqual(
             set(schema),
-            {"model", "permission_mode", "sandbox", "thinking_level", "reasoning_effort"},
+            {
+                "model",
+                "permission_mode",
+                "sandbox",
+                "thinking_level",
+                "reasoning_effort",
+                "provider_max_turns",
+            },
         )
         self.assertTrue(schema["model"].inferred)
         self.assertIsNone(schema["model"].allowed)
         self.assertIsNone(schema["sandbox"].allowed)
+        self.assertEqual(schema["permission_mode"].default, "bypassPermissions")
+        self.assertEqual(schema["sandbox"].default, "read-only")
+        self.assertEqual(schema["provider_max_turns"].minimum, 1)
 
     def test_reasoning_alias_is_canonical_and_conflicts_on_native_field(self):
         options = self.backend.normalize_options(self.agent(), {"reasoning_effort": "high"})
-        self.assertEqual(options, {"thinking_level": "high"})
+        self.assertEqual(
+            options,
+            {
+                "permission_mode": "bypassPermissions",
+                "sandbox": "read-only",
+                "thinking_level": "high",
+            },
+        )
         self.assertEqual(
             self.backend.normalize_options(
                 self.agent(), {"thinking_level": "low", "reasoning_effort": "low"}
             ),
-            {"thinking_level": "low"},
+            {
+                "permission_mode": "bypassPermissions",
+                "sandbox": "read-only",
+                "thinking_level": "low",
+            },
         )
         with self.assertRaises(BackendOptionError) as ctx:
             self.backend.normalize_options(
@@ -103,8 +124,47 @@ sequence = ["xai"]
                 prompt_index = command.index(sentinel)
                 self.assertLess(command.index("--model"), prompt_index)
                 self.assertLess(command.index("--reasoning-effort"), prompt_index)
+                self.assertLess(command.index("--permission-mode"), prompt_index)
+                self.assertLess(command.index("--sandbox"), prompt_index)
+                self.assertLess(command.index("--rules"), prompt_index)
+                self.assertEqual(
+                    command[command.index("--permission-mode") + 1], "bypassPermissions"
+                )
+                self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
+                self.assertIn(
+                    "do not prepend cd or chain commands",
+                    command[command.index("--rules") + 1],
+                )
                 self.assertNotIn("--effort", command)
                 self.assertNotIn("--cwd", command)
+
+    def test_configured_rules_and_explicit_permissions_are_preserved(self):
+        agent = self.agent(["--rules", "Keep the answer concise.", "-p"])
+        options = self.backend.normalize_options(
+            agent,
+            {
+                "permission_mode": "dontAsk",
+                "sandbox": "workspace",
+                "provider_max_turns": 75,
+            },
+        )
+
+        command = self.backend.build_command(agent, options)
+
+        self.assertEqual(command[command.index("--permission-mode") + 1], "dontAsk")
+        self.assertEqual(command[command.index("--sandbox") + 1], "workspace")
+        self.assertEqual(command[command.index("--max-turns") + 1], "75")
+        rules = command[command.index("--rules") + 1]
+        self.assertIn("Keep the answer concise.", rules)
+        self.assertIn("do not prepend cd or chain commands", rules)
+
+    def test_provider_max_turns_is_inferred_and_rejects_invalid_configured_value(self):
+        options = self.backend.normalize_options(self.agent(["--max-turns", "80", "-p"]), {})
+        self.assertEqual(options["provider_max_turns"], 80)
+
+        with self.assertRaises(BackendOptionError) as ctx:
+            self.backend.normalize_options(self.agent(["--max-turns", "many", "-p"]), {})
+        self.assertEqual(ctx.exception.field, "provider_max_turns")
 
     def test_runner_binds_agent_identity_and_preserves_configured_cwd(self):
         agent = self.agent(id="reviewer", cwd="nested")
@@ -152,6 +212,31 @@ sequence = ["xai"]
         events = runner.parser.finish()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].text, "partial")
+
+    def test_runner_reports_cancelled_end_as_fatal_and_keeps_session_identity(self):
+        runner = self.backend.create_runner(self.agent(id="reviewer"), False, {})
+
+        events = runner.parser(
+            '{"type":"end","stopReason":"Cancelled","sessionId":"sess","requestId":"req"}',
+            False,
+        )
+
+        self.assertEqual(len(events), 2)
+        failure, identity = events
+        self.assertEqual((failure.source, failure.type), ("error", "error"))
+        self.assertIn("before producing a response", failure.text)
+        self.assertEqual(failure.raw["code"], "provider_turn_cancelled")
+        self.assertTrue(failure.raw["fatal"])
+        self.assertEqual(failure.raw["provider_stop_reason"], "Cancelled")
+        self.assertIsNone(failure.provider_session)
+        self.assertEqual(identity.provider_session["provider_session_id"], "sess")
+
+    def test_unknown_end_reason_is_not_treated_as_success(self):
+        event = parse_xai_line('{"type":"end","stopReason":"SafetyStop","sessionId":"sess"}')
+
+        self.assertEqual((event.source, event.type), ("error", "error"))
+        self.assertEqual(event.raw["code"], "provider_turn_failed")
+        self.assertIn("SafetyStop", event.text)
 
     def test_probe_reports_missing_dependency_and_observed_version(self):
         with mock.patch("agent_collab.backends.xai_cli.backend.probe_cli_backend") as probe:

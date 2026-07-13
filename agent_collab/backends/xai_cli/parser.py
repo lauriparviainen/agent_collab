@@ -8,6 +8,9 @@ from ...events import Event, compact_json, parse_json_line
 from ..common.sdk import provider_session_event
 
 
+SUCCESS_STOP_REASON = "EndTurn"
+
+
 def _event_text(raw: Dict[str, Any]) -> str:
     for key in ("message", "data", "error"):
         value = raw.get(key)
@@ -42,6 +45,26 @@ def parse_xai_line(
     if event_type == "error":
         return Event.create("error", "error", _event_text(raw), raw)
     if event_type == "end":
+        stop_reason = raw.get("stopReason")
+        if stop_reason != SUCCESS_STOP_REASON:
+            reason = stop_reason if isinstance(stop_reason, str) and stop_reason else "unknown"
+            code = "provider_turn_cancelled" if reason == "Cancelled" else "provider_turn_failed"
+            text = (
+                "Grok ended the turn before producing a response"
+                if reason == "Cancelled"
+                else f"Grok turn ended with unsuccessful stop reason {reason!r}"
+            )
+            return Event.create(
+                "error",
+                "error",
+                text,
+                {
+                    **raw,
+                    "code": code,
+                    "fatal": True,
+                    "provider_stop_reason": reason,
+                },
+            )
         session_id = raw.get("sessionId")
         if isinstance(session_id, str) and session_id:
             return provider_session_event("xai", agent_id, session_id, "session", raw=raw)
@@ -78,6 +101,12 @@ class XaiStreamingParser:
             events = self._flush_text()
             if event is not None:
                 events.append(event)
+            if raw.get("type") == "end" and raw.get("stopReason") != SUCCESS_STOP_REASON:
+                session_id = raw.get("sessionId")
+                if isinstance(session_id, str) and session_id:
+                    events.append(
+                        provider_session_event("xai", self.agent_id, session_id, "session", raw=raw)
+                    )
             return events or None
         return event
 

@@ -248,8 +248,13 @@ under `agents.antigravity_sdk`, not MCP-call options. A backend entry is rejecte
 when it is not selected by the workflow. Configured session defaults live under
 `agents.<id>.options`; MCP values override them for that session.
 
-`backend_options.xai_cli` accepts `model`, `permission_mode`, `sandbox`, and the
-reasoning aliases. `backend_options.xai_sdk` accepts only `model` and the
+`backend_options.xai_cli` accepts `model`, `permission_mode`, `sandbox`,
+`provider_max_turns`, and the reasoning aliases. Its headless defaults are
+`permission_mode=bypassPermissions` and `sandbox=read-only`: inspection
+commands run without an interactive approval prompt while repository writes
+remain blocked. `provider_max_turns` maps to Grok's internal model/tool-loop
+limit and is distinct from the top-level agent-collab workflow `max_turns`; it
+has no backend default. `backend_options.xai_sdk` accepts only `model` and the
 reasoning aliases; pass a model explicitly because no remote API model default
 is assumed without a credentialed account check. Its verified/current reasoning
 values are `none`, `low`, `medium`, and `high`. The SDK is remote message-only
@@ -346,10 +351,12 @@ enabled = true
 
 xAI is disabled by default and available through two intentionally asymmetric
 backends. `xai_cli` runs Grok Build headlessly with `streaming-json`, attributes
-text/thought/end/error records, and captures the Grok session ID; the observed
-0.2.93 stream exposes no typed tool records. `xai_sdk` uses the remote async chat
-API, maps only response content and response identity, requires `XAI_API_KEY`,
-and does not enable tools. Both report resume, interrupt, and tool-gate as false.
+text/thought/end/error records, and captures the Grok session ID. Only
+`stopReason=EndTurn` is treated as success; cancelled and other unsuccessful
+terminal reasons become structured fatal errors. The observed 0.2.93 stream
+exposes no typed tool records. `xai_sdk` uses the remote async chat API, maps only
+response content and response identity, requires `XAI_API_KEY`, and does not
+enable tools. Both report resume, interrupt, and tool-gate as false.
 
 ```toml
 [agents.xai]

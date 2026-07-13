@@ -119,6 +119,10 @@ xAI is opt-in. Grok Build 0.2.93 passed a real headless CLI turn and exposed
 `thought`, `text`, `end`, and explicit `error` records. A disposable shell-tool
 turn emitted no typed action record, so `xai_cli` deliberately maps no tool
 events while capturing `end.sessionId` as provider identity kind `session`.
+Headless CLI runs default to permission-bypassed execution inside Grok's
+read-only sandbox, expose Grok's internal turn limit as `provider_max_turns`,
+and emit a terminal reason other than `EndTurn` as a fatal provider error
+instead of a successful empty response.
 The installed `xai-sdk` 1.17.0 confirmed async client context management,
 `chat.create`, `chat.append(user(...))`, `await chat.sample()`, and response
 `content`/`id`. `xai_sdk` is remote message-only chat and captures identity kind
