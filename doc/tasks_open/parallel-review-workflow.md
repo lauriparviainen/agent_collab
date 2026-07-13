@@ -4,7 +4,11 @@
 
 **Implementation dependency:** The shared turn-outcome contract in
 `backend-turn-outcomes.md` (#17) lands before this task's referee/runtime slice.
-Configuration-only work may proceed after those shared types are frozen.
+Configuration-only work may proceed after those shared types are frozen, but
+must not become externally visible on its own: schema-7 parsing, discovery,
+and the built-in `dual-review` workflow ship together with the stage runtime,
+or the daemon would advertise a workflow the referee cannot execute (Codex
+cross-plan review finding 5).
 
 Design review 2026-07-13: independent read-only reviews by xAI Grok Build and
 Gemini 3.1 Pro (High) through agent-collab, both APPROVE WITH CHANGES; all
@@ -43,6 +47,15 @@ findings (stage-aware roles, transcript-window visibility), moot for v1, are
 recorded in the deferred-`stages` open question. No finding was rejected.
 Byte-for-byte compatibility claims were reconciled to behavior-level
 throughout.
+
+Cross-plan review 2026-07-13 (Codex gpt-5.6-sol high, one round over this
+document plus `backend-turn-outcomes.md`): COMPATIBLE WITH CHANGES — the data
+models compose; the gaps were interfaces, all folded into both documents:
+stop as a registered control cause with a single truthful `stopped` publisher
+(goal 8), the stage-level `parallel_stage_no_accepted_member` failure record
+(goal 8, defined in #17), per-member #17 supervisors replacing the raw
+`wait_for` wording (goal 4), `agent_id` null/ownership semantics (goal 6),
+and the ship-together rule for the config slice (header dependency note).
 
 **Created:** 2026-07-13
 
@@ -165,8 +178,10 @@ fan-out.
    workflow has exactly one stage, so it runs under any `max_turns` ≥ 1
    (the default 3 included) and `max_turns` never bounds group **width**.
    The per-agent `timeout` is applied **per agent** inside the group — each
-   concurrent member runs under its own `asyncio.wait_for(consume(), timeout)`,
-   exactly as `_run_agent_turn` does today — **not** per group. A slow reviewer
+   concurrent member runs under its own independent issue #17 per-turn
+   supervisor and deadline (the raw `asyncio.wait_for` in today's
+   `_run_agent_turn` is exactly what #17 replaces with runner/deadline
+   arbitration and bounded cleanup) — **not** per group. A slow reviewer
    consuming the whole group's budget would defeat the point of independent
    parallel opinions; independent per-member timeouts also let a group return the
    fast reviewers' results while one straggler is cut at its own deadline
@@ -204,9 +219,14 @@ fan-out.
    **agent id**, not the provider brand.
 
    Recommendation: add an optional `agent_id: Optional[str]` to `events.Event`
-   and `api_schema.EventModel`, set by the referee for every workflow-emitted
-   event (sequential and parallel alike, for uniformity), tolerant of `null` in
-   old JSONL. This is the **one** client-visible wire addition and carries a
+   and `api_schema.EventModel`, tolerant of `null` in old JSONL. Ownership and
+   null semantics (Codex cross-plan review finding 6): the **referee** assigns
+   `agent_id` on member-stream events and per-member boundary events —
+   sequential and parallel alike, overwriting any backend-supplied value so a
+   provider cannot impersonate another member — while events with no single
+   member (the human task, session-level referee status, the group-level stage
+   summary) leave it `null`; the stage summary's `members` map is the
+   group-level attribution surface. This is the **one** client-visible wire addition and carries a
    compatibility note (goal 13). It is preferred over stuffing attribution into
    `raw`: `raw` is provider-controlled and opaque, and the summary projection
    nulls it for tool events (`daemon.py:_project_event`), so it is unreliable for
@@ -255,7 +275,13 @@ fan-out.
      retains every outcome. When a group ends with zero accepted members,
      `Referee.run` raises the dedicated safe `ParallelStageFailed` orchestration
      signal after recording the outcomes; the issue #17 daemon failure/CAS path
-     converts it to `failed` without overwriting another terminal state.
+     converts it to `failed` without overwriting another terminal state. The
+     resulting `SessionState.failure` is **stage-level**, not turn-shaped
+     (Codex cross-plan review finding 3 — zero accepted reviews may have no
+     truthful decisive member): code `parallel_stage_no_accepted_member` with
+     its canonical safe message (both defined in #17's stable-code table),
+     `stage_index` set, and null turn/agent/backend fields; the legacy `error`
+     string carries the same canonical message, never generic `str(exc)` text.
 
      The simpler alternative — always reach `done` and let the stage-summary
      event alone carry the outcome — was considered and rejected (fresh-eyes
@@ -291,20 +317,24 @@ fan-out.
      the right seam — start eligibility stays predictable and matches today's
      behavior; only post-start failures degrade. It also means the caller never
      watches a session that was doomed from t=0.
-   - **`agent_collab_stop` mid-group** cancels **all** in-flight member tasks:
-     the existing `stop_session` → session-task cancel path (`daemon.py`)
-     propagates cancellation into every member task, and the daemon sets
-     `stopped`. Stop means stop; there is no "some members keep running" state.
-     The issue #17 contract records an `interrupted` outcome for every active
-     member. Each outcome update is paired with a concise attributed boundary
-     event so long-poll watchers wake with the updated outcome snapshot; no
-     provider-specific cancellation prose is promised. For terminal `stopped`
-     to be truthful, `stop_session` must publish it only **after** cancellation
-     has propagated and the session task has settled (Codex round 2,
-     finding 1: today it sets `stopped` *before* `task.cancel()`, so a watcher
-     could observe the terminal state while members still run); the order
-     becomes cancel → await task → set `stopped`, keeping the direct status
-     set for sessions with no live task.
+   - **`agent_collab_stop` mid-group** cancels **all** in-flight member tasks.
+     Stop is a *registered control cause*, not bare cancellation (Codex
+     cross-plan review finding 1): `stop_session` registers the stop with the
+     referee through #17's daemon-to-referee stop signal **before** cancelling
+     the session task, so every active member supervisor arbitrates its member
+     to `interrupted` — bare `task.cancel()` alone would classify them
+     `failed`/`referee_cancelled_unexpected` under #17's arbitration rule.
+     Stop means stop; there is no "some members keep running" state. Each
+     outcome update is paired with a concise attributed boundary event so
+     long-poll watchers wake with the updated outcome snapshot; no
+     provider-specific cancellation prose is promised. Terminal `stopped` has
+     one publisher and is truthful: `stop_session` publishes it only **after**
+     cancellation has propagated and the session task has settled (Codex
+     round 2, finding 1: today it sets `stopped` *before* `task.cancel()`, so
+     a watcher could observe the terminal state while members still run); the
+     order becomes register stop cause → cancel → await task → set `stopped`,
+     keeping the direct status set for sessions with no live task, and
+     `_run_session`'s cancellation handler defers to that ordering.
 
 9. **Session status vocabulary is unchanged; per-agent detail rides events and
    the existing `agent_sessions` map; `settings` surfaces the stage structure.**
@@ -523,9 +553,11 @@ parallel = ["claude", "codex", "xai"]
   for parallel workflows (goal 12) at start validation
   (`_prepare_session_start`); the width cap lives in `validate_workflow`
   (goal 11), not at start.
-- `daemon.stop_session`: publish terminal `stopped` only after cancelling and
-  awaiting the session task (goal 8, Codex round 2 finding 1); keep the direct
-  status set when no live task exists.
+- `daemon.stop_session`: register the stop control cause with the referee via
+  issue #17's stop signal, then cancel, await the session task, and only then
+  publish terminal `stopped` (goal 8); keep the direct status set when no live
+  task exists. Members stopped this way arbitrate to `interrupted`, never
+  `referee_cancelled_unexpected`.
 - Public-repo hygiene: no machine-specific paths, tokens, or transcript contents
   in any of the above; the width cap and workflow names are the only new
   constants.
