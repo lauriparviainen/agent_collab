@@ -1,7 +1,6 @@
 # Cross-agent review skills
 
-**Status:** Implemented; automated verification and live solo-provider smoke complete,
-dual/preflight smoke pending.
+**Status:** Complete.
 
 **Created:** 2026-07-13
 
@@ -185,17 +184,17 @@ and covered by regression tests.
 - `agent_collab_guidance` returns the review-recipe topic, and the hermetic
   guidance/MCP tests cover it.
 - `./agent_collab_dev.sh test` and `build --check` pass.
-- Manual: install the skills into Claude Code via the marketplace manifest
-  and via plain copy; run solo review and dual review against a real diff
-  in this repo; confirm preflight failure output with the daemon stopped.
 - Completed 2026-07-14: installed-skill solo review against a real diff through
   Gemini 3.1 Pro High on `antigravity_cli`.
-- Remaining: live dual review, daemon-stopped preflight, and plain-copy loading
-  checks.
 - Dual review reconciliation labels agreements and disagreements and cites
   `[session_id backend]` per finding.
 - README documents the skills, prerequisites, and the per-agent install
   table.
+- Closure decision 2026-07-14: the owner accepted the implemented skills,
+  managed installer, strict marketplace validation, 829-test hermetic gate,
+  all-client managed upgrade, and live solo-provider run as sufficient to
+  complete this task. Live dual review, daemon-stopped preflight, and plain-copy
+  loading remain optional release smoke checks rather than task blockers.
 
 ## Resolved questions
 

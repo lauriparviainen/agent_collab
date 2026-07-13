@@ -86,7 +86,7 @@ serves to every watcher identically (`daemon.py`: `_record_event`,
 `wait_events`).
 
 The most valuable agent-collab use is cross-vendor review over MCP. Decision 7
-of `doc/tasks_open/cross-agent-review-skills.md` records that a client agent
+of `doc/tasks_closed/cross-agent-review-skills.md` records that a client agent
 (Gemini specifically) finds client-side management of *parallel* review sessions
 error-prone: it must start two sessions, keep a `{session_id, backend, cursor,
 status}` record per reviewer, poll round-robin, and reconcile only after both go
