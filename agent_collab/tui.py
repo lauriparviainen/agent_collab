@@ -349,17 +349,23 @@ class TuiApp:
             try:
                 batch = self.client.wait_events(session_id, current, 750)
             except Exception as exc:
+                if stop.is_set():
+                    return
                 self.events.put(("error", epoch, session_id, str(exc)))
                 return
             if stop.is_set():
                 return
-            self.events.put(("batch", epoch, session_id, batch))
+            self.events.put(("batch", epoch, session_id, current, batch))
             current = int(batch.cursor)
             if not batch.events:
                 try:
                     session = self.client.get_session(session_id)
                 except Exception as exc:
+                    if stop.is_set():
+                        return
                     self.events.put(("error", epoch, session_id, str(exc)))
+                    return
+                if stop.is_set():
                     return
                 self.events.put(("status", epoch, session_id, session))
                 if session_is_terminal(session):
@@ -373,23 +379,8 @@ class TuiApp:
                 return
             kind = item[0]
             if kind == "batch":
-                _, epoch, session_id, batch = item
-                if not self._current_epoch(session_id, epoch):
-                    continue
-                self.cursor_state, accepted = advance_cursor_state(
-                    self.cursor_state,
-                    session_id=session_id,
-                    cursor=batch.cursor,
-                    epoch=epoch,
-                )
-                if not accepted:
-                    continue
-                events = batch.events
-                if events:
-                    self.transcript_lines = self.transcript_lines + format_transcript_events(events)
-                    self.scroll = clamp_scroll(
-                        self.scroll, len(self.transcript_lines), self._body_height()
-                    )
+                _, epoch, session_id, start_cursor, batch = item
+                if self._accept_batch(session_id, epoch, start_cursor, batch):
                     self._refresh_session_status()
             elif kind == "status":
                 _, epoch, session_id, session = item
@@ -406,6 +397,52 @@ class TuiApp:
                     continue
                 self.message = message
                 self._stop_poller()
+
+    def _accept_batch(self, session_id: str, epoch: int, start_cursor: int, batch: Any) -> bool:
+        """Append only the unseen suffix of a forward, contiguous event batch."""
+
+        if not self._current_epoch(session_id, epoch):
+            return False
+        current_cursor = self.cursor_state.cursor
+        batch_start = max(0, int(start_cursor))
+        batch_cursor = max(0, int(batch.cursor))
+        events = batch.events
+        if batch_start > current_cursor or batch_cursor - batch_start != len(events):
+            return False
+        next_state, accepted = advance_cursor_state(
+            self.cursor_state,
+            session_id=session_id,
+            cursor=batch_cursor,
+            epoch=epoch,
+        )
+        if not accepted:
+            return False
+        unseen = events[current_cursor - batch_start :]
+        if len(unseen) != batch_cursor - current_cursor:
+            return False
+        self.cursor_state = next_state
+        if unseen:
+            self.transcript_lines = self.transcript_lines + format_transcript_events(unseen)
+            self.scroll = clamp_scroll(self.scroll, len(self.transcript_lines), self._body_height())
+        return True
+
+    def _catch_up_and_rotate_epoch(self) -> None:
+        """Read from the accepted cursor, then invalidate the stopped poller."""
+
+        state = self.cursor_state
+        if state.session_id:
+            try:
+                batch = self.client.read_events(state.session_id, state.cursor)
+            except Exception:
+                # A replacement poller can retry from the unchanged cursor.
+                pass
+            else:
+                self._accept_batch(state.session_id, state.epoch, state.cursor, batch)
+        self.cursor_state = CursorState(
+            session_id=state.session_id,
+            cursor=self.cursor_state.cursor,
+            epoch=state.epoch + 1,
+        )
 
     def _current_epoch(self, session_id: str, epoch: int) -> bool:
         return self.cursor_state.session_id == session_id and self.cursor_state.epoch == epoch
@@ -638,6 +675,7 @@ class TuiApp:
             try:
                 self.session = self.client.stop_session(self.session_id)
                 self._stop_poller()
+                self._catch_up_and_rotate_epoch()
                 self.message = f"stopped {self.session_id}"
             except Exception as exc:
                 self.message = str(exc)
@@ -657,17 +695,11 @@ class TuiApp:
             )
             return
         self._stop_poller()
+        posted = False
         try:
             batch = self.client.post_message(self.session_id, text, source="referee")
-            self.cursor_state = CursorState(
-                session_id=self.session_id,
-                cursor=max(0, int(batch.cursor)),
-                epoch=self.cursor_state.epoch + 1,
-            )
+            posted = True
             events = batch.events
-            if events:
-                self.transcript_lines = self.transcript_lines + format_transcript_events(events)
-                self.scroll = follow_scroll(len(self.transcript_lines), self._body_height())
             raw = events[0].raw if events else None
             queued = isinstance(raw, Mapping) and bool(raw.get("queued"))
             self.message = "queued note" if queued else "sent note"
@@ -675,6 +707,9 @@ class TuiApp:
         except Exception as exc:
             self.message = str(exc)
         finally:
+            self._catch_up_and_rotate_epoch()
+            if posted:
+                self.scroll = follow_scroll(len(self.transcript_lines), self._body_height())
             if should_start_poller(self.session):
                 self._start_poller()
 

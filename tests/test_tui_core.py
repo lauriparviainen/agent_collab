@@ -373,6 +373,14 @@ class TuiCoreTests(unittest.TestCase):
         self.assertTrue(accepted)
         self.assertEqual(advanced.cursor, 4)
 
+        replayed, accepted = advance_cursor_state(advanced, session_id="s1", cursor=4, epoch=1)
+        self.assertFalse(accepted)
+        self.assertEqual(replayed, advanced)
+
+        backward, accepted = advance_cursor_state(advanced, session_id="s1", cursor=3, epoch=1)
+        self.assertFalse(accepted)
+        self.assertEqual(backward, advanced)
+
         stale, accepted = advance_cursor_state(advanced, session_id="s1", cursor=9, epoch=0)
         self.assertFalse(accepted)
         self.assertEqual(stale, advanced)

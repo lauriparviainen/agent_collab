@@ -13,6 +13,12 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-07-15 - Reliable TUI polling
+
+- Preserve every TUI event exactly once when referee posts restart the poller
+  or `/stop` races with a final event batch, and ignore late errors from a
+  stopped poller (#28).
+
 ## [0.8.3] - 2026-07-15 - Read-only backend defaults
 
 - Ship read-only write posture by default for every backend that has a

@@ -720,9 +720,10 @@ def advance_cursor_state(
 ) -> Tuple[CursorState, bool]:
     if state.session_id != session_id or state.epoch != epoch:
         return state, False
-    return CursorState(
-        session_id=state.session_id, cursor=max(0, int(cursor)), epoch=state.epoch
-    ), True
+    next_cursor = max(0, int(cursor))
+    if next_cursor <= state.cursor:
+        return state, False
+    return CursorState(session_id=state.session_id, cursor=next_cursor, epoch=state.epoch), True
 
 
 def build_new_session_payload(
