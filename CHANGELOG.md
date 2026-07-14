@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-14 - Public repository and install-instruction fix
+
 - Stop referring to the unowned PyPI name: `agent-collab` on PyPI is an
   unrelated third-party package, so the README extras block now installs from
   the checkout with an explicit not-on-PyPI warning, and backend install
