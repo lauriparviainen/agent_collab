@@ -11,13 +11,18 @@ agent-collab config -> external agents available to the referee
 Codex config        -> how Codex itself runs, loads MCP servers, and applies sandbox policy
 ```
 
-The referee does not assume there is exactly one Claude command and one Codex command. Users may have several variants:
+The schema is backend-first: each `[backends.<canonical>]` section configures
+one backend once — enablement, command, environment, and option defaults.
+Every **enabled** backend implicitly defines its default agent under the
+canonical name (`claude_cli`, `codex_cli`, …), and named options-only
+*personae* nest under the backend when one backend should appear as several
+agents:
 
-- Claude Code default.
-- Codex default.
-- Codex with a read-only profile.
-- Codex with a higher reasoning profile.
-- Mock agents for tests.
+- Claude Code default (`claude_cli`).
+- Codex default (`codex_cli`).
+- A read-only Codex persona (`codex_cli.readonly`, differing by options).
+- A higher-reasoning persona on the same backend.
+- The mock pseudo-backend for tests (`[backends.mock]`).
 - Future command-based agents that stream JSONL.
 
 ## Config locations
@@ -32,67 +37,67 @@ built-in defaults
 ```
 
 Project config comes from the session `workdir`, never the caller's shell
-directory. For safety, it may only rename an existing agent and define workflows
+directory. For safety, it may only rename a derived agent and define workflows
 whose agents are already enabled by built-in or global user config. All
-execution-relevant agent fields — including type, command, args, enablement,
-environment, cwd, timeout, backend, options, and backend-specific settings — are
-global-user-only. Explicit start options remain highest precedence.
+execution-relevant settings live on the `[backends.*]` sections — enablement,
+command, args, environment, cwd, timeout, options, and backend-specific static
+configuration — and those sections are global-user-only. Explicit start
+options remain highest precedence.
 
 Agent commands should be changed in the global `agent-collab` config, not
 through project config or dedicated Claude/Codex path flags.
 
-Built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml), so the base agent commands, option defaults, and built-in workflows are inspectable without reading Python code.
+Built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml), so the base backend commands, option defaults, and built-in workflows are inspectable without reading Python code.
 
-Config files declare a top-level `schema_version` (currently `7`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
+Config files declare a top-level `schema_version` (currently `8`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. `./agent_collab.sh install` additionally rewrites the user config file on disk to the current schema (see [Migration](#migration-from-the-agents-first-schema)). Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
 ## Example
 
 ```toml
-schema_version = 7
+schema_version = 8
 
-[agents.claude]
-type = "claude"
+[backends.claude_cli]
+enabled = true
 command = "claude"
 args = ["-p", "--output-format", "stream-json", "--verbose"]
-enabled = true
 
-[agents.codex]
-type = "codex"
+[backends.codex_cli]
+enabled = true
 command = "codex"
 args = ["exec", "--json"]
-enabled = true
 
-[agents.codex_readonly]
-type = "codex"
-command = "codex"
-args = ["exec", "--json", "--profile", "readonly"]
-enabled = true
+# Options-only persona; derives agent id "codex_cli.readonly".
+[backends.codex_cli.agents.readonly]
+name = "codex-readonly"
 
-[agents.mock_claude]
-type = "mock"
-name = "claude"
-enabled = false
+[backends.codex_cli.agents.readonly.options]
+sandbox = "read-only"
 
-[agents.mock_codex]
-type = "mock"
-name = "codex"
+# The mock pseudo-backend; its default agent id is "mock".
+[backends.mock]
 enabled = false
 
 [workflows.solo-claude]
-sequence = ["claude"]
+sequence = ["claude_cli"]
 
 [workflows.solo-codex]
-sequence = ["codex"]
+sequence = ["codex_cli"]
 
 [workflows.cross-review]
-sequence = ["claude", "codex", "claude"]
+sequence = ["claude_cli", "codex_cli", "claude_cli"]
 
 [workflows.dual-review]
-parallel = ["claude", "codex"]
+parallel = ["claude_cli", "codex_cli"]
 
 [workflows.readonly-review]
-sequence = ["codex_readonly", "claude", "codex_readonly"]
+sequence = ["codex_cli.readonly", "claude_cli", "codex_cli.readonly"]
 ```
+
+Every enabled backend defines its default agent with the canonical backend
+name as the agent id; a disabled backend defines no agents. A nested persona
+derives the agent id `<canonical>.<name>`, inherits the backend's command,
+environment, and options, and may override `options` and a display `name`
+only.
 
 ## Workflow shapes
 
@@ -104,18 +109,24 @@ A workflow defines exactly one shape:
   concurrently. Every member receives the same reviewer prompt over a frozen
   transcript snapshot.
 
+Members reference either a canonical backend name (its default agent) or a
+persona id (`<canonical>.<name>`). An **unknown** reference is a fatal config
+error (it is a typo). A member whose backend is **disabled** keeps the config
+loadable: the workflow stays visible in discovery but is start-ineligible with
+reason `backend_disabled` until that backend is enabled.
+
 The built-in `dual-review` uses Claude and Codex. To configure a three-reviewer
-group, first enable an opt-in provider in the global user config and then add a
+group, first enable an opt-in backend in the global user config and then add a
 global-user workflow:
 
 ```toml
-schema_version = 7
+schema_version = 8
 
-[agents.xai]
+[backends.xai_cli]
 enabled = true
 
 [workflows.triple-review]
-parallel = ["claude", "codex", "xai"]
+parallel = ["claude_cli", "codex_cli", "xai_cli"]
 ```
 
 Parallel workflows are user-config-only: project config may continue to define
@@ -132,48 +143,82 @@ accepted. Its final referee status event carries `raw.members` and
 `raw.accepted_members`; zero accepted members produces the canonical
 `parallel_stage_no_accepted_member` session failure.
 
-## Agent fields
+## Backend sections
 
-Agent fields belong in the global user config. A project copy of an existing
-agent table may set only `name`; other fields are ignored with a sanitized
-warning. A project-only agent table is ignored entirely.
+Backend sections belong in the global user config. The section name is the
+canonical backend name, `<provider>_<mechanism>` (plus the `mock`
+pseudo-backend), so the old per-agent `type` and `backend` keys no longer
+exist — both derive from the section name.
 
-Required fields:
+Required for a `*_cli` backend (subprocess execution):
 
 ```toml
-type = "codex"
+[backends.codex_cli]
 enabled = true
-```
-
-Required for the `cli` backend (subprocess execution):
-
-```toml
 command = "codex"
 args = ["exec", "--json"]
 ```
 
-`command` is required only for the `cli` backend; other backends (e.g. `sdk`)
-run in-process and need no command.
+`command` is required only for `cli` backends; `sdk` backends run in-process
+and need no command.
 
 Optional fields:
 
 ```toml
-name = "display-name"
+name = "display-name"    # default agent's display name
 env = { KEY = "VALUE" }
 cwd = "/path/override"
 timeout = 900
-backend = "cli"          # execution mechanism; default "cli"
 ```
+
+An `options` sub-table sets session option defaults for the backend (see
+[Start options](#start-options)). Any other key is backend-specific static
+configuration and must be declared by that backend (for example the Vertex
+settings of `antigravity_sdk`); undeclared keys are rejected.
 
 Avoid adding broad permission fields at first. Permission policy should remain explicit in the underlying agent command or profile.
 
+### Nested personae
+
+Additional agents on one backend are options-only personae:
+
+```toml
+[backends.codex_cli.agents.fast]
+name = "codex-fast"
+
+[backends.codex_cli.agents.fast.options]
+thinking_level = "low"
+```
+
+A persona may set only `name` and `options`; it can never select a different
+backend, command, or environment, so a persona never changes *what* runs. Its
+options are layered over the backend's `options`. The derived agent id is
+`<canonical>.<name>` (here `codex_cli.fast`), and personae of a disabled
+backend do not exist.
+
+### Display-name overrides
+
+Top-level `[agents.<id>]` sections survive for exactly one purpose: renaming a
+derived agent.
+
+```toml
+[agents.claude_cli]
+name = "claude"
+```
+
+Any other key in a top-level `[agents.*]` section is a config error with a
+hint to re-run `./agent_collab.sh install` (which migrates old agents-first
+files). This name-only shape is also what project config may use: a project
+copy of an existing agent table may set only `name`; other fields are ignored
+with a sanitized warning, and a project-only agent table is ignored entirely.
+
 ## Backends
 
-An agent's `type` (the *provider*: `claude`, `codex`, `antigravity`, `xai`) is separate
-from its `backend` (the *execution mechanism*). The registry is keyed by
-`(type, backend)`:
+A canonical backend name combines the *provider* (`claude`, `codex`,
+`antigravity`, `xai`) with the *execution mechanism* (`cli`, `sdk`). The
+registry is keyed by `(provider, mechanism)`:
 
-| provider (`type`) | `cli`                | `sdk`                           |
+| provider          | `cli`                | `sdk`                           |
 | ----------------- | -------------------- | ------------------------------- |
 | `claude`          | ✅ (default)          | ✅ (`claude-agent-sdk`, typed)   |
 | `codex`           | ✅ (default)          | ✅ (`openai-codex`, message-first) |
@@ -181,36 +226,38 @@ from its `backend` (the *execution mechanism*). The registry is keyed by
 | `xai`             | ✅ (`grok`, streaming JSON) | ✅ (`xai-sdk`, message-only remote chat) |
 
 - `cli` runs the agent as a subprocess and parses its stdout. It is the default
-  backend and runs the provider CLI.
+  mechanism and runs the provider CLI.
 - `sdk` runs the provider's Python SDK in-process. The SDKs install with the
   project (Python ≥ 3.10), but every SDK import is lazy, so a missing wheel is an
-  unavailable backend rather than an import error, and the default `cli` backend
-  is unaffected. Credentials are never managed by agent-collab (provide the
+  unavailable backend rather than an import error, and the default `cli` backends
+  are unaffected. Credentials are never managed by agent-collab (provide the
   provider's own auth in the environment).
 
-Resolution is most-specific-wins: `start-request backend > agents.<id>.backend >
-default "cli"`. A `--backend NAME` / `"backend"` start override applies uniformly
-to every selected agent and is rejected before any session state when any
-selected agent's type does not register that backend. Explicit options are
+An agent's mechanism normally derives from its canonical backend name. A
+`--backend NAME` / `"backend"` start override applies uniformly to every
+selected agent and is rejected before any session state when any selected
+agent's provider does not register that mechanism. Explicit options are
 rejected when their named backend is not selected or cannot honor them, with a
-`backend_options.<provider>_<backend>.<key>` field path.
+`backend_options.<provider>_<mechanism>.<key>` field path.
 
 Each backend package declares its MCP/session options in `options.toml` and
 normalizes only its own `backend_options` entry. Static backend configuration
-stays directly under its backend-specific agent section. CLI backends may infer values
-from configured argv; SDK backends do not inherit CLI-only argv values. The
-start response and runner use the same per-agent normalized map.
+stays directly under its `[backends.<canonical>]` section. CLI backends may
+infer values from configured argv; SDK backends do not inherit CLI-only argv
+values. The start response and runner use the same per-agent normalized map.
 
 Every backend this stage reports `resume`, `interrupt`, and `tool_gate` as
 `false` — capabilities are honest runtime facts, never inferred from the provider
-brand. `agent_collab_describe_options` exposes, per agent type, the registered
+brand. `agent_collab_describe_options` exposes, per provider, the registered
 backend ids, the default, live availability/health, capability flags, and an
 `option_schema` for each backend, so the selection is discoverable before
-starting. `mock` agents ignore backend selection and reject a `backend` field.
+starting. The `mock` pseudo-backend ignores backend selection.
 
-### User backend policy
+### Enablement policy
 
-The user config may independently disable a canonical backend for every agent:
+`enabled` on a backend section is both the user policy bit and agent
+enablement: an enabled backend defines its default agent (and personae), a
+disabled one defines nothing but keeps its settings for when it is re-enabled.
 
 ```toml
 [backends.claude_cli]
@@ -222,7 +269,8 @@ enabled = false
 
 This section is accepted only from `$AGENT_COLLAB_HOME/config.toml`. A project
 `[backends.*]` section is ignored with a migration warning, so project
-precedence cannot undo daemon-user policy. Missing entries mean enabled.
+precedence cannot undo daemon-user policy. A backend with no section at all is
+policy-enabled (relevant for `--backend` overrides) but defines no agents.
 `agent-collab config init` generates one explicit section per registered
 backend. Disabled backends remain visible in discovery but start rejects them
 before health probing or session creation.
@@ -249,32 +297,30 @@ before creating session state or launching a subprocess.
 ```
 
 Each backend's colocated manifest is the shipped source of accepted values and
-defaults. A backend-specific agent section may set concrete session defaults. MCP
-exposes the effective schemas through `agent_collab_describe_options`. Unknown
-keys, wrong types, unsupported values, unselected backends, and invalid
+defaults. A backend section's `options` table sets concrete session defaults.
+MCP exposes the effective schemas through `agent_collab_describe_options`.
+Unknown keys, wrong types, unsupported values, unselected backends, and invalid
 cross-field combinations are rejected with actionable paths.
 
 Example option rules:
 
 ```toml
-[agents.codex_cli]
-type = "codex"
-backend = "cli"
+[backends.codex_cli]
+enabled = true
 command = "codex"
 args = ["exec", "--json"]
 
-[agents.codex_cli.options]
+[backends.codex_cli.options]
 model = "gpt-5.6-sol"
 thinking_level = "high"
 sandbox = "workspace-write"
 approval_policy = "on-request"
 search = true
 
-[agents.claude_sdk]
-type = "claude"
-backend = "sdk"
+[backends.claude_sdk]
+enabled = true
 
-[agents.claude_sdk.options]
+[backends.claude_sdk.options]
 model = "opus"
 permission_mode = "default"
 thinking_level = "high"
@@ -282,9 +328,10 @@ thinking_level = "high"
 
 `backend_options.antigravity_cli` accepts `model` and `mode`; the SDK entry
 accepts only `model`. Vertex, project, and location are static SDK configuration
-under `agents.antigravity_sdk`, not MCP-call options. A backend entry is rejected
-when it is not selected by the workflow. Configured session defaults live under
-`agents.<id>.options`; MCP values override them for that session.
+under `[backends.antigravity_sdk]`, not MCP-call options. A backend entry is
+rejected when it is not selected by the workflow. Configured session defaults
+live under `[backends.<canonical>].options`, with a persona's `options` layered
+on top for that agent; MCP values override both for that session.
 
 `backend_options.xai_cli` accepts `model`, `permission_mode`, `sandbox`,
 `provider_max_turns`, and the reasoning aliases. Its headless defaults are
@@ -316,7 +363,7 @@ Prefer `thinking_level` across providers:
 - xAI CLI accepts `low`, `medium`, `high`, or model-specific `xhigh`; the SDK accepts `none`, `low`, `medium`, or `high`. Both map one effective value to `reasoning_effort`.
 - Codex `reasoning_effort` is kept as a provider-specific alias for compatibility. Claude `thinking_budget_tokens` is kept for advanced raw-token configurations, but should not be combined with `thinking_level`.
 
-## Agent types
+## Providers
 
 Start with a small set:
 
@@ -328,10 +375,11 @@ xai           (opt-in, disabled by default)
 mock
 ```
 
-`type` controls event parsing and prompt handling. `backend` controls the
-execution mechanism (see [Backends](#backends)).
+The provider (the first half of the canonical backend name) controls event
+parsing and prompt handling. The mechanism (the second half) controls
+execution (see [Backends](#backends)).
 
-`command` and `args` control process launch.
+`command` and `args` on the backend section control process launch.
 
 ### `claude`
 
@@ -357,14 +405,15 @@ codex exec --json "prompt"
 
 Google Antigravity, available on both backends. Disabled by default and opt-in.
 
-- `cli` runs `agy -p` in print mode. Requires the `agy` CLI installed and a
+- `antigravity_cli` runs `agy -p` in print mode. Requires the `agy` CLI installed and a
   Google **OAuth sign-in cached under `~/.gemini/`**. Print mode emits **plain
   text only** (no JSON, no per-event markers), so its transcript fidelity is
   intentionally **message-only** — each non-empty output line is one
   `antigravity` message event; there is no tool/command/file-change structure.
   The default `args` include `--mode accept-edits` so `-p` does not stall on the
-  interactive request-review approval prompt. Choose `sdk` for structured events.
-- `sdk` runs the `google-antigravity` SDK in-process (installed with the project,
+  interactive request-review approval prompt. Choose the SDK backend for
+  structured events.
+- `antigravity_sdk` runs the `google-antigravity` SDK in-process (installed with the project,
   Python ≥ 3.10, lazy-imported). Needs a **Gemini API key** (`GEMINI_API_KEY` env,
   or `LocalAgentConfig(api_key=...)`, or Vertex/ADC) — the SDK does **not** use the
   `~/.gemini` OAuth. It maps typed SDK events to `tool_call`/`command`/`file_change`,
@@ -377,11 +426,13 @@ The two backends authenticate differently (OAuth for `cli`, an API key for
 environment through and never manages or logs credentials.
 
 ```toml
-[agents.antigravity]
-type = "antigravity"
+[backends.antigravity_cli]
+enabled = true
 command = "agy"
-args = ["-p", "--mode", "accept-edits"]
-backend = "cli"        # or "sdk" for the google-antigravity SDK
+args = ["--mode", "accept-edits", "-p"]
+
+# Or the in-process SDK backend (no command):
+[backends.antigravity_sdk]
 enabled = true
 ```
 
@@ -397,17 +448,17 @@ response content and response identity, requires `XAI_API_KEY`, and does not
 enable tools. Both report resume, interrupt, and tool-gate as false.
 
 ```toml
-[agents.xai]
-type = "xai"
+[backends.xai_cli]
+enabled = true
 command = "grok"
 args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
-backend = "cli"
-enabled = true
 ```
 
 ### `mock`
 
-Uses the existing mock runner and does not launch a subprocess.
+A pseudo-backend: `[backends.mock]` defines the agent `mock`, which uses the
+existing mock runner and does not launch a subprocess. The session-level
+`mock` start flag is independent of this section.
 
 Useful for tests and demos.
 
@@ -419,19 +470,55 @@ The first version can preserve raw events and print compact verbose output for u
 
 ## Workflow fields
 
-A workflow names an orchestration pattern: the ordered agent sequence a session runs. Workflows reference agent IDs:
+A workflow names an orchestration pattern: the ordered agent sequence a session runs. Workflows reference canonical backend names or persona ids:
 
 ```toml
 [workflows.my-workflow]
-sequence = ["agent_a", "agent_b", "agent_a"]
+sequence = ["claude_cli", "codex_cli.readonly", "claude_cli"]
 ```
 
 This removes hardcoded orchestration logic from the referee. Built-in workflows (`solo-claude`, `solo-codex`, `cross-review`, `dual-review`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
 
+An unknown member reference is a fatal config error; a member whose backend is
+disabled leaves the workflow loadable but start-ineligible with the
+discovery-visible reason `backend_disabled`, so disabling a backend never
+requires editing every workflow that mentions it.
+
 Project workflows are safe shared composition: each referenced agent must
-already exist and be enabled in built-in or global user config. A workflow that
-references a project-only, unknown, or globally disabled agent is ignored with
-a warning.
+already exist and be enabled in built-in or global user config. A project
+workflow that references a project-only, unknown, or globally disabled agent
+is ignored with a warning.
+
+## Migration from the agents-first schema
+
+Configs with `schema_version < 8` used the agents-first shape — top-level
+`[agents.<id>]` sections owning `type`, `backend`, `command`, and `options`.
+They migrate automatically:
+
+- `./agent_collab.sh install` rewrites the user config file on disk through
+  tomlkit, preserving comments and formatting, after writing a
+  `config.toml.bak` backup.
+- The same migration also runs lazily in memory on every load, so an old file
+  keeps loading even before anyone reinstalls. Project configs are never
+  rewritten on disk; only their built-in agent references are remapped in
+  memory.
+
+What the migration does: each old agent folds into its effective canonical
+backend section; one agent per backend becomes the backend section itself
+(the default agent), and additional enabled agents that differ only by `name`
+or `options` become nested personae. `type = "mock"` agents become
+`[backends.mock]`, name-only agent tables stay as top-level display-name
+overrides, and workflow member ids are rewritten (built-in `claude` →
+`claude_cli`, `codex` → `codex_cli`).
+
+When automatic migration is impossible — two agents on one backend whose
+`command`, `args`, `env`, `cwd`, or `timeout` conflict, or an agent that
+cannot be expressed as backend + options-only persona — install fails with a
+clear error naming the offending section and leaves the config file untouched.
+Merge the agents into one `[backends.<canonical>]` section with nested
+options-only personae and re-run install. A file already stamped
+`schema_version = 8` that still carries execution fields under top-level
+`[agents.*]` is rejected at load with the same re-run-install hint.
 
 ## Workdir policy
 
@@ -476,8 +563,8 @@ here, so no TOML dependency is required.
 ## Safety considerations
 
 - Config registration is not permission approval.
-- Keep execution-relevant agent settings in global user config; project config
-  is limited to display names and safe workflow composition.
+- Keep execution-relevant backend settings in global user config; project
+  config is limited to display names and safe workflow composition.
 - Print the command prefix before launching an agent.
 - Do not print full prompts in process metadata unless verbose logging is requested.
 - Keep recursive-agent guardrails in generated prompts.
@@ -485,8 +572,8 @@ here, so no TOML dependency is required.
 
 ## Guarantees
 
-- Users can define multiple agents of the same type.
-- Workflows can reference configured agent IDs.
-- Missing config falls back to built-in `claude` and `codex` defaults.
+- Users can run several personae of one backend, differing by options only.
+- Workflows can reference canonical backend names and persona ids.
+- Missing config falls back to built-in `claude_cli` and `codex_cli` defaults.
 - Mock mode remains easy for tests.
 - Existing CLI flags still work as overrides.

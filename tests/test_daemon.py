@@ -88,7 +88,9 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(state.workflow, "cross-review")
             self.assertEqual(state.settings["workflow"]["name"], "cross-review")
-            self.assertEqual(state.settings["workflow"]["sequence"], ["claude", "codex", "claude"])
+            self.assertEqual(
+                state.settings["workflow"]["sequence"], ["claude_cli", "codex_cli", "claude_cli"]
+            )
             self.assertFalse(state.interactive)
             self.assertFalse(state.settings["interactive"])
             self.assertEqual(final.settings, state.settings)
@@ -127,8 +129,10 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 return self.outcome
 
         runners = {
-            "claude": SequenceRunner("claude", TurnOutcome("completed")),
-            "codex": SequenceRunner("codex", TurnOutcome("failed", "provider_terminal_failure")),
+            "claude_cli": SequenceRunner("claude", TurnOutcome("completed")),
+            "codex_cli": SequenceRunner(
+                "codex", TurnOutcome("failed", "provider_terminal_failure")
+            ),
         }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -232,15 +236,16 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         all_started = asyncio.Event()
 
         class Runner:
-            def __init__(self, source):
+            def __init__(self, agent_id, source):
+                self.agent_id = agent_id
                 self.source = source
 
             async def run_turn(self, prompt, workdir, emit):
-                started.add(self.source)
-                if started == {"claude", "codex"}:
+                started.add(self.agent_id)
+                if started == {"claude_cli", "codex_cli"}:
                     all_started.set()
                 await all_started.wait()
-                await emit(Event.create(self.source, "message", f"{self.source} review"))
+                await emit(Event.create(self.source, "message", f"{self.agent_id} review"))
                 return TurnOutcome("completed")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,7 +253,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             home = root / "home"
             home.mkdir()
             (home / "config.toml").write_text(
-                'schema_version = 7\n[workflows.parallel]\nparallel = ["claude", "codex"]\n',
+                'schema_version = 8\n[workflows.parallel]\nparallel = ["claude_cli", "codex_cli"]\n',
                 encoding="utf-8",
             )
             manager = SessionManager()
@@ -256,7 +261,10 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 with mock.patch.object(
                     Referee,
                     "_runners",
-                    return_value={"claude": Runner("claude"), "codex": Runner("codex")},
+                    return_value={
+                        "claude_cli": Runner("claude_cli", "claude"),
+                        "codex_cli": Runner("codex_cli", "codex"),
+                    },
                 ):
                     state = await manager.start_session(
                         StartSessionRequest(
@@ -269,9 +277,9 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     final = await self._wait_for_terminal(manager, state.session_id)
 
         self.assertEqual(final.status, "done")
-        self.assertEqual(set(final.settings["agents"]), {"claude", "codex"})
-        self.assertEqual(final.settings["workflow"]["sequence"], ["claude", "codex"])
-        self.assertEqual(final.settings["workflow"]["parallel"], ["claude", "codex"])
+        self.assertEqual(set(final.settings["agents"]), {"claude_cli", "codex_cli"})
+        self.assertEqual(final.settings["workflow"]["sequence"], ["claude_cli", "codex_cli"])
+        self.assertEqual(final.settings["workflow"]["parallel"], ["claude_cli", "codex_cli"])
         batch = manager.read_events(final.session_id, 0)
         messages = [event for event in batch.events if event.get("agent_id") in started]
         self.assertEqual({event["agent_id"] for event in messages}, started)
@@ -281,7 +289,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             if isinstance(event.get("raw"), dict) and event["raw"].get("parallel") is True
         ]
         self.assertEqual(len(summaries), 1)
-        self.assertEqual(summaries[0]["raw"]["accepted_members"], ["claude", "codex"])
+        self.assertEqual(summaries[0]["raw"]["accepted_members"], ["claude_cli", "codex_cli"])
 
     async def test_parallel_start_rejects_interactive_and_zero_turns(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,7 +297,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             home = root / "home"
             home.mkdir()
             (home / "config.toml").write_text(
-                'schema_version = 7\n[workflows.parallel]\nparallel = ["claude", "codex"]\n',
+                'schema_version = 8\n[workflows.parallel]\nparallel = ["claude_cli", "codex_cli"]\n',
                 encoding="utf-8",
             )
             manager = SessionManager()
@@ -333,7 +341,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             home = root / "home"
             home.mkdir()
             (home / "config.toml").write_text(
-                'schema_version = 7\n[workflows.review]\nsequence = ["claude"]\n',
+                'schema_version = 8\n[workflows.review]\nsequence = ["claude_cli"]\n',
                 encoding="utf-8",
             )
             manager = SessionManager()
@@ -359,16 +367,16 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.list_sessions(), [])
 
     async def test_start_maps_known_workflow_config_error_to_sanitized_400(self):
-        # A *known* workflow that references a disabled agent must fail as a
-        # sanitized SessionRequestError (400), never escape as a bare 500.
+        # A *known* workflow that references an agent of a disabled backend must
+        # fail as a sanitized SessionRequestError (400), never escape as a bare
+        # 500. The config itself stays loadable (the workflow is merely
+        # start-ineligible); the error surfaces at start.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             home = root / "home"
             home.mkdir()
             (home / "config.toml").write_text(
-                "schema_version = 7\n"
-                '[agents.helper]\ntype = "claude"\nenabled = false\n'
-                '[workflows.custom]\nsequence = ["helper"]\n',
+                'schema_version = 8\n[workflows.custom]\nsequence = ["antigravity_cli"]\n',
                 encoding="utf-8",
             )
             manager = SessionManager()
@@ -383,7 +391,9 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                         )
                     )
 
-        self.assertIn("references disabled agent 'helper'", str(ctx.exception))
+        self.assertIn(
+            "references agent 'antigravity_cli' of a disabled backend", str(ctx.exception)
+        )
         self.assertEqual(manager.list_sessions(), [])
 
     async def test_prepare_start_wraps_late_config_error_as_session_request_error(self):
@@ -395,7 +405,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             home = root / "home"
             home.mkdir()
             (home / "config.toml").write_text(
-                'schema_version = 7\n[workflows.review]\nsequence = ["claude"]\n',
+                'schema_version = 8\n[workflows.review]\nsequence = ["claude_cli"]\n',
                 encoding="utf-8",
             )
             manager = SessionManager()
@@ -418,9 +428,9 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.list_sessions(), [])
 
     async def test_parallel_stop_publishes_stopped_only_after_members_settle(self):
-        started = {"claude": asyncio.Event(), "codex": asyncio.Event()}
-        cancelled = {"claude": asyncio.Event(), "codex": asyncio.Event()}
-        cleaned = {"claude": asyncio.Event(), "codex": asyncio.Event()}
+        started = {"claude_cli": asyncio.Event(), "codex_cli": asyncio.Event()}
+        cancelled = {"claude_cli": asyncio.Event(), "codex_cli": asyncio.Event()}
+        cleaned = {"claude_cli": asyncio.Event(), "codex_cli": asyncio.Event()}
         release = asyncio.Event()
 
         class BlockingRunner:
@@ -442,7 +452,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             home = root / "home"
             home.mkdir()
             (home / "config.toml").write_text(
-                'schema_version = 7\n[workflows.parallel]\nparallel = ["claude", "codex"]\n',
+                'schema_version = 8\n[workflows.parallel]\nparallel = ["claude_cli", "codex_cli"]\n',
                 encoding="utf-8",
             )
             manager = SessionManager()
@@ -451,8 +461,8 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     Referee,
                     "_runners",
                     return_value={
-                        "claude": BlockingRunner("claude"),
-                        "codex": BlockingRunner("codex"),
+                        "claude_cli": BlockingRunner("claude_cli"),
+                        "codex_cli": BlockingRunner("codex_cli"),
                     },
                 ):
                     state = await manager.start_session(
@@ -476,7 +486,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stopped.status, "stopped")
         self.assertEqual(
             {item["agent_id"]: item["outcome"] for item in stopped.turn_outcomes},
-            {"claude": "interrupted", "codex": "interrupted"},
+            {"claude_cli": "interrupted", "codex_cli": "interrupted"},
         )
 
     async def test_stop_records_active_interruption_before_stopped(self):
@@ -484,7 +494,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         cleaned = asyncio.Event()
 
         class BlockingRunner:
-            name = "claude"
+            name = "claude_cli"
 
             async def run_turn(self, prompt, workdir, emit):
                 started.set()
@@ -498,7 +508,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             manager = SessionManager()
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 with mock.patch.object(
-                    Referee, "_runners", return_value={"claude": BlockingRunner()}
+                    Referee, "_runners", return_value={"claude_cli": BlockingRunner()}
                 ):
                     state = await manager.start_session(
                         StartSessionRequest(
@@ -716,22 +726,23 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sum(calls), 1)
 
     async def test_sdk_backend_selection_is_not_blocked_by_inferred_cli_mode(self):
-        # Regression: the built-in antigravity agent carries `--mode accept-edits`
-        # (cli posture); selecting backend="sdk" must reach runner construction
-        # rather than being rejected by the inferred mode. mock skips health so
-        # this exercises the validation path end to end.
+        # Regression: the built-in antigravity backend carries `--mode
+        # accept-edits` (cli posture); enabling the sdk backend must reach
+        # runner construction rather than being rejected by the inferred mode.
+        # mock skips health so this exercises the validation path end to end.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = root / "home" / "config.toml"
             cfg.parent.mkdir(parents=True)
             cfg.write_text(
                 """
-[agents.antigravity]
+schema_version = 8
+
+[backends.antigravity_sdk]
 enabled = true
-backend = "sdk"
 
 [workflows.solo-antigravity]
-sequence = ["antigravity"]
+sequence = ["antigravity_sdk"]
 """,
                 encoding="utf-8",
             )
@@ -750,7 +761,7 @@ sequence = ["antigravity"]
                 final = await self._wait_for_terminal(manager, state.session_id)
 
             self.assertEqual(final.status, "done")
-            self.assertEqual(final.settings["agents"]["antigravity"]["backend"], "sdk")
+            self.assertEqual(final.settings["agents"]["antigravity_sdk"]["backend"], "sdk")
 
     async def test_interactive_session_awaits_input_and_post_message_appends_once(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -860,11 +871,11 @@ sequence = ["antigravity"]
 
             self.assertGreaterEqual(batch.cursor, before + 1)
             self.assertEqual(batch.events[0]["raw"]["target"], "codex")
-            self.assertEqual(batch.events[0]["raw"]["resolved_target"], "codex")
+            self.assertEqual(batch.events[0]["raw"]["resolved_target"], "codex_cli")
             texts = [event["text"] for event in directed_events]
-            self.assertIn("directed turn: codex", texts)
-            self.assertEqual(texts.count("directed turn: codex"), 1)
-            self.assertEqual(sum("mock codex received prompt" in text for text in texts), 1)
+            self.assertIn("directed turn: codex_cli", texts)
+            self.assertEqual(texts.count("directed turn: codex_cli"), 1)
+            self.assertEqual(sum("mock codex_cli received prompt" in text for text in texts), 1)
 
     async def test_mid_turn_referee_note_is_queued_and_visible_to_next_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -876,24 +887,25 @@ sequence = ["antigravity"]
             second_turn_started = asyncio.Event()
 
             class CaptureRunner:
-                def __init__(self, name, pause=False):
+                def __init__(self, name, source, pause=False):
                     self.name = name
+                    self.source = source
                     self.pause = pause
 
                 async def run_turn(self, prompt, workdir, emit):
                     prompts.append((self.name, prompt))
                     if self.pause:
                         first_turn_started.set()
-                        await emit(Event.create(self.name, "status", f"{self.name} started"))
+                        await emit(Event.create(self.source, "status", f"{self.name} started"))
                         await release_first_turn.wait()
                     else:
                         second_turn_started.set()
-                    await emit(Event.create(self.name, "message", f"{self.name} done"))
+                    await emit(Event.create(self.source, "message", f"{self.name} done"))
                     return TurnOutcome("completed")
 
             runners = {
-                "claude": CaptureRunner("claude", pause=True),
-                "codex": CaptureRunner("codex"),
+                "claude_cli": CaptureRunner("claude_cli", "claude", pause=True),
+                "codex_cli": CaptureRunner("codex_cli", "codex"),
             }
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
@@ -921,7 +933,7 @@ sequence = ["antigravity"]
             self.assertEqual(batch.events[0]["raw"]["queued"], True)
             self.assertEqual(awaiting.status, "awaiting_input")
             self.assertGreaterEqual(len(prompts), 2)
-            self.assertEqual(prompts[1][0], "codex")
+            self.assertEqual(prompts[1][0], "codex_cli")
             self.assertIn("remember mid-turn note", prompts[1][1])
 
     async def test_post_message_rejects_unknown_and_ambiguous_targets_in_manager_path(self):
@@ -931,16 +943,14 @@ sequence = ["antigravity"]
             config_path.parent.mkdir(parents=True)
             config_path.write_text(
                 """
-[agents.claude-a]
-type = "claude"
-command = "claude"
+schema_version = 8
 
-[agents.claude-b]
-type = "claude"
-command = "claude"
+[backends.claude_cli.agents.a]
+
+[backends.claude_cli.agents.b]
 
 [workflows.two-claudes]
-sequence = ["claude-a", "claude-b"]
+sequence = ["claude_cli.a", "claude_cli.b"]
 """,
                 encoding="utf-8",
             )
@@ -970,9 +980,9 @@ sequence = ["claude-a", "claude-b"]
                 await manager.stop_session(state.session_id)
 
             self.assertIn("unknown target", str(unknown_ctx.exception))
-            self.assertIn("claude-a", str(unknown_ctx.exception))
+            self.assertIn("claude_cli.a", str(unknown_ctx.exception))
             self.assertIn("ambiguous agent type", str(ambiguous_ctx.exception))
-            self.assertIn("claude-b", str(ambiguous_ctx.exception))
+            self.assertIn("claude_cli.b", str(ambiguous_ctx.exception))
             self.assertEqual(manager.read_events(state.session_id, 0).cursor, cursor)
 
     async def test_post_message_rejects_noninteractive_session(self):
@@ -1182,12 +1192,12 @@ sequence = ["claude-a", "claude-b"]
             home = root / "home"
             home.mkdir()
             (home / "config.toml").write_text(
-                "schema_version = 4\n[backends.claude_cli]\nenabled = false\n",
+                "schema_version = 8\n[backends.claude_cli]\nenabled = false\n",
                 encoding="utf-8",
             )
             manager = SessionManager()
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
-                with self.assertRaises(StartOptionsError) as ctx:
+                with self.assertRaises(SessionRequestError) as ctx:
                     await manager.start_session(
                         StartSessionRequest(
                             task="disabled backend",
@@ -1196,9 +1206,7 @@ sequence = ["claude-a", "claude-b"]
                             workdir=root,
                         )
                     )
-            detail = ctx.exception.to_dict()["details"][0]
-            self.assertEqual(detail["code"], "backend_disabled")
-            self.assertEqual(detail["canonical_backend"], "claude_cli")
+            self.assertIn("references agent 'claude_cli' of a disabled backend", str(ctx.exception))
             self.assertEqual(manager.list_sessions(), [])
 
     async def test_stop_session_transitions_running_session_to_stopped(self):

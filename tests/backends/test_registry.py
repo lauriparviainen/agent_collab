@@ -163,12 +163,12 @@ class StartBackendValidationTests(unittest.TestCase):
             selection = validate_start_backends(config, "solo-claude", request_backend="special")
         finally:
             backends.unregister("claude", "special")
-        self.assertEqual(selection.agent_backends, {"claude": "special"})
+        self.assertEqual(selection.agent_backends, {"claude_cli": "special"})
 
     def test_default_resolution_uses_cli(self):
         config = builtin_config()
         selection = validate_start_backends(config, "cross-review")
-        self.assertEqual(selection.agent_backends, {"claude": "cli", "codex": "cli"})
+        self.assertEqual(selection.agent_backends, {"claude_cli": "cli", "codex_cli": "cli"})
 
     def test_unselected_backend_options_are_rejected(self):
         config = builtin_config()
@@ -185,7 +185,7 @@ class OverrideReachesExecutionTests(unittest.TestCase):
         # re-resolution of agents.<id>.backend. Agent config says "cli"; the map
         # says "special"; the runner must come from "special".
         config = builtin_config()
-        self.assertEqual(config.agents["claude"].backend, None)
+        self.assertEqual(config.agents["claude_cli"].backend, "cli")
         backends.register(_FakeBackend("claude", "special"))
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -195,7 +195,7 @@ class OverrideReachesExecutionTests(unittest.TestCase):
                             workflow="cross-review",
                             workdir=Path(tmp),
                             collab_config=config,
-                            agent_backends={"claude": "special"},
+                            agent_backends={"claude_cli": "special"},
                             color=False,
                         ),
                         printer=lambda event: None,
@@ -203,9 +203,9 @@ class OverrideReachesExecutionTests(unittest.TestCase):
                     runners = referee._runners()
         finally:
             backends.unregister("claude", "special")
-        self.assertIsInstance(runners["claude"], _SentinelRunner)
+        self.assertIsInstance(runners["claude_cli"], _SentinelRunner)
         # codex was not in the map -> falls back to its cli subprocess runner.
-        self.assertIsInstance(runners["codex"], SubprocessRunner)
+        self.assertIsInstance(runners["codex_cli"], SubprocessRunner)
 
 
 if __name__ == "__main__":

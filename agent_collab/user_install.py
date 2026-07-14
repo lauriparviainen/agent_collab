@@ -372,9 +372,9 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
         ("config", payload.get("config_source") or "unknown"),
         ("probe source", payload.get("probe_source") or "installed environment"),
     ]
-    disabled_agents = payload.get("disabled_agents") or []
-    if disabled_agents:
-        summary.append(("disabled agents", ", ".join(str(item) for item in disabled_agents)))
+    disabled_backends = payload.get("disabled_backends") or []
+    if disabled_backends:
+        summary.append(("disabled backends", ", ".join(str(item) for item in disabled_backends)))
     print_kv(tuple(summary))
     table_rows = []
     remediation_rows = []

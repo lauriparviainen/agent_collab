@@ -38,8 +38,10 @@ class RefereeTests(unittest.TestCase):
             config_path.parent.mkdir(parents=True)
             config_path.write_text(
                 """
+schema_version = 8
+
 [workflows.codex-only]
-sequence = ["codex"]
+sequence = ["codex_cli"]
 """,
                 encoding="utf-8",
             )
@@ -60,7 +62,7 @@ sequence = ["codex"]
                     ).run("test task")
                 )
 
-            self.assertIn("turn 1: codex", [event.text for event in events])
+            self.assertIn("turn 1: codex_cli", [event.text for event in events])
 
     def test_dry_run_uses_configured_agent_command(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -69,7 +71,9 @@ sequence = ["codex"]
             config_path.parent.mkdir(parents=True)
             config_path.write_text(
                 """
-[agents.claude]
+schema_version = 8
+
+[backends.claude_cli]
 command = "configured-claude"
 """,
                 encoding="utf-8",

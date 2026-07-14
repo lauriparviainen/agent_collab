@@ -54,10 +54,12 @@ Each pair lives in `agent_collab/backends/<provider>_<backend>/` with its own
 packages by `(agent_type, backend_id)`. Backend resolution order is:
 
 ```text
-start request > agents.<id>.backend > cli
+start request > the backend kind encoded in the canonical section name > cli
 ```
 
-The default remains `cli`. Credentials stay external and provider-managed.
+Since config schema 8, an agent's backend kind is fixed by its
+`[backends.<canonical>]` section; only mock agents have no backend. Credentials
+stay external and provider-managed.
 
 The resolved per-agent backend map is computed once at start validation and
 threaded through `RefereeConfig` to the runner construction path. It must reach
@@ -70,10 +72,10 @@ dynamic `backend_options` map keyed by canonical names such as `claude_cli` and
 Only CLI backends infer values from argv. `describe_options` reports the exact
 schema for every registered backend.
 
-Static, non-MCP backend settings live directly under a backend-specific agent
-section. Antigravity SDK owns and validates `vertex`, `project`, and `location`
-through its colocated `config.toml`; its `[agents.<id>.options]` table contains
-only MCP-overridable values such as `model`.
+Static, non-MCP backend settings live directly under the backend's
+`[backends.<canonical>]` section. Antigravity SDK owns and validates `vertex`,
+`project`, and `location` through its colocated `config.toml`; the section's
+`options` table contains only MCP-overridable values such as `model`.
 
 All runners implement one sink-plus-return boundary: `run_turn` awaits each
 event sink call for streaming backpressure and returns exactly one immutable

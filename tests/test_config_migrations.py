@@ -27,14 +27,16 @@ class MigrateConfigDataTests(unittest.TestCase):
         migrated = migrate_config_data(data)
 
         self.assertEqual(migrated["schema_version"], CURRENT_CONFIG_SCHEMA)
-        self.assertEqual(migrated["agents"], data["agents"])
+        self.assertNotIn("agents", migrated)
+        self.assertEqual(migrated["backends"]["claude_cli"]["command"], "claude")
+        self.assertTrue(migrated["backends"]["claude_cli"]["enabled"])
 
     def test_input_is_not_mutated(self):
         data = {"agents": {"claude": {"type": "claude", "args": ["-p"]}}}
         snapshot = copy.deepcopy(data)
 
         migrated = migrate_config_data(data)
-        migrated["agents"]["claude"]["args"].append("--changed")
+        migrated["backends"]["claude_cli"]["args"].append("--changed")
 
         self.assertEqual(data, snapshot)
 
@@ -63,7 +65,7 @@ class MigrateConfigDataTests(unittest.TestCase):
         merge_config_data(config, migrate_config_data(data))
         validate_config(config)
 
-        self.assertEqual(config.agents["claude"].command, "claude")
+        self.assertEqual(config.agents["claude_cli"].command, "claude")
 
     def test_unknown_agent_field_still_fails_after_migration(self):
         data = {"agents": {"claude": {"type": "claude", "bogus_field": 1}}}
@@ -93,7 +95,7 @@ class MigrateConfigDataTests(unittest.TestCase):
 
         self.assertEqual(migrated["schema_version"], CURRENT_CONFIG_SCHEMA)
 
-    def test_v6_config_is_stamped_to_v7_without_other_changes(self):
+    def test_v6_config_migrates_and_rewrites_builtin_workflow_references(self):
         data = {
             "schema_version": 6,
             "workflows": {"review": {"parallel": ["claude", "codex"]}},
@@ -101,8 +103,171 @@ class MigrateConfigDataTests(unittest.TestCase):
 
         migrated = migrate_config_data(data, source="user.toml", scope="user")
 
-        self.assertEqual(migrated["schema_version"], 7)
-        self.assertEqual(migrated["workflows"], data["workflows"])
+        self.assertEqual(migrated["schema_version"], CURRENT_CONFIG_SCHEMA)
+        self.assertEqual(migrated["workflows"]["review"]["parallel"], ["claude_cli", "codex_cli"])
+
+    def test_v7_agents_fold_into_backend_sections(self):
+        data = {
+            "schema_version": 7,
+            "agents": {
+                "claude": {"type": "claude", "enabled": False},
+                "claude_sdk": {
+                    "type": "claude",
+                    "backend": "sdk",
+                    "enabled": True,
+                    "options": {"model": "opus"},
+                },
+                "helper": {"type": "mock"},
+            },
+            "workflows": {
+                "solo": {"sequence": ["claude_sdk"]},
+                "pair": {"parallel": ["claude", "claude_sdk"]},
+            },
+        }
+
+        migrated = migrate_config_data(data, source="user.toml", scope="user")
+
+        self.assertNotIn("agents", migrated)
+        self.assertFalse(migrated["backends"]["claude_cli"]["enabled"])
+        sdk = migrated["backends"]["claude_sdk"]
+        self.assertTrue(sdk["enabled"])
+        self.assertEqual(sdk["options"], {"model": "opus"})
+        self.assertTrue(migrated["backends"]["mock"]["enabled"])
+        self.assertEqual(migrated["workflows"]["solo"]["sequence"], ["claude_sdk"])
+        self.assertEqual(migrated["workflows"]["pair"]["parallel"], ["claude_cli", "claude_sdk"])
+
+    def test_v7_second_options_only_agent_becomes_nested_persona(self):
+        data = {
+            "schema_version": 7,
+            "agents": {
+                "antigravity_cli": {
+                    "type": "antigravity",
+                    "backend": "cli",
+                    "command": "agy",
+                    "options": {"model": "flash"},
+                },
+                "gemini_pro": {
+                    "type": "antigravity",
+                    "backend": "cli",
+                    "options": {"model": "pro"},
+                },
+            },
+            "workflows": {"pro-review": {"sequence": ["gemini_pro"]}},
+        }
+
+        migrated = migrate_config_data(data, source="user.toml", scope="user")
+
+        section = migrated["backends"]["antigravity_cli"]
+        self.assertEqual(section["command"], "agy")
+        self.assertEqual(section["agents"]["gemini_pro"], {"options": {"model": "pro"}})
+        self.assertEqual(
+            migrated["workflows"]["pro-review"]["sequence"],
+            ["antigravity_cli.gemini_pro"],
+        )
+
+    def test_v7_conflicting_same_backend_agents_fail_migration(self):
+        data = {
+            "schema_version": 7,
+            "agents": {
+                "codex": {"type": "codex", "command": "codex"},
+                "other": {"type": "codex", "command": "different-codex"},
+            },
+        }
+
+        with self.assertRaisesRegex(ConfigMigrationError, "agents.other"):
+            migrate_config_data(data, source="user.toml", scope="user")
+
+    def test_v7_builtin_agent_omitting_command_conflicts_with_custom_default(self):
+        # Review finding: [agents.claude] omits command (it ran with the
+        # built-in "claude"); folding it as a persona of a custom-command
+        # default would silently change what it executes. Must fail clearly.
+        data = {
+            "schema_version": 7,
+            "agents": {
+                "hardened": {"type": "claude", "command": "/usr/local/bin/secure-claude"},
+                "claude": {"options": {"model": "opus"}},
+            },
+        }
+
+        with self.assertRaisesRegex(ConfigMigrationError, "agents.claude"):
+            migrate_config_data(data, source="user.toml", scope="user")
+
+    def test_v7_enabled_agent_wins_the_default_slot_regardless_of_file_order(self):
+        # Review finding: a disabled agent listed first must not claim the
+        # backend section and silently disable the later enabled agent.
+        data = {
+            "schema_version": 7,
+            "agents": {
+                "retired": {"type": "codex", "command": "codex", "enabled": False},
+                "active": {"type": "codex", "command": "codex", "enabled": True},
+            },
+        }
+
+        with self.assertLogs("agent_collab.config", level="WARNING"):
+            migrated = migrate_config_data(data, source="user.toml", scope="user")
+
+        section = migrated["backends"]["codex_cli"]
+        self.assertTrue(section["enabled"])
+        self.assertNotIn("agents", section)
+
+    def test_v7_canonical_id_wins_the_default_slot_over_file_order(self):
+        data = {
+            "schema_version": 7,
+            "agents": {
+                "pro": {"type": "antigravity", "backend": "cli", "options": {"model": "pro"}},
+                "antigravity_cli": {
+                    "type": "antigravity",
+                    "backend": "cli",
+                    "command": "agy",
+                },
+            },
+        }
+
+        migrated = migrate_config_data(data, source="user.toml", scope="user")
+
+        section = migrated["backends"]["antigravity_cli"]
+        self.assertEqual(section["command"], "agy")
+        self.assertEqual(section["agents"]["pro"], {"options": {"model": "pro"}})
+
+    def test_v7_disabled_duplicate_agent_is_dropped_with_warning(self):
+        data = {
+            "schema_version": 7,
+            "agents": {
+                "codex": {"type": "codex", "command": "codex"},
+                "old": {"type": "codex", "command": "different", "enabled": False},
+            },
+        }
+
+        with self.assertLogs("agent_collab.config", level="WARNING") as logs:
+            migrated = migrate_config_data(data, source="user.toml", scope="user")
+
+        self.assertIn("dropping disabled agent", "\n".join(logs.output))
+        self.assertNotIn("agents", migrated["backends"]["codex_cli"])
+
+    def test_v7_permissive_policy_only_backend_section_is_dropped(self):
+        data = {
+            "schema_version": 7,
+            "agents": {},
+            "backends": {
+                "claude_sdk": {"enabled": True},
+                "xai_cli": {"enabled": False},
+            },
+        }
+
+        migrated = migrate_config_data(data, source="user.toml", scope="user")
+
+        self.assertNotIn("claude_sdk", migrated["backends"])
+        self.assertEqual(migrated["backends"]["xai_cli"], {"enabled": False})
+
+    def test_v7_name_only_agent_survives_as_display_override(self):
+        data = {
+            "schema_version": 7,
+            "agents": {"claude": {"name": "Primary"}},
+        }
+
+        migrated = migrate_config_data(data, source="user.toml", scope="user")
+
+        self.assertEqual(migrated["agents"], {"claude_cli": {"name": "Primary"}})
 
     def test_project_sessions_section_is_stripped_with_warning(self):
         with self.assertLogs("agent_collab.config", level="WARNING") as logs:
@@ -175,7 +340,7 @@ command = "project-claude"
 
             config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
 
-            self.assertEqual(config.agents["claude"].command, "claude")
+            self.assertEqual(config.agents["claude_cli"].command, "claude")
             self.assertTrue(config.warnings)
 
     def test_load_config_accepts_declared_schema_version(self):
@@ -196,7 +361,7 @@ command = "project-claude"
 
             config = load_config(root, env={"AGENT_COLLAB_HOME": str(home)})
 
-            self.assertEqual(config.agents["claude"].command, "claude")
+            self.assertEqual(config.agents["claude_cli"].command, "claude")
             self.assertTrue(config.warnings)
 
     def test_load_config_rejects_future_schema_version(self):
@@ -254,7 +419,7 @@ class MigrateUserConfigFileTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), text)
             self.assertFalse(path.with_name("config.toml.bak").exists())
 
-    def test_v6_file_is_stamped_to_v7_without_other_changes(self):
+    def test_v6_file_is_rewritten_backend_first(self):
         with tempfile.TemporaryDirectory() as tmp:
             text = (
                 "# keep this comment\n"
@@ -269,10 +434,63 @@ class MigrateUserConfigFileTests(unittest.TestCase):
             self.assertEqual(result.status, "migrated")
             self.assertEqual(result.previous_version, 6)
             self.assertEqual(result.backup_path.read_text(encoding="utf-8"), text)
-            self.assertEqual(
-                path.read_text(encoding="utf-8"),
-                text.replace("schema_version = 6", "schema_version = 7"),
+            migrated = path.read_text(encoding="utf-8")
+            self.assertIn("# keep this comment", migrated)
+            self.assertIn(f"schema_version = {CURRENT_CONFIG_SCHEMA}", migrated)
+            self.assertIn('"claude_cli"', migrated)
+            self.assertIn('"codex_cli"', migrated)
+            self.assertNotIn("schema_version = 6", migrated)
+
+    def test_v7_file_write_back_folds_agents_and_preserves_daemon_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = (
+                "schema_version = 7\n\n"
+                "[agents.claude]\n"
+                'command = "user-claude"\n\n'
+                "[agents.gemini_pro]\n"
+                'type = "antigravity"\n'
+                'backend = "cli"\n\n'
+                "[agents.gemini_pro.options]\n"
+                'model = "pro"\n\n'
+                "[workflows.pro]\n"
+                'sequence = ["gemini_pro"]\n\n'
+                "# the daemon token comment survives\n"
+                "[daemon]\n"
+                'token = "test-token-value"\n'
             )
+            path = self._write(Path(tmp), text)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "migrated")
+            migrated = path.read_text(encoding="utf-8")
+            self.assertNotIn("[agents.claude]", migrated)
+            self.assertIn("[backends.claude_cli]", migrated)
+            self.assertIn('command = "user-claude"', migrated)
+            # The only agent on a backend becomes its default: the section
+            # absorbs the options and the workflow references the backend.
+            self.assertIn("[backends.antigravity_cli.options]", migrated)
+            self.assertIn('model = "pro"', migrated)
+            self.assertIn('sequence = ["antigravity_cli"]', migrated)
+            self.assertIn('token = "test-token-value"', migrated)
+
+    def test_v7_file_with_unmigratable_agents_fails_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = (
+                "schema_version = 7\n\n"
+                "[agents.codex]\n"
+                'command = "codex"\n\n'
+                "[agents.other]\n"
+                'type = "codex"\n'
+                'command = "different-codex"\n'
+            )
+            path = self._write(Path(tmp), text)
+
+            with self.assertRaisesRegex(ConfigMigrationError, "agents.other"):
+                migrate_user_config_file(path)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), text)
+            self.assertFalse(path.with_name("config.toml.bak").exists())
 
     def test_missing_schema_version_is_stamped_with_backup(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -287,7 +505,8 @@ class MigrateUserConfigFileTests(unittest.TestCase):
             migrated = path.read_text(encoding="utf-8")
             self.assertTrue(migrated.startswith(f"schema_version = {CURRENT_CONFIG_SCHEMA}\n"))
             self.assertIn("# my config", migrated)
-            self.assertIn("[agents.claude]", migrated)
+            # The display-name-only agent survives, remapped to the derived id.
+            self.assertIn("[agents.claude_cli]", migrated)
 
     @unittest.skipUnless(_tomlkit_available(), "tomlkit is not installed")
     def test_old_schema_version_is_updated_preserving_comments(self):
@@ -342,18 +561,17 @@ class MigrateUserConfigFileTests(unittest.TestCase):
             self.assertTrue(migrated.startswith(f"schema_version = {CURRENT_CONFIG_SCHEMA}\n"))
             self.assertEqual(result.backup_path.parent, target.parent)
 
-    def test_version_stamp_works_without_tomlkit(self):
+    def test_backend_first_rewrite_requires_tomlkit(self):
         with tempfile.TemporaryDirectory() as tmp:
             text = "schema_version = 4  # note\n\n[agents.claude]\nname = 'C'\n"
             path = self._write(Path(tmp), text)
 
             with mock.patch.dict(sys.modules, {"tomlkit": None}):
-                result = migrate_user_config_file(path)
+                with self.assertRaisesRegex(ConfigMigrationError, "tomlkit"):
+                    migrate_user_config_file(path)
 
-            self.assertEqual(result.status, "migrated")
-            migrated = path.read_text(encoding="utf-8")
-            self.assertIn(f"schema_version = {CURRENT_CONFIG_SCHEMA}  # note", migrated)
-            self.assertIn("[agents.claude]", migrated)
+            # Nothing was written; install reports the error and stops.
+            self.assertEqual(path.read_text(encoding="utf-8"), text)
 
     @unittest.skipUnless(_tomllib_available(), "multi-line TOML needs stdlib tomllib")
     def test_fallback_stamp_refuses_lookalike_inside_multiline_string(self):

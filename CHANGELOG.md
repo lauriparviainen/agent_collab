@@ -13,6 +13,16 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Make configuration backend-first (#25), config schema 8: `[backends.<canonical>]`
+  owns enablement, command, environment, and default options, and every enabled
+  backend defines its default agent under the canonical name (`claude_cli`,
+  `codex_sdk`, …). Options-only personae nest as
+  `[backends.<canonical>.agents.<name>]`; workflows reference backends or
+  personae. Top-level `[agents.*]` execution sections are removed — install
+  migrates old configs automatically (with a `config.toml.bak` backup) and
+  fails with a clear error when a config cannot be expressed in the new
+  shape. Workflows referencing a disabled backend now load but are
+  start-ineligible instead of failing the whole config.
 - Make the install readiness table backend-first (#24): one row per selected
   backend and command identity with its agents listed alongside, disabled
   agents collapsed into one summary line, and counts that speak about

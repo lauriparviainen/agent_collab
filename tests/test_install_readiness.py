@@ -10,7 +10,7 @@ from agent_collab.backends.base import (
     BackendHealth,
 )
 from agent_collab.cli_output import format_table
-from agent_collab.config import AgentConfig, BackendPolicyConfig, builtin_config
+from agent_collab.config import AgentConfig, builtin_config, merge_config_data
 from agent_collab.install_readiness import collect_install_readiness
 from agent_collab.user_install import _print_backend_readiness
 
@@ -56,8 +56,15 @@ class InstallReadinessCollectionTests(unittest.TestCase):
         from agent_collab import backends as backend_registry
 
         config = builtin_config()
-        config.agents["claude"].command = "custom-claude"
-        config.agents["codex"].enabled = False
+        merge_config_data(
+            config,
+            {
+                "backends": {
+                    "claude_cli": {"command": "custom-claude"},
+                    "codex_cli": {"enabled": False},
+                }
+            },
+        )
         backend = backend_registry.get_backend("claude", "cli")
 
         with mock.patch.object(
@@ -65,9 +72,9 @@ class InstallReadinessCollectionTests(unittest.TestCase):
         ) as probe:
             payload = collect_install_readiness(config)
 
-        probe.assert_called_once_with(config.agents["claude"])
+        probe.assert_called_once_with(config.agents["claude_cli"])
         row = next(item for item in payload["rows"] if item["backend"] == "claude_cli")
-        self.assertEqual(row["agents"], ["claude"])
+        self.assertEqual(row["agents"], ["claude_cli"])
         self.assertEqual(row["dependency"], "custom-claude found")
 
     def test_collects_only_effective_backends_for_enabled_agents(self):
@@ -86,10 +93,10 @@ class InstallReadinessCollectionTests(unittest.TestCase):
         self.assertEqual(payload["enabled_count"], 2)
         self.assertEqual(payload["selected_count"], 2)
         self.assertEqual(payload["attention_count"], 1)
-        self.assertEqual(payload["disabled_agents"], ["antigravity", "xai"])
+        self.assertEqual(payload["disabled_backends"], ["antigravity_cli", "xai_cli"])
         rows = {row["backend"]: row for row in payload["rows"]}
         self.assertEqual(sorted(rows), ["claude_cli", "codex_cli"])
-        self.assertEqual(rows["claude_cli"]["agents"], ["claude"])
+        self.assertEqual(rows["claude_cli"]["agents"], ["claude_cli"])
         self.assertEqual(rows["claude_cli"]["dependency"], "claude found")
         self.assertEqual(rows["claude_cli"]["credentials"], "not checked")
         self.assertEqual(rows["codex_cli"]["dependency"], "codex missing")
@@ -111,14 +118,14 @@ class InstallReadinessCollectionTests(unittest.TestCase):
         self.assertEqual(payload["enabled_count"], 3)
         self.assertEqual(payload["attention_count"], 0)
         row = next(item for item in payload["rows"] if item["backend"] == "claude_cli")
-        self.assertEqual(row["agents"], ["claude", "claude-copy"])
+        self.assertEqual(row["agents"], ["claude_cli", "claude-copy"])
 
     def test_distinct_configured_commands_keep_separate_rows(self):
         config = builtin_config()
+        merge_config_data(config, {"backends": {"codex_cli": {"enabled": False}}})
         config.agents["claude-custom"] = AgentConfig(
             id="claude-custom", type="claude", command="custom-claude", enabled=True
         )
-        config.agents["codex"].enabled = False
         from agent_collab import backends as backend_registry
 
         backend = backend_registry.get_backend("claude", "cli")
@@ -136,10 +143,20 @@ class InstallReadinessCollectionTests(unittest.TestCase):
             {"claude found", "custom-claude found"},
         )
 
-    def test_reports_selected_sdk_and_backend_policy_without_extra_probes(self):
+    def test_reports_selected_sdk_and_disabled_backends_without_extra_probes(self):
+        # Backend enablement is the policy: disabled backends derive no agents,
+        # are summarized in disabled_backends, and are never probed.
         config = builtin_config()
-        config.agents["claude"].backend = "sdk"
-        config.backends["codex_cli"] = BackendPolicyConfig("codex_cli", False)
+        merge_config_data(
+            config,
+            {
+                "backends": {
+                    "claude_cli": {"enabled": False},
+                    "codex_cli": {"enabled": False},
+                    "claude_sdk": {"enabled": True},
+                }
+            },
+        )
         calls = []
 
         def health(backend):
@@ -150,12 +167,11 @@ class InstallReadinessCollectionTests(unittest.TestCase):
 
         self.assertEqual(calls, ["claude_sdk"])
         rows = {row["backend"]: row for row in payload["rows"]}
-        self.assertEqual(rows["claude_sdk"]["agents"], ["claude"])
+        self.assertEqual(sorted(rows), ["claude_sdk"])
+        self.assertEqual(rows["claude_sdk"]["agents"], ["claude_sdk"])
         self.assertEqual(rows["claude_sdk"]["dependency"], "claude_agent_sdk found")
-        self.assertEqual(rows["codex_cli"]["agents"], ["codex"])
-        self.assertEqual(rows["codex_cli"]["dependency"], "policy disabled")
-        self.assertEqual(rows["codex_cli"]["state"], "unavailable")
-        self.assertIn("[backends.codex_cli]", rows["codex_cli"]["remediation"][0]["message"])
+        self.assertIn("claude_cli", payload["disabled_backends"])
+        self.assertIn("codex_cli", payload["disabled_backends"])
 
     def test_defaults_to_loading_user_config_without_creating_one(self):
         config = builtin_config()
@@ -215,11 +231,11 @@ class InstallReadinessTableTests(unittest.TestCase):
             "enabled_count": 3,
             "selected_count": 2,
             "attention_count": 1,
-            "disabled_agents": ["antigravity", "xai"],
+            "disabled_backends": ["antigravity_cli", "xai_cli"],
             "rows": [
                 {
                     "backend": "claude_cli",
-                    "agents": ["claude", "claude_cli"],
+                    "agents": ["claude_cli", "claude-copy"],
                     "dependency": "claude found",
                     "credentials": "not checked",
                     "version": "1.2.3",
@@ -227,7 +243,7 @@ class InstallReadinessTableTests(unittest.TestCase):
                 },
                 {
                     "backend": "codex_cli",
-                    "agents": ["codex"],
+                    "agents": ["codex_cli"],
                     "dependency": "codex missing",
                     "credentials": "not checked",
                     "version": None,
@@ -247,9 +263,9 @@ class InstallReadinessTableTests(unittest.TestCase):
         output = stdout.getvalue()
         self.assertTrue(warned)
         self.assertIn("! Warning: 1 of 2 selected backends needs attention", output)
-        self.assertIn("disabled agents  antigravity, xai", output)
+        self.assertIn("disabled backends  antigravity_cli, xai_cli", output)
         self.assertIn("backend     agents", output)
-        self.assertIn("claude_cli  claude, claude_cli", output)
+        self.assertIn("claude_cli  claude_cli, claude-copy", output)
         self.assertIn("backend    remediation", output)
         self.assertIn("Install codex", output)
 

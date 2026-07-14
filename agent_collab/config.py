@@ -7,14 +7,13 @@ import secrets
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from .config_migrations import migrate_config_data
+from .config_migrations import ConfigError, migrate_config_data
 from .paths import AgentCollabHome, atomic_write_private_text, project_config_path, user_config_path
 
 _logger = logging.getLogger("agent_collab.config")
 
-
-class ConfigError(ValueError):
-    """Raised when agent-collab configuration is invalid."""
+# ConfigError is defined in config_migrations (so ConfigMigrationError can
+# subclass it without a circular import) and re-exported here as the public name.
 
 
 @dataclass
@@ -52,10 +51,34 @@ def workflow_members(workflow: WorkflowConfig) -> List[str]:
 
 
 @dataclass
+class PersonaConfig:
+    """A named options-only agent nested under a backend section."""
+
+    id: str
+    name: Optional[str] = None
+    options: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class BackendPolicyConfig:
+    """One `[backends.<canonical>]` section: enablement plus execution config.
+
+    Every enabled backend implicitly defines its default agent (same id as the
+    canonical backend name); `agents` holds nested options-only personae.
+    """
+
     canonical_backend: str
     enabled: bool = True
     source: str = "user_config"
+    command: Optional[str] = None
+    args: List[str] = field(default_factory=list)
+    name: Optional[str] = None
+    env: Dict[str, str] = field(default_factory=dict)
+    cwd: Optional[str] = None
+    timeout: Optional[int] = None
+    backend_config: Dict[str, Any] = field(default_factory=dict)
+    options: Dict[str, Any] = field(default_factory=dict)
+    agents: Dict[str, PersonaConfig] = field(default_factory=dict)
 
 
 @dataclass
@@ -89,6 +112,8 @@ class CollaborationConfig:
     daemon_token: Optional[str] = None
     loaded_paths: List[Path] = field(default_factory=list)
     warnings: List[Dict[str, str]] = field(default_factory=list)
+    # Display-name overrides for derived agents (project config may rename).
+    agent_names: Dict[str, str] = field(default_factory=dict)
 
 
 DEFAULT_WORKFLOW = "cross-review"
@@ -211,9 +236,19 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
         for agent_id, values in agents.items():
             if not isinstance(values, Mapping):
                 raise ConfigError(f"[agents.{agent_id}] must be a table")
-            config.agents[str(agent_id)] = _merge_agent(
-                config.agents.get(str(agent_id)), str(agent_id), values
-            )
+            # Display names are the one surviving agent-level override; the
+            # execution schema is backend-first (`[backends.<canonical>]`).
+            extra = sorted(set(str(key) for key in values) - {"name"})
+            if extra:
+                raise ConfigError(
+                    f"agents.{agent_id}.{extra[0]}: top-level [agents.*] sections are no "
+                    "longer supported; configure [backends.<canonical>] instead and re-run "
+                    "./agent_collab.sh install to migrate an old config"
+                )
+            if "name" in values:
+                config.agent_names[str(agent_id)] = _expect_str(
+                    values["name"], f"agents.{agent_id}.name"
+                )
 
     workflows = data.get("workflows", {})
     if workflows is not None:
@@ -226,19 +261,21 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
                 config.workflows.get(str(workflow_id)), str(workflow_id), values
             )
 
-    backend_policies = data.get("backends", {})
-    if backend_policies is not None:
-        if not isinstance(backend_policies, Mapping):
+    backend_sections = data.get("backends", {})
+    if backend_sections is not None:
+        if not isinstance(backend_sections, Mapping):
             raise ConfigError("[backends] must be a table")
-        for canonical_name, values in backend_policies.items():
+        for canonical_name, values in backend_sections.items():
             name = str(canonical_name)
             if not isinstance(values, Mapping):
                 raise ConfigError(f"[backends.{name}] must be a table")
-            unknown = sorted(set(values) - {"enabled"})
-            if unknown:
-                raise ConfigError(f"unknown field backends.{name}.{unknown[0]}")
-            enabled = _expect_bool(values.get("enabled", True), f"backends.{name}.enabled")
-            config.backends[name] = BackendPolicyConfig(name, enabled, "user_config")
+            config.backends[name] = _merge_backend_section(config.backends.get(name), name, values)
+
+    # Rebuilding only when backend sections or display names changed keeps
+    # programmatically constructed agent dicts (tests, tooling) intact across
+    # workflow-only merges.
+    if "backends" in data or "agents" in data:
+        _rebuild_derived_agents(config)
 
     sessions = data.get("sessions", {})
     if sessions is not None and sessions != {}:
@@ -285,54 +322,159 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
         config.daemon_token = token
 
 
-def _merge_agent(
-    existing: Optional[AgentConfig], agent_id: str, values: Mapping[str, Any]
-) -> AgentConfig:
-    agent = (
-        AgentConfig(id=agent_id, type="")
+def _merge_backend_section(
+    existing: Optional[BackendPolicyConfig], canonical: str, values: Mapping[str, Any]
+) -> BackendPolicyConfig:
+    section = (
+        BackendPolicyConfig(canonical_backend=canonical)
         if existing is None
-        else AgentConfig(
-            id=existing.id,
-            type=existing.type,
+        else BackendPolicyConfig(
+            canonical_backend=existing.canonical_backend,
+            enabled=existing.enabled,
+            source=existing.source,
             command=existing.command,
             args=list(existing.args),
-            enabled=existing.enabled,
             name=existing.name,
             env=dict(existing.env),
             cwd=existing.cwd,
             timeout=existing.timeout,
             backend_config=dict(existing.backend_config),
             options=dict(existing.options),
-            backend=existing.backend,
+            agents=dict(existing.agents),
         )
     )
     for key, value in values.items():
-        if key == "type":
-            agent.type = _expect_str(value, f"agents.{agent_id}.type")
+        label = f"backends.{canonical}.{key}"
+        if key == "enabled":
+            section.enabled = _expect_bool(value, label)
         elif key == "command":
-            agent.command = _expect_str(value, f"agents.{agent_id}.command")
+            section.command = _expect_str(value, label)
         elif key == "args":
-            agent.args = _expect_str_list(value, f"agents.{agent_id}.args")
-        elif key == "enabled":
-            agent.enabled = _expect_bool(value, f"agents.{agent_id}.enabled")
+            section.args = _expect_str_list(value, label)
         elif key == "name":
-            agent.name = _expect_str(value, f"agents.{agent_id}.name")
+            section.name = _expect_str(value, label)
         elif key == "env":
-            agent.env = _expect_str_dict(value, f"agents.{agent_id}.env")
+            section.env = _expect_str_dict(value, label)
         elif key == "cwd":
-            agent.cwd = _expect_str(value, f"agents.{agent_id}.cwd")
+            section.cwd = _expect_str(value, label)
         elif key == "timeout":
-            agent.timeout = _expect_int(value, f"agents.{agent_id}.timeout")
+            section.timeout = _expect_int(value, label)
         elif key == "options":
-            agent.options = _expect_backend_options(value, f"agents.{agent_id}.options")
-        elif key == "backend":
-            agent.backend = _expect_str(value, f"agents.{agent_id}.backend")
+            section.options = _expect_backend_options(value, label)
+        elif key == "agents":
+            if not isinstance(value, Mapping):
+                raise ConfigError(f"{label} must be a table")
+            for persona_name, persona_values in value.items():
+                section.agents[str(persona_name)] = _merge_persona(
+                    section.agents.get(str(persona_name)),
+                    canonical,
+                    str(persona_name),
+                    persona_values,
+                )
         else:
-            config_name = str(key)
-            agent.backend_config[config_name] = _expect_backend_value(
-                value, f"agents.{agent_id}.{config_name}"
+            section.backend_config[str(key)] = _expect_backend_value(value, label)
+    return section
+
+
+def _merge_persona(
+    existing: Optional[PersonaConfig],
+    canonical: str,
+    persona_id: str,
+    values: Any,
+) -> PersonaConfig:
+    label = f"backends.{canonical}.agents.{persona_id}"
+    if not isinstance(values, Mapping):
+        raise ConfigError(f"[{label}] must be a table")
+    persona = (
+        PersonaConfig(id=persona_id)
+        if existing is None
+        else PersonaConfig(id=existing.id, name=existing.name, options=dict(existing.options))
+    )
+    for key, value in values.items():
+        if key == "name":
+            persona.name = _expect_str(value, f"{label}.name")
+        elif key == "options":
+            persona.options = _expect_backend_options(value, f"{label}.options")
+        else:
+            # Personae differ by options only; execution settings live on the
+            # backend section so a persona can never change what runs.
+            raise ConfigError(f"{label}.{key}: nested agents may set only 'name' and 'options'")
+    return persona
+
+
+def split_canonical_backend(canonical: str) -> tuple[str, Optional[str]]:
+    """Split a canonical backend name into (agent type, backend id)."""
+
+    if canonical == "mock":
+        return "mock", None
+    if "_" in canonical:
+        agent_type, backend_id = canonical.rsplit("_", 1)
+        if agent_type and backend_id:
+            return agent_type, backend_id
+    raise ConfigError(
+        f"backends.{canonical} is not a canonical backend name (expected <type>_<backend>)"
+    )
+
+
+def _rebuild_derived_agents(config: CollaborationConfig) -> None:
+    """Derive the runtime agents from the backend sections.
+
+    Every enabled backend defines its default agent under the canonical name;
+    nested personae derive `<canonical>.<persona>` agents that inherit the
+    backend's execution settings and override options only.
+    """
+
+    agents: Dict[str, AgentConfig] = {}
+    for canonical, section in config.backends.items():
+        if not section.enabled:
+            continue
+        agent_type, backend_id = split_canonical_backend(canonical)
+        agents[canonical] = AgentConfig(
+            id=canonical,
+            type=agent_type,
+            command=section.command,
+            args=list(section.args),
+            enabled=True,
+            name=config.agent_names.get(canonical, section.name),
+            env=dict(section.env),
+            cwd=section.cwd,
+            timeout=section.timeout,
+            backend_config=dict(section.backend_config),
+            options=dict(section.options),
+            backend=backend_id,
+        )
+        for persona in section.agents.values():
+            derived_id = f"{canonical}.{persona.id}"
+            agents[derived_id] = AgentConfig(
+                id=derived_id,
+                type=agent_type,
+                command=section.command,
+                args=list(section.args),
+                enabled=True,
+                name=config.agent_names.get(derived_id, persona.name),
+                env=dict(section.env),
+                cwd=section.cwd,
+                timeout=section.timeout,
+                backend_config=dict(section.backend_config),
+                options={**section.options, **persona.options},
+                backend=backend_id,
             )
-    return agent
+    config.agents = agents
+
+
+def workflow_member_state(config: CollaborationConfig, member_id: str) -> str:
+    """Classify a workflow member reference: 'ok', 'disabled', or 'unknown'."""
+
+    agent = config.agents.get(member_id)
+    if agent is not None:
+        return "ok" if agent.enabled else "disabled"
+    canonical, _, persona = member_id.partition(".")
+    section = config.backends.get(canonical)
+    if section is None:
+        return "unknown"
+    if persona and persona not in section.agents:
+        return "unknown"
+    return "disabled"
 
 
 def _merge_workflow(
@@ -366,7 +508,7 @@ def _merge_workflow(
 def validate_config(config: CollaborationConfig) -> None:
     from .backends import registered_backend_names
 
-    registered = set(registered_backend_names())
+    registered = set(registered_backend_names()) | {"mock"}
     for name in config.backends:
         if name not in registered:
             raise ConfigError(
@@ -375,8 +517,10 @@ def validate_config(config: CollaborationConfig) -> None:
             )
     for agent in config.agents.values():
         validate_agent(agent)
+    # A workflow whose members reference a disabled backend stays loadable and
+    # becomes start-ineligible; only unknown references are configuration errors.
     for workflow in config.workflows.values():
-        validate_workflow(config, workflow.id)
+        validate_workflow(config, workflow.id, allow_disabled=True)
 
 
 def backend_policy(config: CollaborationConfig, canonical_backend: str) -> BackendPolicyConfig:
@@ -413,11 +557,18 @@ def resolve_existing_workdir(workdir: Path) -> Path:
 
 
 def render_user_config(token: Optional[str] = None) -> str:
-    """Generate a user config with explicit policy for every registered backend."""
+    """Generate a user config with explicit enablement for every registered backend.
+
+    Enablement mirrors the built-in defaults so a freshly generated file
+    changes nothing: an enabled backend defines its default agent.
+    """
 
     from .backends import registered_backend_names
     from .config_migrations import CURRENT_CONFIG_SCHEMA
 
+    builtin_enabled = {
+        name for name, section in builtin_config().backends.items() if section.enabled
+    }
     lines = [f"schema_version = {CURRENT_CONFIG_SCHEMA}", ""]
     lines.extend(
         (
@@ -429,7 +580,8 @@ def render_user_config(token: Optional[str] = None) -> str:
         )
     )
     for name in registered_backend_names():
-        lines.extend((f"[backends.{name}]", "enabled = true", ""))
+        enabled = "true" if name in builtin_enabled else "false"
+        lines.extend((f"[backends.{name}]", f"enabled = {enabled}", ""))
     if token is not None:
         lines.extend(
             (
@@ -510,6 +662,13 @@ def ensure_daemon_token(
     return token
 
 
+def _config_path(agent_id: str) -> str:
+    """Render a derived agent id as its backend-first TOML path fragment."""
+
+    canonical, _, persona = agent_id.partition(".")
+    return f"{canonical}.agents.{persona}" if persona else canonical
+
+
 def validate_agent(agent: AgentConfig) -> None:
     if not agent.type:
         raise ConfigError(f"agents.{agent.id}.type is required")
@@ -529,8 +688,8 @@ def validate_agent(agent: AgentConfig) -> None:
     registered = registered_backends(agent.type)
     if agent.backend is not None and agent.backend not in registered:
         raise ConfigError(
-            f"agents.{agent.id}.backend {agent.backend!r} is not registered for type "
-            f"{agent.type!r}; registered backends: {registered}"
+            f"backends.{_config_path(agent.id)} selects backend {agent.backend!r} which is not "
+            f"registered for type {agent.type!r}; registered backends: {registered}"
         )
     backend_id = agent.backend or DEFAULT_BACKEND
     backend_impl = get_backend(agent.type, backend_id)
@@ -538,7 +697,8 @@ def validate_agent(agent: AgentConfig) -> None:
     if agent.backend_config and not callable(config_normalizer):
         field = sorted(agent.backend_config)[0]
         raise ConfigError(
-            f"agents.{agent.id}.{field} is not a configuration field declared by backend {backend_id!r}"
+            f"backends.{_config_path(agent.id)}.{field} is not a configuration field declared "
+            f"by backend {backend_id!r}"
         )
     try:
         if callable(config_normalizer):
@@ -546,17 +706,23 @@ def validate_agent(agent: AgentConfig) -> None:
         backend_impl.normalize_options(agent, {})
     except BackendOptionError as exc:
         section = "options" if exc.field in agent.options else ""
-        path = f"agents.{agent.id}.{section + '.' if section else ''}{exc.field}".rstrip(".")
+        path = (
+            f"backends.{_config_path(agent.id)}.{section + '.' if section else ''}{exc.field}"
+        ).rstrip(".")
         raise ConfigError(f"{path}: {exc.message}") from exc
     if agent.enabled and backend_id == "cli" and not agent.command:
-        raise ConfigError(f"agents.{agent.id}.command is required for backend 'cli'")
+        canonical = f"{agent.type}_{backend_id}"
+        raise ConfigError(f"backends.{canonical}.command is required for backend 'cli'")
 
 
-def validate_workflow(config: CollaborationConfig, workflow_id: str) -> None:
+def validate_workflow(
+    config: CollaborationConfig, workflow_id: str, *, allow_disabled: bool = False
+) -> None:
     workflow = config.workflows.get(workflow_id)
     if workflow is None:
         raise ConfigError(f"unknown workflow {workflow_id!r}")
     if workflow.parallel is not None:
+        kind = "parallel"
         if workflow.sequence:
             raise ConfigError(
                 f"workflows.{workflow_id} must define exactly one of sequence or parallel"
@@ -575,28 +741,22 @@ def validate_workflow(config: CollaborationConfig, workflow_id: str) -> None:
                 f"workflows.{workflow_id}.parallel exceeds the maximum width "
                 f"of {MAX_PARALLEL_WORKFLOW_WIDTH}"
             )
-        for agent_id in workflow.parallel:
-            agent = config.agents.get(agent_id)
-            if agent is None:
-                raise ConfigError(
-                    f"workflows.{workflow_id}.parallel references unknown agent {agent_id!r}"
-                )
-            if not agent.enabled:
-                raise ConfigError(
-                    f"workflows.{workflow_id}.parallel references disabled agent {agent_id!r}"
-                )
-        return
-    if not workflow.sequence:
-        raise ConfigError(f"workflows.{workflow_id}.sequence must not be empty")
-    for agent_id in workflow.sequence:
-        agent = config.agents.get(agent_id)
-        if agent is None:
+        members = workflow.parallel
+    else:
+        kind = "sequence"
+        if not workflow.sequence:
+            raise ConfigError(f"workflows.{workflow_id}.sequence must not be empty")
+        members = workflow.sequence
+    for agent_id in members:
+        state = workflow_member_state(config, agent_id)
+        if state == "unknown":
             raise ConfigError(
-                f"workflows.{workflow_id}.sequence references unknown agent {agent_id!r}"
+                f"workflows.{workflow_id}.{kind} references unknown agent {agent_id!r}"
             )
-        if not agent.enabled:
+        if state == "disabled" and not allow_disabled:
             raise ConfigError(
-                f"workflows.{workflow_id}.sequence references disabled agent {agent_id!r}"
+                f"workflows.{workflow_id}.{kind} references agent {agent_id!r} "
+                "of a disabled backend"
             )
 
 

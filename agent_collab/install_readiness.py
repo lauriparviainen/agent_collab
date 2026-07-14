@@ -14,7 +14,7 @@ import sys
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from .backends.base import BackendHealth, HEALTH_UNKNOWN
-from .config import CollaborationConfig, backend_policy, load_user_config
+from .config import CollaborationConfig, load_user_config
 from .options import assess_backend
 
 
@@ -39,15 +39,14 @@ def collect_install_readiness(
     from . import backends as backend_registry
 
     effective = config or load_user_config()
-    pending: Dict[ProbeKey, Tuple[Any, Any, Any]] = {}
+    pending: Dict[ProbeKey, Tuple[Any, Any]] = {}
     groups: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
-    disabled_agents: List[str] = []
+    disabled_backends = [
+        name for name, section in effective.backends.items() if not section.enabled
+    ]
     enabled_count = 0
 
     for agent in effective.agents.values():
-        if not agent.enabled:
-            disabled_agents.append(agent.id)
-            continue
         enabled_count += 1
         if agent.type == "mock":
             _group(groups, ("mock", agent.id), {"kind": "mock"}, agent.id)
@@ -64,16 +63,11 @@ def collect_install_readiness(
             continue
 
         backend = backend_registry.get_backend(agent.type, backend_id)
-        policy = backend_policy(effective, canonical)
-        fact["policy_enabled"] = policy.enabled
-        if not policy.enabled:
-            _group(groups, ("policy", canonical), fact, agent.id)
-            continue
         agent_probe = getattr(backend, "probe_for_agent", None)
         probe_identity = (agent.command or agent.id) if callable(agent_probe) else None
         probe_key = (canonical, probe_identity)
         fact["probe_key"] = probe_key
-        pending.setdefault(probe_key, (backend, policy, agent))
+        pending.setdefault(probe_key, (backend, agent))
         _group(groups, ("probe", *probe_key), fact, agent.id)
 
     health_results = _probe_selected_backends(pending, health)
@@ -97,7 +91,7 @@ def collect_install_readiness(
         "enabled_count": enabled_count,
         "selected_count": len(rows),
         "attention_count": attention_count,
-        "disabled_agents": disabled_agents,
+        "disabled_backends": disabled_backends,
         "rows": rows,
     }
 
@@ -113,13 +107,13 @@ def _group(
 
 
 def _probe_selected_backends(
-    pending: Mapping[ProbeKey, Tuple[Any, Any, Any]],
+    pending: Mapping[ProbeKey, Tuple[Any, Any]],
     health: Optional[Callable[[Any], BackendHealth]],
 ) -> Dict[ProbeKey, BackendHealth]:
     if health is not None:
         return {
             probe_key: _safe_probe(backend, agent, health)
-            for probe_key, (backend, _, agent) in pending.items()
+            for probe_key, (backend, agent) in pending.items()
         }
     if not pending:
         return {}
@@ -128,7 +122,7 @@ def _probe_selected_backends(
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="install-health") as executor:
         futures = {
             executor.submit(_safe_probe, backend, agent, None): probe_key
-            for probe_key, (backend, _, agent) in pending.items()
+            for probe_key, (backend, agent) in pending.items()
         }
         for future in as_completed(futures):
             results[futures[future]] = future.result()
@@ -166,7 +160,7 @@ def _safe_probe(
 def _readiness_row(
     fact: Mapping[str, Any],
     agents: List[str],
-    pending: Mapping[ProbeKey, Tuple[Any, Any, Any]],
+    pending: Mapping[ProbeKey, Tuple[Any, Any]],
     health_results: Mapping[ProbeKey, BackendHealth],
 ) -> Dict[str, Any]:
     canonical = fact.get("canonical_backend")
@@ -199,30 +193,16 @@ def _readiness_row(
                 }
             ],
         }
-    if not fact.get("policy_enabled", True):
-        return {
-            **base,
-            "dependency": "policy disabled",
-            "state": "unavailable",
-            "reason": f"backend {canonical!r} is disabled by user config",
-            "remediation": [
-                {
-                    "code": "enable_backend_in_user_config",
-                    "message": f"Set [backends.{canonical}] enabled = true in the user config.",
-                }
-            ],
-        }
-
     probe_key = fact.get("probe_key")
     if not isinstance(probe_key, tuple) or len(probe_key) != 2:
         raise ValueError("enabled backend fact is missing its probe key")
-    backend, policy, _agent = pending[probe_key]
+    backend, _agent = pending[probe_key]
     observed = health_results[probe_key]
     assessment = assess_backend(
         str(canonical),
         {"health": observed.to_dict(), "stale": False},
         {
-            "enabled": policy.enabled,
+            "enabled": True,
             "block_on_unavailable": backend.block_on_unavailable,
             "checks_credentials": backend.checks_credentials,
         },

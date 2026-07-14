@@ -855,7 +855,20 @@ def _describe_workflow(
     recommendation_blockers: List[str] = []
     provider_types: Set[str] = set()
     for agent_id in members:
-        agent = config.agents[agent_id]
+        agent = config.agents.get(agent_id)
+        if agent is None:
+            # The member references a disabled backend: the workflow stays
+            # visible but cannot start until that backend is enabled.
+            effective_agents.append(
+                {
+                    "agent_id": agent_id,
+                    "canonical_backend": agent_id.partition(".")[0],
+                    "selection_source": "backend_disabled",
+                }
+            )
+            ineligible.append("backend_disabled")
+            recommendation_blockers.append("backend_disabled")
+            continue
         if agent.type == "mock":
             effective_agents.append({"agent_id": agent_id, "canonical_backend": None})
             continue
@@ -881,7 +894,9 @@ def _describe_workflow(
                 catalog["assessment"]["reason_codes"] or ["backend_unavailable"]
             )
     uniform = []
-    if provider_types:
+    # Uniform overrides are meaningless while any member's backend is disabled
+    # (that member has no derived agent and the workflow is start-ineligible).
+    if provider_types and all(agent_id in config.agents for agent_id in members):
         candidates = set.intersection(
             *(
                 set(backend_registry.registered_backends(agent_type))
@@ -1193,7 +1208,18 @@ def _option_object_schema(schema: Mapping[str, OptionSpec]) -> Dict[str, Any]:
 
 
 def _workflow_agent_types(config: CollaborationConfig, sequence: Iterable[str]) -> Set[str]:
-    return {config.agents[agent_id].type for agent_id in sequence}
+    from .config import split_canonical_backend
+
+    types: Set[str] = set()
+    for agent_id in sequence:
+        agent = config.agents.get(agent_id)
+        if agent is not None:
+            types.add(agent.type)
+            continue
+        # A member of a disabled backend has no derived agent; its provider
+        # type still comes from the canonical reference.
+        types.add(split_canonical_backend(agent_id.partition(".")[0])[0])
+    return types
 
 
 def _join_values(values: Sequence[Any]) -> str:

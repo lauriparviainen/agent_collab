@@ -462,7 +462,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["session_id"], session_id)
         self.assertEqual(response["events"][0]["text"], "from http")
-        self.assertEqual(response["events"][0]["raw"]["resolved_target"], "claude")
+        self.assertEqual(response["events"][0]["raw"]["resolved_target"], "claude_cli")
 
     async def test_mcp_start_is_visible_and_readable_through_session_routes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -901,7 +901,9 @@ class PruneRouteTests(unittest.IsolatedAsyncioTestCase):
 
         home = Path(self._tmp.name).resolve() / "home"
         home.mkdir()
-        (home / "config.toml").write_text("[agents.broken]\ntype = 12345\n", encoding="utf-8")
+        (home / "config.toml").write_text(
+            "schema_version = 8\n[agents.broken]\ntype = 12345\n", encoding="utf-8"
+        )
 
         config = _load_sessions_config(home)
 

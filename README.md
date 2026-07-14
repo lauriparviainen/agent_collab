@@ -410,7 +410,7 @@ agent-collab tui
 One daemon can serve many projects. Every session carries its own `workdir`,
 which selects project configuration and becomes the agents' working directory.
 Project config may rename globally known agents and compose workflows, but all
-execution-relevant agent settings remain global-user-only. An optional global
+execution-relevant settings live on the user-global `[backends.*]` sections. An optional global
 `[workdir].restrict_workdir_roots` list can confine sessions while still listing a
 specific exceptional directory. Omitting the key is unrestricted; an empty list
 also means no restriction.

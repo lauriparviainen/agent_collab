@@ -102,15 +102,17 @@ class BackendQualifiedOptionTests(unittest.TestCase):
 
     def test_parallel_members_are_all_normalized(self):
         config = _config()
-        config.workflows["parallel"] = WorkflowConfig(id="parallel", parallel=["claude", "codex"])
+        config.workflows["parallel"] = WorkflowConfig(
+            id="parallel", parallel=["claude_cli", "codex_cli"]
+        )
 
         normalized = normalize_start_options(
             config,
             "parallel",
-            agent_backends={"claude": "cli", "codex": "cli"},
+            agent_backends={"claude_cli": "cli", "codex_cli": "cli"},
         )
 
-        self.assertEqual(set(normalized.agent_options), {"claude", "codex"})
+        self.assertEqual(set(normalized.agent_options), {"claude_cli", "codex_cli"})
         self.assertEqual(set(normalized.backend_options), {"claude_cli", "codex_cli"})
 
 
@@ -154,8 +156,10 @@ class DescribeOptionsTests(unittest.TestCase):
             set(payload["backend_options"]["properties"]),
         )
         agents = {item["id"]: item for item in payload["agents"]}
-        self.assertEqual(agents["claude"]["canonical_backend"], "claude_cli")
-        self.assertEqual(agents["claude"]["selection_source"], "registry_default")
+        self.assertEqual(agents["claude_cli"]["canonical_backend"], "claude_cli")
+        # Derived agents always carry the backend selected by their canonical
+        # backend section, so the selection source is the agent configuration.
+        self.assertEqual(agents["claude_cli"]["selection_source"], "agent_config")
         workflow = next(item for item in payload["workflows"] if item["id"] == "cross-review")
         self.assertEqual(
             workflow["selected_canonical_backends"],
@@ -180,22 +184,39 @@ class DescribeOptionsTests(unittest.TestCase):
         self.assertFalse(workflow["start_eligible"])
 
     def test_parallel_workflow_exposes_members_and_requires_all_eligible(self):
-        from agent_collab.config import BackendPolicyConfig
+        from agent_collab.backends.base import HEALTH_UNAVAILABLE
+        from agent_collab.config import merge_config_data
 
         config = _config()
-        config.workflows["parallel"] = WorkflowConfig(id="parallel", parallel=["claude", "codex"])
-        config.backends["codex_cli"] = BackendPolicyConfig("codex_cli", False)
+        config.workflows["parallel"] = WorkflowConfig(
+            id="parallel", parallel=["claude_cli", "codex_cli"]
+        )
+        merge_config_data(config, {"backends": {"codex_cli": {"enabled": False}}})
 
-        payload = describe_options(config)
+        # Probes are stubbed so eligibility comes from the disabled backend,
+        # not from whichever provider CLIs happen to exist on this machine.
+        payload = describe_options(
+            config,
+            health=lambda backend: BackendHealth(status=HEALTH_UNAVAILABLE, reason="stubbed"),
+        )
 
         workflow = next(item for item in payload["workflows"] if item["id"] == "parallel")
-        self.assertEqual(workflow["sequence"], ["claude", "codex"])
-        self.assertEqual(workflow["parallel"], ["claude", "codex"])
+        self.assertEqual(workflow["sequence"], ["claude_cli", "codex_cli"])
+        self.assertEqual(workflow["parallel"], ["claude_cli", "codex_cli"])
         self.assertEqual(
             [item["agent_id"] for item in workflow["effective_agents"]],
-            ["claude", "codex"],
+            ["claude_cli", "codex_cli"],
+        )
+        self.assertEqual(
+            workflow["effective_agents"][1],
+            {
+                "agent_id": "codex_cli",
+                "canonical_backend": "codex_cli",
+                "selection_source": "backend_disabled",
+            },
         )
         self.assertFalse(workflow["start_eligible"])
+        self.assertIn("backend_disabled", workflow["ineligible_reasons"])
 
 
 class CommandMappingTests(unittest.TestCase):
@@ -269,7 +290,7 @@ class SessionSettingsTests(unittest.TestCase):
             config,
             "cross-review",
             normalized.backend_options,
-            agent_backends={"claude": "cli", "codex": "cli"},
+            agent_backends={"claude_cli": "cli", "codex_cli": "cli"},
             agent_options=normalized.agent_options,
             workdir=Path("."),
         )
@@ -299,34 +320,36 @@ class SessionSettingsTests(unittest.TestCase):
             config,
             "cross-review",
             normalized.backend_options,
-            agent_backends={"claude": "cli", "codex": "cli"},
+            agent_backends={"claude_cli": "cli", "codex_cli": "cli"},
             agent_options=normalized.agent_options,
             workdir=Path("."),
         )
-        self.assertEqual(settings["agents"]["claude"]["brand_color"], "#D97757")
-        self.assertEqual(settings["agents"]["codex"]["brand_color"], "#10A37F")
+        self.assertEqual(settings["agents"]["claude_cli"]["brand_color"], "#D97757")
+        self.assertEqual(settings["agents"]["codex_cli"]["brand_color"], "#10A37F")
 
     def test_parallel_settings_cover_every_member_and_preserve_flat_sequence(self):
         config = _config()
-        config.workflows["parallel"] = WorkflowConfig(id="parallel", parallel=["claude", "codex"])
+        config.workflows["parallel"] = WorkflowConfig(
+            id="parallel", parallel=["claude_cli", "codex_cli"]
+        )
         normalized = normalize_start_options(
             config,
             "parallel",
-            agent_backends={"claude": "cli", "codex": "cli"},
+            agent_backends={"claude_cli": "cli", "codex_cli": "cli"},
         )
 
         settings = build_session_settings(
             config,
             "parallel",
             normalized.backend_options,
-            agent_backends={"claude": "cli", "codex": "cli"},
+            agent_backends={"claude_cli": "cli", "codex_cli": "cli"},
             agent_options=normalized.agent_options,
             workdir=Path("."),
         )
 
-        self.assertEqual(set(settings["agents"]), {"claude", "codex"})
-        self.assertEqual(settings["workflow"]["sequence"], ["claude", "codex"])
-        self.assertEqual(settings["workflow"]["parallel"], ["claude", "codex"])
+        self.assertEqual(set(settings["agents"]), {"claude_cli", "codex_cli"})
+        self.assertEqual(settings["workflow"]["sequence"], ["claude_cli", "codex_cli"])
+        self.assertEqual(settings["workflow"]["parallel"], ["claude_cli", "codex_cli"])
 
 
 class BrandColorRegistryTests(unittest.TestCase):

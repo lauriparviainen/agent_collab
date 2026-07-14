@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_collab.config import builtin_config, load_config
+from agent_collab.config import builtin_config, load_config, merge_config_data
 from agent_collab.backends.antigravity_cli import AntigravityCliBackend, parse_antigravity_line
 from agent_collab.options import (
     StartOptionsError,
@@ -74,11 +74,12 @@ class AntigravityParserTests(unittest.TestCase):
 class AntigravityConfigTests(unittest.TestCase):
     def test_antigravity_is_disabled_by_default(self):
         config = builtin_config()
-        agent = config.agents["antigravity"]
-        self.assertEqual(agent.type, "antigravity")
-        self.assertFalse(agent.enabled)
-        self.assertEqual(agent.command, "agy")
-        self.assertIn("--mode", agent.args)  # non-blocking print posture
+        section = config.backends["antigravity_cli"]
+        self.assertFalse(section.enabled)
+        self.assertEqual(section.command, "agy")
+        self.assertIn("--mode", section.args)  # non-blocking print posture
+        # Disabled backends derive no agents.
+        self.assertNotIn("antigravity_cli", config.agents)
 
     def test_enabling_antigravity_and_referencing_workflow_validates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,16 +90,18 @@ class AntigravityConfigTests(unittest.TestCase):
             _write_user_config(
                 home,
                 """
-[agents.antigravity]
+schema_version = 8
+
+[backends.antigravity_cli]
 enabled = true
 
 [workflows.solo-antigravity]
-sequence = ["antigravity"]
+sequence = ["antigravity_cli"]
 """,
             )
             config = load_config(root, env=_env(home))
-            self.assertTrue(config.agents["antigravity"].enabled)
-            self.assertEqual(config.workflows["solo-antigravity"].sequence, ["antigravity"])
+            self.assertTrue(config.agents["antigravity_cli"].enabled)
+            self.assertEqual(config.workflows["solo-antigravity"].sequence, ["antigravity_cli"])
 
 
 class AntigravityOptionsTests(unittest.TestCase):
@@ -106,11 +109,13 @@ class AntigravityOptionsTests(unittest.TestCase):
         _write_user_config(
             home,
             """
-[agents.antigravity]
+schema_version = 8
+
+[backends.antigravity_cli]
 enabled = true
 
 [workflows.solo-antigravity]
-sequence = ["antigravity"]
+sequence = ["antigravity_cli"]
 """,
         )
         return load_config(root, env=_env(home))
@@ -132,7 +137,7 @@ sequence = ["antigravity"]
             self.assertEqual(validated["antigravity_cli"]["model"], "Gemini 3.5 Flash (Low)")
             self.assertEqual(validated["antigravity_cli"]["mode"], "plan")
 
-            agent = config.agents["antigravity"]
+            agent = config.agents["antigravity_cli"]
             command = AntigravityCliBackend().build_command(agent, validated["antigravity_cli"])
             self.assertIn("--model", command)
             self.assertIn("Gemini 3.5 Flash (Low)", command)
@@ -173,7 +178,7 @@ sequence = ["antigravity"]
                 agent_backends=selection.agent_backends,
                 workdir=root,
             )
-            entry = settings["agents"]["antigravity"]
+            entry = settings["agents"]["antigravity_cli"]
             self.assertEqual(entry["backend"], "cli")
             self.assertEqual(
                 entry["capabilities"], {"resume": False, "interrupt": False, "tool_gate": False}
@@ -191,7 +196,7 @@ sequence = ["antigravity"]
             root.mkdir()
             home.mkdir()
             config = self._config(root, home)
-            config.agents["antigravity"].cwd = "agent-root"
+            config.agents["antigravity_cli"].cwd = "agent-root"
             normalized = validate_start_options(config, "solo-antigravity")
             selection = validate_start_backends(config, "solo-antigravity")
 
@@ -203,7 +208,7 @@ sequence = ["antigravity"]
                 workdir=root,
             )
 
-            argv = settings["agents"]["antigravity"]["command_preview"]
+            argv = settings["agents"]["antigravity_cli"]["command_preview"]
             add_dir_index = argv.index("--add-dir")
             self.assertEqual(argv[add_dir_index + 1], str((root / "agent-root").resolve()))
             self.assertLess(add_dir_index, argv.index("-p"))
@@ -212,7 +217,9 @@ sequence = ["antigravity"]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             root.mkdir()
-            agent = builtin_config().agents["antigravity"]
+            config = builtin_config()
+            merge_config_data(config, {"backends": {"antigravity_cli": {"enabled": True}}})
+            agent = config.agents["antigravity_cli"]
             agent.cwd = "agent-root"
             backend = AntigravityCliBackend()
             runner = backend.create_runner(agent, False, backend.normalize_options(agent, {}))
@@ -240,11 +247,13 @@ class AntigravityMockSourceTests(unittest.TestCase):
             _write_user_config(
                 root / "home",
                 """
-[agents.antigravity]
+schema_version = 8
+
+[backends.antigravity_cli]
 enabled = true
 
 [workflows.solo-antigravity]
-sequence = ["antigravity"]
+sequence = ["antigravity_cli"]
 """,
             )
             events = []
@@ -272,11 +281,13 @@ sequence = ["antigravity"]
             _write_user_config(
                 root / "home",
                 """
-[agents.antigravity]
+schema_version = 8
+
+[backends.antigravity_cli]
 enabled = true
 
 [workflows.solo-antigravity]
-sequence = ["antigravity"]
+sequence = ["antigravity_cli"]
 """,
             )
             events = []

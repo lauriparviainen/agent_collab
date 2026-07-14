@@ -8,7 +8,13 @@ from agent_collab import backends
 from agent_collab.backend_contract import BackendOptionError
 from agent_collab.backends.common.health import xai_cli_credentials
 from agent_collab.backends.xai_cli import XaiCliBackend, parse_xai_line
-from agent_collab.config import AgentConfig, SUBPROCESS_AGENT_TYPES, builtin_config, load_config
+from agent_collab.config import (
+    AgentConfig,
+    SUBPROCESS_AGENT_TYPES,
+    builtin_config,
+    load_config,
+    merge_config_data,
+)
 from agent_collab.events import VALID_SOURCES
 from agent_collab.options import build_session_settings, describe_options
 from agent_collab.referee import Referee, RefereeConfig
@@ -40,23 +46,28 @@ class XaiCliBackendTests(unittest.TestCase):
         self.assertEqual(backends.backend_name("xai", "cli"), "xai_cli")
 
     def test_builtin_is_disabled_and_user_config_can_opt_in(self):
-        self.assertFalse(builtin_config().agents["xai"].enabled)
+        builtin = builtin_config()
+        self.assertFalse(builtin.backends["xai_cli"].enabled)
+        # Disabled backends derive no agents.
+        self.assertNotIn("xai_cli", builtin.agents)
         repo = Path(__file__).parents[3]
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             (home / "config.toml").write_text(
                 """
-[agents.xai]
+schema_version = 8
+
+[backends.xai_cli]
 enabled = true
 
 [workflows.solo-xai]
-sequence = ["xai"]
+sequence = ["xai_cli"]
 """,
                 encoding="utf-8",
             )
             config = load_config(repo, env={"AGENT_COLLAB_HOME": str(home)})
-        self.assertTrue(config.agents["xai"].enabled)
-        self.assertEqual(config.workflows["solo-xai"].sequence, ["xai"])
+        self.assertTrue(config.agents["xai_cli"].enabled)
+        self.assertEqual(config.workflows["solo-xai"].sequence, ["xai_cli"])
 
     def test_manifest_is_backend_owned_and_open_ended_where_required(self):
         schema = self.backend.option_schema(self.agent())
@@ -249,10 +260,10 @@ sequence = ["xai"]
     def test_generic_settings_dry_run_and_policy_use_canonical_backend(self):
         agent = self.agent()
         config = builtin_config()
-        config.agents["xai"].enabled = True
+        merge_config_data(config, {"backends": {"xai_cli": {"enabled": True}}})
         from agent_collab.config import WorkflowConfig
 
-        config.workflows["solo-xai"] = WorkflowConfig("solo-xai", ["xai"])
+        config.workflows["solo-xai"] = WorkflowConfig("solo-xai", ["xai_cli"])
         options = self.backend.normalize_options(
             agent, {"model": "grok-build", "thinking_level": "low"}
         )
@@ -260,24 +271,24 @@ sequence = ["xai"]
             config,
             "solo-xai",
             {"xai_cli": dict(options)},
-            agent_backends={"xai": "cli"},
-            agent_options={"xai": dict(options)},
+            agent_backends={"xai_cli": "cli"},
+            agent_options={"xai_cli": dict(options)},
         )
-        self.assertEqual(settings["agents"]["xai"]["backend"], "cli")
-        self.assertIn("--reasoning-effort", settings["agents"]["xai"]["command_preview"])
+        self.assertEqual(settings["agents"]["xai_cli"]["backend"], "cli")
+        self.assertIn("--reasoning-effort", settings["agents"]["xai_cli"]["command_preview"])
 
         referee = Referee(
             RefereeConfig(
                 workflow="solo-xai",
                 dry_run=True,
                 collab_config=config,
-                agent_backends={"xai": "cli"},
-                agent_options={"xai": dict(options)},
+                agent_backends={"xai_cli": "cli"},
+                agent_options={"xai_cli": dict(options)},
                 color=False,
             ),
             printer=lambda event: None,
         )
-        self.assertIsInstance(referee._runners()["xai"], DryRunRunner)
+        self.assertIsInstance(referee._runners()["xai_cli"], DryRunRunner)
 
         described = describe_options(config, health=lambda backend: BackendHealth(status="ok"))
         policy = described["canonical_backends"]["xai_cli"]["policy"]

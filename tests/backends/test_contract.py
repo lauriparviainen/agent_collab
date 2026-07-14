@@ -267,8 +267,19 @@ class BuiltinBackendContractTests(unittest.TestCase):
     def test_every_builtin_backend_has_well_formed_declarative_schema(self):
         config = builtin_config()
         for agent_type in ("claude", "codex", "antigravity", "xai"):
-            agent = config.agents[agent_type]
             for backend_id in ("cli", "sdk"):
+                # Derived agents only exist for enabled backends; build the
+                # equivalent agent from the canonical backend section so every
+                # builtin backend's schema is exercised regardless of policy.
+                section = config.backends.get(f"{agent_type}_{backend_id}")
+                agent = AgentConfig(
+                    id=f"{agent_type}_{backend_id}",
+                    type=agent_type,
+                    backend=backend_id,
+                    command=None if section is None else section.command,
+                    args=[] if section is None else list(section.args),
+                    options={} if section is None else dict(section.options),
+                )
                 with self.subTest(agent_type=agent_type, backend=backend_id):
                     backend = backends.get_backend(agent_type, backend_id)
                     schema = backend.option_schema(agent)

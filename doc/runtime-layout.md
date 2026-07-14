@@ -80,12 +80,13 @@ PROJECT/.agent-collab/
   config.toml
 ```
 
-Project `.agent-collab/config.toml` can be tracked in git. It may rename existing
-agents and define workflows from agents already enabled by built-in or global
-user config. Execution-relevant agent fields and daemon-global policy are
-ignored with sanitized warnings. Runtime files, temp review workdirs, daemon
-state, and session logs are not written under project `.agent-collab/` by
-default.
+Project `.agent-collab/config.toml` can be tracked in git. It may rename
+derived agents (name-only `[agents.<id>]` tables) and define workflows from
+agents already enabled by built-in or global user config. A project
+`[backends.*]` section, other execution-relevant fields, and daemon-global
+policy are ignored with sanitized warnings. Runtime files, temp review
+workdirs, daemon state, and session logs are not written under project
+`.agent-collab/` by default.
 
 Set `AGENT_COLLAB_HOME` to run an isolated daemon instance (tests do this so they never touch the real home):
 
@@ -101,21 +102,27 @@ times out waiting for daemon readiness on a slow cold start.
 For a session with `workdir = PROJECT`, effective precedence is field-specific:
 
 ```text
-agent execution: built-in defaults < global user config < explicit start options
-agent names:     built-in defaults < global user config < project config
-workflows:       built-in defaults < global user config < safe project workflows
-daemon policy:   built-in defaults < global user config
+backend execution: built-in defaults < global user config < explicit start options
+agent names:       built-in defaults < global user config < project config
+workflows:         built-in defaults < global user config < safe project workflows
+daemon policy:     built-in defaults < global user config
 ```
 
-The caller's current shell directory does not affect project config unless it
+Execution settings live on the user-global `[backends.<canonical>]` sections
+(schema v8, backend-first); every enabled backend defines its default agent
+under the canonical name, with options-only personae nested beneath it. The
+caller's current shell directory does not affect project config unless it
 is also the session `workdir`. Config files declare a `schema_version`
-(currently 6, missing means 1); `agent_collab/config_migrations.py` migrates
+(currently 8, missing means 1); `agent_collab/config_migrations.py` migrates
 known old shapes in memory before validation, so old files keep loading even
 if nobody reinstalls. `./agent_collab.sh install` additionally migrates the
 **user** config file on disk to the current schema — a `config.toml.bak`
 backup is written first and comments/formatting are preserved via tomlkit;
-project configs are never rewritten. Inspect the merged result and any
-ignored-project warnings with `agent-collab config show --workdir PROJECT`.
+project configs are never rewritten. An old config that cannot be migrated
+automatically (for example two agents on one backend that differ beyond
+options) fails install with an error naming the offending section. Inspect
+the merged result and any ignored-project warnings with
+`agent-collab config show --workdir PROJECT`.
 
 The optional global-user `[workdir].restrict_workdir_roots` list confines resolved
 session workdirs. A missing key or empty list means unrestricted, and each
@@ -154,16 +161,16 @@ Session records store the execution project and the effective settings confirmat
   "settings": {
     "workflow": {
       "name": "cross-review",
-      "sequence": ["claude", "codex", "claude"]
+      "sequence": ["claude_cli", "codex_cli", "claude_cli"]
     },
     "agents": {
-      "claude": {
+      "claude_cli": {
         "type": "claude",
         "model": "opus",
         "thinking_level": "high",
         "command_preview": ["claude", "-p", "--output-format", "stream-json", "--verbose", "--model", "opus", "--effort", "high"]
       },
-      "codex": {
+      "codex_cli": {
         "type": "codex",
         "thinking_level": "high",
         "command_preview": ["codex", "exec", "--json", "-c", "model_reasoning_effort=\"high\""]

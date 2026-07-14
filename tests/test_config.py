@@ -47,13 +47,12 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_file_parses_with_fallback_toml_parser(self):
         data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(data["schema_version"], 7)
-        self.assertNotIn("options", data["agents"]["claude"])
-        self.assertNotIn("options", data["agents"]["codex"])
-        self.assertNotIn("options", data["agents"]["antigravity"])
-        self.assertNotIn("options", data["agents"]["xai"])
-        self.assertEqual(data["workflows"]["solo-claude"]["sequence"], ["claude"])
-        self.assertEqual(data["workflows"]["dual-review"]["parallel"], ["claude", "codex"])
+        self.assertEqual(data["schema_version"], 8)
+        self.assertNotIn("agents", data)
+        self.assertNotIn("options", data["backends"]["claude_cli"])
+        self.assertNotIn("options", data["backends"]["codex_cli"])
+        self.assertEqual(data["workflows"]["solo-claude"]["sequence"], ["claude_cli"])
+        self.assertEqual(data["workflows"]["dual-review"]["parallel"], ["claude_cli", "codex_cli"])
 
     def test_fallback_toml_parser_accepts_flat_parallel_array(self):
         data = _parse_toml_subset('[workflows.review]\nparallel = ["a", "b"]\n')
@@ -92,8 +91,10 @@ class ConfigTests(unittest.TestCase):
             agents=agents,
             workflows={"disabled": WorkflowConfig(id="disabled", parallel=["a", "b"])},
         )
-        with self.assertRaisesRegex(ConfigError, "references disabled agent 'b'"):
+        with self.assertRaisesRegex(ConfigError, "references agent 'b' of a disabled backend"):
             validate_workflow(config, "disabled")
+        # Load-time validation keeps such a workflow; it is only start-ineligible.
+        validate_workflow(config, "disabled", allow_disabled=True)
 
     def test_workflow_table_rejects_both_shapes(self):
         config = CollaborationConfig()
@@ -147,31 +148,34 @@ class ConfigTests(unittest.TestCase):
             config = load_config(root, env=_env(home))
 
             self.assertTrue(DEFAULT_CONFIG_PATH.exists())
-            self.assertEqual(config.agents["claude"].type, "claude")
-            self.assertEqual(config.agents["claude"].command, "claude")
+            self.assertEqual(config.agents["claude_cli"].type, "claude")
+            self.assertEqual(config.agents["claude_cli"].command, "claude")
             self.assertEqual(
-                config.agents["claude"].args, ["-p", "--output-format", "stream-json", "--verbose"]
+                config.agents["claude_cli"].args,
+                ["-p", "--output-format", "stream-json", "--verbose"],
             )
-            self.assertEqual(config.agents["claude"].options, {})
-            self.assertEqual(config.agents["codex"].command, "codex")
-            self.assertEqual(config.agents["codex"].args, ["exec", "--json"])
-            self.assertEqual(config.agents["codex"].options, {})
-            self.assertEqual(config.agents["antigravity"].command, "agy")
-            self.assertFalse(config.agents["antigravity"].enabled)
-            self.assertEqual(config.agents["antigravity"].options, {})
-            self.assertEqual(config.agents["xai"].command, "grok")
+            self.assertEqual(config.agents["claude_cli"].options, {})
+            self.assertEqual(config.agents["codex_cli"].command, "codex")
+            self.assertEqual(config.agents["codex_cli"].args, ["exec", "--json"])
+            self.assertEqual(config.agents["codex_cli"].options, {})
+            # Disabled backends define no agents; the sections keep their config.
+            self.assertNotIn("antigravity_cli", config.agents)
+            self.assertNotIn("xai_cli", config.agents)
+            self.assertFalse(config.backends["antigravity_cli"].enabled)
+            self.assertEqual(config.backends["antigravity_cli"].command, "agy")
+            self.assertFalse(config.backends["xai_cli"].enabled)
+            self.assertEqual(config.backends["xai_cli"].command, "grok")
             self.assertEqual(
-                config.agents["xai"].args,
+                config.backends["xai_cli"].args,
                 ["--no-auto-update", "--output-format", "streaming-json", "-p"],
             )
-            self.assertFalse(config.agents["xai"].enabled)
-            self.assertEqual(config.agents["xai"].options, {})
-            self.assertEqual(config.workflows["solo-claude"].sequence, ["claude"])
-            self.assertEqual(config.workflows["solo-codex"].sequence, ["codex"])
+            self.assertEqual(config.workflows["solo-claude"].sequence, ["claude_cli"])
+            self.assertEqual(config.workflows["solo-codex"].sequence, ["codex_cli"])
             self.assertEqual(
-                config.workflows["cross-review"].sequence, ["claude", "codex", "claude"]
+                config.workflows["cross-review"].sequence,
+                ["claude_cli", "codex_cli", "claude_cli"],
             )
-            self.assertEqual(config.workflows["dual-review"].parallel, ["claude", "codex"])
+            self.assertEqual(config.workflows["dual-review"].parallel, ["claude_cli", "codex_cli"])
             self.assertNotIn("compare", config.workflows)
             self.assertEqual(config.workdir.restrict_workdir_roots, [])
             self.assertEqual(config.loaded_paths, [])
@@ -185,51 +189,44 @@ class ConfigTests(unittest.TestCase):
             _write_user_config(
                 home,
                 """
-[agents.codex]
+[backends.codex_cli]
 command = "user-codex"
 
-[agents.codex_readonly]
-type = "codex"
-command = "codex"
-args = ["exec", "--json", "--profile", "readonly"]
-enabled = true
+[backends.codex_cli.agents.readonly]
+name = "Read-only Codex"
 """,
             )
             _write_config(
                 root,
                 """
-[agents.codex]
+[backends.codex_cli]
 command = "project-codex"
 
-[agents.codex_readonly]
-type = "codex"
-command = "codex"
-args = ["exec", "--json", "--profile", "readonly"]
-enabled = true
+[agents."codex_cli.readonly"]
+name = "Project Read-only"
+command = "untrusted"
 
 [workflows.readonly-review]
-sequence = ["codex_readonly", "claude", "codex_readonly"]
+sequence = ["codex_cli.readonly", "claude_cli", "codex_cli.readonly"]
 """,
             )
 
             config = load_config(root, env=_env(home))
 
-            self.assertEqual(config.agents["codex"].command, "user-codex")
-            self.assertNotIn(
-                "codex_readonly",
-                [
-                    warning["path"]
-                    for warning in config.warnings
-                    if "project-only" in warning["message"]
-                ],
-            )
-            self.assertEqual(
-                config.agents["codex_readonly"].args, ["exec", "--json", "--profile", "readonly"]
-            )
+            # Project [backends.*] is stripped; the user command stands.
+            self.assertEqual(config.agents["codex_cli"].command, "user-codex")
+            readonly = config.agents["codex_cli.readonly"]
+            self.assertEqual(readonly.command, "user-codex")
+            # The project may rename the persona but not change what runs.
+            self.assertEqual(readonly.name, "Project Read-only")
             self.assertEqual(
                 config.workflows["readonly-review"].sequence,
-                ["codex_readonly", "claude", "codex_readonly"],
+                ["codex_cli.readonly", "claude_cli", "codex_cli.readonly"],
             )
+            rendered = "\n".join(warning["message"] for warning in config.warnings)
+            self.assertIn("[backends.*] policy", rendered)
+            self.assertIn("command", rendered)
+            self.assertNotIn("untrusted", rendered)
 
     def test_user_config_overrides_builtin(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -246,7 +243,7 @@ command = "user-claude"
 
             config = load_config(root, env=_env(home))
 
-            self.assertEqual(config.agents["claude"].command, "user-claude")
+            self.assertEqual(config.agents["claude_cli"].command, "user-claude")
             self.assertEqual(config.loaded_paths, [home.resolve() / "config.toml"])
 
     def test_user_backend_policy_is_loaded_and_project_cannot_override_it(self):
@@ -301,11 +298,11 @@ sequence = ["project_only"]
 
             config = load_config(root, env=_env(home))
 
-            claude = config.agents["claude"]
+            claude = config.agents["claude_cli"]
             self.assertEqual(claude.type, "claude")
             self.assertEqual(claude.command, "claude")
             self.assertTrue(claude.enabled)
-            self.assertEqual(claude.backend, None)
+            self.assertEqual(claude.backend, "cli")
             self.assertEqual(claude.name, "project-reviewer")
             self.assertEqual(claude.env, {})
             self.assertEqual(claude.options, {})
@@ -497,7 +494,7 @@ sequence = ["project_only"]
                     code = cli.main(["config", "show", "--workdir", str(root)])
 
             self.assertEqual(code, 0)
-            self.assertIn("workflow review (parallel): claude + codex", output.getvalue())
+            self.assertIn("workflow review (parallel): claude_cli + codex_cli", output.getvalue())
 
     def test_config_init_materializes_every_registered_backend(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -548,7 +545,7 @@ name = "project-b-codex"
             finally:
                 os.chdir(cwd)
 
-            self.assertEqual(config.agents["codex"].name, "project-b-codex")
+            self.assertEqual(config.agents["codex_cli"].name, "project-b-codex")
             self.assertEqual(
                 config.loaded_paths,
                 [project_b.resolve() / ".agent-collab" / "config.toml"],
@@ -574,8 +571,8 @@ sequence = ["claude"]
 
             text = output.getvalue()
             self.assertEqual(code, 0)
-            self.assertIn("workflow custom: claude", text)
-            self.assertIn("workflow cross-review: claude -> codex -> claude", text)
+            self.assertIn("workflow custom: claude_cli", text)
+            self.assertIn("workflow cross-review: claude_cli -> codex_cli -> claude_cli", text)
             self.assertIn(str(root.resolve() / ".agent-collab" / "config.toml"), text)
 
     def test_cli_config_show_prints_configured_agent_options(self):
@@ -638,8 +635,8 @@ location = "us-central1"
 
             text = output.getvalue()
             self.assertEqual(code, 0)
-            self.assertIn("agent claude: type=claude backend=cli", text)
-            self.assertIn("agent bare_sdk: type=claude backend=sdk", text)
+            self.assertIn("agent claude_cli: type=claude backend=cli", text)
+            self.assertIn("agent claude_sdk: type=claude backend=sdk", text)
             self.assertIn("name='primary-reviewer'", text)
             self.assertIn("cwd='/tmp/claude-cwd'", text)
             self.assertIn("timeout=600", text)
@@ -815,9 +812,9 @@ thinking_level = "high"
             home = Path(tmp) / "home"
             root.mkdir()
             home.mkdir()
-            _write_user_config(home, "[agents.claude]\nbogus = true\n")
+            _write_user_config(home, "[backends.claude_cli]\nbogus = true\n")
 
-            with self.assertRaisesRegex(ConfigError, "agents.claude.bogus"):
+            with self.assertRaisesRegex(ConfigError, "backends.claude_cli.bogus"):
                 load_config(root, env=_env(home))
 
     def test_antigravity_static_config_is_validated_by_sdk_backend(self):
@@ -829,15 +826,13 @@ thinking_level = "high"
             _write_user_config(
                 home,
                 """
-[agents.antigravity_sdk]
-type = "antigravity"
-backend = "sdk"
+[backends.antigravity_sdk]
 vertex = true
 location = "us-central1"
 """,
             )
 
-            with self.assertRaisesRegex(ConfigError, "agents.antigravity_sdk.project"):
+            with self.assertRaisesRegex(ConfigError, "backends.antigravity_sdk.project"):
                 load_config(root, env=_env(home))
 
     def test_project_workflow_with_unknown_agent_is_dropped(self):
@@ -942,7 +937,7 @@ class AgentBackendConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "command is required for backend 'cli'"):
             validate_agent(agent)
 
-    def test_backend_field_parses_from_toml(self):
+    def test_backend_kind_derives_from_the_section_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             home = Path(tmp) / "home"
@@ -951,14 +946,63 @@ class AgentBackendConfigTests(unittest.TestCase):
             _write_user_config(
                 home,
                 """
-[agents.codex]
-backend = "cli"
+schema_version = 8
+
+[backends.codex_sdk]
+enabled = true
 """,
             )
 
             config = load_config(root, env=_env(home))
 
-            self.assertEqual(config.agents["codex"].backend, "cli")
+            self.assertEqual(config.agents["codex_sdk"].backend, "sdk")
+            self.assertEqual(config.agents["codex_sdk"].type, "codex")
+            self.assertEqual(config.agents["codex_cli"].backend, "cli")
+
+    def test_nested_persona_derives_options_only_agent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            home = Path(tmp) / "home"
+            root.mkdir()
+            home.mkdir()
+            _write_user_config(
+                home,
+                """
+[backends.claude_cli.agents.deep]
+name = "Deep Claude"
+
+[backends.claude_cli.agents.deep.options]
+model = "opus"
+
+[workflows.deep-review]
+sequence = ["claude_cli.deep"]
+""",
+            )
+
+            config = load_config(root, env=_env(home))
+
+            persona = config.agents["claude_cli.deep"]
+            self.assertEqual(persona.type, "claude")
+            self.assertEqual(persona.command, "claude")
+            self.assertEqual(persona.name, "Deep Claude")
+            self.assertEqual(persona.options["model"], "opus")
+            self.assertEqual(config.workflows["deep-review"].sequence, ["claude_cli.deep"])
+
+    def test_persona_rejects_execution_fields(self):
+        config = CollaborationConfig()
+        with self.assertRaisesRegex(ConfigError, "may set only 'name' and 'options'"):
+            merge_config_data(
+                config,
+                {"backends": {"claude_cli": {"agents": {"deep": {"command": "evil"}}}}},
+            )
+
+    def test_stray_top_level_agent_section_is_rejected(self):
+        config = CollaborationConfig()
+        with self.assertRaisesRegex(ConfigError, "no longer supported"):
+            merge_config_data(
+                config,
+                {"agents": {"claude": {"command": "claude"}}},
+            )
 
 
 class DaemonTokenTests(unittest.TestCase):

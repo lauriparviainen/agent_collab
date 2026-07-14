@@ -71,7 +71,7 @@ the effective backend of each globally enabled agent, honors configured CLI
 commands, and renders dependency, credential, version, and remediation facts
 in aligned backend-first tables: one row per probe target (canonical backend
 plus command identity) listing the agents that select it, with disabled
-agents collapsed into one summary line. Missing providers warn without
+backends collapsed into one summary line. Missing providers warn without
 failing installation; the checks never make a model call and do not claim
 project-workdir readiness.
 
@@ -125,10 +125,11 @@ The server binds to `127.0.0.1:8765` by default.
 When launching real provider subprocesses, the server may need to run outside a
 restricted sandbox so the child CLIs can see normal user credentials.
 
-Execution-relevant agent configuration is global-user-only. To opt into the
-disabled-by-default `antigravity` or `xai` agents for local development, enable
-them and add their workflows in `$AGENT_COLLAB_HOME/config.toml`; project config
-cannot enable agents. Grok Build runs as
+Execution-relevant configuration lives on the global-user `[backends.*]`
+sections. To opt into the disabled-by-default Antigravity or xAI backends for
+local development, set `[backends.antigravity_cli]` / `[backends.xai_cli]`
+`enabled = true` and add their workflows in `$AGENT_COLLAB_HOME/config.toml`;
+project config cannot enable backends. Grok Build runs as
 `grok --no-auto-update --output-format streaming-json -p`; xAI SDK starts
 require `backend="sdk"`, `XAI_API_KEY`, and an explicit
 `backend_options.xai_sdk.model`.

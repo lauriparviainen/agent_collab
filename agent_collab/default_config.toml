@@ -1,43 +1,41 @@
-schema_version = 7
+schema_version = 8
 
-[agents.claude]
-type = "claude"
+# The schema is backend-first: every enabled [backends.<canonical>] section
+# defines its default agent under the same id. Nested options-only personae
+# live in [backends.<canonical>.agents.<name>].
+
+[backends.claude_cli]
+enabled = true
 command = "claude"
 args = ["-p", "--output-format", "stream-json", "--verbose"]
-enabled = true
 
-[agents.codex]
-type = "codex"
+[backends.codex_cli]
+enabled = true
 command = "codex"
 args = ["exec", "--json"]
-enabled = true
 
 # Antigravity is opt-in. No built-in workflow references it while disabled, so
 # the default Claude/Codex behavior stays valid without local `agy` setup.
-[agents.antigravity]
-type = "antigravity"
+[backends.antigravity_cli]
+enabled = false
 command = "agy"
 args = ["--mode", "accept-edits", "-p"]
-backend = "cli"
-enabled = false
 
 # xAI is opt-in. Grok Build uses newline-delimited streaming JSON in headless
-# single-turn mode; no built-in workflow references this disabled agent.
-[agents.xai]
-type = "xai"
+# single-turn mode; no built-in workflow references this disabled backend.
+[backends.xai_cli]
+enabled = false
 command = "grok"
 args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
-backend = "cli"
-enabled = false
 
 [workflows.solo-claude]
-sequence = ["claude"]
+sequence = ["claude_cli"]
 
 [workflows.solo-codex]
-sequence = ["codex"]
+sequence = ["codex_cli"]
 
 [workflows.cross-review]
-sequence = ["claude", "codex", "claude"]
+sequence = ["claude_cli", "codex_cli", "claude_cli"]
 
 [workflows.dual-review]
-parallel = ["claude", "codex"]
+parallel = ["claude_cli", "codex_cli"]

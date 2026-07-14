@@ -1,6 +1,14 @@
 # Backend-first configuration schema
 
-**Status:** Approved design — implementation in progress.
+**Status:** Implemented and verified 2026-07-14. The full gate passes (856
+hermetic tests), the maintainer's real config migrated cleanly (backup kept),
+the daemon runs on the migrated config with `dual-review` and the solo
+workflows start-eligible, and the readiness table shows one row per backend.
+A pre-commit cross-model review (Gemini 3.1 Pro via agent-collab, run on the
+migrated config itself) found two high-severity migration flaws — omitted
+keys hiding execution differences during persona folding, and file-order
+dependent backend enablement — both fixed with regression tests before
+commit.
 
 **Created:** 2026-07-14.
 
