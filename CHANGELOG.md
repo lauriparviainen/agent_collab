@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Stop referring to the unowned PyPI name: `agent-collab` on PyPI is an
+  unrelated third-party package, so the README extras block now installs from
+  the checkout with an explicit not-on-PyPI warning, and backend install
+  hints name the actual SDK distributions or `./agent_collab.sh install`.
 - Make the repository public (#14): final content-audit delta and release-gate
   verification on the public HEAD, then private vulnerability reporting,
   secret scanning with push protection, Dependabot alerts, branch and

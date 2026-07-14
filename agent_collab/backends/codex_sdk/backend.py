@@ -51,7 +51,9 @@ from ..common.options import configured_choices, resolve_codex_effort
 
 MODULE_NAME = "openai_codex"
 PACKAGE_NAME = "openai-codex"
-INSTALL_HINT = "install the Codex SDK: pip install 'agent-collab[codex]' (openai-codex)"
+INSTALL_HINT = (
+    "install the Codex SDK: pip install openai-codex, or re-run ./agent_collab.sh install"
+)
 
 CODEX_SDK_OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 

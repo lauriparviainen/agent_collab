@@ -92,15 +92,21 @@ agent-collab --help
 The helper installs every provider SDK (the `all` extra) so the `sdk` backends
 work out of the box. A plain `pip install` of the package is SDK-free — the
 `cli` backends drive the provider command-line tools and need no vendor SDK —
-and enables `sdk` backends through per-provider extras:
+and enables `sdk` backends through per-provider extras, installed from the
+checkout:
 
 ```bash
-pip install 'agent-collab[claude]'       # claude_sdk
-pip install 'agent-collab[codex]'        # codex_sdk
-pip install 'agent-collab[antigravity]'  # antigravity_sdk
-pip install 'agent-collab[xai]'          # xai_sdk
-pip install 'agent-collab[all]'          # everything
+pip install '.[claude]'       # claude_sdk
+pip install '.[codex]'        # codex_sdk
+pip install '.[antigravity]'  # antigravity_sdk
+pip install '.[xai]'          # xai_sdk
+pip install '.[all]'          # everything
 ```
+
+> **This package is not on PyPI.** `pip install agent-collab` currently
+> installs an unrelated, same-named package by a different author. Until a
+> PyPI release is announced in the changelog, install only from this
+> repository — the clone-based commands above.
 
 A missing SDK never crashes the daemon: the backend reports itself unavailable
 with the matching install hint.
