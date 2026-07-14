@@ -787,7 +787,7 @@ def _parse_toml_subset(text: str) -> Dict[str, Any]:
             if not section:
                 raise ConfigError(f"line {line_number}: empty TOML section")
             current = root
-            for part in section.split("."):
+            for part in _split_section_parts(section, line_number):
                 key = part.strip()
                 if not key:
                     raise ConfigError(f"line {line_number}: invalid TOML section {section!r}")
@@ -808,6 +808,27 @@ def _parse_toml_subset(text: str) -> Dict[str, Any]:
             current, key, _parse_toml_value(raw_value.strip(), line_number), line_number
         )
     return root
+
+
+def _split_section_parts(section: str, line_number: int) -> List[str]:
+    """Split a TOML section header on dots outside quotes, unquoting parts.
+
+    Quoted parts (`[agents."codex_cli.readonly"]`) carry derived persona ids
+    that contain a literal dot; the fallback parser must not split inside
+    them.
+    """
+
+    parts: List[str] = []
+    for part in _split_top_level(section, "."):
+        item = part.strip()
+        if len(item) >= 2 and item[0] == item[-1] and item[0] in {"'", '"'}:
+            item = item[1:-1]
+        if not item:
+            raise ConfigError(f"line {line_number}: invalid TOML section {section!r}")
+        parts.append(item)
+    if not parts:
+        raise ConfigError(f"line {line_number}: invalid TOML section {section!r}")
+    return parts
 
 
 def _set_dotted_key(current: Dict[str, Any], key: str, value: Any, line_number: int) -> None:

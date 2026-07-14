@@ -59,6 +59,13 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(data["workflows"]["review"]["parallel"], ["a", "b"])
 
+    def test_fallback_toml_parser_keeps_quoted_section_parts_intact(self):
+        # Persona display-name overrides quote the derived id, which contains
+        # a literal dot; Python 3.10 uses this parser instead of tomllib.
+        data = _parse_toml_subset('[agents."codex_cli.readonly"]\nname = "X"\n')
+
+        self.assertEqual(data["agents"]["codex_cli.readonly"]["name"], "X")
+
     def test_parallel_workflow_validation(self):
         agents = {name: AgentConfig(id=name, type="mock") for name in ("a", "b", "c", "d", "e")}
         invalid = {
