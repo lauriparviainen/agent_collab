@@ -69,8 +69,11 @@ layouts. After migration and the optional daemon restart, install invokes a
 structured readiness helper through the durable interpreter. It probes only
 the effective backend of each globally enabled agent, honors configured CLI
 commands, and renders dependency, credential, version, and remediation facts
-in aligned tables. Missing providers warn without failing installation; the
-checks never make a model call and do not claim project-workdir readiness.
+in aligned backend-first tables: one row per probe target (canonical backend
+plus command identity) listing the agents that select it, with disabled
+agents collapsed into one summary line. Missing providers warn without
+failing installation; the checks never make a model call and do not claim
+project-workdir readiness.
 
 `uninstall` reverses install: it stops the daemon, disables autostart,
 removes the venv and the command link (only when the link points into the

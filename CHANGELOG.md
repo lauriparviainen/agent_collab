@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Make the install readiness table backend-first (#24): one row per selected
+  backend and command identity with its agents listed alongside, disabled
+  agents collapsed into one summary line, and counts that speak about
+  selected backends instead of enabled agents.
 - Report global configured backend readiness after every install/upgrade (#23):
   probe only effective backends of enabled agents from the durable environment,
   honor configured CLI commands, and render dependency, credential, version,

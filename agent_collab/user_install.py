@@ -359,32 +359,34 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
     rows = payload.get("rows")
     if not isinstance(rows, list):
         raise ValueError("readiness rows must be a list")
-    enabled_count = int(payload.get("enabled_count", 0))
+    selected_count = int(payload.get("selected_count", len(rows)))
     attention_count = int(payload.get("attention_count", 0))
     if attention_count:
         verb = "needs" if attention_count == 1 else "need"
-        warn(f"{attention_count} of {enabled_count} enabled agents {verb} attention")
+        warn(f"{attention_count} of {selected_count} selected backends {verb} attention")
     else:
-        ok(f"All {enabled_count} enabled agents have available dependencies")
+        ok(f"All {selected_count} selected backends have available dependencies")
 
-    print_kv(
-        (
-            ("scope", payload.get("scope") or "global user config"),
-            ("config", payload.get("config_source") or "unknown"),
-            ("probe source", payload.get("probe_source") or "installed environment"),
-        )
-    )
+    summary = [
+        ("scope", payload.get("scope") or "global user config"),
+        ("config", payload.get("config_source") or "unknown"),
+        ("probe source", payload.get("probe_source") or "installed environment"),
+    ]
+    disabled_agents = payload.get("disabled_agents") or []
+    if disabled_agents:
+        summary.append(("disabled agents", ", ".join(str(item) for item in disabled_agents)))
+    print_kv(tuple(summary))
     table_rows = []
     remediation_rows = []
     seen_remediation = set()
     for item in rows:
         if not isinstance(item, dict):
             raise ValueError("readiness row must be an object")
-        agent = str(item.get("agent") or "unknown")
+        backend = str(item.get("backend") or "—")
         table_rows.append(
             (
-                agent,
-                item.get("backend") or "—",
+                backend,
+                ", ".join(str(agent) for agent in item.get("agents") or []) or "—",
                 item.get("dependency") or "unknown",
                 item.get("credentials") or "unknown",
                 item.get("version") or "—",
@@ -393,21 +395,21 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
         for remediation in item.get("remediation") or []:
             if not isinstance(remediation, dict) or not remediation.get("message"):
                 continue
-            entry = (agent, str(remediation["message"]))
+            entry = (backend, str(remediation["message"]))
             if entry not in seen_remediation:
                 seen_remediation.add(entry)
                 remediation_rows.append(entry)
 
     print_table(
-        ("agent", "backend", "dependency", "credentials", "version"),
+        ("backend", "agents", "dependency", "credentials", "version"),
         table_rows,
-        max_widths=(16, 20, 24, 13, 24),
+        max_widths=(20, 24, 24, 13, 20),
     )
     if remediation_rows:
         print_table(
-            ("agent", "remediation"),
+            ("backend", "remediation"),
             remediation_rows,
-            max_widths=(16, 76),
+            max_widths=(20, 72),
         )
     return attention_count > 0
 
