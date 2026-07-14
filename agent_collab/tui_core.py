@@ -447,6 +447,25 @@ def session_workflow_name(session: Any) -> str:
     return str(workflow.get("name") or _value(session, "workflow", None) or "")
 
 
+def session_backends_summary(session: Any) -> str:
+    """The session's effective member backends, deduped in order (`a+b`).
+
+    Read from the settings echo, which reflects start-time member selection —
+    with one built-in `solo` shape the workflow id alone no longer says which
+    agents ran. Legacy records without settings yield an empty string.
+    """
+    raw_settings = _value(session, "settings", None)
+    settings = raw_settings if isinstance(raw_settings, Mapping) else {}
+    workflow = settings.get("workflow") if isinstance(settings.get("workflow"), Mapping) else {}
+    # The daemon echo fills "sequence" with the member list for parallel
+    # workflows too; the "parallel" fallback covers records that only carry
+    # the parallel shape (same tolerance as the wizard's annotations).
+    members = workflow.get("sequence") or workflow.get("parallel")
+    if isinstance(members, str) or not isinstance(members, Sequence):
+        return ""
+    return "+".join(dict.fromkeys(str(member) for member in members))
+
+
 def status_is_terminal(status: Any) -> bool:
     return str(status or "") in TERMINAL_STATUSES
 
@@ -539,7 +558,7 @@ def format_session_picker_lines(picker: SessionPickerState, width: int = 0) -> T
             "",
             "    no daemon sessions found — /new to start one",
         )
-    header = ("session", "status", "workflow", "updated")
+    header = ("session", "status", "workflow", "backends", "updated")
     rows = []
     for session in picker.sessions:
         rows.append(
@@ -547,6 +566,7 @@ def format_session_picker_lines(picker: SessionPickerState, width: int = 0) -> T
                 str(_value(session, "session_id", None) or ""),
                 str(_value(session, "status", None) or ""),
                 session_workflow_name(session),
+                session_backends_summary(session),
                 _picker_timestamp(
                     _value(session, "updated_at", None) or _value(session, "created_at", None)
                 ),
@@ -555,13 +575,15 @@ def format_session_picker_lines(picker: SessionPickerState, width: int = 0) -> T
         )
     # Reserved floors keep the columns from shifting between session lists:
     # the daemon session-id shape, the longest built-in workflow name, and the
-    # minute-precision timestamp. Status stays dynamic — statuses are short
-    # and an "awaiting_input"-wide floor reads as wasted space. Wider values
-    # (custom ids or workflow names) still grow their column.
+    # minute-precision timestamp. Status and backends stay dynamic —
+    # statuses are short, and the effective member list varies too much for a
+    # useful floor. Wider values (custom ids or workflow names) still grow their
+    # column.
     floors = (
         len("daemon-0123456789abcdef"),
         0,
-        len("solo-antigravity-cli"),
+        len("cross-review"),
+        0,
         len("2026-07-13 20:38"),
     )
     widths = [
@@ -580,7 +602,7 @@ def format_session_picker_lines(picker: SessionPickerState, width: int = 0) -> T
         lines.append(
             f"{marker}   "
             + " ".join(f"{row[i]:<{widths[i]}}" for i in range(len(header)))
-            + f" {row[4]}"
+            + f" {row[5]}"
         )
     return tuple(lines)
 

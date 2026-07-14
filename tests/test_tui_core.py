@@ -470,6 +470,69 @@ class TuiCoreTests(unittest.TestCase):
         self.assertNotIn("Esc close", format_session_picker_lines(picker, 40)[0])
         self.assertNotIn("Esc close", header)
 
+    def test_picker_backends_column_shows_effective_members(self):
+        # With one built-in `solo` shape, the workflow id no longer says which
+        # agents ran; the picker reads them from the settings echo (which
+        # reflects start-time member selection) and dedupes reprised slots.
+        sessions = [
+            {
+                "session_id": "substituted",
+                "status": "done",
+                "workflow": "solo",
+                "updated_at": "2026-07-15T01:00:00+00:00",
+                "workdir": "/repo",
+                "settings": {"workflow": {"name": "solo", "sequence": ["xai_cli"]}},
+            },
+            {
+                "session_id": "reprised",
+                "status": "done",
+                "workflow": "cross-review",
+                "updated_at": "2026-07-15T00:00:00+00:00",
+                "workdir": "/repo",
+                "settings": {
+                    "workflow": {
+                        "name": "cross-review",
+                        "sequence": ["claude_cli", "codex_cli", "claude_cli"],
+                    }
+                },
+            },
+            # A record carrying only the parallel shape (no sequence mirror)
+            # still shows its members.
+            {
+                "session_id": "parallel-only",
+                "status": "done",
+                "workflow": "dual-review",
+                "updated_at": "2026-07-14T12:00:00+00:00",
+                "workdir": "/repo",
+                "settings": {
+                    "workflow": {
+                        "name": "dual-review",
+                        "parallel": ["codex_cli", "xai_cli"],
+                    }
+                },
+            },
+            # Legacy record without settings: the column stays blank.
+            {
+                "session_id": "legacy",
+                "status": "interrupted",
+                "workflow": "solo",
+                "updated_at": "2026-07-14T00:00:00+00:00",
+                "workdir": "/repo",
+            },
+        ]
+        picker = make_session_picker(sessions)
+        lines = format_session_picker_lines(picker)
+        header, rows = lines[0], lines[1:]
+
+        self.assertIn("backends", header)
+        self.assertIn("xai_cli", rows[0])
+        self.assertIn("claude_cli+codex_cli", rows[1])
+        self.assertNotIn("claude_cli+codex_cli+claude_cli", rows[1])
+        self.assertIn("codex_cli+xai_cli", rows[2])
+        # The agents column starts where its header says on every row.
+        self.assertEqual(header.index("backends"), rows[0].index("xai_cli"))
+        self.assertEqual(header.index("backends"), rows[1].index("claude_cli+codex_cli"))
+
     def test_options_helpers_extract_workflows(self):
         options = {
             "workflows": [

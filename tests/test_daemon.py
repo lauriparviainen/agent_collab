@@ -617,7 +617,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     state = await manager.start_session(
                         StartSessionRequest(
                             task="stop active",
-                            workflow="solo-claude-cli",
+                            workflow="solo",
                             max_turns=1,
                             timeout=30,
                             workdir=root,
@@ -1305,7 +1305,7 @@ sequence = ["claude_cli.a", "claude_cli.b"]
                     await manager.start_session(
                         StartSessionRequest(
                             task="disabled backend",
-                            workflow="solo-claude-cli",
+                            workflow="solo",
                             mock=True,
                             workdir=root,
                         )

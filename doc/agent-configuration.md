@@ -79,11 +79,8 @@ sandbox = "workspace-write"
 [backends.mock]
 enabled = false
 
-[workflows.solo-claude-cli]
+[workflows.solo]
 sequence = ["claude_cli"]
-
-[workflows.solo-codex-cli]
-sequence = ["codex_cli"]
 
 [workflows.cross-review]
 sequence = ["claude_cli", "codex_cli", "claude_cli"]
@@ -418,9 +415,9 @@ CLI callers can pass JSON option objects and select a backend:
 
 ```bash
 agent-collab start --backend-options '{"codex_cli":{"thinking_level":"medium"},"claude_cli":{"model":"opus"}}' "Task"
-agent-collab start --workflow solo-antigravity --backend sdk --backend-options '{"antigravity_sdk":{"model":"Gemini 3.1 Pro (High)"}}' "Task"
-agent-collab start --workflow solo-xai --backend-options '{"xai_cli":{"model":"grok-build"}}' "Task"
-agent-collab start --workflow solo-xai --backend sdk --backend-options '{"xai_sdk":{"model":"grok-4.5","thinking_level":"low"}}' "Task"
+agent-collab start --workflow solo --members '{"claude_cli":"antigravity_sdk"}' --backend-options '{"antigravity_sdk":{"model":"Gemini 3.1 Pro (High)"}}' "Task"
+agent-collab start --workflow solo --members '{"claude_cli":"xai_cli"}' --backend-options '{"xai_cli":{"model":"grok-build"}}' "Task"
+agent-collab start --workflow solo --members '{"claude_cli":"xai_sdk"}' --backend-options '{"xai_sdk":{"model":"grok-4.5","thinking_level":"low"}}' "Task"
 ```
 
 The option-to-command mapping is explicit. Unknown option keys are never appended as arbitrary shell flags.
@@ -548,7 +545,7 @@ A workflow names an orchestration pattern: the ordered agent sequence a session 
 sequence = ["claude_cli", "codex_cli.writer", "claude_cli"]
 ```
 
-This removes hardcoded orchestration logic from the referee. Built-in workflows (`solo-claude-cli`, `solo-codex-cli`, `cross-review`, `dual-review`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
+This removes hardcoded orchestration logic from the referee. Built-in workflows (`solo`, `cross-review`, `dual-review`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
 
 An unknown member reference is a fatal config error; a member whose backend is
 disabled leaves the workflow loadable but start-ineligible with the

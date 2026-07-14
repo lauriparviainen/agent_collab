@@ -63,7 +63,8 @@ permission_mode = "bypassPermissions"
 sandbox = "read-only"
 
 # SDK backends are opt-in; they need their provider SDK installed and are
-# declared here so every built-in solo workflow resolves to a known backend.
+# declared here so member selection and workflow references resolve to a
+# known backend.
 [backends.claude_sdk]
 enabled = false
 
@@ -92,33 +93,13 @@ model = "Gemini 3.5 Flash (High)"
 [backends.xai_sdk]
 enabled = false
 
-# One solo workflow per canonical backend. A workflow whose backend is
-# disabled stays listed and becomes start-eligible the moment the backend is
-# enabled — no workflow configuration needed.
+# One single-agent shape. The default member is Claude; start-time member
+# selection (`members = {"claude_cli" = "<agent>"}`) runs any other enabled
+# agent without extra workflow ids. Fixed aliases remain one user-config line:
+# [workflows.solo-xai-cli] sequence = ["xai_cli"].
 
-[workflows.solo-claude-cli]
+[workflows.solo]
 sequence = ["claude_cli"]
-
-[workflows.solo-claude-sdk]
-sequence = ["claude_sdk"]
-
-[workflows.solo-codex-cli]
-sequence = ["codex_cli"]
-
-[workflows.solo-codex-sdk]
-sequence = ["codex_sdk"]
-
-[workflows.solo-antigravity-cli]
-sequence = ["antigravity_cli"]
-
-[workflows.solo-antigravity-sdk]
-sequence = ["antigravity_sdk"]
-
-[workflows.solo-xai-cli]
-sequence = ["xai_cli"]
-
-[workflows.solo-xai-sdk]
-sequence = ["xai_sdk"]
 
 [workflows.cross-review]
 sequence = ["claude_cli", "codex_cli", "claude_cli"]

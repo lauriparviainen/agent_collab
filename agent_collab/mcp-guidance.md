@@ -36,8 +36,8 @@ affect a session's config.
 A `workflow` names the orchestration pattern a session runs: either an ordered
 sequence of agent turns or one concurrent review group. Built-in workflows:
 
-- `solo-claude-cli` — one Claude turn,
-- `solo-codex-cli` — one Codex turn,
+- `solo` — one agent turn (Claude by default; pick any enabled agent with
+  `members`),
 - `cross-review` — Claude, then Codex review, then Claude revision
   (the default),
 - `dual-review` — Claude and Codex independently, in parallel.

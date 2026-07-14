@@ -13,6 +13,15 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Collapse the built-in `solo-<provider>-<cli|sdk>` workflow family (shipped
+  in 0.8.1) into one `solo` workflow (`sequence = ["claude_cli"]`): with
+  member selection the backend is a slot choice, not a workflow id. Existing
+  references to the removed ids fail at start with the available-workflows
+  message; a fixed alias is one user-config line, e.g.
+  `[workflows.solo-xai-cli] sequence = ["xai_cli"]`. The TUI session list
+  gains a `backends` column showing each session's effective members
+  (`claude_cli+xai_cli`, reprised slots deduped), since the workflow id alone
+  no longer says which backends ran.
 - Select workflow members at session start (#21): the additive `members` start
   field maps a workflow slot (its configured member id; `[a, b, a]` stays one
   lead plus one reviewer) to any globally enabled agent, validated with the

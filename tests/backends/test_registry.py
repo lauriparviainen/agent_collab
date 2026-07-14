@@ -149,7 +149,7 @@ class StartBackendValidationTests(unittest.TestCase):
     def test_request_backend_unavailable_for_type_is_rejected(self):
         config = builtin_config()
         with self.assertRaises(StartOptionsError) as ctx:
-            validate_start_backends(config, "solo-claude-cli", request_backend="nonesuch")
+            validate_start_backends(config, "solo", request_backend="nonesuch")
         detail = ctx.exception.to_dict()["details"][0]
         self.assertEqual(detail["path"], "backend")
         self.assertIn("claude", detail["message"])
@@ -160,9 +160,7 @@ class StartBackendValidationTests(unittest.TestCase):
         config = builtin_config()
         backends.register(_FakeBackend("claude", "special"))
         try:
-            selection = validate_start_backends(
-                config, "solo-claude-cli", request_backend="special"
-            )
+            selection = validate_start_backends(config, "solo", request_backend="special")
         finally:
             backends.unregister("claude", "special")
         self.assertEqual(selection.agent_backends, {"claude_cli": "special"})
