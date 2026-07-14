@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-14 - Backend-first configuration
+
 - Make configuration backend-first (#25), config schema 8: `[backends.<canonical>]`
   owns enablement, command, environment, and default options, and every enabled
   backend defines its default agent under the canonical name (`claude_cli`,
