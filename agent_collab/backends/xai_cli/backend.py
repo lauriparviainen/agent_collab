@@ -52,6 +52,13 @@ class XaiCliBackend:
             "grok", run_version=default_version_runner, credentials=xai_cli_credentials
         )
 
+    def probe_for_agent(self, agent: AgentConfig) -> BackendHealth:
+        return probe_cli_backend(
+            agent.command or agent.id,
+            run_version=default_version_runner,
+            credentials=xai_cli_credentials,
+        )
+
     def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
         return dict(OPTION_SCHEMA)
 

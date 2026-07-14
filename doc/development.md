@@ -65,7 +65,12 @@ daemon, and never enables autostart. Verbose pip output is captured to
 `~/.agent-collab/install.log` and shown only on failure. For active
 development set `AGENT_COLLAB_INSTALL_EDITABLE=1`; `AGENT_COLLAB_BIN_DIR`
 selects a different user command directory for isolated tests or custom
-layouts.
+layouts. After migration and the optional daemon restart, install invokes a
+structured readiness helper through the durable interpreter. It probes only
+the effective backend of each globally enabled agent, honors configured CLI
+commands, and renders dependency, credential, version, and remediation facts
+in aligned tables. Missing providers warn without failing installation; the
+checks never make a model call and do not claim project-workdir readiness.
 
 `uninstall` reverses install: it stops the daemon, disables autostart,
 removes the venv and the command link (only when the link points into the

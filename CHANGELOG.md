@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Report global configured backend readiness after every install/upgrade (#23):
+  probe only effective backends of enabled agents from the durable environment,
+  honor configured CLI commands, and render dependency, credential, version,
+  and remediation facts in aligned tables without making model calls.
+
 ## [0.7.1] - 2026-07-14 - Public repository and install-instruction fix
 
 - Stop referring to the unowned PyPI name: `agent-collab` on PyPI is an

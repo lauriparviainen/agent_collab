@@ -647,7 +647,7 @@ def _describe_canonical_backends(
                     else "not_probed"
                 ),
             }
-            assessment = _assess_backend(canonical, probe, policy)
+            assessment = assess_backend(canonical, probe, policy)
             result[canonical] = {
                 "identity": {
                     "provider_type": agent_type,
@@ -722,7 +722,7 @@ def _backend_configuration_schema(backend: Any) -> Dict[str, Any]:
         return _option_object_schema({})
 
 
-def _assess_backend(
+def assess_backend(
     canonical: str, probe: Mapping[str, Any], policy: Mapping[str, Any]
 ) -> Dict[str, Any]:
     if not policy["enabled"]:

@@ -11,6 +11,7 @@ and session data under the agent-collab home are always kept.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from pathlib import Path
@@ -21,7 +22,7 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 from . import __version__
-from .cli_output import error, info, ok, step, warn
+from .cli_output import error, info, ok, print_kv, print_table, step, warn
 
 
 class UserInstallError(RuntimeError):
@@ -31,6 +32,7 @@ class UserInstallError(RuntimeError):
 DEFAULT_BIN_DIR_ENV = "AGENT_COLLAB_BIN_DIR"
 EDITABLE_ENV = "AGENT_COLLAB_INSTALL_EDITABLE"
 INSTALL_LOG_NAME = "install.log"
+READINESS_TIMEOUT_SECONDS = 30
 
 
 def install_user_command(
@@ -314,6 +316,102 @@ def _state_port(state: Dict[str, Any]) -> int:
         return 8765
 
 
+def _collect_backend_readiness(venv_python: Path) -> Dict[str, Any]:
+    """Collect readiness through the installed environment, never bootstrap Python."""
+
+    try:
+        result = subprocess.run(
+            [str(venv_python), "-m", "agent_collab.install_readiness"],
+            capture_output=True,
+            text=True,
+            timeout=READINESS_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise UserInstallError("installed readiness helper could not run") from exc
+    if result.returncode != 0:
+        raise UserInstallError("installed readiness helper returned an error")
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, ValueError) as exc:
+        raise UserInstallError("installed readiness helper returned invalid data") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+        raise UserInstallError("installed readiness helper returned an invalid summary")
+    return payload
+
+
+def _check_backend_readiness(venv_python: Path) -> bool:
+    """Print the post-install table and return whether setup warnings remain."""
+
+    step("Checking configured backend readiness")
+    try:
+        payload = _collect_backend_readiness(venv_python)
+        return _print_backend_readiness(payload)
+    except (UserInstallError, TypeError, ValueError):
+        warn(
+            "Backend readiness could not be checked; once the daemon is running, retry with: "
+            "agent-collab options --workdir PROJECT --fresh"
+        )
+        return True
+
+
+def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        raise ValueError("readiness rows must be a list")
+    enabled_count = int(payload.get("enabled_count", 0))
+    attention_count = int(payload.get("attention_count", 0))
+    if attention_count:
+        verb = "needs" if attention_count == 1 else "need"
+        warn(f"{attention_count} of {enabled_count} enabled agents {verb} attention")
+    else:
+        ok(f"All {enabled_count} enabled agents have available dependencies")
+
+    print_kv(
+        (
+            ("scope", payload.get("scope") or "global user config"),
+            ("config", payload.get("config_source") or "unknown"),
+            ("probe source", payload.get("probe_source") or "installed environment"),
+        )
+    )
+    table_rows = []
+    remediation_rows = []
+    seen_remediation = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            raise ValueError("readiness row must be an object")
+        agent = str(item.get("agent") or "unknown")
+        table_rows.append(
+            (
+                agent,
+                item.get("backend") or "—",
+                item.get("dependency") or "unknown",
+                item.get("credentials") or "unknown",
+                item.get("version") or "—",
+            )
+        )
+        for remediation in item.get("remediation") or []:
+            if not isinstance(remediation, dict) or not remediation.get("message"):
+                continue
+            entry = (agent, str(remediation["message"]))
+            if entry not in seen_remediation:
+                seen_remediation.add(entry)
+                remediation_rows.append(entry)
+
+    print_table(
+        ("agent", "backend", "dependency", "credentials", "version"),
+        table_rows,
+        max_widths=(16, 20, 24, 13, 24),
+    )
+    if remediation_rows:
+        print_table(
+            ("agent", "remediation"),
+            remediation_rows,
+            max_widths=(16, 76),
+        )
+    return attention_count > 0
+
+
 def _main_install(args: argparse.Namespace) -> int:
     bin_dir = Path(os.environ.get(DEFAULT_BIN_DIR_ENV) or "~/.local/bin")
     editable = os.environ.get(EDITABLE_ENV, "").strip().lower() in {"1", "true", "yes"}
@@ -325,11 +423,16 @@ def _main_install(args: argparse.Namespace) -> int:
         editable=editable,
     )
     _migrate_user_config()
+    venv_python = args.venv.expanduser().resolve() / "bin" / "python"
     if probe["running"]:
-        _restart_daemon(probe, args.venv.expanduser().resolve() / "bin" / "python")
+        _restart_daemon(probe, venv_python)
     else:
         info("Daemon not running; start it with: agent-collab daemon start")
-    ok("Install complete — try: agent-collab --help")
+    has_readiness_warnings = _check_backend_readiness(venv_python)
+    if has_readiness_warnings:
+        warn("Install complete with backend setup warnings — try: agent-collab --help")
+    else:
+        ok("Install complete — try: agent-collab --help")
     return 0
 
 

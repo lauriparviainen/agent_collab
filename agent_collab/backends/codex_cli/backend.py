@@ -39,6 +39,9 @@ class CodexCliBackend:
     def probe(self) -> BackendHealth:
         return probe_cli_backend("codex", run_version=default_version_runner)
 
+    def probe_for_agent(self, agent: AgentConfig) -> BackendHealth:
+        return probe_cli_backend(agent.command or agent.id, run_version=default_version_runner)
+
     def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
         return dict(OPTION_SCHEMA)
 

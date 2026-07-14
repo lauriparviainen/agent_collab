@@ -1,0 +1,227 @@
+import io
+from pathlib import Path
+import unittest
+from unittest import mock
+
+from agent_collab.backends.base import (
+    CREDENTIALS_UNKNOWN,
+    HEALTH_OK,
+    HEALTH_UNAVAILABLE,
+    BackendHealth,
+)
+from agent_collab.cli_output import format_table
+from agent_collab.config import AgentConfig, BackendPolicyConfig, builtin_config
+from agent_collab.install_readiness import collect_install_readiness
+from agent_collab.user_install import _print_backend_readiness
+
+
+def _cli_health(command, *, present=True, version="1.2.3"):
+    status = "present" if present else "missing"
+    return BackendHealth(
+        status=HEALTH_OK if present else HEALTH_UNAVAILABLE,
+        reason=None if present else f"{command}: command not found on PATH",
+        credentials=CREDENTIALS_UNKNOWN,
+        version=version if present else None,
+        checks={
+            "dependency": {"status": status, "kind": "path", "command": command},
+            "credentials": {"status": "not_checked"},
+        },
+        remediation=(
+            ()
+            if present
+            else (
+                {
+                    "code": "install_cli",
+                    "message": f"Install {command} and ensure it is available on PATH.",
+                },
+            )
+        ),
+    )
+
+
+def _sdk_health(module, version="4.5.6"):
+    return BackendHealth(
+        status=HEALTH_OK,
+        credentials=CREDENTIALS_UNKNOWN,
+        version=version,
+        checks={
+            "dependency": {"status": "present", "kind": "python_module", "module": module},
+            "credentials": {"status": "unknown"},
+        },
+    )
+
+
+class InstallReadinessCollectionTests(unittest.TestCase):
+    def test_cli_probe_uses_the_agent_configured_command(self):
+        from agent_collab import backends as backend_registry
+
+        config = builtin_config()
+        config.agents["claude"].command = "custom-claude"
+        config.agents["codex"].enabled = False
+        backend = backend_registry.get_backend("claude", "cli")
+
+        with mock.patch.object(
+            backend, "probe_for_agent", return_value=_cli_health("custom-claude")
+        ) as probe:
+            payload = collect_install_readiness(config)
+
+        probe.assert_called_once_with(config.agents["claude"])
+        row = next(item for item in payload["rows"] if item["agent"] == "claude")
+        self.assertEqual(row["dependency"], "custom-claude found")
+
+    def test_collects_only_effective_backends_for_enabled_agents(self):
+        config = builtin_config()
+        calls = []
+
+        def health(backend):
+            calls.append(f"{backend.agent_type}_{backend.id}")
+            if backend.agent_type == "claude":
+                return _cli_health("claude")
+            return _cli_health("codex", present=False)
+
+        payload = collect_install_readiness(config, health=health)
+
+        self.assertEqual(calls, ["claude_cli", "codex_cli"])
+        self.assertEqual(payload["enabled_count"], 2)
+        self.assertEqual(payload["attention_count"], 1)
+        rows = {row["agent"]: row for row in payload["rows"]}
+        self.assertEqual(rows["claude"]["dependency"], "claude found")
+        self.assertEqual(rows["claude"]["credentials"], "not checked")
+        self.assertEqual(rows["codex"]["dependency"], "codex missing")
+        self.assertEqual(rows["antigravity"]["state"], "disabled")
+        self.assertEqual(rows["antigravity"]["dependency"], "agent disabled")
+        self.assertEqual(rows["xai"]["state"], "disabled")
+
+    def test_deduplicates_shared_effective_backend_probe(self):
+        config = builtin_config()
+        config.agents["claude-copy"] = AgentConfig(
+            id="claude-copy", type="claude", command="claude", enabled=True
+        )
+        calls = []
+
+        def health(backend):
+            calls.append(f"{backend.agent_type}_{backend.id}")
+            return _cli_health(backend.agent_type)
+
+        payload = collect_install_readiness(config, health=health)
+
+        self.assertEqual(calls.count("claude_cli"), 1)
+        self.assertEqual(payload["enabled_count"], 3)
+        self.assertEqual(payload["attention_count"], 0)
+
+    def test_reports_selected_sdk_and_backend_policy_without_extra_probes(self):
+        config = builtin_config()
+        config.agents["claude"].backend = "sdk"
+        config.backends["codex_cli"] = BackendPolicyConfig("codex_cli", False)
+        calls = []
+
+        def health(backend):
+            calls.append(f"{backend.agent_type}_{backend.id}")
+            return _sdk_health("claude_agent_sdk")
+
+        payload = collect_install_readiness(config, health=health)
+
+        self.assertEqual(calls, ["claude_sdk"])
+        rows = {row["agent"]: row for row in payload["rows"]}
+        self.assertEqual(rows["claude"]["backend"], "claude_sdk")
+        self.assertEqual(rows["claude"]["dependency"], "claude_agent_sdk found")
+        self.assertEqual(rows["codex"]["dependency"], "policy disabled")
+        self.assertEqual(rows["codex"]["state"], "unavailable")
+        self.assertIn("[backends.codex_cli]", rows["codex"]["remediation"][0]["message"])
+
+    def test_defaults_to_loading_user_config_without_creating_one(self):
+        config = builtin_config()
+
+        def health(backend):
+            return _cli_health(backend.agent_type)
+
+        with mock.patch(
+            "agent_collab.install_readiness.load_user_config", return_value=config
+        ) as loader:
+            payload = collect_install_readiness(health=health)
+
+        loader.assert_called_once_with()
+        self.assertEqual(payload["config_source"], "built-in defaults (no user config)")
+
+    def test_reports_user_config_source_when_config_files_loaded(self):
+        config = builtin_config()
+        config.loaded_paths.append(Path("/tmp/does-not-matter/config.toml"))
+
+        payload = collect_install_readiness(config, health=lambda b: _cli_health(b.agent_type))
+
+        self.assertEqual(payload["config_source"], "built-in defaults + user config")
+
+    def test_probe_exception_becomes_unknown_nonfatal_fact(self):
+        config = builtin_config()
+
+        def health(backend):
+            if backend.agent_type == "claude":
+                raise RuntimeError("private provider failure")
+            return _cli_health("codex")
+
+        payload = collect_install_readiness(config, health=health)
+
+        row = next(item for item in payload["rows"] if item["agent"] == "claude")
+        self.assertEqual(row["state"], "unknown")
+        self.assertEqual(row["reason"], "backend health probe failed")
+        self.assertNotIn("private provider failure", str(payload))
+
+
+class InstallReadinessTableTests(unittest.TestCase):
+    def test_dependency_free_table_aligns_and_truncates(self):
+        lines = format_table(
+            ("agent", "backend"),
+            (("claude", "claude_cli"), ("very-long-agent-name", "codex_cli")),
+            max_widths=(10, 12),
+        )
+
+        self.assertEqual(lines[0], "  agent       backend")
+        self.assertEqual(lines[1], "  ----------  ----------")
+        self.assertIn("very-long…", lines[3])
+
+    def test_installer_renders_readiness_and_remediation_tables(self):
+        payload = {
+            "scope": "global user config",
+            "config_source": "built-in defaults + user config",
+            "probe_source": "installed environment",
+            "enabled_count": 2,
+            "attention_count": 1,
+            "rows": [
+                {
+                    "agent": "claude",
+                    "backend": "claude_cli",
+                    "dependency": "claude found",
+                    "credentials": "not checked",
+                    "version": "1.2.3",
+                    "remediation": [],
+                },
+                {
+                    "agent": "codex",
+                    "backend": "codex_cli",
+                    "dependency": "codex missing",
+                    "credentials": "not checked",
+                    "version": None,
+                    "remediation": [
+                        {
+                            "code": "install_cli",
+                            "message": "Install codex and ensure it is available on PATH.",
+                        }
+                    ],
+                },
+            ],
+        }
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            warned = _print_backend_readiness(payload)
+
+        output = stdout.getvalue()
+        self.assertTrue(warned)
+        self.assertIn("! Warning: 1 of 2 enabled agents needs attention", output)
+        self.assertIn("agent   backend", output)
+        self.assertIn("claude  claude_cli", output)
+        self.assertIn("agent  remediation", output)
+        self.assertIn("Install codex", output)
+
+
+if __name__ == "__main__":
+    unittest.main()

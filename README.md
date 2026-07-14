@@ -74,6 +74,13 @@ options and narrates each step: what it did and whether it succeeded. If
 make; it never edits shell startup files, and it refuses to replace an
 unrelated command (the error tells you exactly what to remove).
 
+At the end of every install or upgrade, the installer checks the effective
+backend selected by each globally enabled agent from the durable environment.
+It prints an aligned table with command or SDK dependency status, best-effort
+credential evidence, and versions. These checks never make a model call;
+missing providers are actionable setup warnings rather than installation
+failures.
+
 You can now run the TUI or other commands from any directory:
 
 ```bash

@@ -1,6 +1,9 @@
 # Install-time configured backend readiness summary
 
-**Status:** Proposed — design ready for review.
+**Status:** Implemented and verified 2026-07-14. A cross-model review
+(Gemini 3.1 Pro via agent-collab) confirmed one gap — the no-user-config
+collector path was untested — closed by
+`test_defaults_to_loading_user_config_without_creating_one`.
 
 **Created:** 2026-07-14.
 
@@ -163,12 +166,17 @@ status block. For example:
 ▶ Checking configured backend readiness
 ! Warning: 1 of 2 enabled agents needs attention
   scope         global user config
-  probe source  restarted daemon
-  claude        claude_cli  command found, version 2.x (credentials not checked)
-  codex         codex_cli   command not found on PATH
-  antigravity   disabled
-  xai           disabled
-  remediation   Install codex and ensure it is available on the daemon PATH.
+  config        built-in defaults + user config
+  probe source  installed environment
+  agent        backend          dependency      credentials  version
+  -----------  ---------------  --------------  -----------  -------
+  claude       claude_cli       claude found    not checked  2.x
+  codex        codex_cli        codex missing   not checked  —
+  antigravity  antigravity_cli  agent disabled  —            —
+  xai          xai_cli          agent disabled  —            —
+  agent  remediation
+  -----  --------------------------------------------------------
+  codex  Install codex and ensure it is available on the daemon PATH.
 ```
 
 A fully healthy dependency check should end with `✓`; unavailable selected
@@ -218,6 +226,34 @@ Credential reporting must retain the existing distinctions:
 - Do not persist the snapshot as durable truth. Command installation, PATH,
   credentials, and provider state can change immediately afterward.
 
+## Implementation record
+
+Implemented 2026-07-14 with these decisions:
+
+- Use a small standard-library table formatter in `cli_output.py`; do not add
+  `rich`, `tabulate`, `prettytable`, or another runtime dependency for a fixed
+  installer table.
+- Invoke `agent_collab.install_readiness` as a structured JSON helper through
+  the newly installed durable interpreter. The parent installer renders the
+  human output and never scrapes another human-oriented command.
+- Probe only effective backends of globally enabled agents. Disabled agents
+  remain visible in the table but are not probed; identical effective probes
+  are deduplicated and distinct probes run with bounded concurrency.
+- Add backend-owned `probe_for_agent` methods to CLI backends so configured
+  command overrides are checked rather than assuming the canonical executable
+  name. SDK backends retain their existing package-owned probes.
+- Reuse the existing shared backend assessment function for readiness and
+  remediation. Backend-owned remediation remains the only source of provider
+  installation wording.
+- Label the result `installed environment`. The implementation does not start
+  a stopped daemon, does not add a daemon/API route solely for install, and does
+  not claim that local evidence is the daemon's PATH when systemd may differ.
+- Keep disabled agents as individual table rows, omit resolved executable paths,
+  omit workflows, and defer a public `doctor` command.
+- Treat missing, disabled, or indeterminate selected backends as non-fatal setup
+  warnings. Invalid config remains fatal and a failed readiness helper produces
+  a generic non-fatal recheck hint without exposing captured stderr.
+
 ## Verification
 
 Add hermetic coverage for at least:
@@ -253,17 +289,19 @@ An isolated manual smoke should cover one environment with both default CLIs
 present and one with a deliberately restricted `PATH`. It must not make a model
 call.
 
-## Open questions
+## Verification record
 
-- Should the first implementation also add a public `agent-collab doctor`
-  command so the exact summary can be rerun after PATH or credential changes,
-  or should that remain a focused follow-up?
-- Should disabled agents be listed individually by default or collapsed into
-  one `disabled: antigravity, xai` line?
-- Should locally resolved executable paths appear by default, only in a verbose
-  doctor view, or not at all?
-- If a restarted daemon and the installer environment disagree about command
-  availability, should the summary show both observations or only the daemon's
-  execution-relevant result with a warning about the mismatch?
-- Should globally configured workflows receive a clearly labeled advisory
-  summary, or should all workflow reporting remain exclusively workdir-scoped?
+Verified 2026-07-14:
+
+- focused readiness, installer, option, and CLI-backend suite: 90 tests passed;
+- complete local gate: Ruff lint, Ruff formatting, and 839 hermetic tests
+  passed;
+- `./agent_collab_dev.sh build --check` verified the generated REST artifacts;
+  and
+- an isolated no-user-config smoke used side-effect-free probes, made no model
+  call, found the configured `claude` and `codex` commands, displayed their
+  versions in the table, and left disabled agents unprobed.
+
+The public `doctor` command, executable-path display, daemon-versus-installer
+environment comparison, and global workflow projection remain intentionally
+deferred rather than open requirements for issue #23.

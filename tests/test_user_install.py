@@ -1,5 +1,7 @@
 import io
+import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +9,7 @@ from unittest import mock
 
 from agent_collab.user_install import (
     UserInstallError,
+    _collect_backend_readiness,
     install_user_command,
     main,
     uninstall_user_command,
@@ -14,6 +17,23 @@ from agent_collab.user_install import (
 
 
 class UserInstallTests(unittest.TestCase):
+    def test_readiness_helper_runs_through_installed_interpreter(self):
+        payload = {"rows": [], "enabled_count": 0, "attention_count": 0}
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(payload), stderr=""
+        )
+        with mock.patch("agent_collab.user_install.subprocess.run", return_value=completed) as run:
+            result = _collect_backend_readiness(Path("/durable/venv/bin/python"))
+
+        self.assertEqual(result, payload)
+        run.assert_called_once_with(
+            ["/durable/venv/bin/python", "-m", "agent_collab.install_readiness"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
     def test_install_creates_venv_installs_package_and_links_entrypoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -201,6 +221,9 @@ class UserInstallTests(unittest.TestCase):
                         "state": {},
                     },
                 ),
+                mock.patch(
+                    "agent_collab.user_install._check_backend_readiness", return_value=False
+                ) as readiness,
                 mock.patch.dict(os.environ, environ, clear=False),
                 mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
             ):
@@ -210,6 +233,7 @@ class UserInstallTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertEqual(install.call_args.kwargs["bin_dir"], root / "bin")
+            readiness.assert_called_once_with(root / "venv" / "bin" / "python")
             output = stdout.getvalue()
             self.assertIn("✓ Install complete", output)
             self.assertIn("ⓘ Info: Daemon not running", output)
@@ -230,6 +254,9 @@ class UserInstallTests(unittest.TestCase):
                 ),
                 mock.patch("agent_collab.user_install._probe_daemon", return_value=probe),
                 mock.patch("agent_collab.user_install._migrate_user_config"),
+                mock.patch(
+                    "agent_collab.user_install._check_backend_readiness", return_value=False
+                ) as readiness,
                 mock.patch("agent_collab.daemon_supervisor.stop_daemon") as stop,
                 mock.patch("agent_collab.daemon_supervisor.start_daemon") as start,
                 mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root)}, clear=False),
@@ -247,9 +274,38 @@ class UserInstallTests(unittest.TestCase):
                 default_workdir=None,
                 interpreter=(root / "venv" / "bin" / "python"),
             )
+            readiness.assert_called_once_with(root / "venv" / "bin" / "python")
             output = stdout.getvalue()
             self.assertIn("interrupting 2 active sessions", output)
             self.assertIn("✓ Daemon restarted", output)
+
+    def test_main_install_keeps_readiness_warnings_nonfatal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                mock.patch(
+                    "agent_collab.user_install.install_user_command",
+                    return_value=root / "bin" / "agent-collab",
+                ),
+                mock.patch(
+                    "agent_collab.user_install._probe_daemon",
+                    return_value={
+                        "running": False,
+                        "systemd": False,
+                        "sessions": None,
+                        "state": {},
+                    },
+                ),
+                mock.patch("agent_collab.user_install._migrate_user_config"),
+                mock.patch("agent_collab.user_install._check_backend_readiness", return_value=True),
+                mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            ):
+                code = main(
+                    ["install", "--repo-root", str(root / "repo"), "--venv", str(root / "venv")]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertIn("! Warning: Install complete with backend setup warnings", stdout.getvalue())
 
     def test_main_reports_fatal_errors_with_error_prefix(self):
         with (
