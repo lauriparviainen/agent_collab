@@ -31,8 +31,8 @@ Built-in defaults live in
 Compatibility handling for old config shapes belongs in
 `agent_collab/config_migrations.py`; runtime code consumes the latest schema.
 
-Orchestration is a `workflow`, not a `mode`. Built-ins include `solo-claude`,
-`solo-codex`, `cross-review` (default), and the concurrent
+Orchestration is a `workflow`, not a `mode`. Built-ins include `solo-claude-cli`,
+`solo-codex-cli`, `cross-review` (default), and the concurrent
 `dual-review` group. Sequential workflows normalize to singleton stages; a flat
 `parallel` workflow normalizes to one group of two to four distinct agents.
 Additional parallel workflows are global-user-only, while safe project

@@ -22,17 +22,53 @@ command = "agy"
 args = ["--mode", "accept-edits", "-p"]
 
 # xAI is opt-in. Grok Build uses newline-delimited streaming JSON in headless
-# single-turn mode; no built-in workflow references this disabled backend.
+# single-turn mode.
 [backends.xai_cli]
 enabled = false
 command = "grok"
 args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
 
-[workflows.solo-claude]
+# SDK backends are opt-in; they need their provider SDK installed and are
+# declared here so every built-in solo workflow resolves to a known backend.
+[backends.claude_sdk]
+enabled = false
+
+[backends.codex_sdk]
+enabled = false
+
+[backends.antigravity_sdk]
+enabled = false
+
+[backends.xai_sdk]
+enabled = false
+
+# One solo workflow per canonical backend. A workflow whose backend is
+# disabled stays listed and becomes start-eligible the moment the backend is
+# enabled — no workflow configuration needed.
+
+[workflows.solo-claude-cli]
 sequence = ["claude_cli"]
 
-[workflows.solo-codex]
+[workflows.solo-claude-sdk]
+sequence = ["claude_sdk"]
+
+[workflows.solo-codex-cli]
 sequence = ["codex_cli"]
+
+[workflows.solo-codex-sdk]
+sequence = ["codex_sdk"]
+
+[workflows.solo-antigravity-cli]
+sequence = ["antigravity_cli"]
+
+[workflows.solo-antigravity-sdk]
+sequence = ["antigravity_sdk"]
+
+[workflows.solo-xai-cli]
+sequence = ["xai_cli"]
+
+[workflows.solo-xai-sdk]
+sequence = ["xai_sdk"]
 
 [workflows.cross-review]
 sequence = ["claude_cli", "codex_cli", "claude_cli"]

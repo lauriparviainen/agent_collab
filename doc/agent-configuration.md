@@ -77,10 +77,10 @@ sandbox = "read-only"
 [backends.mock]
 enabled = false
 
-[workflows.solo-claude]
+[workflows.solo-claude-cli]
 sequence = ["claude_cli"]
 
-[workflows.solo-codex]
+[workflows.solo-codex-cli]
 sequence = ["codex_cli"]
 
 [workflows.cross-review]
@@ -477,7 +477,7 @@ A workflow names an orchestration pattern: the ordered agent sequence a session 
 sequence = ["claude_cli", "codex_cli.readonly", "claude_cli"]
 ```
 
-This removes hardcoded orchestration logic from the referee. Built-in workflows (`solo-claude`, `solo-codex`, `cross-review`, `dual-review`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
+This removes hardcoded orchestration logic from the referee. Built-in workflows (`solo-claude-cli`, `solo-codex-cli`, `cross-review`, `dual-review`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.
 
 An unknown member reference is a fatal config error; a member whose backend is
 disabled leaves the workflow loadable but start-ineligible with the

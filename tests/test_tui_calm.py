@@ -494,7 +494,7 @@ class RenderIntegrationTests(unittest.TestCase):
                 {
                     "session_id": "daemon-1",
                     "status": "done",
-                    "workflow": "solo-claude",
+                    "workflow": "solo-claude-cli",
                     "updated_at": "2026-07-13T20:38:18+00:00",
                     "workdir": "/w",
                 }

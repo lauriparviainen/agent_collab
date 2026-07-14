@@ -513,7 +513,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     state = await manager.start_session(
                         StartSessionRequest(
                             task="stop active",
-                            workflow="solo-claude",
+                            workflow="solo-claude-cli",
                             max_turns=1,
                             timeout=30,
                             workdir=root,
@@ -571,7 +571,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     "session_id": "legacy-live",
                     "status": "running",
                     "task": "legacy",
-                    "workflow": "solo-claude",
+                    "workflow": "solo-claude-cli",
                     "workdir": tmp,
                     "jsonl_path": str(Path(tmp) / "legacy.jsonl"),
                     "markdown_path": str(Path(tmp) / "legacy.md"),
@@ -1201,7 +1201,7 @@ sequence = ["claude_cli.a", "claude_cli.b"]
                     await manager.start_session(
                         StartSessionRequest(
                             task="disabled backend",
-                            workflow="solo-claude",
+                            workflow="solo-claude-cli",
                             mock=True,
                             workdir=root,
                         )

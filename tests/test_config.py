@@ -51,7 +51,7 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn("agents", data)
         self.assertNotIn("options", data["backends"]["claude_cli"])
         self.assertNotIn("options", data["backends"]["codex_cli"])
-        self.assertEqual(data["workflows"]["solo-claude"]["sequence"], ["claude_cli"])
+        self.assertEqual(data["workflows"]["solo-claude-cli"]["sequence"], ["claude_cli"])
         self.assertEqual(data["workflows"]["dual-review"]["parallel"], ["claude_cli", "codex_cli"])
 
     def test_fallback_toml_parser_accepts_flat_parallel_array(self):
@@ -176,8 +176,8 @@ class ConfigTests(unittest.TestCase):
                 config.backends["xai_cli"].args,
                 ["--no-auto-update", "--output-format", "streaming-json", "-p"],
             )
-            self.assertEqual(config.workflows["solo-claude"].sequence, ["claude_cli"])
-            self.assertEqual(config.workflows["solo-codex"].sequence, ["codex_cli"])
+            self.assertEqual(config.workflows["solo-claude-cli"].sequence, ["claude_cli"])
+            self.assertEqual(config.workflows["solo-codex-cli"].sequence, ["codex_cli"])
             self.assertEqual(
                 config.workflows["cross-review"].sequence,
                 ["claude_cli", "codex_cli", "claude_cli"],
@@ -707,7 +707,7 @@ sequence = ["claude_cli"]
             },
             "workflows": [
                 {
-                    "id": "solo-claude",
+                    "id": "solo-claude-cli",
                     "selected_canonical_backends": ["claude_cli"],
                     "start_eligible": True,
                 }
@@ -833,7 +833,10 @@ thinking_level = "high"
             _write_user_config(
                 home,
                 """
+schema_version = 8
+
 [backends.antigravity_sdk]
+enabled = true
 vertex = true
 location = "us-central1"
 """,

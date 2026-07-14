@@ -13,6 +13,15 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Ship one built-in solo workflow per canonical backend (#26):
+  `solo-<provider>-<cli|sdk>` for all eight backends, replacing the
+  agents-first `solo-claude`/`solo-codex` names. Disabled backends' solo
+  workflows stay listed and become start-eligible the moment the backend is
+  enabled, so a typical user config needs no `[workflows]` section. The sdk
+  backends are declared (disabled) in the built-in defaults, which also means
+  a request-level `--backend sdk` override now requires enabling the backend
+  first.
+
 ## [0.8.0] - 2026-07-14 - Backend-first configuration
 
 - Make configuration backend-first (#25), config schema 8: `[backends.<canonical>]`

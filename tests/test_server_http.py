@@ -306,11 +306,21 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 release.wait(2.0)
                 return BackendHealth(status=HEALTH_UNAVAILABLE, reason="test probe unavailable")
 
+            home = root / "home"
+            home.mkdir()
+            # A request-level sdk override needs the sdk backends enabled;
+            # they ship disabled in the built-in defaults.
+            (home / "config.toml").write_text(
+                "schema_version = 8\n\n"
+                "[backends.claude_sdk]\nenabled = true\n\n"
+                "[backends.codex_sdk]\nenabled = true\n",
+                encoding="utf-8",
+            )
             body = json.dumps(
                 {"task": "slow probe", "workdir": str(root), "backend": "sdk"}
             ).encode("utf-8")
             with (
-                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}),
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}),
                 mock.patch.object(
                     manager,
                     "_backend_health",

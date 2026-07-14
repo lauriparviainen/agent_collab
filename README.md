@@ -389,7 +389,7 @@ The agents run in the selected project directory. They can inspect the actual
 repository rather than receiving a pasted excerpt, and the bounded workflow
 ends after the configured turns.
 
-Already use only one provider? The built-in `solo-claude` and `solo-codex`
+Already use only one provider? The built-in `solo-claude-cli` and `solo-codex-cli`
 workflows are useful for supervised runs, but the cross-vendor review idea is
 the reason this project exists.
 

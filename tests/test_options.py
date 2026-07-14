@@ -56,7 +56,7 @@ class BackendQualifiedOptionTests(unittest.TestCase):
             ({"codex_cli": {"model": "gpt-5"}}, "backend_options.codex_cli"),
         ):
             with self.subTest(payload=payload), self.assertRaises(StartOptionsError) as ctx:
-                validate_start_options(_config(), "solo-claude", payload)
+                validate_start_options(_config(), "solo-claude-cli", payload)
             self.assertEqual(ctx.exception.to_dict()["details"][0]["path"], expected)
 
     def test_defaults_come_from_backend_manifests(self):

@@ -93,7 +93,17 @@ class InstallReadinessCollectionTests(unittest.TestCase):
         self.assertEqual(payload["enabled_count"], 2)
         self.assertEqual(payload["selected_count"], 2)
         self.assertEqual(payload["attention_count"], 1)
-        self.assertEqual(payload["disabled_backends"], ["antigravity_cli", "xai_cli"])
+        self.assertEqual(
+            payload["disabled_backends"],
+            [
+                "antigravity_cli",
+                "xai_cli",
+                "claude_sdk",
+                "codex_sdk",
+                "antigravity_sdk",
+                "xai_sdk",
+            ],
+        )
         rows = {row["backend"]: row for row in payload["rows"]}
         self.assertEqual(sorted(rows), ["claude_cli", "codex_cli"])
         self.assertEqual(rows["claude_cli"]["agents"], ["claude_cli"])

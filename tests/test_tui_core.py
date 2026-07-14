@@ -159,7 +159,7 @@ class TuiCoreTests(unittest.TestCase):
             "jsonl_path": "/logs/s1.jsonl",
             "markdown_path": "/logs/s1.md",
             "settings": {
-                "workflow": {"name": "solo-codex", "sequence": ["codex"]},
+                "workflow": {"name": "solo-codex-cli", "sequence": ["codex"]},
                 "agents": {
                     "codex": {
                         "type": "codex",
@@ -176,7 +176,7 @@ class TuiCoreTests(unittest.TestCase):
         lines = format_session_details(session)
         text = "\n".join(lines)
 
-        self.assertIn("workflow: solo-codex", text)
+        self.assertIn("workflow: solo-codex-cli", text)
         self.assertIn("sequence: codex", text)
         self.assertIn("workdir: /repo", text)
         self.assertIn("mock: false", text)
@@ -299,7 +299,7 @@ class TuiCoreTests(unittest.TestCase):
             {
                 "session_id": f"s{index:02d}",
                 "status": "done",
-                "workflow": "solo-codex",
+                "workflow": "solo-codex-cli",
                 "updated_at": f"2026-07-08T00:00:{index:02d}+00:00",
                 "workdir": "/w",
             }
@@ -335,7 +335,7 @@ class TuiCoreTests(unittest.TestCase):
             {
                 "session_id": "one",
                 "status": "done",
-                "workflow": "solo-codex",
+                "workflow": "solo-codex-cli",
                 "updated_at": "2026-07-08T00:00:01+00:00",
                 "workdir": "/short",
             },
@@ -397,7 +397,7 @@ class TuiCoreTests(unittest.TestCase):
             {
                 "session_id": "old",
                 "status": "done",
-                "workflow": "solo-codex",
+                "workflow": "solo-codex-cli",
                 "updated_at": "2026-07-08T00:00:00+00:00",
                 "workdir": "/old",
             },
@@ -465,7 +465,7 @@ class TuiCoreTests(unittest.TestCase):
     def test_options_helpers_extract_workflows(self):
         options = {
             "workflows": [
-                {"id": "solo-claude", "sequence": ["claude"], "parallel": None},
+                {"id": "solo-claude-cli", "sequence": ["claude"], "parallel": None},
                 {
                     "id": "dual-review",
                     "sequence": ["claude", "codex"],
@@ -474,15 +474,17 @@ class TuiCoreTests(unittest.TestCase):
             ],
         }
 
-        self.assertEqual(workflow_ids_from_options(options), ("solo-claude", "dual-review"))
+        self.assertEqual(workflow_ids_from_options(options), ("solo-claude-cli", "dual-review"))
         self.assertEqual(parallel_workflow_ids_from_options(options), ("dual-review",))
 
     def test_new_session_payload_matches_daemon_start_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
-            payload = build_new_session_payload(task=" task ", workflow="solo-codex", workdir=tmp)
+            payload = build_new_session_payload(
+                task=" task ", workflow="solo-codex-cli", workdir=tmp
+            )
 
         self.assertEqual(payload["task"], "task")
-        self.assertEqual(payload["workflow"], "solo-codex")
+        self.assertEqual(payload["workflow"], "solo-codex-cli")
         self.assertEqual(payload["workdir"], str(Path(tmp).resolve()))
         self.assertEqual(payload["max_turns"], 3)
         self.assertEqual(payload["timeout"], 900)
@@ -494,7 +496,7 @@ class TuiCoreTests(unittest.TestCase):
 
         interactive_payload = build_new_session_payload(
             task="task",
-            workflow="solo-codex",
+            workflow="solo-codex-cli",
             workdir=tmp,
             interactive=True,
             interactive_idle_timeout=30,
