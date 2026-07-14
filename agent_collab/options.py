@@ -866,6 +866,7 @@ def _describe_workflow(
                     "selection_source": "backend_disabled",
                 }
             )
+            selected.append(agent_id.partition(".")[0])
             ineligible.append("backend_disabled")
             recommendation_blockers.append("backend_disabled")
             continue
