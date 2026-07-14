@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-14 - Backend-first built-in workflows
+
 - Ship one built-in solo workflow per canonical backend (#26):
   `solo-<provider>-<cli|sdk>` for all eight backends, replacing the
   agents-first `solo-claude`/`solo-codex` names. Disabled backends' solo
@@ -21,6 +23,8 @@ into a detailed work log.
   backends are declared (disabled) in the built-in defaults, which also means
   a request-level `--backend sdk` override now requires enabling the backend
   first.
+- Show a disabled backend's canonical name in `agent-collab options` workflow
+  lines instead of the `(mock)` placeholder.
 
 ## [0.8.0] - 2026-07-14 - Backend-first configuration
 
