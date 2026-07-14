@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-07-15 - Read-only backend defaults
+
 - Ship read-only write posture by default for every backend that has a
   permission or sandbox control (#29): `claude_cli`/`claude_sdk`
   `permission_mode = "default"` (with `plan` newly accepted), `codex_cli`/
