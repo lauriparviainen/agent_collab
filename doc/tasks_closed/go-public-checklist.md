@@ -1,13 +1,15 @@
 # Go-public checklist
 
-**Status:** Open — publication blocker.
+**Status:** Closed 2026-07-14 — the repository is public and every checklist
+item is verified.
 
 **Created:** 2026-07-12. Final audit remediation merged 2026-07-13.
+Visibility flipped and post-flip items completed 2026-07-14.
 
 **Issue:** [#14](https://github.com/lauriparviainen/agent_collab/issues/14)
 
 **Related:**
-[workdir-limits-and-workspace-trust.md](../tasks_closed/workdir-limits-and-workspace-trust.md)
+[workdir-limits-and-workspace-trust.md](workdir-limits-and-workspace-trust.md)
 (issue #13), [SECURITY.md](../../SECURITY.md), and
 [release/SKILL.md](../../.claude/skills/release/SKILL.md).
 
@@ -37,24 +39,37 @@ recorded in the closed `workdir-limits-and-workspace-trust.md`; issue #14 owns
 the combined release gate and must stay synchronized with material scope
 changes.
 
-## Current continuation point
+## Closure record
 
-**Updated 2026-07-13.** The pre-flip remediation work is complete, but the
-go-public checklist is not complete and the repository remains private. The
-next concrete action is visibility-flip checklist item 2: rerun the complete
-pre-flip content audit on the actual final release commit. Do not change
-visibility as part of that audit.
+**Closed 2026-07-14.** The maintainer flipped visibility to public on
+2026-07-14 after the v0.7.0 release. The post-baseline content audit delta
+(all commits since the 2026-07-13 baseline, three of them documentation-only
+after the v0.7.0 tag) was scanned for credential signatures, machine-local
+paths, and private integration material with no findings; the one historical
+machine-local path is covered by the recorded identity/metadata decision.
+The verification matrix passed on the public HEAD: 830 hermetic tests, Ruff
+lint and formatting, `build --check`, a clean working tree, a clean
+`git fsck --full --no-dangling`, and a green CI run on the same commit.
 
-After the content audit, run the final verification and release gates on the
-same commit, confirm CI is green, and choose and prepare the release version,
-changelog, tag, and GitHub Release under the release skill. The visibility
-change still requires explicit maintainer approval. Public-only security,
-rendering, and community-profile checks follow the flip; issue #14 and this
-task remain open until those checks are complete.
+Post-flip settings, all applied and verified 2026-07-14:
 
-Issue #14 was reconciled at this checkpoint: it records issue #13 as completed
-and uses the current `./agent_collab_dev.sh test` and
-`./agent_collab_dev.sh build --check` verification commands.
+- private vulnerability reporting enabled and confirmed via `GET`;
+- secret scanning with push protection and Dependabot alerts enabled
+  (dependency graph is automatic on public repositories);
+- ruleset `protect-main` blocks deletion and force-pushes on the default
+  branch, and ruleset `protect-release-tags` blocks deletion, force-pushes,
+  and updates on `v*` tags;
+- squash-only merging, automatic head-branch deletion, Projects tab off;
+- fork pull-request workflows require approval for all external contributors,
+  the default `GITHUB_TOKEN` stays read-only, allowed actions are restricted
+  to GitHub-authored actions, and actions must be pinned to full-length
+  commit SHAs (the CI workflow already was);
+- the CI badge, Actions runs, and repository page render publicly, and the
+  description, topics, and release presentation were verified.
+
+GitHub's community profile still reported the valid bug-report issue template
+as unrecognized at closure time; this is post-flip cache lag, tracked as a
+recheck rather than a blocker.
 
 ## Audit baseline
 
@@ -248,6 +263,9 @@ Dependabot alerts.
 ## Visibility-flip checklist
 
 Ordered; the audit comes first because the flip publishes all history at once.
+
+**All items below were completed on 2026-07-14; the closure record above
+summarizes the evidence.**
 
 1. **Complete every pre-flip blocker above.** Record explicit maintainer
    decisions for historical identity/path metadata and the MCP install

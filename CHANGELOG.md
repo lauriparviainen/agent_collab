@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Make the repository public (#14): final content-audit delta and release-gate
+  verification on the public HEAD, then private vulnerability reporting,
+  secret scanning with push protection, Dependabot alerts, branch and
+  release-tag rulesets, and hardened Actions settings.
+
 ## [0.7.0] - 2026-07-14 - Cross-model review skills and parallel dual review
 
 - Fix `./agent_collab.sh skills install|uninstall` without a client crashing
