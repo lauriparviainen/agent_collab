@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Tidy the install readiness output: the agents column appears only when a
+  backend has agents beyond its default (personae or renames), and blank
+  lines separate the summary block, each table, and the final install
+  result.
+
 ## [0.8.1] - 2026-07-14 - Backend-first built-in workflows
 
 - Ship one built-in solo workflow per canonical backend (#26):

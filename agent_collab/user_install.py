@@ -376,6 +376,7 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
     if disabled_backends:
         summary.append(("disabled backends", ", ".join(str(item) for item in disabled_backends)))
     print_kv(tuple(summary))
+    print()
     table_rows = []
     remediation_rows = []
     seen_remediation = set()
@@ -383,10 +384,13 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
         if not isinstance(item, dict):
             raise ValueError("readiness row must be an object")
         backend = str(item.get("backend") or "—")
+        # The default agent shares the backend's name; only personae and
+        # renames add information, so the agents cell lists just those.
+        extra_agents = [str(agent) for agent in item.get("agents") or [] if str(agent) != backend]
         table_rows.append(
             (
                 backend,
-                ", ".join(str(agent) for agent in item.get("agents") or []) or "—",
+                ", ".join(extra_agents),
                 item.get("dependency") or "unknown",
                 item.get("credentials") or "unknown",
                 item.get("version") or "—",
@@ -400,17 +404,23 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
                 seen_remediation.add(entry)
                 remediation_rows.append(entry)
 
-    print_table(
-        ("backend", "agents", "dependency", "credentials", "version"),
-        table_rows,
-        max_widths=(20, 24, 24, 13, 20),
-    )
+    if any(row[1] for row in table_rows):
+        headers = ("backend", "agents", "dependency", "credentials", "version")
+        widths = (20, 24, 24, 13, 20)
+        printable = table_rows
+    else:
+        headers = ("backend", "dependency", "credentials", "version")
+        widths = (20, 24, 13, 20)
+        printable = [(row[0], *row[2:]) for row in table_rows]
+    print_table(headers, printable, max_widths=widths)
     if remediation_rows:
+        print()
         print_table(
             ("backend", "remediation"),
             remediation_rows,
             max_widths=(20, 72),
         )
+    print()
     return attention_count > 0
 
 

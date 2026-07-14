@@ -274,10 +274,45 @@ class InstallReadinessTableTests(unittest.TestCase):
         self.assertTrue(warned)
         self.assertIn("! Warning: 1 of 2 selected backends needs attention", output)
         self.assertIn("disabled backends  antigravity_cli, xai_cli", output)
+        # Blank lines separate the summary block, each table, and what follows.
+        self.assertIn("antigravity_cli, xai_cli\n\n", output)
+        self.assertIn("—\n\n  backend    remediation", output)
+        self.assertTrue(output.endswith("PATH.\n\n"))
+        # Only non-default agents appear in the agents cell.
         self.assertIn("backend     agents", output)
-        self.assertIn("claude_cli  claude_cli, claude-copy", output)
+        self.assertIn("claude_cli  claude-copy", output)
         self.assertIn("backend    remediation", output)
-        self.assertIn("Install codex", output)
+
+    def test_agents_column_is_omitted_when_only_default_agents_exist(self):
+        payload = {
+            "scope": "global user config",
+            "config_source": "built-in defaults + user config",
+            "probe_source": "installed environment",
+            "enabled_count": 1,
+            "selected_count": 1,
+            "attention_count": 0,
+            "disabled_backends": [],
+            "rows": [
+                {
+                    "backend": "claude_cli",
+                    "agents": ["claude_cli"],
+                    "dependency": "claude found",
+                    "credentials": "not checked",
+                    "version": "1.2.3",
+                    "remediation": [],
+                }
+            ],
+        }
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            warned = _print_backend_readiness(payload)
+
+        output = stdout.getvalue()
+        self.assertFalse(warned)
+        self.assertNotIn("agents", output)
+        self.assertIn("backend     dependency", output)
+        self.assertIn("claude_cli  claude found", output)
+        self.assertTrue(output.endswith("1.2.3\n\n"))
 
 
 if __name__ == "__main__":
