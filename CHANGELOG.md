@@ -13,6 +13,16 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Select workflow members at session start (#21): the additive `members` start
+  field maps a workflow slot (its configured member id; `[a, b, a]` stays one
+  lead plus one reviewer) to any globally enabled agent, validated with the
+  same rules as configured workflows before any session state exists.
+  Discovery advertises per-slot eligible members under
+  `workflows[].member_selection`, `agent-collab start` gains `--members`, and
+  the TUI `/new` wizard asks shape first, then the backends that fill its
+  slots, with the configured members preselected so Enter-through reproduces
+  the configured workflow. Task document: workflow-member-selection.
+
 ## [0.8.4] - 2026-07-15 - Reliable TUI polling
 
 - Preserve every TUI event exactly once when referee posts restart the poller

@@ -62,7 +62,9 @@ TOOLS = [
             "Start a supervised collaboration session over the configured agent backends "
             "(Claude, Codex, Antigravity, xAI, ...) and return a session id. "
             "workdir is required because it selects project config and subprocess cwd. "
-            "Call agent_collab_describe_options first before passing non-default backend_options."
+            "Call agent_collab_describe_options first before passing non-default backend_options "
+            "or members (per-workflow slot names and eligible agents are advertised under "
+            "workflows[].member_selection)."
         ),
         "inputSchema": {
             "type": "object",
@@ -78,6 +80,7 @@ TOOLS = [
                 "interactive_idle_timeout": {"type": "number"},
                 "backend_options": {"type": "object", "additionalProperties": {"type": "object"}},
                 "backend": {"type": "string"},
+                "members": {"type": "object", "additionalProperties": {"type": "string"}},
             },
             "required": ["task", "workdir"],
         },
@@ -557,6 +560,7 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
             "interactive_idle_timeout",
             "backend_options",
             "backend",
+            "members",
         )
         if key in args
     }

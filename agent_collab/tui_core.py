@@ -738,6 +738,7 @@ def build_new_session_payload(
     interactive: bool = False,
     interactive_idle_timeout: float = 600.0,
     backend_options: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    members: Optional[Mapping[str, str]] = None,
 ) -> dict:
     task = task.strip()
     workflow = workflow.strip()
@@ -746,7 +747,7 @@ def build_new_session_payload(
     if not workflow:
         raise ValueError("workflow is required")
     root = Path(workdir or ".").expanduser().resolve()
-    return {
+    payload = {
         "task": task,
         "workflow": workflow,
         "workdir": str(root),
@@ -758,6 +759,11 @@ def build_new_session_payload(
         "interactive_idle_timeout": float(interactive_idle_timeout),
         "backend_options": {key: dict(value) for key, value in (backend_options or {}).items()},
     }
+    # Only a real substitution goes on the wire; Enter-through-defaults keeps
+    # the payload identical to a start without member selection.
+    if members:
+        payload["members"] = {str(slot): str(agent_id) for slot, agent_id in members.items()}
+    return payload
 
 
 def workflow_ids_from_options(options: Mapping[str, Any]) -> Tuple[str, ...]:
@@ -777,6 +783,44 @@ def parallel_workflow_ids_from_options(options: Mapping[str, Any]) -> Tuple[str,
         if isinstance(workflow, Mapping) and workflow.get("id") and workflow.get("parallel"):
             ids.append(str(workflow["id"]))
     return tuple(ids)
+
+
+def member_slots_from_options(options: Mapping[str, Any]) -> dict:
+    """Per-workflow member-selection slots from a discovery payload.
+
+    Returns ``{workflow_id: [{"slot", "default", "eligible_members"}, ...]}``.
+    A daemon without ``member_selection`` support yields an empty map, which
+    makes the wizard skip its backends step entirely (today's behavior).
+    """
+
+    workflows = options.get("workflows") if isinstance(options.get("workflows"), Sequence) else []
+    result: dict = {}
+    for workflow in workflows:
+        if not isinstance(workflow, Mapping) or not workflow.get("id"):
+            continue
+        selection = workflow.get("member_selection")
+        if not isinstance(selection, Mapping):
+            continue
+        raw_slots = selection.get("slots")
+        if not isinstance(raw_slots, Sequence):
+            continue
+        slots = []
+        for raw in raw_slots:
+            if not isinstance(raw, Mapping) or not raw.get("slot"):
+                continue
+            eligible = raw.get("eligible_members")
+            slots.append(
+                {
+                    "slot": str(raw["slot"]),
+                    "default": str(raw.get("default") or raw["slot"]),
+                    "eligible_members": [str(item) for item in eligible]
+                    if isinstance(eligible, Sequence) and not isinstance(eligible, str)
+                    else [],
+                }
+            )
+        if slots and all(slot["eligible_members"] for slot in slots):
+            result[str(workflow["id"])] = slots
+    return result
 
 
 # ---------------------------------------------------------------------------

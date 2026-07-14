@@ -126,6 +126,7 @@ class StartPayloadSyncTests(unittest.TestCase):
             "interactive_idle_timeout": 1.0,
             "backend_options": {},
             "backend": "cli",
+            "members": {"claude_cli": "xai_cli"},
         }
         result = _start_payload(args)
         self.assertEqual(set(result), set(StartSessionRequestModel.WIRE_FIELDS))
@@ -163,6 +164,20 @@ class StartPayloadSyncTests(unittest.TestCase):
             _start_payload({**base, "backend": 5})
         with self.assertRaises(ValueError):
             StartSessionRequestModel.from_dict({**base, "backend": 5})
+
+    def test_members_shape_rules_and_default_round_trip(self):
+        base = {"task": "t", "workdir": "/w"}
+        # Absent, null, and empty all mean "configured members" and stay off
+        # the wire on the way back out.
+        for value in (None, {}):
+            model = StartSessionRequestModel.from_dict({**base, "members": value})
+            self.assertEqual(model.members, {})
+            self.assertNotIn("members", model.to_dict())
+        model = StartSessionRequestModel.from_dict({**base, "members": {"codex_cli": "xai_cli"}})
+        self.assertEqual(model.to_dict()["members"], {"codex_cli": "xai_cli"})
+        for bad in (["codex_cli"], {"codex_cli": 5}, "codex_cli"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                StartSessionRequestModel.from_dict({**base, "members": bad})
 
     def test_removed_provider_option_fields_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "codex_options"):

@@ -52,6 +52,7 @@ from .tui_core import (
     MENU_TEXT_ROW_SOURCE,
     MENU_TITLE_SOURCE,
     overlay_body_lines,
+    member_slots_from_options,
     parallel_workflow_ids_from_options,
     parse_input,
     picker_menu_lines,
@@ -500,7 +501,7 @@ class TuiApp:
             return
         if (
             self.new_wizard is not None
-            and self.new_wizard.get("step") == "workflow"
+            and self.new_wizard.get("step") in ("workflow", "members")
             and key in (curses.KEY_UP, curses.KEY_DOWN)
         ):
             self._move_wizard_choice(-1 if key == curses.KEY_UP else 1)
@@ -756,9 +757,17 @@ class TuiApp:
         if wizard.get("task"):
             lines.append(f"task: {wizard['task']}")
         for workflow_id in wizard.get("workflows", ()):
-            lines.append(f"workflow: {workflow_id}")
+            lines.append(f"workflow: {self._workflow_summary(workflow_id)}")
         lines.append(question)
         self.overlay_lines = tuple(lines)
+
+    def _workflow_summary(self, workflow_id: str) -> str:
+        """Render a selected workflow with its effective members."""
+        wizard = self.new_wizard or {}
+        members = (wizard.get("members") or {}).get(workflow_id) or ()
+        assigned = (wizard.get("selected_members") or {}).get(workflow_id) or {}
+        effective = [str(assigned.get(member, member)) for member in members]
+        return f"{workflow_id} · {' + '.join(effective)}" if effective else workflow_id
 
     def _enter_workflow_step(self, options: Mapping[str, Any]) -> None:
         wizard = self.new_wizard
@@ -776,6 +785,10 @@ class TuiApp:
         wizard["step"] = "workflow"
         wizard["choices"] = workflow_ids_from_options(options)
         wizard["members"] = members
+        wizard["slot_data"] = member_slots_from_options(options)
+        # Slot assignments are tied to the options snapshot the slots came
+        # from; re-entering the workflow step always resets them.
+        wizard["selected_members"] = {}
         wizard["index"] = 0
         # No preselected workflow: the choice is deliberate; continue is
         # rejected until at least one workflow is selected.
@@ -784,6 +797,9 @@ class TuiApp:
 
     def _wizard_choice_rows(self) -> list:
         wizard = self.new_wizard or {}
+        if wizard.get("step") == "members":
+            slot = self._current_member_slot()
+            return list(slot["eligible_members"]) if slot else []
         return list(wizard.get("choices") or ()) + [self.WIZARD_CONTINUE_ROW]
 
     def _refresh_workflow_choices(self) -> None:
@@ -819,7 +835,118 @@ class TuiApp:
         rows = self._wizard_choice_rows()
         index = max(0, min(len(rows) - 1, int(wizard.get("index") or 0) + delta))
         wizard["index"] = index
-        self._refresh_workflow_choices()
+        if wizard.get("step") == "members":
+            self._refresh_member_choices()
+        else:
+            self._refresh_workflow_choices()
+
+    def _current_member_slot(self) -> Optional[Mapping[str, Any]]:
+        wizard = self.new_wizard or {}
+        slots = wizard.get("member_slots") or []
+        slot_index = int(wizard.get("slot_index") or 0)
+        return slots[slot_index] if 0 <= slot_index < len(slots) else None
+
+    def _enter_members_step(self) -> None:
+        """Queue the backends question for every selected workflow.
+
+        Workflows whose discovery payload advertises no member slots (older
+        daemon) are skipped, so the wizard degrades to today's flow.
+        """
+        wizard = self.new_wizard
+        if wizard is None:
+            return
+        slot_data = wizard.get("slot_data") or {}
+        wizard["member_queue"] = [
+            workflow_id for workflow_id in wizard["workflows"] if slot_data.get(workflow_id)
+        ]
+        wizard["selected_members"] = {}
+        self._advance_members_queue()
+
+    def _advance_members_queue(self) -> None:
+        wizard = self.new_wizard
+        if wizard is None:
+            return
+        queue = wizard.get("member_queue") or []
+        if not queue:
+            self._enter_workdir_step()
+            return
+        workflow_id = queue.pop(0)
+        wizard["step"] = "members"
+        wizard["member_workflow"] = workflow_id
+        wizard["member_slots"] = list((wizard.get("slot_data") or {}).get(workflow_id) or ())
+        wizard["slot_index"] = 0
+        wizard["selected_members"].setdefault(workflow_id, {})
+        self._focus_member_default()
+        self._refresh_member_choices()
+        self.message = "↑↓ choose · Enter select"
+
+    def _focus_member_default(self) -> None:
+        """Preselect the slot's configured member so Enter keeps the default."""
+        wizard = self.new_wizard or {}
+        slot = self._current_member_slot()
+        if slot is None:
+            wizard["index"] = 0
+            return
+        eligible = list(slot["eligible_members"])
+        assigned = wizard["selected_members"][wizard["member_workflow"]].get(slot["slot"])
+        target = assigned or slot["default"]
+        wizard["index"] = eligible.index(target) if target in eligible else 0
+
+    def _refresh_member_choices(self) -> None:
+        """Render the backends step: one single-choice list per workflow slot.
+
+        ▸ marks the highlighted row (starting on the configured member), ✓ the
+        slot's current assignment. Enter assigns the highlighted agent and
+        advances to the next slot, workflow, or the workdir question.
+        """
+        wizard = self.new_wizard or {}
+        slot = self._current_member_slot()
+        if slot is None:
+            return
+        workflow_id = wizard.get("member_workflow") or ""
+        slots = wizard.get("member_slots") or []
+        slot_index = int(wizard.get("slot_index") or 0)
+        index = int(wizard.get("index") or 0)
+        assigned = wizard["selected_members"].get(workflow_id, {})
+        current = assigned.get(slot["slot"], slot["default"])
+        lines = ["new session"]
+        if wizard.get("task"):
+            lines.append(f"task: {wizard['task']}")
+        lines.append(
+            f"workflow: {workflow_id} · agent for slot {slot['slot']} "
+            f"({slot_index + 1}/{len(slots)})"
+        )
+        for row_index, agent_id in enumerate(slot["eligible_members"]):
+            marker = "▸" if row_index == index else " "
+            check = " ✓" if agent_id == current else ""
+            default = " · configured" if agent_id == slot["default"] else ""
+            lines.append(f"{marker} {agent_id}{check}{default}")
+        self.overlay_lines = tuple(lines)
+
+    def _assign_member(self, agent_id: str) -> None:
+        wizard = self.new_wizard
+        slot = self._current_member_slot()
+        if wizard is None or slot is None:
+            return
+        workflow_id = wizard["member_workflow"]
+        wizard["selected_members"][workflow_id][slot["slot"]] = agent_id
+        wizard["slot_index"] = int(wizard.get("slot_index") or 0) + 1
+        if wizard["slot_index"] < len(wizard.get("member_slots") or []):
+            self._focus_member_default()
+            self._refresh_member_choices()
+            self.message = f"slot {slot['slot']}: {agent_id}"
+            return
+        self._advance_members_queue()
+
+    def _enter_workdir_step(self) -> None:
+        wizard = self.new_wizard
+        if wizard is None:
+            return
+        default_workdir = str(wizard.get("default_workdir") or self._default_workdir())
+        wizard["step"] = "workdir"
+        wizard["default_workdir"] = default_workdir
+        self._refresh_wizard_overlay(f"workdir [{default_workdir}]")
+        self.message = f"workdir [{default_workdir}]"
 
     def _advance_new_wizard(self, value: str) -> None:
         wizard = self.new_wizard
@@ -861,11 +988,7 @@ class TuiApp:
                 if not wizard["workflows"]:
                     self.message = "workflow is required"
                     return
-                default_workdir = str(self._default_workdir())
-                wizard["step"] = "workdir"
-                wizard["default_workdir"] = default_workdir
-                self._refresh_wizard_overlay(f"workdir [{default_workdir}]")
-                self.message = f"workdir [{default_workdir}]"
+                self._enter_members_step()
                 return
             if choices and value not in choices:
                 self.message = f"unknown workflow {value!r}; choices: {', '.join(choices)}"
@@ -876,6 +999,23 @@ class TuiApp:
             wizard["workflows"].append(value)
             self._refresh_workflow_choices()
             self.message = f"selected: {', '.join(wizard['workflows'])}"
+            return
+        if step == "members":
+            slot = self._current_member_slot()
+            if slot is None:
+                self._advance_members_queue()
+                return
+            eligible = list(slot["eligible_members"])
+            if not value:
+                # Enter assigns the highlighted agent; the highlight starts on
+                # the configured member, so Enter-through keeps the defaults.
+                rows = self._wizard_choice_rows()
+                self._assign_member(rows[min(int(wizard.get("index") or 0), len(rows) - 1)])
+                return
+            if value not in eligible:
+                self.message = f"unknown agent {value!r}; choices: {', '.join(eligible)}"
+                return
+            self._assign_member(value)
             return
         if step == "workdir":
             workdir = value or str(wizard.get("default_workdir") or self._default_workdir())
@@ -899,6 +1039,13 @@ class TuiApp:
                 parallel = set(parallel_workflow_ids_from_options(options))
                 started = []
                 for workflow_id in selected:
+                    assigned = (wizard.get("selected_members") or {}).get(workflow_id) or {}
+                    # A slot answered with its configured member is not a
+                    # substitution; Enter-through-defaults sends no members
+                    # field at all (byte-for-byte today's start payload).
+                    substituted = {
+                        slot: agent_id for slot, agent_id in assigned.items() if agent_id != slot
+                    }
                     payload = build_new_session_payload(
                         task=wizard["task"],
                         workflow=workflow_id,
@@ -906,6 +1053,7 @@ class TuiApp:
                         # A parallel workflow is non-interactive by contract,
                         # and a multi-session start is watched, not driven.
                         interactive=len(selected) == 1 and workflow_id not in parallel,
+                        members=substituted or None,
                     )
                     started.append(self.client.start_session(payload).session_id)
                 self.new_wizard = None

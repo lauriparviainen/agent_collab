@@ -60,6 +60,17 @@ def workflow_members(workflow: WorkflowConfig) -> List[str]:
     return list(workflow.parallel if workflow.parallel is not None else workflow.sequence)
 
 
+def workflow_member_slots(workflow: WorkflowConfig) -> List[str]:
+    """Return the workflow's member slots in first-appearance order.
+
+    A slot is named by its configured member id; duplicate sequence positions
+    collapse into one slot, so ``[a, b, a]`` keeps slot identity ``a`` (lead,
+    reprising) plus ``b`` (reviewer) rather than three free positions.
+    """
+
+    return list(dict.fromkeys(workflow_members(workflow)))
+
+
 @dataclass
 class PersonaConfig:
     """A named options-only agent nested under a backend section."""

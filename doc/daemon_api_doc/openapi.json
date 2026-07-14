@@ -623,6 +623,13 @@
             "default": 3,
             "type": "integer"
           },
+          "members": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "type": "object"
+          },
           "mock": {
             "default": false,
             "type": "boolean"

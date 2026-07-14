@@ -469,6 +469,11 @@ class StartSessionRequestModel:
     interactive_idle_timeout: float = 600.0
     backend_options: Dict[str, Any] = field(default_factory=dict)
     backend: Optional[str] = None
+    # Start-time workflow member selection: {slot: agent_id}, slots named by
+    # the workflow's configured member ids. Absent/empty keeps the configured
+    # members — deep validation (slots, enablement, distinctness) is the
+    # daemon's ``resolve_workflow_members``; only the shape is checked here.
+    members: Dict[str, str] = field(default_factory=dict)
 
     WIRE_FIELDS: ClassVar[Tuple[str, ...]] = (
         "task",
@@ -482,6 +487,7 @@ class StartSessionRequestModel:
         "interactive_idle_timeout",
         "backend_options",
         "backend",
+        "members",
     )
     REQUIRED_FIELDS: ClassVar[Tuple[str, ...]] = ("task", "workdir")
 
@@ -493,6 +499,11 @@ class StartSessionRequestModel:
         backend = data.get("backend")
         if backend is not None and not isinstance(backend, str):
             raise ValueError("backend must be a string")
+        members = _optional_object(data, "members")
+        if not isinstance(members, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in members.items()
+        ):
+            raise ValueError("members must be an object mapping slot names to agent id strings")
         return cls(
             task=_required_str(data, "task"),
             workdir=_required_str(data, "workdir"),
@@ -505,6 +516,7 @@ class StartSessionRequestModel:
             interactive_idle_timeout=_number(data, "interactive_idle_timeout", 600.0),
             backend_options=_optional_object(data, "backend_options"),
             backend=str(backend) if backend is not None else None,
+            members=dict(members),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -522,6 +534,8 @@ class StartSessionRequestModel:
         }
         if self.backend is not None:
             out["backend"] = self.backend
+        if self.members:
+            out["members"] = dict(self.members)
         return out
 
 

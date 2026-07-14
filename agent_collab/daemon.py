@@ -25,6 +25,7 @@ from .options import (
     build_session_settings,
     describe_options,
     normalize_start_options,
+    resolve_workflow_members,
     validate_start_backends,
 )
 from .paths import GlobalDataPaths
@@ -80,6 +81,9 @@ class StartSessionRequest:
     session_id: Optional[str] = None
     backend_options: Optional[Dict[str, Dict[str, Any]]] = None
     backend: Optional[str] = None
+    # Start-time workflow member selection ({slot: agent_id}); validated and
+    # folded into the session's config snapshot by resolve_workflow_members.
+    members: Optional[Dict[str, str]] = None
     interactive: bool = False
     interactive_idle_timeout: float = 600.0
     # Resolved {agent_id: backend_id}, computed once during start validation and
@@ -119,6 +123,7 @@ class StartSessionRequest:
             interactive_idle_timeout=model.interactive_idle_timeout,
             backend_options=model.backend_options,
             backend=model.backend,
+            members=model.members,
         )
 
 
@@ -407,6 +412,16 @@ class SessionManager:
                     }
                 ]
             )
+        if request.members:
+            # Fold the validated start-time member selection into this start's
+            # fresh config snapshot: every later validation step, the settings
+            # echo, and execution (which carries the snapshot) see the effective
+            # members. The selection never comes from config, so #19's posture
+            # (project config cannot alter execution) is untouched.
+            effective = resolve_workflow_members(collab_config, request.workflow, request.members)
+            if effective is not None:
+                collab_config.workflows[request.workflow] = effective
+                workflow = effective
         if workflow.parallel is not None:
             errors = []
             if request.interactive:

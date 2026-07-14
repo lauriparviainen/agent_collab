@@ -60,7 +60,10 @@ selecting a workflow or starting. Use `health_refresh: "cached"` normally, or
   workflow occurrence's effective canonical backend,
 - one exact schema per canonical backend name, with allowed values and defaults
   (for example `backend_options.claude_cli.model` and
-  `backend_options.codex_sdk.sandbox`).
+  `backend_options.codex_sdk.sandbox`),
+- each workflow's member slots under `workflows[].member_selection`: the slot
+  name (the configured member id), its default, and the enabled agents
+  eligible to fill it, plus `distinct_members` for parallel shapes.
 
 Only pass entries for backends selected by the chosen workflow; anything else
 is rejected. Omit options you do not need — backend-specific configured
@@ -83,7 +86,16 @@ Start a session with `agent_collab_start`:
 ```
 
 Optional fields: `max_turns`, `timeout`, `mock`, `dry_run`, `interactive`,
-`interactive_idle_timeout`, `backend_options`, `backend`.
+`interactive_idle_timeout`, `backend_options`, `backend`, `members`.
+
+`members` runs a named workflow shape with different agents: it maps a slot
+(the configured member id from `member_selection.slots`) to any enabled agent,
+so `{"workflow": "dual-review", "members": {"codex_cli": "xai_cli"}}` reviews
+with Claude and xAI without config changes. A sequence slot reprises
+(`cross-review`'s lead fills both of its positions); parallel members must
+stay distinct. Invalid selections are rejected with `members.<slot>` field
+paths. `members` chooses agents; `backend` and `backend_options` stay
+orthogonal transport and option choices.
 
 Start is authoritative for preflight: it reloads workdir config, re-resolves
 the exact selection, rejects disabled backends, revalidates options, and freshly

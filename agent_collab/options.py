@@ -8,8 +8,10 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, 
 from .config import (
     AgentConfig,
     CollaborationConfig,
+    WorkflowConfig,
     load_config,
     validate_workflow,
+    workflow_member_state,
     workflow_members,
 )
 from .backend_contract import BackendOptionError, OptionSpec
@@ -41,6 +43,104 @@ def format_validation_error(details: Sequence[Mapping[str, Any]]) -> str:
         message = detail.get("message", "")
         lines.append(f"{path}: {message}" if path else message)
     return "\n".join(lines)
+
+
+def resolve_workflow_members(
+    config: CollaborationConfig,
+    workflow_id: str,
+    members: Any,
+) -> Optional[WorkflowConfig]:
+    """Validate a start-time member selection and return the effective workflow.
+
+    ``members`` maps a workflow slot (named by the configured member id, see
+    ``workflow_member_slots``) to the globally enabled agent that fills it.
+    Selection is a caller-side start choice only — project config can neither
+    supply nor influence it — and every substituted group keeps the rules of
+    ``validate_workflow`` (members enabled, parallel groups duplicate-free with
+    an unchanged width). Returns ``None`` when nothing was substituted so an
+    absent or empty field stays byte-for-byte today's behavior.
+    """
+
+    from .config import workflow_member_slots
+
+    errors: List[Dict[str, str]] = []
+    selection = _expect_mapping(members, "members", errors)
+    if errors:
+        raise StartOptionsError(errors)
+    if not selection:
+        return None
+    workflow = config.workflows.get(workflow_id)
+    if workflow is None:
+        raise StartOptionsError(
+            [{"path": "workflow", "message": f"unknown workflow {workflow_id!r}"}]
+        )
+    slots = workflow_member_slots(workflow)
+    mapping: Dict[str, str] = {}
+    for key in selection:
+        if not isinstance(key, str) or not key:
+            errors.append({"path": "members", "message": "slot names must be non-empty strings"})
+            continue
+        if key not in slots:
+            errors.append(
+                {
+                    "path": f"members.{key}",
+                    "message": (
+                        f"unknown slot for workflow {workflow_id!r}; "
+                        "expected one of: " + ", ".join(slots)
+                    ),
+                }
+            )
+            continue
+        value = selection[key]
+        if not isinstance(value, str) or not value:
+            errors.append({"path": f"members.{key}", "message": "must be an agent id string"})
+            continue
+        state = workflow_member_state(config, value)
+        if state == "unknown":
+            errors.append(
+                {"path": f"members.{key}", "message": f"references unknown agent {value!r}"}
+            )
+            continue
+        if state == "disabled":
+            errors.append(
+                {
+                    "path": f"members.{key}",
+                    "message": (
+                        f"references agent {value!r} of a disabled backend; enable it in "
+                        "the user config or select an enabled agent"
+                    ),
+                }
+            )
+            continue
+        mapping[key] = value
+    if errors:
+        raise StartOptionsError(_dedupe_details(errors))
+    if all(mapping[slot] == slot for slot in mapping):
+        return None
+    if workflow.parallel is not None:
+        substituted = [mapping.get(member, member) for member in workflow.parallel]
+        seen: Dict[str, str] = {}
+        for slot, agent_id in zip(workflow.parallel, substituted):
+            if agent_id in seen:
+                errors.append(
+                    {
+                        "path": f"members.{slot}",
+                        "message": (
+                            f"parallel workflow {workflow_id!r} members must be distinct; "
+                            f"{agent_id!r} already fills slot {seen[agent_id]!r}"
+                        ),
+                    }
+                )
+                continue
+            seen[agent_id] = slot
+        if errors:
+            raise StartOptionsError(errors)
+        return WorkflowConfig(id=workflow.id, sequence=[], parallel=substituted)
+    return WorkflowConfig(
+        id=workflow.id,
+        sequence=[mapping.get(member, member) for member in workflow.sequence],
+        parallel=None,
+    )
 
 
 def validate_start_options(
@@ -552,6 +652,7 @@ def describe_options(
             "start": {
                 "reloads_workdir_config": True,
                 "revalidates_selection_and_options": True,
+                "accepts_member_selection": True,
                 "rejects_disabled_backends": True,
                 "start_probe_policy_is_per_backend": True,
                 "applies_backend_policy": True,
@@ -929,12 +1030,44 @@ def _describe_workflow(
         "sequence": members,
         "parallel": None if workflow.parallel is None else list(workflow.parallel),
         "agent_types": types,
+        "member_selection": _describe_member_selection(config, workflow),
         "effective_agents": effective_agents,
         "selected_canonical_backends": sorted(set(selected)),
         "start_eligible": not ineligible,
         "ineligible_reasons": list(dict.fromkeys(ineligible)),
         "recommendation_blockers": list(dict.fromkeys(recommendation_blockers)),
         "uniform_backend_overrides": uniform,
+    }
+
+
+def _describe_member_selection(
+    config: CollaborationConfig, workflow: WorkflowConfig
+) -> Dict[str, Any]:
+    """Describe the workflow's start-time member slots for discovery.
+
+    Advertises the additive ``members`` start field: one entry per slot (see
+    ``workflow_member_slots``) with its configured default and the globally
+    enabled agents eligible to fill it. ``default_eligible`` is false when the
+    configured member's backend is disabled — the slot then *requires* a
+    substitution before the workflow can start.
+    """
+
+    from .config import workflow_member_slots
+
+    eligible = sorted(agent.id for agent in config.agents.values() if agent.enabled)
+    distinct = workflow.parallel is not None
+    return {
+        "start_field": "members",
+        "distinct_members": distinct,
+        "slots": [
+            {
+                "slot": slot,
+                "default": slot,
+                "default_eligible": slot in eligible,
+                "eligible_members": eligible,
+            }
+            for slot in workflow_member_slots(workflow)
+        ],
     }
 
 

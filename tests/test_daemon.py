@@ -335,6 +335,110 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("max_turns must be at least 1", zero_detail["message"])
         self.assertEqual(manager.list_sessions(), [])
 
+    async def test_start_member_selection_runs_substituted_parallel_group(self):
+        ran = set()
+
+        class Runner:
+            def __init__(self, agent_id, source):
+                self.agent_id = agent_id
+                self.source = source
+
+            async def run_turn(self, prompt, workdir, emit):
+                ran.add(self.agent_id)
+                await emit(Event.create(self.source, "message", f"{self.agent_id} review"))
+                return TurnOutcome("completed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                "schema_version = 8\n[backends.xai_cli]\nenabled = true\n",
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                with mock.patch.object(
+                    Referee,
+                    "_runners",
+                    return_value={
+                        "claude_cli": Runner("claude_cli", "claude"),
+                        "xai_cli": Runner("xai_cli", "xai"),
+                    },
+                ):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="substituted review",
+                            workflow="dual-review",
+                            members={"codex_cli": "xai_cli"},
+                            mock=True,
+                            workdir=root,
+                        )
+                    )
+                    final = await self._wait_for_terminal(manager, state.session_id)
+
+        self.assertEqual(final.status, "done")
+        self.assertEqual(ran, {"claude_cli", "xai_cli"})
+        # The settings echo reflects the effective members — no new fields.
+        self.assertEqual(final.settings["workflow"]["parallel"], ["claude_cli", "xai_cli"])
+        self.assertEqual(set(final.settings["agents"]), {"claude_cli", "xai_cli"})
+
+    async def test_start_member_selection_reprises_sequence_slot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                "schema_version = 8\n[backends.xai_cli]\nenabled = true\n",
+                encoding="utf-8",
+            )
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="substituted lead",
+                        workflow="cross-review",
+                        members={"claude_cli": "xai_cli"},
+                        mock=True,
+                        max_turns=1,
+                        workdir=root,
+                    )
+                )
+                final = await self._wait_for_terminal(manager, state.session_id)
+
+        self.assertEqual(final.status, "done")
+        # [a, b, a] keeps slot identity: the substituted lead reprises.
+        self.assertEqual(
+            final.settings["workflow"]["sequence"], ["xai_cli", "codex_cli", "xai_cli"]
+        )
+
+    async def test_start_member_selection_rejects_before_session_state_is_created(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                for members, path in (
+                    ({"nope": "claude_cli"}, "members.nope"),
+                    ({"codex_cli": "xai_cli"}, "members.codex_cli"),  # disabled backend
+                    ({"codex_cli": "claude_cli"}, "members.codex_cli"),  # duplicate
+                ):
+                    with self.subTest(members=members):
+                        with self.assertRaises(StartOptionsError) as ctx:
+                            await manager.start_session(
+                                StartSessionRequest(
+                                    task="bad members",
+                                    workflow="dual-review",
+                                    members=members,
+                                    mock=True,
+                                    workdir=root,
+                                )
+                            )
+                        details = ctx.exception.to_dict()["details"]
+                        self.assertEqual(details[0]["path"], path)
+        self.assertEqual(manager.list_sessions(), [])
+
     async def test_start_rejects_unknown_workflow_with_structured_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

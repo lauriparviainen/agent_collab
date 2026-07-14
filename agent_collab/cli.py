@@ -172,6 +172,12 @@ def build_start_parser() -> argparse.ArgumentParser:
         help='JSON object keyed by backend name, e.g. {"claude_cli":{"model":"opus"}}.',
     )
     parser.add_argument(
+        "--members",
+        help="JSON object mapping workflow slots (configured member ids) to the enabled "
+        'agents that fill them, e.g. {"codex_cli":"xai_cli"}. '
+        "See 'agent-collab options' for each workflow's slots.",
+    )
+    parser.add_argument(
         "--watch",
         action="store_true",
         help="Start the session and immediately watch its transcript.",
@@ -488,6 +494,9 @@ def _main_start(argv) -> int:
         }
         if args.backend:
             payload["backend"] = args.backend
+        members = _json_object_arg(args.members, "--members")
+        if members:
+            payload["members"] = members
         result = _client(args.server_url).start_session(payload)
         _print_session(result)
         if args.watch:

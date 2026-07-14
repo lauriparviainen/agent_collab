@@ -10,6 +10,7 @@ from agent_collab.options import (
     build_session_settings,
     describe_options,
     normalize_start_options,
+    resolve_workflow_members,
     validate_start_options,
 )
 
@@ -217,6 +218,119 @@ class DescribeOptionsTests(unittest.TestCase):
         )
         self.assertFalse(workflow["start_eligible"])
         self.assertIn("backend_disabled", workflow["ineligible_reasons"])
+
+
+class WorkflowMemberSelectionTests(unittest.TestCase):
+    """Start-time member selection: slot semantics, enablement, distinctness."""
+
+    @staticmethod
+    def _config_with_xai() -> CollaborationConfig:
+        from agent_collab.config import merge_config_data
+
+        config = _config()
+        # xai ships disabled in the built-in config; the substitution tests
+        # need a third enabled agent.
+        merge_config_data(config, {"backends": {"xai_cli": {"enabled": True}}})
+        return config
+
+    def test_absent_or_empty_or_identity_selection_is_a_no_op(self):
+        config = _config()
+        self.assertIsNone(resolve_workflow_members(config, "cross-review", None))
+        self.assertIsNone(resolve_workflow_members(config, "cross-review", {}))
+        self.assertIsNone(
+            resolve_workflow_members(config, "cross-review", {"claude_cli": "claude_cli"})
+        )
+
+    def test_sequence_substitution_keeps_slot_identity(self):
+        # cross-review is [claude, codex, claude]: substituting the lead slot
+        # must reprise in both of its positions.
+        effective = resolve_workflow_members(
+            self._config_with_xai(), "cross-review", {"claude_cli": "xai_cli"}
+        )
+        self.assertEqual(effective.sequence, ["xai_cli", "codex_cli", "xai_cli"])
+        self.assertIsNone(effective.parallel)
+
+    def test_parallel_substitution_replaces_one_group_member(self):
+        effective = resolve_workflow_members(
+            self._config_with_xai(), "dual-review", {"codex_cli": "xai_cli"}
+        )
+        self.assertEqual(effective.parallel, ["claude_cli", "xai_cli"])
+        self.assertEqual(effective.sequence, [])
+
+    def test_unknown_slot_and_unknown_agent_have_field_paths(self):
+        with self.assertRaises(StartOptionsError) as ctx:
+            resolve_workflow_members(
+                _config(),
+                "dual-review",
+                {"nope_cli": "claude_cli", "codex_cli": "missing_agent"},
+            )
+        details = {item["path"]: item["message"] for item in ctx.exception.to_dict()["details"]}
+        self.assertIn("unknown slot", details["members.nope_cli"])
+        self.assertIn("unknown agent", details["members.codex_cli"])
+
+    def test_disabled_agent_is_rejected_with_field_path(self):
+        from agent_collab.config import merge_config_data
+
+        config = _config()
+        merge_config_data(config, {"backends": {"xai_cli": {"enabled": False}}})
+        with self.assertRaises(StartOptionsError) as ctx:
+            resolve_workflow_members(config, "dual-review", {"codex_cli": "xai_cli"})
+        detail = ctx.exception.to_dict()["details"][0]
+        self.assertEqual(detail["path"], "members.codex_cli")
+        self.assertIn("disabled backend", detail["message"])
+
+    def test_parallel_duplicate_members_are_rejected(self):
+        with self.assertRaises(StartOptionsError) as ctx:
+            resolve_workflow_members(_config(), "dual-review", {"codex_cli": "claude_cli"})
+        detail = ctx.exception.to_dict()["details"][0]
+        self.assertEqual(detail["path"], "members.codex_cli")
+        self.assertIn("must be distinct", detail["message"])
+
+    def test_substitution_can_replace_a_disabled_configured_member(self):
+        from agent_collab.config import merge_config_data
+
+        config = self._config_with_xai()
+        merge_config_data(config, {"backends": {"codex_cli": {"enabled": False}}})
+        effective = resolve_workflow_members(config, "dual-review", {"codex_cli": "xai_cli"})
+        self.assertEqual(effective.parallel, ["claude_cli", "xai_cli"])
+
+    def test_non_object_selection_is_rejected(self):
+        with self.assertRaises(StartOptionsError) as ctx:
+            resolve_workflow_members(_config(), "dual-review", ["claude_cli"])
+        self.assertEqual(ctx.exception.to_dict()["details"][0]["path"], "members")
+
+    def test_describe_options_advertises_per_slot_member_selection(self):
+        payload = describe_options(self._config_with_xai())
+        self.assertTrue(payload["discovery"]["start"]["accepts_member_selection"])
+        workflows = {item["id"]: item for item in payload["workflows"]}
+
+        cross = workflows["cross-review"]["member_selection"]
+        self.assertEqual(cross["start_field"], "members")
+        self.assertFalse(cross["distinct_members"])
+        # [a, b, a] collapses into two slots with the configured defaults.
+        self.assertEqual(
+            [(slot["slot"], slot["default"]) for slot in cross["slots"]],
+            [("claude_cli", "claude_cli"), ("codex_cli", "codex_cli")],
+        )
+        for slot in cross["slots"]:
+            self.assertTrue(slot["default_eligible"])
+            self.assertIn("xai_cli", slot["eligible_members"])
+
+        dual = workflows["dual-review"]["member_selection"]
+        self.assertTrue(dual["distinct_members"])
+        self.assertEqual(len(dual["slots"]), 2)
+
+    def test_describe_options_marks_disabled_default_ineligible(self):
+        from agent_collab.config import merge_config_data
+
+        config = _config()
+        merge_config_data(config, {"backends": {"codex_cli": {"enabled": False}}})
+        payload = describe_options(config)
+        dual = next(item for item in payload["workflows"] if item["id"] == "dual-review")
+        slots = {slot["slot"]: slot for slot in dual["member_selection"]["slots"]}
+        self.assertFalse(slots["codex_cli"]["default_eligible"])
+        self.assertTrue(slots["claude_cli"]["default_eligible"])
+        self.assertNotIn("codex_cli", slots["codex_cli"]["eligible_members"])
 
 
 class CommandMappingTests(unittest.TestCase):

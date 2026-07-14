@@ -756,6 +756,157 @@ class NewWizardFlowTests(unittest.TestCase):
         self.assertEqual(app.new_wizard["workflows"], ["dual-review"])
 
 
+class NewWizardMemberStepTests(unittest.TestCase):
+    """The wizard asks shape first, then the backends that fill its slots."""
+
+    class _Client:
+        def __init__(self):
+            self.started = []
+
+        def describe_options(self, payload):
+            eligible = ["claude_cli", "codex_cli", "xai_cli"]
+            return {
+                "workflows": [
+                    {
+                        "id": "cross-review",
+                        "sequence": ["claude_cli", "codex_cli", "claude_cli"],
+                        "member_selection": {
+                            "start_field": "members",
+                            "distinct_members": False,
+                            "slots": [
+                                {
+                                    "slot": "claude_cli",
+                                    "default": "claude_cli",
+                                    "eligible_members": eligible,
+                                },
+                                {
+                                    "slot": "codex_cli",
+                                    "default": "codex_cli",
+                                    "eligible_members": eligible,
+                                },
+                            ],
+                        },
+                    },
+                    {
+                        "id": "dual-review",
+                        "parallel": ["claude_cli", "codex_cli"],
+                        "sequence": ["claude_cli", "codex_cli"],
+                        "member_selection": {
+                            "start_field": "members",
+                            "distinct_members": True,
+                            "slots": [
+                                {
+                                    "slot": "claude_cli",
+                                    "default": "claude_cli",
+                                    "eligible_members": eligible,
+                                },
+                                {
+                                    "slot": "codex_cli",
+                                    "default": "codex_cli",
+                                    "eligible_members": eligible,
+                                },
+                            ],
+                        },
+                    },
+                ]
+            }
+
+        def start_session(self, payload):
+            self.started.append(payload)
+            from types import SimpleNamespace
+
+            return SimpleNamespace(session_id=f"daemon-{len(self.started)}")
+
+    def _app(self):
+        client = self._Client()
+        app = TuiApp(_DummyScreen(), client, initial_session_id=None)
+        app.activated = []
+        app.activate_session = app.activated.append
+        return app, client
+
+    def _select_dual_review(self, app):
+        app._start_new_wizard()
+        app._advance_new_wizard("review the diff")
+        app._move_wizard_choice(1)  # ▸ dual-review
+        app._advance_new_wizard("")  # toggle ✓
+        app._move_wizard_choice(99)  # ▸ continue
+        app._advance_new_wizard("")  # → members step
+
+    def test_enter_through_defaults_sends_no_members_field(self):
+        app, client = self._app()
+        self._select_dual_review(app)
+        self.assertEqual(app.new_wizard["step"], "members")
+        # The highlight starts on the configured member of each slot.
+        self.assertIn("▸ claude_cli ✓ · configured", app.overlay_lines)
+        app._advance_new_wizard("")  # slot claude_cli keeps its default
+        app._advance_new_wizard("")  # slot codex_cli keeps its default
+        self.assertEqual(app.new_wizard["step"], "workdir")
+        app._advance_new_wizard("")  # default workdir starts the session
+        self.assertEqual(len(client.started), 1)
+        self.assertNotIn("members", client.started[0])
+
+    def test_substituted_slot_is_sent_and_shown(self):
+        app, client = self._app()
+        self._select_dual_review(app)
+        app._advance_new_wizard("")  # slot claude_cli keeps its default
+        app._advance_new_wizard("xai_cli")  # slot codex_cli → xai_cli
+        self.assertEqual(app.new_wizard["step"], "workdir")
+        # The workdir question shows the effective members.
+        self.assertIn("workflow: dual-review · claude_cli + xai_cli", app.overlay_lines)
+        app._advance_new_wizard("")
+        self.assertEqual(client.started[0]["members"], {"codex_cli": "xai_cli"})
+
+    def test_arrow_selection_assigns_highlighted_member(self):
+        app, client = self._app()
+        self._select_dual_review(app)
+        app._move_wizard_choice(2)  # ▸ xai_cli for slot claude_cli
+        app._advance_new_wizard("")
+        app._advance_new_wizard("")  # slot codex_cli keeps its default
+        app._advance_new_wizard("")  # workdir
+        self.assertEqual(client.started[0]["members"], {"claude_cli": "xai_cli"})
+
+    def test_unknown_member_is_rejected_and_slot_stays(self):
+        app, client = self._app()
+        self._select_dual_review(app)
+        app._advance_new_wizard("nope_cli")
+        self.assertIn("unknown agent", app.message)
+        self.assertEqual(app.new_wizard["step"], "members")
+        self.assertEqual(app.new_wizard["slot_index"], 0)
+
+    def test_each_selected_workflow_gets_its_own_members_question(self):
+        app, client = self._app()
+        app._start_new_wizard()
+        app._advance_new_wizard("review the diff")
+        app._advance_new_wizard("")  # ▸ cross-review toggled
+        app._move_wizard_choice(1)  # ▸ dual-review
+        app._advance_new_wizard("")
+        app._move_wizard_choice(99)  # ▸ continue
+        app._advance_new_wizard("")
+        # cross-review first: substitute the lead, keep the reviewer.
+        self.assertIn("workflow: cross-review · agent for slot claude_cli (1/2)", app.overlay_lines)
+        app._advance_new_wizard("xai_cli")
+        app._advance_new_wizard("")
+        # then dual-review: keep both defaults.
+        self.assertIn("workflow: dual-review · agent for slot claude_cli (1/2)", app.overlay_lines)
+        app._advance_new_wizard("")
+        app._advance_new_wizard("")
+        app._advance_new_wizard("")  # workdir starts both
+        self.assertEqual(client.started[0]["members"], {"claude_cli": "xai_cli"})
+        self.assertNotIn("members", client.started[1])
+
+    def test_wizard_without_slot_data_skips_members_step(self):
+        app, client = self._app()
+        client.describe_options = lambda payload: {
+            "workflows": [{"id": "dual-review", "parallel": ["claude_cli", "codex_cli"]}]
+        }
+        app._start_new_wizard()
+        app._advance_new_wizard("review the diff")
+        app._advance_new_wizard("")  # toggle dual-review
+        app._move_wizard_choice(99)
+        app._advance_new_wizard("")  # continue → straight to workdir
+        self.assertEqual(app.new_wizard["step"], "workdir")
+
+
 class GutterLabelTests(unittest.TestCase):
     def test_long_source_is_ellipsized_into_the_fixed_gutter(self):
         self.assertEqual(gutter_label("antigravity-tool"), "antigravity-tool")  # 16 fits exactly

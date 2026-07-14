@@ -145,6 +145,38 @@ accepted. Its final referee status event carries `raw.members` and
 `raw.accepted_members`; zero accepted members produces the canonical
 `parallel_stage_no_accepted_member` session failure.
 
+### Member selection at start
+
+A session start can fill a named workflow's slots with different agents
+without defining a throwaway workflow (#21). The additive `members` start
+field maps a **slot** — named by the workflow's configured member id — to the
+globally enabled agent that fills it. Duplicate sequence positions collapse
+into one slot, so `cross-review`'s `[a, b, a]` exposes slots `a`
+(lead/reviser, reprising) and `b` (reviewer); substituting `a` replaces both
+of its positions:
+
+```json
+{"workflow": "dual-review", "members": {"codex_cli": "xai_cli"}}
+```
+
+Selection is validated with the same rules as configured workflows before any
+session state exists: members must exist and be enabled, parallel groups keep
+duplicate rejection and their configured width. Violations are rejected with
+`invalid_start_options` field paths (`members.<slot>`). An absent or empty
+field — and a selection that names only configured members — is exactly
+today's behavior. The selection is a caller-side start choice: project config
+can neither supply nor influence it, so the #19 posture (parallel execution
+and agent enablement are user-config-only) is unchanged. The start response's
+`settings.workflow` and `settings.agents` echo the effective members.
+
+Discovery advertises each workflow's slots under
+`workflows[].member_selection` (`slots[]` with `slot`, `default`,
+`default_eligible`, `eligible_members`, plus `distinct_members` for parallel
+shapes), the CLI accepts `--members '{"slot":"agent"}'`, and the TUI `/new`
+wizard asks for the workflow shape first and then the backends that fill its
+slots, with the configured members preselected so pressing Enter through the
+questions starts the configured workflow.
+
 ## Backend sections
 
 Backend sections belong in the global user config. The section name is the
@@ -314,6 +346,11 @@ effective schemas — with the shipped defaults overlaid — through
 `agent_collab_describe_options`. Unknown keys, wrong types, unsupported
 values, unselected backends, and invalid cross-field combinations are rejected
 with actionable paths.
+
+The separate `members` start field chooses which *agents* fill the workflow's
+slots (see "Member selection at start" above); `backend` and `backend_options`
+stay orthogonal transport and option choices for whichever agents end up
+selected.
 
 ### Default write posture
 

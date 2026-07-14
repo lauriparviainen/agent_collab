@@ -513,6 +513,60 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(interactive_payload["interactive"], True)
         self.assertEqual(interactive_payload["interactive_idle_timeout"], 30.0)
 
+    def test_new_session_payload_carries_members_only_when_substituted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plain = build_new_session_payload(task="task", workflow="dual-review", workdir=tmp)
+            substituted = build_new_session_payload(
+                task="task",
+                workflow="dual-review",
+                workdir=tmp,
+                members={"codex_cli": "xai_cli"},
+            )
+
+        self.assertNotIn("members", plain)
+        self.assertEqual(substituted["members"], {"codex_cli": "xai_cli"})
+
+    def test_member_slots_from_options_requires_complete_slot_data(self):
+        from agent_collab.tui_core import member_slots_from_options
+
+        slots = {
+            "start_field": "members",
+            "distinct_members": True,
+            "slots": [
+                {
+                    "slot": "claude_cli",
+                    "default": "claude_cli",
+                    "eligible_members": ["claude_cli", "codex_cli"],
+                }
+            ],
+        }
+        options = {
+            "workflows": [
+                {"id": "with-slots", "parallel": ["claude_cli"], "member_selection": slots},
+                # Pre-member-selection daemon payload: no member_selection key.
+                {"id": "legacy", "sequence": ["claude_cli"]},
+                # A slot with no eligible members disables the whole step.
+                {
+                    "id": "empty-eligible",
+                    "sequence": ["claude_cli"],
+                    "member_selection": {"slots": [{"slot": "claude_cli", "eligible_members": []}]},
+                },
+            ]
+        }
+
+        parsed = member_slots_from_options(options)
+        self.assertEqual(set(parsed), {"with-slots"})
+        self.assertEqual(
+            parsed["with-slots"],
+            [
+                {
+                    "slot": "claude_cli",
+                    "default": "claude_cli",
+                    "eligible_members": ["claude_cli", "codex_cli"],
+                }
+            ],
+        )
+
     def test_terminal_status_controls_poller_and_read_only_helpers(self):
         self.assertTrue(session_is_terminal({"status": "interrupted"}))
         self.assertFalse(session_is_terminal({"status": "awaiting_input"}))
