@@ -406,20 +406,16 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
 
     if any(row[1] for row in table_rows):
         headers = ("backend", "agents", "dependency", "credentials", "version")
-        widths = (20, 24, 24, 13, 20)
         printable = table_rows
     else:
         headers = ("backend", "dependency", "credentials", "version")
-        widths = (20, 24, 13, 20)
         printable = [(row[0], *row[2:]) for row in table_rows]
-    print_table(headers, printable, max_widths=widths)
+    # No max_widths: readiness facts are short-lived diagnostics and must not
+    # be truncated; the terminal wraps long remediation text if it has to.
+    print_table(headers, printable)
     if remediation_rows:
         print()
-        print_table(
-            ("backend", "remediation"),
-            remediation_rows,
-            max_widths=(20, 72),
-        )
+        print_table(("backend", "remediation"), remediation_rows)
     print()
     return attention_count > 0
 

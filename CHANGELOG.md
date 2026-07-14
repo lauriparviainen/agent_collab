@@ -14,9 +14,9 @@ into a detailed work log.
 ## [Unreleased]
 
 - Tidy the install readiness output: the agents column appears only when a
-  backend has agents beyond its default (personae or renames), and blank
-  lines separate the summary block, each table, and the final install
-  result.
+  backend has agents beyond its default (personae or renames), blank lines
+  separate the summary block, each table, and the final install result, and
+  table cells are never truncated.
 
 ## [0.8.1] - 2026-07-14 - Backend-first built-in workflows
 
