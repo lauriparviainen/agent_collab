@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-07-14 - Readiness output polish
+
 - Tidy the install readiness output: the agents column appears only when a
   backend has agents beyond its default (personae or renames), blank lines
   separate the summary block, each table, and the final install result, and
