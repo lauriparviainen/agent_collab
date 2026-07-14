@@ -26,8 +26,9 @@ is generally better. It does not make AI review sufficient.
 
 ![Claude Opus and Codex reviewing the daemon-to-TUI event path concurrently in the agent-collab TUI](doc/assets/tui-dual-review.png)
 
-*Claude Opus and Codex independently review the same code in the built-in
-`dual-review` workflow.*
+*A coding agent launched the built-in `dual-review` workflow through
+agent-collab's MCP server; Claude Opus and Codex then reviewed the same code
+independently.*
 
 ## How it fits together
 
