@@ -1,9 +1,12 @@
 # Install-time configured backend readiness summary
 
-**Status:** Implemented and verified 2026-07-14. A cross-model review
-(Gemini 3.1 Pro via agent-collab) confirmed one gap — the no-user-config
-collector path was untested — closed by
-`test_defaults_to_loading_user_config_without_creating_one`.
+**Status:** Closed 2026-07-14 — implemented, verified, and shipped on `main`.
+A cross-model review (Gemini 3.1 Pro via agent-collab) confirmed one gap —
+the no-user-config collector path was untested — closed by
+`test_defaults_to_loading_user_config_without_creating_one`. The open
+questions below are recorded as optional follow-ups, not blockers; a public
+`agent-collab doctor` command remains the natural next step if demand
+appears.
 
 **Created:** 2026-07-14.
 
