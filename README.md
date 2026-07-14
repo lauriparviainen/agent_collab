@@ -24,6 +24,11 @@ is generally better. It does not make AI review sufficient.
 
 > The bet is simple: coverage comes from disagreement, not just more passes.
 
+![Claude Opus and Codex reviewing the daemon-to-TUI event path concurrently in the agent-collab TUI](doc/assets/tui-dual-review.png)
+
+*Claude Opus and Codex independently review the same code in the built-in
+`dual-review` workflow.*
+
 ## How it fits together
 
 ```mermaid
