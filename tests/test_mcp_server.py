@@ -136,7 +136,7 @@ class McpServerTests(unittest.TestCase):
             "interactive: false",
             "timeout_ms=20000",
             "[<session_id> <canonical_backend>]",
-            "Advisory backend quirks (2026-07-14)",
+            "Advisory backend quirks (2026-07-15)",
         ):
             self.assertIn(required, text)
         self.assertNotIn("## Errors", text)

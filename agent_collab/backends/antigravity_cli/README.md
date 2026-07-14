@@ -8,7 +8,7 @@ Select with `backend="cli"`; `agy` must be on PATH. The health probe checks the 
 
 ## Options
 
-[`options.toml`](options.toml) is authoritative. `model` and `mode` map to flags before print mode and may be inferred from argv. The resolved workdir is supplied with `--add-dir` unless already configured.
+[`options.toml`](options.toml) is authoritative for accepted keys and values; shipped defaults live in the built-in config. `model` and `mode` map to flags before print mode and may be inferred from argv, and the boolean `sandbox` option maps to the `--sandbox` terminal-restriction flag. The shipped `mode` default is the read-only `plan`; `accept-edits` is the explicit write opt-in (it auto-approves edits, including destructive ones). The resolved workdir is supplied with `--add-dir` unless already configured.
 
 ## Events and identity
 

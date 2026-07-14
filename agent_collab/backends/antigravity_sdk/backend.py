@@ -238,6 +238,7 @@ class AntigravitySdkBackend:
             requested,
             self.option_schema(agent),
             configured=agent.options_for(self.id),
+            configured_defaults=agent.default_options_for(self.id),
         )
 
     def normalize_config(self, agent: AgentConfig) -> Mapping[str, Any]:

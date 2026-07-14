@@ -226,8 +226,12 @@ findings, say so.
 ```
 
 Prompt-level read-only instructions are behavioral, not a security boundary.
-Use a backend's sandbox, mode, or permission option where the discovery schema
-offers one, and include the effective value in the pre-start confirmation.
+The shipped backend defaults already enforce a read-only posture where the
+provider supports one (`claude_cli` `permission_mode=default`, `codex_cli`
+`sandbox=read-only`, `antigravity_cli` `mode=plan`, `xai_cli`
+`sandbox=read-only`); verify with `agent_collab_describe_options` that no
+configured override loosens it, and include the effective value in the
+pre-start confirmation.
 
 ### 4. Start and watch
 
@@ -275,11 +279,11 @@ scenario as `Agreement`; agreement raises confidence but is not proof. Label
 conflicts and single-reviewer findings as `Disagreement`, then adjudicate by
 reading code and tests, never by majority vote.
 
-### Advisory backend quirks (2026-07-14)
+### Advisory backend quirks (2026-07-15)
 
 | Provider | Behavioral guidance not expressed by the schema |
 | --- | --- |
-| Antigravity | Prefer `mode=plan` for read-only review. |
+| Antigravity | `mode=plan` (the shipped default) is the read-only review mode; do not switch to `accept-edits` for a review. |
 | xAI | Prefer `permission_mode=auto`; `plan` can cancel silently when headless. |
 | Codex | Include the explicit file list and prohibit broad repository greps. |
 

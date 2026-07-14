@@ -29,12 +29,22 @@ class AgentConfig:
     timeout: Optional[int] = None
     backend_config: Dict[str, Any] = field(default_factory=dict)
     options: Dict[str, Any] = field(default_factory=dict)
+    default_options: Dict[str, Any] = field(default_factory=dict)
     backend: Optional[str] = None
 
     def options_for(self, backend_id: str) -> Dict[str, Any]:
         """Return config defaults only for the agent's configured backend."""
 
         return self.options if (self.backend or "cli") == backend_id else {}
+
+    def default_options_for(self, backend_id: str) -> Dict[str, Any]:
+        """Return built-in option defaults only for the configured backend.
+
+        These rank below values inferred from ``args`` — see
+        ``normalize_declared_options``.
+        """
+
+        return self.default_options if (self.backend or "cli") == backend_id else {}
 
 
 @dataclass
@@ -78,6 +88,9 @@ class BackendPolicyConfig:
     timeout: Optional[int] = None
     backend_config: Dict[str, Any] = field(default_factory=dict)
     options: Dict[str, Any] = field(default_factory=dict)
+    # Shipped option defaults from the built-in config; kept separate from
+    # user `options` so a user options table never silently drops them.
+    default_options: Dict[str, Any] = field(default_factory=dict)
     agents: Dict[str, PersonaConfig] = field(default_factory=dict)
 
 
@@ -131,6 +144,7 @@ def builtin_config() -> CollaborationConfig:
     merge_config_data(
         config,
         migrate_config_data(data, source=str(DEFAULT_CONFIG_PATH), scope="built_in"),
+        scope="built_in",
     )
     return config
 
@@ -222,7 +236,9 @@ KNOWN_TOP_LEVEL_KEYS = {
 }
 
 
-def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> None:
+def merge_config_data(
+    config: CollaborationConfig, data: Mapping[str, Any], *, scope: str = "user_config"
+) -> None:
     for key in data:
         if key not in KNOWN_TOP_LEVEL_KEYS:
             if key == "modes":
@@ -269,7 +285,9 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
             name = str(canonical_name)
             if not isinstance(values, Mapping):
                 raise ConfigError(f"[backends.{name}] must be a table")
-            config.backends[name] = _merge_backend_section(config.backends.get(name), name, values)
+            config.backends[name] = _merge_backend_section(
+                config.backends.get(name), name, values, scope=scope
+            )
 
     # Rebuilding only when backend sections or display names changed keeps
     # programmatically constructed agent dicts (tests, tooling) intact across
@@ -323,7 +341,11 @@ def merge_config_data(config: CollaborationConfig, data: Mapping[str, Any]) -> N
 
 
 def _merge_backend_section(
-    existing: Optional[BackendPolicyConfig], canonical: str, values: Mapping[str, Any]
+    existing: Optional[BackendPolicyConfig],
+    canonical: str,
+    values: Mapping[str, Any],
+    *,
+    scope: str = "user_config",
 ) -> BackendPolicyConfig:
     section = (
         BackendPolicyConfig(canonical_backend=canonical)
@@ -340,6 +362,7 @@ def _merge_backend_section(
             timeout=existing.timeout,
             backend_config=dict(existing.backend_config),
             options=dict(existing.options),
+            default_options=dict(existing.default_options),
             agents=dict(existing.agents),
         )
     )
@@ -359,6 +382,8 @@ def _merge_backend_section(
             section.cwd = _expect_str(value, label)
         elif key == "timeout":
             section.timeout = _expect_int(value, label)
+        elif key == "options" and scope == "built_in":
+            section.default_options = _expect_backend_options(value, label)
         elif key == "options":
             section.options = _expect_backend_options(value, label)
         elif key == "agents":
@@ -441,6 +466,7 @@ def _rebuild_derived_agents(config: CollaborationConfig) -> None:
             timeout=section.timeout,
             backend_config=dict(section.backend_config),
             options=dict(section.options),
+            default_options=dict(section.default_options),
             backend=backend_id,
         )
         for persona in section.agents.values():
@@ -457,6 +483,7 @@ def _rebuild_derived_agents(config: CollaborationConfig) -> None:
                 timeout=section.timeout,
                 backend_config=dict(section.backend_config),
                 options={**section.options, **persona.options},
+                default_options=dict(section.default_options),
                 backend=backend_id,
             )
     config.agents = agents

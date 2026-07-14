@@ -102,7 +102,10 @@ class ClaudeSdkBackend:
     ) -> Mapping[str, Any]:
         configured = agent.options_for(self.id)
         normalized = normalize_declared_options(
-            requested, self.option_schema(agent), configured=configured
+            requested,
+            self.option_schema(agent),
+            configured=configured,
+            configured_defaults=agent.default_options_for(self.id),
         )
         return resolve_claude_thinking(normalized, configured_choices(configured, requested))
 

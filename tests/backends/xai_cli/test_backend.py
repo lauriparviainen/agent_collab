@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from agent_collab import backends
-from agent_collab.backend_contract import BackendOptionError
+from agent_collab.backend_contract import OPTION_UNSET, BackendOptionError
 from agent_collab.backends.common.health import xai_cli_credentials
 from agent_collab.backends.xai_cli import XaiCliBackend, parse_xai_line
 from agent_collab.config import (
@@ -30,6 +30,12 @@ class XaiCliBackendTests(unittest.TestCase):
         self.backend = XaiCliBackend()
 
     def agent(self, args=None, **kwargs):
+        # Carry the shipped option defaults so the tests exercise the same
+        # posture (permission-bypassed inside a read-only sandbox) as the
+        # built-in config.
+        kwargs.setdefault(
+            "default_options", dict(builtin_config().backends["xai_cli"].default_options)
+        )
         return AgentConfig(
             id=kwargs.pop("id", "xai"),
             type="xai",
@@ -85,8 +91,12 @@ sequence = ["xai_cli"]
         self.assertTrue(schema["model"].inferred)
         self.assertIsNone(schema["model"].allowed)
         self.assertIsNone(schema["sandbox"].allowed)
-        self.assertEqual(schema["permission_mode"].default, "bypassPermissions")
-        self.assertEqual(schema["sandbox"].default, "read-only")
+        # Defaults ship in the built-in config, not the backend manifest.
+        self.assertIs(schema["permission_mode"].default, OPTION_UNSET)
+        self.assertIs(schema["sandbox"].default, OPTION_UNSET)
+        defaults = builtin_config().backends["xai_cli"].default_options
+        self.assertEqual(defaults["permission_mode"], "bypassPermissions")
+        self.assertEqual(defaults["sandbox"], "read-only")
         self.assertEqual(schema["provider_max_turns"].minimum, 1)
 
     def test_reasoning_alias_is_canonical_and_conflicts_on_native_field(self):

@@ -2,18 +2,16 @@ schema_version = 1
 
 [options.model]
 type = "string"
-default = "opus"
 allowed = ["fable", "sonnet", "opus"]
 inferred = true
 
 [options.permission_mode]
 type = "string"
-allowed = ["default", "acceptEdits", "bypassPermissions"]
+allowed = ["default", "plan", "acceptEdits", "bypassPermissions"]
 inferred = true
 
 [options.thinking_level]
 type = "string"
-default = "high"
 allowed = ["low", "medium", "high", "xhigh", "max"]
 inferred = true
 

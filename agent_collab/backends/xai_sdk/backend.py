@@ -84,6 +84,7 @@ class XaiSdkBackend:
             requested,
             self.option_schema(agent),
             configured=agent.options_for(self.id),
+            configured_defaults=agent.default_options_for(self.id),
         )
         model = normalized.get("model")
         if not isinstance(model, str) or not model.strip():

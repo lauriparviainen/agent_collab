@@ -898,6 +898,12 @@ def _main_config(argv) -> int:
                 print(f"  {' '.join(details)}")
             for name, value in sorted(agent.backend_config.items()):
                 print(f"  backend {agent.backend or 'cli'} config {name} = {value!r}")
+            for option, value in sorted(agent.default_options.items()):
+                if option not in agent.options:
+                    print(
+                        f"  backend {agent.backend or 'cli'} option {option} = {value!r} "
+                        "(built-in default)"
+                    )
             for option, value in sorted(agent.options.items()):
                 print(f"  backend {agent.backend or 'cli'} option {option} = {value!r}")
         from .backends import registered_backend_names

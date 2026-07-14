@@ -20,7 +20,8 @@ agents:
 
 - Claude Code default (`claude_cli`).
 - Codex default (`codex_cli`).
-- A read-only Codex persona (`codex_cli.readonly`, differing by options).
+- A write-enabled Codex persona (`codex_cli.writer`, differing by options —
+  the shipped defaults are read-only, so writing is the opt-in).
 - A higher-reasoning persona on the same backend.
 - The mock pseudo-backend for tests (`[backends.mock]`).
 - Future command-based agents that stream JSONL.
@@ -66,12 +67,13 @@ enabled = true
 command = "codex"
 args = ["exec", "--json"]
 
-# Options-only persona; derives agent id "codex_cli.readonly".
-[backends.codex_cli.agents.readonly]
-name = "codex-readonly"
+# Options-only persona; derives agent id "codex_cli.writer". The shipped
+# default sandbox is "read-only", so a write-enabled persona is the opt-in.
+[backends.codex_cli.agents.writer]
+name = "codex-writer"
 
-[backends.codex_cli.agents.readonly.options]
-sandbox = "read-only"
+[backends.codex_cli.agents.writer.options]
+sandbox = "workspace-write"
 
 # The mock pseudo-backend; its default agent id is "mock".
 [backends.mock]
@@ -89,8 +91,8 @@ sequence = ["claude_cli", "codex_cli", "claude_cli"]
 [workflows.dual-review]
 parallel = ["claude_cli", "codex_cli"]
 
-[workflows.readonly-review]
-sequence = ["codex_cli.readonly", "claude_cli", "codex_cli.readonly"]
+[workflows.implement-then-review]
+sequence = ["codex_cli.writer", "claude_cli", "codex_cli.writer"]
 ```
 
 Every enabled backend defines its default agent with the canonical backend
@@ -176,7 +178,11 @@ An `options` sub-table sets session option defaults for the backend (see
 configuration and must be declared by that backend (for example the Vertex
 settings of `antigravity_sdk`); undeclared keys are rejected.
 
-Avoid adding broad permission fields at first. Permission policy should remain explicit in the underlying agent command or profile.
+Write posture is an option like any other. The built-in config ships every
+backend that has a permission or sandbox control with a read-only default (see
+[Default write posture](#default-write-posture)); granting write access is a
+deliberate `options` override per backend, persona, or session, never an
+implicit provider default.
 
 ### Nested personae
 
@@ -296,11 +302,36 @@ before creating session state or launching a subprocess.
 }
 ```
 
-Each backend's colocated manifest is the shipped source of accepted values and
-defaults. A backend section's `options` table sets concrete session defaults.
-MCP exposes the effective schemas through `agent_collab_describe_options`.
-Unknown keys, wrong types, unsupported values, unselected backends, and invalid
-cross-field combinations are rejected with actionable paths.
+Each backend's colocated manifest is the shipped source of accepted keys and
+values (types, allowed values, ranges). Shipped default *values* live in the
+built-in config's `[backends.<canonical>.options]` tables in
+[agent_collab/default_config.toml](../agent_collab/default_config.toml), so
+they are ordinary, inspectable configuration rather than hard-coded manifest
+data. They rank below flags configured in `args` and below a user config's
+`options` table, and overriding one value never drops the others. A backend
+section's `options` table sets concrete session defaults. MCP exposes the
+effective schemas — with the shipped defaults overlaid — through
+`agent_collab_describe_options`. Unknown keys, wrong types, unsupported
+values, unselected backends, and invalid cross-field combinations are rejected
+with actionable paths.
+
+### Default write posture
+
+Shipped defaults lean read-only: agents can call tools and inspect the
+repository, but file writes need an explicit opt-in.
+
+| Backend | Shipped default | Write opt-in |
+| --- | --- | --- |
+| `claude_cli` / `claude_sdk` | `permission_mode = "default"` (headless: write/exec tools are denied instead of prompting; `"plan"` is the strictest read-only mode) | `permission_mode = "acceptEdits"` |
+| `codex_cli` / `codex_sdk` | `sandbox = "read-only"` (commands run, writes are blocked) | `sandbox = "workspace-write"` |
+| `antigravity_cli` | `mode = "plan"` (read-only, headless-safe); boolean `sandbox` option adds terminal restrictions, opt-in | `mode = "accept-edits"` |
+| `xai_cli` | `permission_mode = "bypassPermissions"` + `sandbox = "read-only"` (approval-free inspection, writes blocked) | `sandbox = "workspace"` |
+| `antigravity_sdk` | no mode/permission control — follows the provider default | — |
+| `xai_sdk` | remote chat only, no tools | — |
+
+The posture is enforced by the provider's own sandbox/mode flag, not by prompt
+text. Session `backend_options`, a persona, or a user-config `options` table
+can loosen it deliberately.
 
 Example option rules:
 
@@ -326,7 +357,8 @@ permission_mode = "default"
 thinking_level = "high"
 ```
 
-`backend_options.antigravity_cli` accepts `model` and `mode`; the SDK entry
+`backend_options.antigravity_cli` accepts `model`, `mode`, and a boolean
+`sandbox` (the `agy --sandbox` terminal-restriction flag); the SDK entry
 accepts only `model`. Vertex, project, and location are static SDK configuration
 under `[backends.antigravity_sdk]`, not MCP-call options. A backend entry is
 rejected when it is not selected by the workflow. Configured session defaults
@@ -410,9 +442,11 @@ Google Antigravity, available on both backends. Disabled by default and opt-in.
   text only** (no JSON, no per-event markers), so its transcript fidelity is
   intentionally **message-only** — each non-empty output line is one
   `antigravity` message event; there is no tool/command/file-change structure.
-  The default `args` include `--mode accept-edits` so `-p` does not stall on the
-  interactive request-review approval prompt. Choose the SDK backend for
-  structured events.
+  The shipped `mode` default is `plan`: read-only, and it does not stall `-p`
+  on the interactive request-review approval prompt. Turns that must write
+  need `mode = "accept-edits"` (which auto-approves edits — the historical
+  default until it deleted files in a nominally read-only review). Choose the
+  SDK backend for structured events.
 - `antigravity_sdk` runs the `google-antigravity` SDK in-process (installed with the project,
   Python ≥ 3.10, lazy-imported). Needs a **Gemini API key** (`GEMINI_API_KEY` env,
   or `LocalAgentConfig(api_key=...)`, or Vertex/ADC) — the SDK does **not** use the
@@ -429,7 +463,7 @@ environment through and never manages or logs credentials.
 [backends.antigravity_cli]
 enabled = true
 command = "agy"
-args = ["--mode", "accept-edits", "-p"]
+args = ["-p"]
 
 # Or the in-process SDK backend (no command):
 [backends.antigravity_sdk]
@@ -474,7 +508,7 @@ A workflow names an orchestration pattern: the ordered agent sequence a session 
 
 ```toml
 [workflows.my-workflow]
-sequence = ["claude_cli", "codex_cli.readonly", "claude_cli"]
+sequence = ["claude_cli", "codex_cli.writer", "claude_cli"]
 ```
 
 This removes hardcoded orchestration logic from the referee. Built-in workflows (`solo-claude-cli`, `solo-codex-cli`, `cross-review`, `dual-review`) still exist when no config file is present; `cross-review` is the default. Workflow names should describe the orchestration, not who "leads". The old `[modes.*]` sections are rejected with a hint.

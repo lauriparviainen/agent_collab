@@ -15,6 +15,7 @@ from ..common.cli import (
     flag_value,
     has_flag,
     insert_before_print_prompt,
+    remove_flag,
     resolve_run_dir,
     set_flag_value_before_print_prompt,
 )
@@ -61,11 +62,14 @@ class AntigravityCliBackend:
             value = flag_value(agent.args, flag)
             if value is not None:
                 inferred[field] = value
+        if has_flag(agent.args, "--sandbox"):
+            inferred["sandbox"] = True
         return normalize_declared_options(
             requested,
             self.option_schema(agent),
             configured=agent.options_for(self.id),
             inferred=inferred,
+            configured_defaults=agent.default_options_for(self.id),
         )
 
     def build_command(
@@ -75,6 +79,10 @@ class AntigravityCliBackend:
         for key, flag in (("model", "--model"), ("mode", "--mode")):
             if key in options:
                 command = set_flag_value_before_print_prompt(command, flag, str(options[key]))
+        if "sandbox" in options:
+            command = remove_flag(command, "--sandbox", has_value=False)
+            if options["sandbox"]:
+                command = insert_before_print_prompt(command, ["--sandbox"])
         if run_dir is not None and not has_flag(command, "--add-dir"):
             command = insert_before_print_prompt(command, ["--add-dir", str(run_dir.resolve())])
         return command

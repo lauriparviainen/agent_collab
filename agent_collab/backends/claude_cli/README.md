@@ -8,7 +8,7 @@ Select with `backend="cli"`; the configured agent needs a `claude` command. Auth
 
 ## Options
 
-[`options.toml`](options.toml) is authoritative. `model`, `permission_mode`, `thinking_level`, and `thinking_budget_tokens` map to CLI flags and may be inferred from configured argv. Level and raw-budget requests conflict.
+[`options.toml`](options.toml) is authoritative for accepted keys and values; shipped defaults live in the built-in config. `model`, `permission_mode`, `thinking_level`, and `thinking_budget_tokens` map to CLI flags and may be inferred from configured argv. Level and raw-budget requests conflict. The shipped `permission_mode` default is `default` (headless runs deny write/exec tools instead of prompting); `plan` is the strictest read-only mode and `acceptEdits` is the write opt-in.
 
 ## Events and identity
 

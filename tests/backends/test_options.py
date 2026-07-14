@@ -97,10 +97,16 @@ class SdkSettingsDisplayTests(unittest.TestCase):
     them (an inferred default `thinking_level`, `profile`, `mode`, ...)."""
 
     def _settings(self, agent_type, args):
+        from agent_collab.config import builtin_config
         from agent_collab.options import build_session_settings, validate_start_options
 
         agent = AgentConfig(
-            id=agent_type, type=agent_type, command=agent_type, args=args, backend="sdk"
+            id=agent_type,
+            type=agent_type,
+            command=agent_type,
+            args=args,
+            default_options=dict(builtin_config().backends[f"{agent_type}_sdk"].default_options),
+            backend="sdk",
         )
         config = CollaborationConfig(
             agents={agent_type: agent},

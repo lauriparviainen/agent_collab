@@ -13,6 +13,20 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Ship read-only write posture by default for every backend that has a
+  permission or sandbox control (#29): `claude_cli`/`claude_sdk`
+  `permission_mode = "default"` (with `plan` newly accepted), `codex_cli`/
+  `codex_sdk` `sandbox = "read-only"`, and `antigravity_cli` `mode = "plan"`
+  instead of the write-enabled `accept-edits`. Writing now needs an explicit
+  option override per backend, persona, or session.
+- Move all shipped option defaults out of the backend manifests into the
+  built-in config's `[backends.<canonical>.options]` tables. They rank below
+  flags configured in `args` and below user-config options, so existing
+  overrides keep working and overriding one value never drops the rest;
+  discovery still shows the effective defaults.
+- Add the boolean `antigravity_cli` `sandbox` option mapping to the `agy
+  --sandbox` terminal-restriction flag.
+
 ## [0.8.2] - 2026-07-14 - Readiness output polish
 
 - Tidy the install readiness output: the agents column appears only when a

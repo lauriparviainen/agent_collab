@@ -66,11 +66,15 @@ threaded through `RefereeConfig` to the runner construction path. It must reach
 execution, not only the returned settings.
 
 Every backend owns a declarative `options.toml`, plus `normalize_options`,
-`settings_summary`, `command_preview`, and runner construction. Requests use one
-dynamic `backend_options` map keyed by canonical names such as `claude_cli` and
-`codex_sdk`; there are no provider-wide option fields or central support table.
-Only CLI backends infer values from argv. `describe_options` reports the exact
-schema for every registered backend.
+`settings_summary`, `command_preview`, and runner construction. The manifest
+declares accepted keys and values only; shipped default values live in the
+built-in config's `[backends.<canonical>.options]` tables and rank below argv
+inference and user-config options (`configured_defaults` in
+`normalize_declared_options`). Requests use one dynamic `backend_options` map
+keyed by canonical names such as `claude_cli` and `codex_sdk`; there are no
+provider-wide option fields or central support table. Only CLI backends infer
+values from argv. `describe_options` reports the exact schema for every
+registered backend, with the shipped defaults overlaid.
 
 Static, non-MCP backend settings live directly under the backend's
 `[backends.<canonical>]` section. Antigravity SDK owns and validates `vertex`,

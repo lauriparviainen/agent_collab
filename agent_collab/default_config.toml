@@ -3,23 +3,51 @@ schema_version = 8
 # The schema is backend-first: every enabled [backends.<canonical>] section
 # defines its default agent under the same id. Nested options-only personae
 # live in [backends.<canonical>.agents.<name>].
+#
+# Each [backends.<canonical>.options] table below carries the shipped option
+# defaults, including the write posture. They rank below flags configured in
+# `args` and below user-config [backends.*.options], so overriding any single
+# value never drops the rest. Defaults lean read-only: agents can call tools
+# and inspect the repository, but file writes need an explicit opt-in per
+# backend, persona, or session.
 
 [backends.claude_cli]
 enabled = true
 command = "claude"
 args = ["-p", "--output-format", "stream-json", "--verbose"]
 
+[backends.claude_cli.options]
+model = "opus"
+thinking_level = "high"
+# Headless "default" denies write/exec tools instead of prompting; "plan" is
+# the strictest read-only mode. Writes need "acceptEdits" or stronger.
+permission_mode = "default"
+
 [backends.codex_cli]
 enabled = true
 command = "codex"
 args = ["exec", "--json"]
+
+[backends.codex_cli.options]
+model = "gpt-5.6-sol"
+thinking_level = "high"
+# Commands run but cannot write outside the sandbox; use "workspace-write"
+# for turns that must edit files.
+sandbox = "read-only"
 
 # Antigravity is opt-in. No built-in workflow references it while disabled, so
 # the default Claude/Codex behavior stays valid without local `agy` setup.
 [backends.antigravity_cli]
 enabled = false
 command = "agy"
-args = ["--mode", "accept-edits", "-p"]
+args = ["-p"]
+
+[backends.antigravity_cli.options]
+model = "Gemini 3.5 Flash (High)"
+# "plan" is read-only and does not stall headless runs on approval prompts;
+# "accept-edits" auto-approves edits and is the explicit write opt-in. The
+# boolean sandbox option additionally restricts terminal commands.
+mode = "plan"
 
 # xAI is opt-in. Grok Build uses newline-delimited streaming JSON in headless
 # single-turn mode.
@@ -28,17 +56,39 @@ enabled = false
 command = "grok"
 args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
 
+[backends.xai_cli.options]
+# Inspection commands run without approval prompts while the read-only
+# sandbox blocks repository writes.
+permission_mode = "bypassPermissions"
+sandbox = "read-only"
+
 # SDK backends are opt-in; they need their provider SDK installed and are
 # declared here so every built-in solo workflow resolves to a known backend.
 [backends.claude_sdk]
 enabled = false
 
+[backends.claude_sdk.options]
+model = "opus"
+thinking_level = "high"
+permission_mode = "default"
+
 [backends.codex_sdk]
 enabled = false
 
+[backends.codex_sdk.options]
+model = "gpt-5.6-sol"
+thinking_level = "high"
+sandbox = "read-only"
+
+# The Antigravity SDK exposes no mode/permission control; its write posture
+# follows the provider default.
 [backends.antigravity_sdk]
 enabled = false
 
+[backends.antigravity_sdk.options]
+model = "Gemini 3.5 Flash (High)"
+
+# The xAI SDK backend is remote chat only and enables no tools.
 [backends.xai_sdk]
 enabled = false
 

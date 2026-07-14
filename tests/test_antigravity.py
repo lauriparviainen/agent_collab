@@ -77,7 +77,10 @@ class AntigravityConfigTests(unittest.TestCase):
         section = config.backends["antigravity_cli"]
         self.assertFalse(section.enabled)
         self.assertEqual(section.command, "agy")
-        self.assertIn("--mode", section.args)  # non-blocking print posture
+        # Read-only, non-blocking print posture ships as a built-in option
+        # default rather than a hard-coded args flag.
+        self.assertNotIn("--mode", section.args)
+        self.assertEqual(section.default_options["mode"], "plan")
         # Disabled backends derive no agents.
         self.assertNotIn("antigravity_cli", config.agents)
 
@@ -186,8 +189,9 @@ sequence = ["antigravity_cli"]
             self.assertEqual(entry["command_preview"][0], "agy")
             self.assertIn("--add-dir", entry["command_preview"])
             self.assertIn(str(root.resolve()), entry["command_preview"])
-            # mode is a displayed settings field, defaulted from the agent args.
-            self.assertEqual(entry["mode"], "accept-edits")
+            # mode is a displayed settings field, defaulted from the built-in
+            # config's read-only posture.
+            self.assertEqual(entry["mode"], "plan")
 
     def test_antigravity_command_preview_resolves_agent_cwd_for_add_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

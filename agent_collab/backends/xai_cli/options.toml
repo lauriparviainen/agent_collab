@@ -7,12 +7,10 @@ inferred = true
 [options.permission_mode]
 type = "string"
 allowed = ["default", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "plan"]
-default = "bypassPermissions"
 inferred = true
 
 [options.sandbox]
 type = "string"
-default = "read-only"
 inferred = true
 
 [options.thinking_level]

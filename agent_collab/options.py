@@ -1161,7 +1161,16 @@ def _backend_option_schemas(config: CollaborationConfig) -> Dict[str, Any]:
             backend = backend_registry.get_backend(agent_type, backend_id)
             agent = _representative_agent(config, agent_type, backend_id)
             schema = _effective_backend_schema(backend, agent, f"backend_options.{name}", [])
-            properties[name] = _option_object_schema(schema)
+            object_schema = _option_object_schema(schema)
+            # Option defaults ship in the built-in config, not the backend
+            # manifests; overlay them so discovery keeps showing defaults.
+            section = config.backends.get(name)
+            if section is not None:
+                for key, value in section.default_options.items():
+                    option_schema = object_schema["properties"].get(key)
+                    if option_schema is not None:
+                        option_schema["default"] = value
+            properties[name] = object_schema
     return {"type": "object", "additionalProperties": False, "properties": properties}
 
 

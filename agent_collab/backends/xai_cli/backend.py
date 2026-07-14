@@ -90,6 +90,7 @@ class XaiCliBackend:
             self.option_schema(agent),
             configured=agent.options_for(self.id),
             inferred=inferred,
+            configured_defaults=agent.default_options_for(self.id),
         )
         return canonical_reasoning(normalized)
 

@@ -49,8 +49,10 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(data["schema_version"], 8)
         self.assertNotIn("agents", data)
-        self.assertNotIn("options", data["backends"]["claude_cli"])
-        self.assertNotIn("options", data["backends"]["codex_cli"])
+        # Shipped option defaults live in the built-in config, read-only first.
+        self.assertEqual(data["backends"]["claude_cli"]["options"]["permission_mode"], "default")
+        self.assertEqual(data["backends"]["codex_cli"]["options"]["sandbox"], "read-only")
+        self.assertEqual(data["backends"]["antigravity_cli"]["options"]["mode"], "plan")
         self.assertEqual(data["workflows"]["solo-claude-cli"]["sequence"], ["claude_cli"])
         self.assertEqual(data["workflows"]["dual-review"]["parallel"], ["claude_cli", "codex_cli"])
 

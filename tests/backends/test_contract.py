@@ -363,6 +363,7 @@ class BuiltinBackendContractTests(unittest.TestCase):
                     type="claude",
                     command="claude",
                     args=["--effort", "high"],
+                    default_options=dict(builtin_config().backends["claude_sdk"].default_options),
                     backend="sdk",
                 ),
             },

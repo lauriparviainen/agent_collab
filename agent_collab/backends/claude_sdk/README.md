@@ -8,7 +8,7 @@ Select with `backend="sdk"`. Python and the `claude-agent-sdk` wheel are require
 
 ## Options
 
-[`options.toml`](options.toml) is authoritative. `model`, `permission_mode`, `thinking_level`, and `thinking_budget_tokens` map to `ClaudeAgentOptions`; level and raw-budget requests conflict. SDK options are never inferred from CLI argv. Runs use `setting_sources=[]` and the `claude_code` system/tool presets.
+[`options.toml`](options.toml) is authoritative for accepted keys and values; shipped defaults live in the built-in config, including the read-only `permission_mode = "default"` posture. `model`, `permission_mode`, `thinking_level`, and `thinking_budget_tokens` map to `ClaudeAgentOptions`; level and raw-budget requests conflict. SDK options are never inferred from CLI argv. Runs use `setting_sources=[]` and the `claude_code` system/tool presets.
 
 ## Events and identity
 

@@ -145,12 +145,20 @@ def normalize_declared_options(
     *,
     configured: Optional[Mapping[str, Any]] = None,
     inferred: Optional[Mapping[str, Any]] = None,
+    configured_defaults: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Apply defaults, CLI inference, configured options, then request data."""
+    """Apply defaults, CLI inference, configured options, then request data.
+
+    ``configured_defaults`` carries the built-in config's option defaults. They
+    rank with schema defaults — below CLI-args inference — so a flag configured
+    in ``args`` still wins over a shipped default.
+    """
 
     inferred_options = {
         key: deepcopy(value) for key, value in (inferred or {}).items() if key in schema
     }
+    default_options = configured_defaults or {}
+    _validate_values(default_options, schema)
     configured_options = configured or {}
     _validate_values(configured_options, schema)
     _validate_values(requested, schema)
@@ -158,6 +166,9 @@ def normalize_declared_options(
     for key, spec in schema.items():
         if spec.default is not OPTION_UNSET:
             result[key] = deepcopy(spec.default)
+    for key in schema:
+        if key in default_options:
+            result[key] = deepcopy(default_options[key])
     result.update(inferred_options)
     for key in schema:
         if key in configured_options:

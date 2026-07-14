@@ -59,7 +59,11 @@ class ClaudeCliBackend:
                 )
         configured = agent.options_for(self.id)
         normalized = normalize_declared_options(
-            requested, self.option_schema(agent), configured=configured, inferred=inferred
+            requested,
+            self.option_schema(agent),
+            configured=configured,
+            inferred=inferred,
+            configured_defaults=agent.default_options_for(self.id),
         )
         choices = highest_precedence_choices(
             ("thinking_level", "thinking_budget_tokens"),
