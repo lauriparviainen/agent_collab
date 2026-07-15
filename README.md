@@ -254,9 +254,15 @@ need that machine-level policy can enable it separately with
 `loginctl enable-linger "$USER"` after considering credential availability and
 resource use. macOS LaunchAgent registration is not yet supported.
 
-On first start the daemon generates a permanent bearer token into
-`~/.agent-collab/config.toml`; it stays valid across daemon restarts (see
-[runtime layout](doc/runtime-layout.md) for the semantics and rotation).
+Install creates the permanent bearer token in `~/.agent-collab/config.toml`, so
+it is ready before the daemon's first start (the daemon also generates one on
+first start if it is somehow missing); it stays valid across daemon restarts
+(see [runtime layout](doc/runtime-layout.md) for the semantics and rotation).
+Print it any time with:
+
+```bash
+agent-collab daemon token
+```
 
 Then register agent-collab with your MCP client. **Direct Streamable HTTP is
 the preferred transport**: it connects the client straight to the daemon and
@@ -266,21 +272,23 @@ does not need a per-client adapter process. The daemon must be running first:
 agent-collab daemon start
 ```
 
-For Claude Code, pass the permanent token as an HTTP header:
+For Claude Code, pass the permanent token as an HTTP header — substitute the
+command so you never copy the token by hand:
 
 ```bash
 claude mcp add --transport http agent-collab http://127.0.0.1:8765/mcp \
-  --header "Authorization: Bearer <your [daemon].token value>"
+  --header "Authorization: Bearer $(agent-collab daemon token)"
 ```
 
 For Codex, configure the same Streamable HTTP URL and header. The
 [`http_headers` setting](https://learn.chatgpt.com/docs/config-file/config-reference#configtoml)
-is part of Codex's MCP HTTP configuration:
+is part of Codex's MCP HTTP configuration; paste the token from
+`agent-collab daemon token` in place of the placeholder:
 
 ```toml
 [mcp_servers.agent_collab]
 url = "http://127.0.0.1:8765/mcp"
-http_headers = { Authorization = "Bearer <your [daemon].token value>" }
+http_headers = { Authorization = "Bearer <agent-collab daemon token>" }
 tool_timeout_sec = 60
 enabled = true
 ```

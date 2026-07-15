@@ -215,7 +215,7 @@ class _WarningBridge(logging.Handler):
 
 
 def _migrate_user_config() -> None:
-    from .config import ConfigError, load_user_config
+    from .config import ConfigError, ensure_daemon_token, load_user_config
     from .config_migrations import (
         CURRENT_CONFIG_SCHEMA,
         ConfigMigrationError,
@@ -236,7 +236,10 @@ def _migrate_user_config() -> None:
                 f"user config could not be migrated: {exc}; fix {config_path} and re-run install"
             ) from exc
         if result.status == "absent":
-            info("No user config yet; it is created on first daemon start")
+            # Create the config now with the durable daemon token so it is
+            # available for MCP client setup without first starting the daemon.
+            ensure_daemon_token()
+            ok(f"Created user config with a daemon token: {_display(config_path)}")
             return
         if result.permissions_fixed:
             warn(f"{result.path} was group/world-readable; tightened to owner-only (0600)")
@@ -253,8 +256,30 @@ def _migrate_user_config() -> None:
             ) from exc
         if result.status == "current":
             ok(f"Config OK (schema {CURRENT_CONFIG_SCHEMA})")
+        _ensure_daemon_token(config_path)
     finally:
         config_logger.removeHandler(bridge)
+
+
+def _ensure_daemon_token(config_path: Path) -> None:
+    """Add the durable daemon token to an existing config when it lacks one.
+
+    Never fails the install: a config that already carries a token is left
+    untouched, and a config whose token cannot be written (permissive mode, or
+    a malformed ``[daemon]`` section) is reported as a warning so the daemon can
+    still mint one on first start.
+    """
+
+    from .config import ConfigError, load_daemon_token, ensure_daemon_token
+
+    if load_daemon_token() is not None:
+        return
+    try:
+        ensure_daemon_token()
+    except ConfigError as exc:
+        warn(f"daemon token not set: {exc}")
+        return
+    ok("Added a daemon token to the user config")
 
 
 def _probe_daemon() -> Dict[str, Any]:

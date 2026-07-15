@@ -10,10 +10,49 @@ from unittest import mock
 from agent_collab.user_install import (
     UserInstallError,
     _collect_backend_readiness,
+    _migrate_user_config,
     install_user_command,
     main,
     uninstall_user_command,
 )
+
+
+class MigrateUserConfigTests(unittest.TestCase):
+    def test_absent_config_is_created_with_a_daemon_token(self):
+        from agent_collab.config import load_daemon_token
+        from agent_collab.paths import AgentCollabHome
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"AGENT_COLLAB_HOME": tmp}
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                _migrate_user_config()
+                config_path = AgentCollabHome.resolve().config_path
+                self.assertTrue(config_path.exists())
+                token = load_daemon_token()
+
+            self.assertTrue(token)
+            # Owner-only: the file carries a bearer credential.
+            self.assertEqual(config_path.stat().st_mode & 0o077, 0)
+
+    def test_existing_tokenless_config_gains_a_token(self):
+        from agent_collab.config import load_daemon_token
+        from agent_collab.paths import AgentCollabHome
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"AGENT_COLLAB_HOME": tmp}
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text("schema_version = 8\n", encoding="utf-8")
+            config_path.chmod(0o600)
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                _migrate_user_config()
+                self.assertEqual(config_path, AgentCollabHome.resolve().config_path)
+                self.assertTrue(load_daemon_token())
 
 
 class UserInstallTests(unittest.TestCase):

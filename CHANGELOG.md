@@ -13,6 +13,12 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Make the daemon bearer token available for MCP client setup without hand
+  editing `config.toml` (#35). Install now creates the user config with the
+  durable token (and adds one to an existing tokenless config) instead of
+  deferring it to first daemon start, and a new `agent-collab daemon token`
+  command prints it on plain stdout so it composes into client registration,
+  e.g. `--header "Authorization: Bearer $(agent-collab daemon token)"`.
 - Add a top-level `agent-collab --version` flag that prints the installed
   package version and exits (#36). The version was previously only visible as a
   side effect of install and `daemon status` output.

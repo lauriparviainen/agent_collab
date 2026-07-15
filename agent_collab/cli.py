@@ -241,6 +241,11 @@ def build_daemon_parser() -> argparse.ArgumentParser:
         "--stderr", action="store_true", help="Read daemon.stderr.log instead of daemon.log."
     )
 
+    subparsers.add_parser(
+        "token",
+        help="Print the permanent daemon bearer token for MCP client setup, creating it if needed.",
+    )
+
     run = subparsers.add_parser("run", help=argparse.SUPPRESS)
     _add_daemon_default_workdir(run)
     run.add_argument("--host", default="127.0.0.1")
@@ -595,6 +600,13 @@ def _main_daemon(argv) -> int:
                 )
             except KeyboardInterrupt:
                 pass
+            return 0
+        if args.action == "token":
+            from .config import ensure_daemon_token
+
+            # Plain stdout so it composes into client setup, e.g.
+            #   --header "Authorization: Bearer $(agent-collab daemon token)"
+            print(ensure_daemon_token())
             return 0
         if args.action == "autostart":
             if args.autostart_action == "enable":

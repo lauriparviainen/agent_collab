@@ -19,6 +19,20 @@ class DaemonCliTests(unittest.TestCase):
             detail="healthy" if healthy else "stopped",
         )
 
+    def test_token_command_prints_ensured_token_on_plain_stdout(self):
+        with (
+            mock.patch(
+                "agent_collab.config.ensure_daemon_token", return_value="tok-abc123"
+            ) as ensure,
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            code = main(["daemon", "token"])
+
+        self.assertEqual(code, 0)
+        ensure.assert_called_once_with()
+        # Plain, single-line token so it composes into client setup commands.
+        self.assertEqual(stdout.getvalue().strip(), "tok-abc123")
+
     def test_existing_lifecycle_commands_delegate_when_systemd_owns_daemon(self):
         cases = {
             "start": "start_systemd_daemon",
