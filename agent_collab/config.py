@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 import ast
 import logging
+import os
 import secrets
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Iterator, List, Mapping, Optional
 
 from .config_migrations import ConfigError, migrate_config_data
 from .paths import AgentCollabHome, atomic_write_private_text, project_config_path, user_config_path
@@ -671,13 +673,31 @@ def ensure_daemon_token(
     The token lives in the user config only. A missing config file is created
     owner-only; an existing file gets a ``[daemon]`` section appended without
     rewriting its content. Generation refuses a group/world-readable file.
+
+    Creation is serialized with an inter-process lock so concurrent callers
+    (two ``daemon token`` runs, or one racing daemon start) converge on a
+    single persisted token instead of each generating and writing a different
+    one — a last-writer-wins race would otherwise hand a caller a token that
+    never survived on disk.
     """
 
     resolved_home = home or AgentCollabHome.resolve(env)
-    config_path = resolved_home.config_path
     existing = load_daemon_token(resolved_home)
     if existing:
         return existing
+    with _daemon_token_lock(resolved_home):
+        # Re-check under the lock: a concurrent creator may have won the race
+        # while we waited, in which case we return its token untouched.
+        existing = load_daemon_token(resolved_home)
+        if existing:
+            return existing
+        return _generate_daemon_token(resolved_home)
+
+
+def _generate_daemon_token(home: AgentCollabHome) -> str:
+    """Generate and persist a fresh daemon token. Call under the token lock."""
+
+    config_path = home.config_path
     token = secrets.token_urlsafe(32)
     if not config_path.exists():
         atomic_write_private_text(config_path, render_user_config(token=token))
@@ -702,6 +722,32 @@ def ensure_daemon_token(
     text += f'\n[daemon]\ntoken = "{token}"\n'
     atomic_write_private_text(config_path, text)
     return token
+
+
+@contextmanager
+def _daemon_token_lock(home: AgentCollabHome) -> Iterator[None]:
+    """Exclusive, blocking lock serializing daemon-token creation for one home.
+
+    Best-effort on platforms without ``fcntl`` (the project targets Unix): the
+    lock is skipped there and creation falls back to the prior behavior.
+    """
+
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    home.root.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(home.root / "config-token.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _config_path(agent_id: str) -> str:

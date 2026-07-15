@@ -1068,6 +1068,65 @@ class DaemonTokenTests(unittest.TestCase):
             self.assertIn("[daemon]", target.read_text(encoding="utf-8"))
             self.assertEqual(load_daemon_token(home), token)
 
+    def test_ensure_returns_concurrent_winner_without_overwriting(self):
+        # Regression for #37: if another creator wins the race while we wait for
+        # the lock, the re-check under the lock must return that persisted token
+        # rather than generating and writing a second one.
+        from agent_collab import config as config_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home(tmp)
+            home.root.mkdir(parents=True)
+            calls = {"n": 0}
+
+            def fake_load(_home):
+                # First call is the pre-lock fast path (still missing); the
+                # second is the in-lock re-check, where the winner is present.
+                calls["n"] += 1
+                return None if calls["n"] == 1 else "winner-token"
+
+            with (
+                mock.patch.object(config_module, "load_daemon_token", side_effect=fake_load),
+                mock.patch.object(config_module, "atomic_write_private_text") as write,
+            ):
+                token = ensure_daemon_token(home)
+
+            self.assertEqual(token, "winner-token")
+            write.assert_not_called()
+            self.assertFalse(home.config_path.exists())
+
+    def test_ensure_token_creation_is_serialized_by_lock(self):
+        # The blocking lock must actually exclude a second creator: while the
+        # lock is held, a concurrent ensure_daemon_token blocks, and once it is
+        # released the waiter creates and returns the single persisted token.
+        import threading
+
+        from agent_collab.config import _daemon_token_lock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home(tmp)
+            home.root.mkdir(parents=True)
+            result: dict = {}
+            started = threading.Event()
+
+            def worker():
+                started.set()
+                result["token"] = ensure_daemon_token(home)
+
+            with _daemon_token_lock(home):
+                thread = threading.Thread(target=worker)
+                thread.start()
+                started.wait()
+                thread.join(timeout=0.3)
+                # Still blocked on the lock we hold: no token produced yet.
+                self.assertTrue(thread.is_alive())
+                self.assertNotIn("token", result)
+
+            thread.join(timeout=2.0)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(result["token"])
+            self.assertEqual(load_daemon_token(home), result["token"])
+
     def test_ensure_refuses_group_or_world_readable_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = self._home(tmp)

@@ -13,6 +13,13 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Serialize daemon-token creation with an inter-process lock (#37). Concurrent
+  `ensure_daemon_token()` callers — two `agent-collab daemon token` runs, or one
+  racing the daemon's first-start token generation — now converge on a single
+  persisted token via a blocking lock and a re-check under it, instead of each
+  generating a different token and losing all but the last write (which could
+  hand a client a token that was never saved).
+
 ## [0.9.1] - 2026-07-15 - Autostart stop fix and MCP token ergonomics
 
 - Make the daemon bearer token available for MCP client setup without hand
