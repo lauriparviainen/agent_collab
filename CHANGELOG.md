@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-07-15 - Daemon token creation race fix
+
 - Serialize daemon-token creation with an inter-process lock (#37). Concurrent
   `ensure_daemon_token()` callers — two `agent-collab daemon token` runs, or one
   racing the daemon's first-start token generation — now converge on a single
