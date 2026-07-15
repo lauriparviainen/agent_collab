@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-15 - Autostart stop fix and MCP token ergonomics
+
 - Make the daemon bearer token available for MCP client setup without hand
   editing `config.toml` (#35). Install now creates the user config with the
   durable token (and adds one to an existing tokenless config) instead of
