@@ -1048,6 +1048,26 @@ class DaemonTokenTests(unittest.TestCase):
             self.assertEqual(load_daemon_token(home), token)
             self.assertEqual(home.config_path.stat().st_mode & 0o777, 0o600)
 
+    def test_ensure_preserves_a_symlinked_config(self):
+        # A dotfile-managed config is a symlink into a repository. Appending the
+        # token must write through to the target, not sever the link with an
+        # os.replace on the symlink path itself.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home(tmp)
+            home.root.mkdir(parents=True)
+            target = Path(tmp) / "dotfiles" / "config.toml"
+            target.parent.mkdir(parents=True)
+            target.write_text("schema_version = 8\n", encoding="utf-8")
+            target.chmod(0o600)
+            home.config_path.symlink_to(target)
+
+            token = ensure_daemon_token(home)
+
+            self.assertTrue(home.config_path.is_symlink())
+            self.assertEqual(home.config_path.resolve(), target.resolve())
+            self.assertIn("[daemon]", target.read_text(encoding="utf-8"))
+            self.assertEqual(load_daemon_token(home), token)
+
     def test_ensure_refuses_group_or_world_readable_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = self._home(tmp)
