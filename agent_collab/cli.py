@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 from typing import Any, Dict, Optional
 
+from . import __version__
 from .cli_output import error, fail, info, ok, print_kv, step, warn
 from .config import DEFAULT_WORKFLOW
 from .referee import RefereeConfig, run_sync
@@ -35,6 +36,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run and supervise bounded collaboration workflows across configured AI agents.",
         epilog=_root_help_epilog(),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"agent-collab {__version__}",
+        help="Print the installed agent-collab version and exit.",
     )
     parser.add_argument("task", nargs="?", help="Task to send to the collaboration loop.")
     parser.add_argument(

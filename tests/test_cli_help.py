@@ -54,6 +54,20 @@ class CommandDispatchTests(unittest.TestCase):
         run.assert_not_called()
         self.assertIn("task is required", stderr.getvalue())
 
+    def test_version_flag_prints_version_and_exits_zero(self):
+        from agent_collab import __version__
+
+        with (
+            mock.patch("agent_collab.cli.run_sync") as run,
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            with self.assertRaises(SystemExit) as caught:
+                main(["--version"])
+
+        self.assertEqual(caught.exception.code, 0)
+        run.assert_not_called()
+        self.assertIn(f"agent-collab {__version__}", stdout.getvalue())
+
     def test_mcp_subcommand_runs_stdio_adapter(self):
         with mock.patch("agent_collab.mcp_server.serve") as serve:
             code = main(["mcp"])

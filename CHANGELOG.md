@@ -13,6 +13,9 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add a top-level `agent-collab --version` flag that prints the installed
+  package version and exits (#36). The version was previously only visible as a
+  side effect of install and `daemon status` output.
 - Fix `agent-collab daemon autostart enable` aborting and leaving the daemon
   stopped when a manually-started daemon was already running (#34). The stop
   handoff's post-signal wait loops no longer treat a transient
