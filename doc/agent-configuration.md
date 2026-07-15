@@ -114,15 +114,13 @@ error (it is a typo). A member whose backend is **disabled** keeps the config
 loadable: the workflow stays visible in discovery but is start-ineligible with
 reason `backend_disabled` until that backend is enabled.
 
-The built-in `dual-review` uses Claude and Codex. To configure a three-reviewer
-group, first enable an opt-in backend in the global user config and then add a
-global-user workflow:
+The built-in `dual-review` uses Claude and Codex. The `xai_cli` backend is also
+enabled by default, so adding it as a third reviewer is just a global-user
+workflow (it becomes start-eligible once the `grok` CLI is installed; enable an
+opt-in `sdk` backend first if you would rather use one of those):
 
 ```toml
 schema_version = 8
-
-[backends.xai_cli]
-enabled = true
 
 [workflows.triple-review]
 parallel = ["claude_cli", "codex_cli", "xai_cli"]
@@ -436,8 +434,8 @@ Start with a small set:
 ```text
 claude
 codex
-antigravity   (opt-in, disabled by default)
-xai           (opt-in, disabled by default)
+antigravity   (cli enabled by default; sdk opt-in)
+xai           (cli enabled by default; sdk opt-in)
 mock
 ```
 

@@ -79,6 +79,11 @@ class InstallReadinessCollectionTests(unittest.TestCase):
 
     def test_collects_only_effective_backends_for_enabled_agents(self):
         config = builtin_config()
+        # Keep this collection test focused on the claude/codex pair.
+        merge_config_data(
+            config,
+            {"backends": {"antigravity_cli": {"enabled": False}, "xai_cli": {"enabled": False}}},
+        )
         calls = []
 
         def health(backend):
@@ -113,6 +118,10 @@ class InstallReadinessCollectionTests(unittest.TestCase):
 
     def test_deduplicates_shared_effective_backend_probe(self):
         config = builtin_config()
+        merge_config_data(
+            config,
+            {"backends": {"antigravity_cli": {"enabled": False}, "xai_cli": {"enabled": False}}},
+        )
         config.agents["claude-copy"] = AgentConfig(
             id="claude-copy", type="claude", command="claude", enabled=True
         )
@@ -163,6 +172,8 @@ class InstallReadinessCollectionTests(unittest.TestCase):
                 "backends": {
                     "claude_cli": {"enabled": False},
                     "codex_cli": {"enabled": False},
+                    "antigravity_cli": {"enabled": False},
+                    "xai_cli": {"enabled": False},
                     "claude_sdk": {"enabled": True},
                 }
             },
@@ -272,12 +283,18 @@ class InstallReadinessTableTests(unittest.TestCase):
 
         output = stdout.getvalue()
         self.assertTrue(warned)
-        self.assertIn("! Warning: 1 of 2 selected backends needs attention", output)
+        # A not-ready backend is framed as skipped, not an install failure.
+        self.assertIn(
+            "ⓘ Info: 1 of 2 enabled backends is not set up yet; each is simply skipped",
+            output,
+        )
         self.assertIn("disabled backends  antigravity_cli, xai_cli", output)
         # Blank lines separate the summary block, each table, and what follows.
         self.assertIn("antigravity_cli, xai_cli\n\n", output)
         self.assertIn("—\n\n  backend    remediation", output)
-        self.assertTrue(output.endswith("PATH.\n\n"))
+        # The disable-a-backend hint closes the section.
+        self.assertIn("enabled = false under its [backends.<name>] section", output)
+        self.assertTrue(output.rstrip().endswith("in the user config."))
         # Only non-default agents appear in the agents cell.
         self.assertIn("backend     agents", output)
         self.assertIn("claude_cli  claude-copy", output)

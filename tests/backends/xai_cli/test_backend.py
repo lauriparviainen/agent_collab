@@ -51,20 +51,19 @@ class XaiCliBackendTests(unittest.TestCase):
         self.assertIn("xai", SUBPROCESS_AGENT_TYPES)
         self.assertEqual(backends.backend_name("xai", "cli"), "xai_cli")
 
-    def test_builtin_is_disabled_and_user_config_can_opt_in(self):
+    def test_builtin_is_enabled_and_a_workflow_can_reference_it(self):
         builtin = builtin_config()
-        self.assertFalse(builtin.backends["xai_cli"].enabled)
-        # Disabled backends derive no agents.
-        self.assertNotIn("xai_cli", builtin.agents)
+        self.assertTrue(builtin.backends["xai_cli"].enabled)
+        # Enabled backends derive their default agent.
+        self.assertIn("xai_cli", builtin.agents)
         repo = Path(__file__).parents[3]
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
+            # No enable line needed: xai_cli is on by default, so a workflow can
+            # reference it directly.
             (home / "config.toml").write_text(
                 """
 schema_version = 8
-
-[backends.xai_cli]
-enabled = true
 
 [workflows.solo-xai]
 sequence = ["xai_cli"]

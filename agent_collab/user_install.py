@@ -387,10 +387,13 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
     selected_count = int(payload.get("selected_count", len(rows)))
     attention_count = int(payload.get("attention_count", 0))
     if attention_count:
-        verb = "needs" if attention_count == 1 else "need"
-        warn(f"{attention_count} of {selected_count} selected backends {verb} attention")
+        verb = "is" if attention_count == 1 else "are"
+        info(
+            f"{attention_count} of {selected_count} enabled backends {verb} not set up yet; "
+            "each is simply skipped until its provider is available — the rest work normally"
+        )
     else:
-        ok(f"All {selected_count} selected backends have available dependencies")
+        ok(f"All {selected_count} enabled backends have available dependencies")
 
     summary = [
         ("scope", payload.get("scope") or "global user config"),
@@ -441,6 +444,12 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
     if remediation_rows:
         print()
         print_table(("backend", "remediation"), remediation_rows)
+    if attention_count or disabled_backends:
+        print()
+        info(
+            "A backend you will not use can be turned off (and drop off this table) with "
+            "enabled = false under its [backends.<name>] section in the user config."
+        )
     print()
     return attention_count > 0
 
@@ -461,9 +470,11 @@ def _main_install(args: argparse.Namespace) -> int:
         _restart_daemon(probe, venv_python)
     else:
         info("Daemon not running; start it with: agent-collab daemon start")
-    has_readiness_warnings = _check_backend_readiness(venv_python)
-    if has_readiness_warnings:
-        warn("Install complete with backend setup warnings — try: agent-collab --help")
+    backends_awaiting_setup = _check_backend_readiness(venv_python)
+    if backends_awaiting_setup:
+        ok(
+            "Install complete — some backends await provider setup (see above); try: agent-collab --help"
+        )
     else:
         ok("Install complete — try: agent-collab --help")
     return 0

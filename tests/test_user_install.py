@@ -318,7 +318,7 @@ class UserInstallTests(unittest.TestCase):
             self.assertIn("interrupting 2 active sessions", output)
             self.assertIn("✓ Daemon restarted", output)
 
-    def test_main_install_keeps_readiness_warnings_nonfatal(self):
+    def test_main_install_keeps_unready_backends_nonfatal(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with (
@@ -344,7 +344,12 @@ class UserInstallTests(unittest.TestCase):
                 )
 
         self.assertEqual(code, 0)
-        self.assertIn("! Warning: Install complete with backend setup warnings", stdout.getvalue())
+        # Unready backends never turn install into a warning: it still reads as
+        # a success (✓), with a calm note pointing at the readiness table.
+        output = stdout.getvalue()
+        self.assertIn("✓ Install complete", output)
+        self.assertIn("some backends await provider setup", output)
+        self.assertNotIn("! Warning: Install complete", output)
 
     def test_main_reports_fatal_errors_with_error_prefix(self):
         with (

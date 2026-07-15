@@ -167,13 +167,18 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.agents["codex_cli"].command, "codex")
             self.assertEqual(config.agents["codex_cli"].args, ["exec", "--json"])
             self.assertEqual(config.agents["codex_cli"].options, {})
-            # Disabled backends define no agents; the sections keep their config.
-            self.assertNotIn("antigravity_cli", config.agents)
-            self.assertNotIn("xai_cli", config.agents)
-            self.assertFalse(config.backends["antigravity_cli"].enabled)
+            # The cli backends ship enabled and derive their default agents;
+            # they are only reported unavailable when the provider CLI is absent.
+            self.assertIn("antigravity_cli", config.agents)
+            self.assertIn("xai_cli", config.agents)
+            self.assertTrue(config.backends["antigravity_cli"].enabled)
             self.assertEqual(config.backends["antigravity_cli"].command, "agy")
-            self.assertFalse(config.backends["xai_cli"].enabled)
+            self.assertTrue(config.backends["xai_cli"].enabled)
             self.assertEqual(config.backends["xai_cli"].command, "grok")
+            # SDK backends stay opt-in (disabled) and derive no agents.
+            self.assertNotIn("claude_sdk", config.agents)
+            self.assertFalse(config.backends["claude_sdk"].enabled)
+            self.assertFalse(config.backends["xai_sdk"].enabled)
             self.assertEqual(
                 config.backends["xai_cli"].args,
                 ["--no-auto-update", "--output-format", "streaming-json", "-p"],

@@ -35,10 +35,12 @@ thinking_level = "high"
 # for turns that must edit files.
 sandbox = "read-only"
 
-# Antigravity is opt-in. No built-in workflow references it while disabled, so
-# the default Claude/Codex behavior stays valid without local `agy` setup.
+# Antigravity is enabled so a local `agy` setup works out of the box. When the
+# CLI is absent the backend is simply reported unavailable and skipped; no
+# built-in workflow references it, so default Claude/Codex behavior is
+# unaffected. Turn it off with `enabled = false` in your user config.
 [backends.antigravity_cli]
-enabled = false
+enabled = true
 command = "agy"
 args = ["-p"]
 
@@ -49,10 +51,12 @@ model = "Gemini 3.5 Flash (High)"
 # boolean sandbox option additionally restricts terminal commands.
 mode = "plan"
 
-# xAI is opt-in. Grok Build uses newline-delimited streaming JSON in headless
-# single-turn mode.
+# xAI is enabled so a local `grok` setup works out of the box; when the CLI is
+# absent the backend is reported unavailable and skipped. Grok Build uses
+# newline-delimited streaming JSON in headless single-turn mode. Turn it off
+# with `enabled = false` in your user config.
 [backends.xai_cli]
-enabled = false
+enabled = true
 command = "grok"
 args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
 

@@ -72,17 +72,18 @@ class AntigravityParserTests(unittest.TestCase):
 
 
 class AntigravityConfigTests(unittest.TestCase):
-    def test_antigravity_is_disabled_by_default(self):
+    def test_antigravity_is_enabled_by_default(self):
         config = builtin_config()
         section = config.backends["antigravity_cli"]
-        self.assertFalse(section.enabled)
+        self.assertTrue(section.enabled)
         self.assertEqual(section.command, "agy")
         # Read-only, non-blocking print posture ships as a built-in option
         # default rather than a hard-coded args flag.
         self.assertNotIn("--mode", section.args)
         self.assertEqual(section.default_options["mode"], "plan")
-        # Disabled backends derive no agents.
-        self.assertNotIn("antigravity_cli", config.agents)
+        # Enabled backends derive their default agent (reported unavailable when
+        # the `agy` CLI is absent, never a hard failure).
+        self.assertIn("antigravity_cli", config.agents)
 
     def test_enabling_antigravity_and_referencing_workflow_validates(self):
         with tempfile.TemporaryDirectory() as tmp:

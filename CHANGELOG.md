@@ -13,6 +13,17 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Enable the `antigravity_cli` and `xai_cli` backends by default (#38) so a
+  local `agy` or `grok` setup works out of the box. A provider whose CLI is
+  absent is simply reported unavailable and skipped — the daemon still runs and
+  built-in workflows (claude/codex) are unaffected. The `sdk` backends stay
+  opt-in. The post-install readiness section now frames a not-ready backend as
+  skipped-until-set-up rather than a warning, and points at
+  `[backends.<name>] enabled = false` for turning off a backend you will not
+  use. Existing user configs keep their explicit per-backend `enabled` values
+  (upgrades never silently flip a setting); only newly created configs pick up
+  the new default, or enable the backend by hand.
+
 ## [0.9.2] - 2026-07-15 - Daemon token creation race fix
 
 - Serialize daemon-token creation with an inter-process lock (#37). Concurrent

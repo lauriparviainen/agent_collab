@@ -421,7 +421,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
                 for members, path in (
                     ({"nope": "claude_cli"}, "members.nope"),
-                    ({"codex_cli": "xai_cli"}, "members.codex_cli"),  # disabled backend
+                    ({"codex_cli": "codex_sdk"}, "members.codex_cli"),  # disabled backend
                     ({"codex_cli": "claude_cli"}, "members.codex_cli"),  # duplicate
                 ):
                     with self.subTest(members=members):
@@ -480,7 +480,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             home = root / "home"
             home.mkdir()
             (home / "config.toml").write_text(
-                'schema_version = 8\n[workflows.custom]\nsequence = ["antigravity_cli"]\n',
+                'schema_version = 8\n[workflows.custom]\nsequence = ["antigravity_sdk"]\n',
                 encoding="utf-8",
             )
             manager = SessionManager()
@@ -496,7 +496,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     )
 
         self.assertIn(
-            "references agent 'antigravity_cli' of a disabled backend", str(ctx.exception)
+            "references agent 'antigravity_sdk' of a disabled backend", str(ctx.exception)
         )
         self.assertEqual(manager.list_sessions(), [])
 

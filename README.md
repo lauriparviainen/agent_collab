@@ -465,15 +465,20 @@ provider's optional dependency extra (see [Install](#install)).
 > capability flags remain conservative. Follow the design refresh and full SDK
 > capability work in [issue #20](https://github.com/lauriparviainen/agent_collab/issues/20).
 
-| Provider | CLI backend | SDK backend | Enabled by default |
+| Provider | CLI backend | SDK backend | CLI enabled by default |
 | --- | --- | --- | --- |
 | Claude (Claude Code) | `claude_cli` | `claude_sdk` | yes |
 | Codex | `codex_cli` | `codex_sdk` | yes |
-| Google Antigravity (a harness, not a model vendor) | `antigravity_cli` | `antigravity_sdk` | opt-in |
-| xAI (Grok Build CLI, remote chat SDK) | `xai_cli` | `xai_sdk` | opt-in |
+| Google Antigravity (a harness, not a model vendor) | `antigravity_cli` | `antigravity_sdk` | yes |
+| xAI (Grok Build CLI, remote chat SDK) | `xai_cli` | `xai_sdk` | yes |
 
-Claude and Codex power the built-in workflows; Antigravity and xAI are opt-in
-so a clean install does not pretend credentials or local runtimes exist.
+Claude and Codex power the built-in workflows. All four `cli` backends are
+enabled by default, so a local Antigravity or Grok setup works without extra
+config; a provider whose CLI is absent is simply reported unavailable and
+skipped — never an install failure or a crash, the daemon still runs and you
+just cannot launch that backend. The `sdk` backends stay opt-in (they need
+their provider SDK). Disable any backend you will not use by setting
+`enabled = false` under its `[backends.<name>]` section in the user config.
 
 See [agent configuration](doc/agent-configuration.md) for provider setup,
 backend selection, typed options, custom agents, and custom workflows. Each
