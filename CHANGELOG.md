@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-07-15 - Symlinked-config token fix and headless Grok guidance
+
 - Fix `ensure_daemon_token` destroying a dangling symlinked config. The 0.9.1
   symlink preservation resolved the config path only after the existence
   check, so a dotfile-managed link whose target did not exist yet (repository
