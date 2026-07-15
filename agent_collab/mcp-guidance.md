@@ -290,7 +290,7 @@ adjudicate by reading code and tests, never by majority vote.
 | Provider | Behavioral guidance not expressed by the schema |
 | --- | --- |
 | Antigravity | `mode=plan` (the shipped default) is the read-only review mode; do not switch to `accept-edits` for a review. |
-| xAI | Prefer `permission_mode=auto`; `plan` can cancel silently when headless. |
+| xAI | Keep the shipped default `permission_mode=bypassPermissions` with `sandbox=read-only`; the sandbox is the safety boundary. Do not override to `auto` or `plan` for a headless run: both can end the turn as `provider_turn_cancelled` — `auto` raises a permission prompt for commands its classifier will not auto-approve (chained `;` pipelines) that no one can answer headlessly and that cancels the turn after 15s. |
 | Codex | Include the explicit file list and prohibit broad repository greps. |
 
 Re-read allowed values, defaults, and models from

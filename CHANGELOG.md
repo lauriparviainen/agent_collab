@@ -24,6 +24,15 @@ into a detailed work log.
   then-opt-in backends and upgrades keep those values, so the README and the
   triple-review recipe now say to set `enabled = true` yourself on an older
   install instead of implying the packaged default applies.
+- Correct the xAI review guidance that steered headless runs into cancelled
+  turns (#40). The review-recipe quirk table recommended
+  `permission_mode=auto`, but under `auto` a command grok's classifier will
+  not auto-approve — reliably a `;`-chained pipeline — raises a permission
+  prompt nothing can answer headlessly and grok cancels the turn after 15
+  seconds (`provider_turn_cancelled`). The guidance, the default-config
+  comment, and the backend README now say to keep the shipped
+  `permission_mode=bypassPermissions` + `sandbox=read-only` posture, where
+  the read-only sandbox is the safety boundary.
 
 ## [0.9.3] - 2026-07-15 - Antigravity/xAI CLIs default-on and sign-in fix
 

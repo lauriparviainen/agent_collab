@@ -14,9 +14,15 @@ value maps to `--reasoning-effort`. Flags are inserted before `-p`/`--single`,
 and the subprocess working directory is used directly without adding `--cwd`.
 Headless runs default to `permission_mode=bypassPermissions` and
 `sandbox=read-only`, so Grok can execute inspection commands without an
-interactive approval prompt while repository writes remain blocked. The
-backend also tells Grok to issue one read-only inspection command at a time
-without prepending `cd`. Callers must explicitly opt into a writable sandbox.
+interactive approval prompt while repository writes remain blocked. Keep that
+default: under `permission_mode=auto` a command Grok's classifier will not
+auto-approve (reliably a `;`-chained pipeline) raises a permission prompt that
+nothing answers headlessly, and Grok cancels the turn after 15 seconds
+(`stopReason=Cancelled`, daemon outcome `provider_turn_cancelled`; the grok
+model does not always obey the one-command-per-call rule that would avoid
+this). The backend also tells Grok to issue one read-only inspection command
+at a time without prepending `cd`. Callers must explicitly opt into a writable
+sandbox.
 `provider_max_turns` maps to Grok's internal `--max-turns` model/tool-loop limit;
 it is separate from agent-collab's workflow `max_turns` and has no backend
 default, so Grok retains its version-specific default unless a caller overrides

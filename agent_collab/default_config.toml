@@ -62,7 +62,11 @@ args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
 
 [backends.xai_cli.options]
 # Inspection commands run without approval prompts while the read-only
-# sandbox blocks repository writes.
+# sandbox blocks repository writes: the sandbox, not the prompt gate, is the
+# safety boundary. Do not switch headless runs to "auto" (or "plan"): a
+# command grok's classifier will not auto-approve — reliably a ";"-chained
+# pipeline — raises a permission prompt no one can answer headlessly, and
+# after 15s grok cancels the whole turn (surfaced as provider_turn_cancelled).
 permission_mode = "bypassPermissions"
 sandbox = "read-only"
 
