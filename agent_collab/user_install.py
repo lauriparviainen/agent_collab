@@ -389,8 +389,9 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
     if attention_count:
         verb = "is" if attention_count == 1 else "are"
         info(
-            f"{attention_count} of {selected_count} enabled backends {verb} not set up yet; "
-            "each is simply skipped until its provider is available — the rest work normally"
+            f"{attention_count} of {selected_count} enabled backends {verb} not ready yet; "
+            "a workflow that uses one cannot run until its provider is set up — the ready "
+            "backends are unaffected"
         )
     else:
         ok(f"All {selected_count} enabled backends have available dependencies")

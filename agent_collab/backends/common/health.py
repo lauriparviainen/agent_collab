@@ -24,7 +24,6 @@ from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from ...events import utc_timestamp
 from ..base import (
-    CREDENTIALS_MISSING,
     CREDENTIALS_OK,
     CREDENTIALS_UNKNOWN,
     HEALTH_OK,
@@ -184,9 +183,14 @@ def probe_sdk_backend(
 def antigravity_credentials(gemini_home: Optional[Path] = None) -> str:
     """Best-effort Antigravity sign-in check under ``~/.gemini`` (never a call).
 
-    ``ok`` when a cached OAuth token or an ``active`` Google account is present;
-    ``missing`` when neither exists (a definite absence); ``unknown`` when the
-    accounts file exists but cannot be read/parsed (indeterminate — never block).
+    Returns ``ok`` on a positive signal — a cached Antigravity OAuth token, or
+    an ``active`` account in the sibling Gemini CLI's ``google_accounts.json`` —
+    and ``unknown`` otherwise. It never returns ``missing``: recent Antigravity
+    (``agy`` 1.1.2+) keeps its sign-in outside these files (e.g. the OS keyring),
+    so their absence does not prove the user is signed out, and the daemon must
+    not block a signed-in user on an unverifiable negative (``unknown`` warns
+    instead of gating start). The ``google_accounts.json`` fallback also belongs
+    to the Gemini CLI, which is being sunset, so it is a positive-only hint.
     """
 
     base = gemini_home if gemini_home is not None else Path.home() / ".gemini"
@@ -201,8 +205,7 @@ def antigravity_credentials(gemini_home: Optional[Path] = None) -> str:
             return CREDENTIALS_UNKNOWN
         if isinstance(data, dict) and data.get("active"):
             return CREDENTIALS_OK
-        return CREDENTIALS_MISSING
-    return CREDENTIALS_MISSING
+    return CREDENTIALS_UNKNOWN
 
 
 def anthropic_api_key_credentials(env: Optional[Mapping[str, str]] = None) -> str:

@@ -127,15 +127,18 @@ class AntigravityCredentialsTests(unittest.TestCase):
             )
             self.assertEqual(antigravity_credentials(base), CREDENTIALS_OK)
 
-    def test_no_token_and_no_account_is_missing(self):
+    def test_no_token_and_no_account_is_unknown(self):
+        # agy 1.1.2+ stores sign-in outside these files (e.g. the OS keyring),
+        # so their absence is unverifiable, not a definite sign-out — unknown
+        # warns instead of blocking a signed-in user at start.
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(antigravity_credentials(Path(tmp)), CREDENTIALS_MISSING)
+            self.assertEqual(antigravity_credentials(Path(tmp)), CREDENTIALS_UNKNOWN)
 
-    def test_accounts_without_active_is_missing(self):
+    def test_accounts_without_active_is_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             (base / "google_accounts.json").write_text(json.dumps({"old": "x"}), encoding="utf-8")
-            self.assertEqual(antigravity_credentials(base), CREDENTIALS_MISSING)
+            self.assertEqual(antigravity_credentials(base), CREDENTIALS_UNKNOWN)
 
     def test_unreadable_accounts_is_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:

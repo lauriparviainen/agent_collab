@@ -62,6 +62,10 @@ class InstallReadinessCollectionTests(unittest.TestCase):
                 "backends": {
                     "claude_cli": {"command": "custom-claude"},
                     "codex_cli": {"enabled": False},
+                    # Disable the default-on cli backends this test does not
+                    # inject health for, so it never shells out to real agy/grok.
+                    "antigravity_cli": {"enabled": False},
+                    "xai_cli": {"enabled": False},
                 }
             },
         )
@@ -141,7 +145,18 @@ class InstallReadinessCollectionTests(unittest.TestCase):
 
     def test_distinct_configured_commands_keep_separate_rows(self):
         config = builtin_config()
-        merge_config_data(config, {"backends": {"codex_cli": {"enabled": False}}})
+        merge_config_data(
+            config,
+            {
+                "backends": {
+                    "codex_cli": {"enabled": False},
+                    # No injected health for agy/grok here: disable them so the
+                    # test never shells out to real provider CLIs.
+                    "antigravity_cli": {"enabled": False},
+                    "xai_cli": {"enabled": False},
+                }
+            },
+        )
         config.agents["claude-custom"] = AgentConfig(
             id="claude-custom", type="claude", command="custom-claude", enabled=True
         )
@@ -283,9 +298,10 @@ class InstallReadinessTableTests(unittest.TestCase):
 
         output = stdout.getvalue()
         self.assertTrue(warned)
-        # A not-ready backend is framed as skipped, not an install failure.
+        # A not-ready backend is framed as "cannot run a workflow that uses it",
+        # not an install failure.
         self.assertIn(
-            "ⓘ Info: 1 of 2 enabled backends is not set up yet; each is simply skipped",
+            "ⓘ Info: 1 of 2 enabled backends is not ready yet; a workflow that uses one cannot run",
             output,
         )
         self.assertIn("disabled backends  antigravity_cli, xai_cli", output)
