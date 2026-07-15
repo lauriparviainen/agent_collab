@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-07-15 - Antigravity/xAI CLIs default-on and sign-in fix
+
 - Enable the `antigravity_cli` and `xai_cli` backends by default (#38) so a
   local `agy` or `grok` setup works out of the box. A provider whose CLI is
   absent is reported not-ready and a workflow that uses it cannot run until it
