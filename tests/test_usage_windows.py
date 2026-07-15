@@ -313,6 +313,7 @@ class UsageWindowPlannerTests(unittest.TestCase):
 
     def test_missed_window_catches_latest_once_and_skips_older(self):
         config = builtin_config()
+        config.system.timezone = "Europe/Helsinki"
         target = config.usage_windows.targets["codex_cli_luna"]
         initial, state = plan_target(
             config,
