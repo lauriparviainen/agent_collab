@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import time, timedelta
 import ast
 import logging
 import os
 import secrets
 from pathlib import Path
+import re
 from typing import Any, Dict, Iterator, List, Mapping, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config_migrations import ConfigError, migrate_config_data
 from .paths import AgentCollabHome, atomic_write_private_text, project_config_path, user_config_path
@@ -122,6 +125,39 @@ class SessionsConfig:
 
 
 @dataclass
+class WorkTimeConfig:
+    start: time = time(9, 0)
+    end: time = time(17, 0)
+
+
+@dataclass
+class SystemConfig:
+    timezone: str = "local"
+
+
+@dataclass
+class UsageWindowTargetConfig:
+    id: str
+    enabled: bool = False
+    backend: str = ""
+    model: str = ""
+    options: Dict[str, Any] = field(default_factory=dict)
+    days: Optional[List[str]] = None
+    work_time: Optional[WorkTimeConfig] = None
+    interval: Optional[timedelta] = None
+    jitter: Optional[timedelta] = None
+
+
+@dataclass
+class UsageWindowsConfig:
+    days: List[str] = field(default_factory=lambda: ["mon", "tue", "wed", "thu", "fri"])
+    work_time: WorkTimeConfig = field(default_factory=WorkTimeConfig)
+    interval: timedelta = timedelta(hours=5)
+    jitter: timedelta = timedelta(minutes=5)
+    targets: Dict[str, UsageWindowTargetConfig] = field(default_factory=dict)
+
+
+@dataclass
 class WorkdirConfig:
     """Daemon-global workdir confinement policy; user config only."""
 
@@ -134,6 +170,8 @@ class CollaborationConfig:
     workflows: Dict[str, WorkflowConfig] = field(default_factory=dict)
     backends: Dict[str, BackendPolicyConfig] = field(default_factory=dict)
     sessions: SessionsConfig = field(default_factory=SessionsConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
+    usage_windows: UsageWindowsConfig = field(default_factory=UsageWindowsConfig)
     workdir: WorkdirConfig = field(default_factory=WorkdirConfig)
     daemon_token: Optional[str] = None
     loaded_paths: List[Path] = field(default_factory=list)
@@ -246,6 +284,8 @@ KNOWN_TOP_LEVEL_KEYS = {
     "daemon",
     "sessions",
     "workdir",
+    "system",
+    "usage_windows",
 }
 
 
@@ -307,6 +347,20 @@ def merge_config_data(
     # workflow-only merges.
     if "backends" in data or "agents" in data:
         _rebuild_derived_agents(config)
+
+    system = data.get("system", {})
+    if system is not None and system != {}:
+        if not isinstance(system, Mapping):
+            raise ConfigError("[system] must be a table")
+        unknown = sorted(set(system) - {"timezone"})
+        if unknown:
+            raise ConfigError(f"unknown field system.{unknown[0]}")
+        if "timezone" in system:
+            config.system.timezone = _expect_str(system["timezone"], "system.timezone")
+
+    usage_windows = data.get("usage_windows", {})
+    if usage_windows is not None and usage_windows != {}:
+        _merge_usage_windows(config.usage_windows, usage_windows)
 
     sessions = data.get("sessions", {})
     if sessions is not None and sessions != {}:
@@ -412,6 +466,244 @@ def _merge_backend_section(
         else:
             section.backend_config[str(key)] = _expect_backend_value(value, label)
     return section
+
+
+_TARGET_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_CLOCK = re.compile(r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _parse_usage_duration(value: Any, label: str, *, jitter: bool) -> timedelta:
+    from .durations import parse_whole_duration
+
+    units = {"m": timedelta(minutes=1)}
+    if not jitter:
+        units["h"] = timedelta(hours=1)
+    try:
+        return parse_whole_duration(
+            value,
+            units=units,
+            allow_zero=jitter,
+            example="0m" if jitter else "5h",
+        )
+    except ValueError as exc:
+        raise ConfigError(f"{label}: {exc}") from exc
+
+
+def _parse_clock(value: Any, label: str) -> time:
+    text = _expect_str(value, label)
+    if _CLOCK.fullmatch(text) is None:
+        raise ConfigError(f"{label} must use zero-padded HH:MM")
+    hour, minute = text.split(":")
+    return time(int(hour), int(minute))
+
+
+def _parse_work_time(value: Any, label: str) -> WorkTimeConfig:
+    if not isinstance(value, Mapping):
+        raise ConfigError(f"{label} must be a table with start and end")
+    unknown = sorted(set(value) - {"start", "end"})
+    if unknown:
+        raise ConfigError(f"unknown field {label}.{unknown[0]}")
+    if "start" not in value or "end" not in value:
+        missing = "start" if "start" not in value else "end"
+        raise ConfigError(f"{label}.{missing} is required")
+    result = WorkTimeConfig(
+        start=_parse_clock(value["start"], f"{label}.start"),
+        end=_parse_clock(value["end"], f"{label}.end"),
+    )
+    if result.start == result.end:
+        raise ConfigError(f"{label}.start and {label}.end must differ")
+    return result
+
+
+def _parse_days(value: Any, label: str) -> List[str]:
+    days = _expect_str_list(value, label)
+    if not days:
+        raise ConfigError(f"{label} must be a non-empty array")
+    if len(set(days)) != len(days):
+        raise ConfigError(f"{label} must contain unique day names")
+    invalid = next((item for item in days if item not in _DAYS), None)
+    if invalid is not None:
+        raise ConfigError(f"{label} contains invalid day {invalid!r}; expected mon through sun")
+    return days
+
+
+def _merge_usage_windows(config: UsageWindowsConfig, values: Any) -> None:
+    if not isinstance(values, Mapping):
+        raise ConfigError("[usage_windows] must be a table")
+    unknown = sorted(set(values) - {"days", "work_time", "interval", "jitter", "targets"})
+    if unknown:
+        raise ConfigError(f"unknown field usage_windows.{unknown[0]}")
+    if "days" in values:
+        config.days = _parse_days(values["days"], "usage_windows.days")
+    if "work_time" in values:
+        config.work_time = _parse_work_time(values["work_time"], "usage_windows.work_time")
+    if "interval" in values:
+        config.interval = _parse_usage_duration(
+            values["interval"], "usage_windows.interval", jitter=False
+        )
+    if "jitter" in values:
+        config.jitter = _parse_usage_duration(values["jitter"], "usage_windows.jitter", jitter=True)
+    targets = values.get("targets")
+    if targets is None:
+        return
+    if not isinstance(targets, Mapping):
+        raise ConfigError("[usage_windows.targets] must be a table")
+    for raw_id, raw_values in targets.items():
+        target_id = str(raw_id)
+        label = f"usage_windows.targets.{target_id}"
+        if not isinstance(raw_values, Mapping):
+            raise ConfigError(f"[{label}] must be a table")
+        unknown = sorted(
+            set(raw_values)
+            - {"enabled", "backend", "model", "options", "days", "work_time", "interval", "jitter"}
+        )
+        if unknown:
+            raise ConfigError(f"unknown field {label}.{unknown[0]}")
+        existing = config.targets.get(target_id)
+        target = (
+            UsageWindowTargetConfig(id=target_id)
+            if existing is None
+            else UsageWindowTargetConfig(
+                id=existing.id,
+                enabled=existing.enabled,
+                backend=existing.backend,
+                model=existing.model,
+                options=dict(existing.options),
+                days=None if existing.days is None else list(existing.days),
+                work_time=existing.work_time,
+                interval=existing.interval,
+                jitter=existing.jitter,
+            )
+        )
+        if "enabled" in raw_values:
+            target.enabled = _expect_bool(raw_values["enabled"], f"{label}.enabled")
+        if "backend" in raw_values:
+            target.backend = _expect_str(raw_values["backend"], f"{label}.backend")
+        if "model" in raw_values:
+            target.model = _expect_str(raw_values["model"], f"{label}.model")
+        if "options" in raw_values:
+            options = _expect_backend_options(raw_values["options"], f"{label}.options")
+            if "model" in options:
+                raise ConfigError(f"{label}.options.model is not allowed; use {label}.model")
+            target.options.update(options)
+        if "days" in raw_values:
+            target.days = _parse_days(raw_values["days"], f"{label}.days")
+        if "work_time" in raw_values:
+            target.work_time = _parse_work_time(raw_values["work_time"], f"{label}.work_time")
+        if "interval" in raw_values:
+            target.interval = _parse_usage_duration(
+                raw_values["interval"], f"{label}.interval", jitter=False
+            )
+        if "jitter" in raw_values:
+            target.jitter = _parse_usage_duration(
+                raw_values["jitter"], f"{label}.jitter", jitter=True
+            )
+        config.targets[target_id] = target
+
+
+def effective_usage_window_schedule(
+    config: CollaborationConfig, target: UsageWindowTargetConfig
+) -> tuple[List[str], WorkTimeConfig, timedelta, timedelta]:
+    """Return target schedule fields after applying global defaults."""
+
+    usage = config.usage_windows
+    return (
+        list(target.days if target.days is not None else usage.days),
+        target.work_time or usage.work_time,
+        target.interval or usage.interval,
+        target.jitter if target.jitter is not None else usage.jitter,
+    )
+
+
+def normalized_usage_window_options(
+    config: CollaborationConfig, target: UsageWindowTargetConfig
+) -> Dict[str, Any]:
+    """Normalize one target through its backend-owned option contract."""
+
+    from . import backends as backend_registry
+    from .backend_contract import BackendOptionError
+
+    agent_type, backend_id = split_canonical_backend(target.backend)
+    backend = backend_registry.get_backend(agent_type, backend_id or "")
+    section = config.backends[target.backend]
+    agent = config.agents.get(target.backend) or AgentConfig(
+        id=target.backend,
+        type=agent_type,
+        command=section.command,
+        args=list(section.args),
+        enabled=True,
+        env=dict(section.env),
+        cwd=section.cwd,
+        timeout=section.timeout,
+        backend_config=dict(section.backend_config),
+        options=dict(section.options),
+        default_options=dict(section.default_options),
+        backend=backend_id,
+    )
+    try:
+        return dict(backend.normalize_options(agent, {**target.options, "model": target.model}))
+    except BackendOptionError as exc:
+        if exc.field == "model":
+            path = f"usage_windows.targets.{target.id}.model"
+        else:
+            field = f".{exc.field}" if exc.field else ""
+            path = f"usage_windows.targets.{target.id}.options{field}"
+        raise ConfigError(f"{path}: {exc.message}") from exc
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"usage_windows.targets.{target.id}.options: {exc}") from exc
+
+
+def _validate_usage_windows(config: CollaborationConfig) -> None:
+    timezone_name = config.system.timezone
+    if timezone_name != "local":
+        try:
+            ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ConfigError(
+                "system.timezone must be 'local' or a valid IANA timezone name"
+            ) from exc
+    if config.usage_windows.interval < timedelta(minutes=15):
+        raise ConfigError("usage_windows.interval must be at least 15m")
+    if config.usage_windows.jitter >= config.usage_windows.interval:
+        raise ConfigError("usage_windows.jitter must be smaller than usage_windows.interval")
+    enabled_pairs: Dict[tuple[str, str], str] = {}
+    from .backends import registered_backend_names
+
+    registered = set(registered_backend_names())
+    for target in config.usage_windows.targets.values():
+        label = f"usage_windows.targets.{target.id}"
+        if _TARGET_ID.fullmatch(target.id) is None:
+            raise ConfigError(
+                f"{label}: target name must match ^[A-Za-z0-9][A-Za-z0-9._-]{{0,127}}$"
+            )
+        if not target.backend:
+            raise ConfigError(f"{label}.backend is required")
+        if target.backend not in registered:
+            raise ConfigError(
+                f"{label}.backend is not a registered canonical backend; expected one of: "
+                + ", ".join(sorted(registered))
+            )
+        if not target.model.strip():
+            raise ConfigError(f"{label}.model must be a non-empty string")
+        _days, _work_time, interval, jitter = effective_usage_window_schedule(config, target)
+        if interval < timedelta(minutes=15):
+            raise ConfigError(f"{label}.interval must be at least 15m")
+        if jitter >= interval:
+            raise ConfigError(f"{label}.jitter must be smaller than its effective interval")
+        normalized = normalized_usage_window_options(config, target)
+        normalized_model = normalized.get("model")
+        if not isinstance(normalized_model, str) or not normalized_model.strip():
+            raise ConfigError(f"{label}.model must normalize to a non-empty string")
+        if target.enabled:
+            pair = (target.backend, normalized_model)
+            previous = enabled_pairs.get(pair)
+            if previous is not None:
+                raise ConfigError(
+                    f"{label} duplicates enabled target {previous!r} for backend/model "
+                    f"{target.backend}/{normalized_model}"
+                )
+            enabled_pairs[pair] = target.id
 
 
 def _merge_persona(
@@ -561,6 +853,7 @@ def validate_config(config: CollaborationConfig) -> None:
     # becomes start-ineligible; only unknown references are configuration errors.
     for workflow in config.workflows.values():
         validate_workflow(config, workflow.id, allow_disabled=True)
+    _validate_usage_windows(config)
 
 
 def backend_policy(config: CollaborationConfig, canonical_backend: str) -> BackendPolicyConfig:

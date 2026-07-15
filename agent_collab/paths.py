@@ -34,6 +34,8 @@ class GlobalDataPaths:
     daemon_start_lock_path: Path
     pid_path: Path
     state_path: Path
+    usage_window_state_path: Path
+    usage_window_workdir: Path
     token_path: Path
     daemon_log_path: Path
     daemon_stderr_path: Path
@@ -52,6 +54,8 @@ class GlobalDataPaths:
             daemon_start_lock_path=daemon_dir / "start.lock",
             pid_path=daemon_dir / "pid",
             state_path=daemon_dir / "state.json",
+            usage_window_state_path=daemon_dir / "usage-window-state.json",
+            usage_window_workdir=data_dir / "tmp" / "usage-windows",
             token_path=daemon_dir / "token",
             daemon_log_path=daemon_dir / "daemon.log",
             daemon_stderr_path=daemon_dir / "daemon.stderr.log",
@@ -66,6 +70,7 @@ class GlobalDataPaths:
         self.daemon_dir.chmod(0o700)
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
+        self.tmp_dir.chmod(0o700)
 
 
 def atomic_write_private_text(path: Path, text: str) -> None:

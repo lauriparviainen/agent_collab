@@ -2,6 +2,7 @@ schema_version = 1
 
 [options.model]
 type = "string"
+suggested = ["grok-4.5", "grok-composer-2.5-fast"]
 inferred = true
 
 [options.permission_mode]

@@ -1,4 +1,91 @@
-schema_version = 8
+schema_version = 9
+
+##### SYSTEM CONFIG #####
+
+[system]
+timezone = "local"
+
+
+##### USAGE WINDOWS #####
+
+[usage_windows]
+# Usage-window alignment makes normal paid provider requests on a schedule.
+# Every target is disabled by default; enable only the target you intend to use.
+days = ["mon", "tue", "wed", "thu", "fri"]
+work_time = { start = "09:00", end = "17:00" }
+interval = "5h"
+jitter = "5m"
+
+[usage_windows.targets.claude_cli_sonnet]
+enabled = false
+backend = "claude_cli"
+model = "sonnet"
+
+[usage_windows.targets.claude_cli_sonnet.options]
+thinking_level = "low"
+permission_mode = "plan"
+
+[usage_windows.targets.claude_sdk_sonnet]
+enabled = false
+backend = "claude_sdk"
+model = "sonnet"
+
+[usage_windows.targets.claude_sdk_sonnet.options]
+thinking_level = "low"
+permission_mode = "plan"
+
+[usage_windows.targets.codex_cli_luna]
+enabled = false
+backend = "codex_cli"
+model = "gpt-5.6-luna"
+
+[usage_windows.targets.codex_cli_luna.options]
+thinking_level = "low"
+sandbox = "read-only"
+
+[usage_windows.targets.codex_sdk_luna]
+enabled = false
+backend = "codex_sdk"
+model = "gpt-5.6-luna"
+
+[usage_windows.targets.codex_sdk_luna.options]
+thinking_level = "low"
+sandbox = "read-only"
+
+[usage_windows.targets.antigravity_cli_flash_low]
+enabled = false
+backend = "antigravity_cli"
+model = "Gemini 3.5 Flash (Low)"
+
+[usage_windows.targets.antigravity_cli_flash_low.options]
+mode = "plan"
+sandbox = true
+
+[usage_windows.targets.antigravity_sdk_flash_low]
+enabled = false
+backend = "antigravity_sdk"
+model = "Gemini 3.5 Flash (Low)"
+
+[usage_windows.targets.xai_cli_grok_4_5]
+enabled = false
+backend = "xai_cli"
+model = "grok-4.5"
+
+[usage_windows.targets.xai_cli_grok_4_5.options]
+thinking_level = "low"
+sandbox = "read-only"
+provider_max_turns = 1
+
+[usage_windows.targets.xai_sdk_grok_4_5]
+enabled = false
+backend = "xai_sdk"
+model = "grok-4.5"
+
+[usage_windows.targets.xai_sdk_grok_4_5.options]
+thinking_level = "low"
+
+
+##### BACKENDS #####
 
 # The schema is backend-first: every enabled [backends.<canonical>] section
 # defines its default agent under the same id. Nested options-only personae
@@ -61,6 +148,8 @@ command = "grok"
 args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
 
 [backends.xai_cli.options]
+model = "grok-4.5"
+thinking_level = "high"
 # Inspection commands run without approval prompts while the read-only
 # sandbox blocks repository writes: the sandbox, not the prompt gate, is the
 # safety boundary. Do not switch headless runs to "auto" (or "plan"): a
@@ -101,6 +190,13 @@ model = "Gemini 3.5 Flash (High)"
 [backends.xai_sdk]
 enabled = false
 
+[backends.xai_sdk.options]
+model = "grok-4.5"
+thinking_level = "high"
+
+
+##### WORKFLOWS #####
+
 # One single-agent shape. The default member is Claude; start-time member
 # selection (`members = {"claude_cli" = "<agent>"}`) runs any other enabled
 # agent without extra workflow ids. Fixed aliases remain one user-config line:
@@ -114,3 +210,8 @@ sequence = ["claude_cli", "codex_cli", "claude_cli"]
 
 [workflows.dual-review]
 parallel = ["claude_cli", "codex_cli"]
+
+# The scheduler replaces this placeholder member through the ordinary
+# start-time member/options override path. Manual starts remain ordinary starts.
+[workflows.usage-window]
+sequence = ["claude_cli"]

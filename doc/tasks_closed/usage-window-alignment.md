@@ -1,7 +1,7 @@
 # Usage-window alignment
 
-**Status:** Open — design verified against the codebase (2026-07-15), ready
-for implementation.
+**Status:** Closed in 0.10.0 (2026-07-16). The full hermetic gate passed;
+credentialed usage-window verification was not run because it makes paid calls.
 
 **Created:** 2026-07-15
 
@@ -184,12 +184,13 @@ enabled = false
 backend = "antigravity_sdk"
 model = "Gemini 3.5 Flash (Low)"
 
-[usage_windows.targets.xai_cli_grok_build]
+[usage_windows.targets.xai_cli_grok_4_5]
 enabled = false
 backend = "xai_cli"
-model = "grok-build"
+model = "grok-4.5"
 
-[usage_windows.targets.xai_cli_grok_build.options]
+[usage_windows.targets.xai_cli_grok_4_5.options]
+thinking_level = "low"
 sandbox = "read-only"
 provider_max_turns = 1
 
@@ -203,8 +204,8 @@ thinking_level = "low"
 ```
 
 The model names match the economical live-integration defaults in
-`integration_tests/harness.py` (`DEFAULT_LIVE_OPTIONS`, plus the `grok-build`
-override in `integration_tests/backends/xai_cli/test_live.py`). The option
+`integration_tests/harness.py` (`DEFAULT_LIVE_OPTIONS`); the installed Grok
+CLI's `grok models` catalog reports `grok-4.5` as its default. The option
 postures are chosen for this feature, not taken from that harness, which sets
 only `model` and `thinking_level`. Two postures are deliberately stricter than
 the shipped session defaults in `default_config.toml`: the Claude targets use
@@ -753,6 +754,13 @@ external side effects explicit and require direct user confirmation.
 
 ## Verification
 
+Implementation verification on 2026-07-16: `./agent_collab_dev.sh build
+--check` and the full hermetic `./agent_collab_dev.sh test` gate pass (937
+tests, one pre-existing/conditional skip). Credentialed usage-window calls
+were not run; set `AGENT_COLLAB_IT_USAGE_WINDOWS=1` with an explicitly selected
+backend to run the opt-in live session test. The packaged model matrix was
+rechecked against `integration_tests/harness.py` and the xAI CLI override.
+
 Add focused hermetic coverage for at least:
 
 - packaged config contains exactly one disabled target for each real backend;
@@ -865,10 +873,10 @@ provider response content.
 - **Same-anchor retry:** none in the first implementation; failed anchors
   wait for the next anchor, and provider retry guidance is honored across
   anchors.
-- **`timezone = "local"`:** resolve through Python's fold-aware local-time
-  conversion of naive datetimes; never guess an IANA name. On platforms
-  exposing only a fixed UTC offset, anchors follow that offset and DST cases
-  never arise — documented behavior, not an error.
+- **`timezone = "local"`:** discover an IANA name from standard platform
+  settings (`TZ`, `/etc/localtime`, or `/etc/timezone`) and use fold-aware
+  local-time conversion. On platforms exposing only a fixed UTC offset,
+  anchors follow that offset and DST cases never arise.
 - **Status display:** enabled targets in detail, disabled packaged targets
   collapsed to a count; no `daemon status --json` in this task (none exists
   today).
@@ -890,8 +898,8 @@ answers are folded into the sections and decisions above:
    analysis stands: only `xai_sdk` could disable tools.)
 2. **Retry:** no same-anchor retry in the first implementation; the
    missed-anchor catch-up applies only to anchors that were never attempted.
-3. **`timezone = "local"`:** fold-aware platform-local conversion;
-   fixed-offset platforms schedule on that offset.
+3. **`timezone = "local"`:** discover the platform's IANA zone when available
+   and use fold-aware conversion; fixed-offset platforms schedule on that offset.
 4. **Status verbosity:** enabled targets in detail, disabled packaged targets
    collapsed to a count.
 5. **Normalization API:** moot on the visible-session path — the normal

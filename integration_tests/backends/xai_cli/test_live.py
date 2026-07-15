@@ -10,9 +10,9 @@ class XaiCliLiveTests(LiveBackendTestCase):
 
     def requested_options(self):
         options = super().requested_options()
-        # Grok Build's local model catalog is distinct from the remote API's.
-        options["model"] = os.environ.get("AGENT_COLLAB_IT_XAI_MODEL", "grok-build")
-        options.pop("thinking_level", None)  # grok-build does not accept effort today
+        # Keep this explicit so the live transport test follows the model
+        # reported by the installed Grok CLI's local catalog.
+        options["model"] = os.environ.get("AGENT_COLLAB_IT_XAI_MODEL", "grok-4.5")
         return options
 
     def prepare_workdir(self, workdir):

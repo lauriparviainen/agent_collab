@@ -88,12 +88,18 @@ sequence = ["xai_cli"]
             },
         )
         self.assertTrue(schema["model"].inferred)
+        self.assertEqual(
+            schema["model"].suggested,
+            ("grok-4.5", "grok-composer-2.5-fast"),
+        )
         self.assertIsNone(schema["model"].allowed)
         self.assertIsNone(schema["sandbox"].allowed)
         # Defaults ship in the built-in config, not the backend manifest.
         self.assertIs(schema["permission_mode"].default, OPTION_UNSET)
         self.assertIs(schema["sandbox"].default, OPTION_UNSET)
         defaults = builtin_config().backends["xai_cli"].default_options
+        self.assertEqual(defaults["model"], "grok-4.5")
+        self.assertEqual(defaults["thinking_level"], "high")
         self.assertEqual(defaults["permission_mode"], "bypassPermissions")
         self.assertEqual(defaults["sandbox"], "read-only")
         self.assertEqual(schema["provider_max_turns"].minimum, 1)
@@ -103,6 +109,7 @@ sequence = ["xai_cli"]
         self.assertEqual(
             options,
             {
+                "model": "grok-4.5",
                 "permission_mode": "bypassPermissions",
                 "sandbox": "read-only",
                 "thinking_level": "high",
@@ -113,6 +120,7 @@ sequence = ["xai_cli"]
                 self.agent(), {"thinking_level": "low", "reasoning_effort": "low"}
             ),
             {
+                "model": "grok-4.5",
                 "permission_mode": "bypassPermissions",
                 "sandbox": "read-only",
                 "thinking_level": "low",
@@ -132,14 +140,14 @@ sequence = ["xai_cli"]
                         "--output-format",
                         "streaming-json",
                         "--model",
-                        "configured-model",
+                        "grok-composer-2.5-fast",
                         "--effort",
                         "low",
                         sentinel,
                     ]
                 )
                 options = self.backend.normalize_options(agent, {"thinking_level": "high"})
-                self.assertEqual(options["model"], "configured-model")
+                self.assertEqual(options["model"], "grok-composer-2.5-fast")
                 command = self.backend.build_command(agent, options)
                 prompt_index = command.index(sentinel)
                 self.assertLess(command.index("--model"), prompt_index)
@@ -274,7 +282,7 @@ sequence = ["xai_cli"]
 
         config.workflows["solo-xai"] = WorkflowConfig("solo-xai", ["xai_cli"])
         options = self.backend.normalize_options(
-            agent, {"model": "grok-build", "thinking_level": "low"}
+            agent, {"model": "grok-4.5", "thinking_level": "low"}
         )
         settings = build_session_settings(
             config,
@@ -300,6 +308,11 @@ sequence = ["xai_cli"]
         self.assertIsInstance(referee._runners()["xai_cli"], DryRunRunner)
 
         described = describe_options(config, health=lambda backend: BackendHealth(status="ok"))
+        model_schema = described["backends"]["xai_cli"]["static"]["option_schema"]["properties"][
+            "model"
+        ]
+        self.assertEqual(model_schema["suggested"], ["grok-4.5", "grok-composer-2.5-fast"])
+        self.assertNotIn("allowed", model_schema)
         policy = described["backends"]["xai_cli"]["policy"]
         self.assertTrue(policy["enabled"])
         self.assertTrue(policy["selection_eligible"])

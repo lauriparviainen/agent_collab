@@ -43,6 +43,14 @@ that were running or awaiting input when the daemon died are marked
 `interrupted`. Start/status/list responses carry effective `settings` with a
 prompt-free `command_preview` per agent.
 
+Schema 9 adds global `[system]` and `[usage_windows]` policy. The daemon loads
+it once, runs no scheduler when all packaged targets remain disabled, and
+starts enabled targets through normal visible `usage-window` sessions. Pure
+planning and private `data/daemon/usage-window-state.json` provide persisted
+jitter, fingerprint invalidation, duplicate guards, and fail-closed bounded
+catch-up. The scheduler's isolated workdir exemption is an internal-only
+`StartSessionRequest` field absent from the wire DTO.
+
 ## Backend Model
 
 An agent's provider `type` (`claude`, `codex`, `antigravity`, `xai`, `mock`) is

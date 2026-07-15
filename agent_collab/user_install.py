@@ -451,6 +451,45 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
             "A backend you will not use can be turned off (and drop off this table) with "
             "enabled = false under its [backends.<name>] section in the user config."
         )
+    usage_windows = payload.get("usage_windows") or {}
+    usage_targets = usage_windows.get("targets") or []
+    if usage_targets:
+        print()
+        count = len(usage_targets)
+        noun = "target" if count == 1 else "targets"
+        ok(f"{count} usage-window {noun} enabled")
+        print_kv(
+            (
+                ("timezone", usage_windows.get("timezone") or "local"),
+                ("days", ",".join(usage_windows.get("days") or [])),
+                ("work time", usage_windows.get("work_time") or "—"),
+                ("interval", usage_windows.get("interval") or "—"),
+                ("jitter", usage_windows.get("jitter") or "—"),
+            )
+        )
+        print()
+        print("  participating backends", flush=True)
+        rows_with_overrides = [
+            (
+                str(item.get("backend") or "—"),
+                str(item.get("model") or "—"),
+                "; ".join(str(value) for value in item.get("overrides") or []),
+            )
+            for item in usage_targets
+            if isinstance(item, dict)
+        ]
+        if any(row[2] for row in rows_with_overrides):
+            print_table(
+                ("backend", "model", "schedule overrides"),
+                rows_with_overrides,
+                indent="    ",
+            )
+        else:
+            print_table(
+                ("backend", "model"),
+                [(row[0], row[1]) for row in rows_with_overrides],
+                indent="    ",
+            )
     print()
     return attention_count > 0
 

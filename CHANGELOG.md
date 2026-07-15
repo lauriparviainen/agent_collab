@@ -13,6 +13,24 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-16 - Event Windows beta
+
+- Add opt-in daemon-owned usage-window alignment (#41). Schema v9 ships one
+  economical disabled target for each real CLI/SDK backend, timezone-aware
+  drift-free scheduling with bounded persisted jitter and fail-closed catch-up,
+  normal visible `usage-window` sessions in an owner-only empty workdir,
+  private restart-safe state, backend-health gating, and daemon-status
+  observability. The Event Windows beta includes dedicated configuration
+  guidance and installer output for the participating backend/model targets.
+  The feature makes ordinary paid requests and does not claim to reset,
+  extend, inspect, or guarantee provider quota windows.
+- Make xAI model selection explicit in shipped normal-session defaults:
+  `xai_cli` and `xai_sdk` use `grok-4.5` with high reasoning, matching the
+  installed CLI's reported default and xAI's documented reasoning default.
+  Their manifests expose verified model suggestions without rejecting newer
+  provider-supported model IDs. Economical usage-window and live-test settings
+  use low reasoning.
+
 ## [0.9.4] - 2026-07-15 - Symlinked-config token fix and headless Grok guidance
 
 - Fix `ensure_daemon_token` destroying a dangling symlinked config. The 0.9.1

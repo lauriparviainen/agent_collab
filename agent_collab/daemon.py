@@ -95,6 +95,10 @@ class StartSessionRequest:
     # the runner uses the same agents/types/backends the start response
     # advertised — never a possibly-divergent reload. Not a user input.
     collab_config: Optional[CollaborationConfig] = None
+    # Scheduler-only exemption for its daemon-owned empty workdir. from_wire
+    # never accepts or sets this flag, so external starts remain confined by
+    # [workdir].restrict_workdir_roots.
+    internal_workdir_exempt: bool = False
 
     @classmethod
     def from_wire(cls, data: Dict[str, Any]) -> "StartSessionRequest":
@@ -396,7 +400,12 @@ class SessionManager:
         )
         try:
             workdir = resolve_existing_workdir(requested_workdir)
-            collab_config = load_config(workdir)
+            if request.internal_workdir_exempt:
+                from .config import load_user_config
+
+                collab_config = load_user_config()
+            else:
+                collab_config = load_config(workdir)
         except ConfigError as exc:
             raise SessionRequestError(str(exc)) from exc
         workflow = collab_config.workflows.get(request.workflow)

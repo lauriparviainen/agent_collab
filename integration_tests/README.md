@@ -16,6 +16,12 @@ This suite is credentialed and may make paid model calls. It is structurally sep
 ./agent_collab_dev.sh integration-test xai_sdk --strict
 ```
 
+Each selected backend also defines a usage-window visible-session integration
+test. It is skipped unless `AGENT_COLLAB_IT_USAGE_WINDOWS=1` is set because it
+makes an additional paid request. The test uses the fixed application prompt,
+the owner-only empty daemon workdir, and the normal session manager path; it
+does not wait for a wall-clock schedule.
+
 Selection can also use comma-separated canonical names in
 `AGENT_COLLAB_IT_BACKENDS`, such as `claude_sdk,codex_cli`.
 `AGENT_COLLAB_IT_STRICT=1` makes missing dependencies/credentials for explicitly
@@ -24,8 +30,8 @@ skips exit `0`.
 
 The paid calls default to economical, low-latency settings: Claude `sonnet` with
 low effort, Codex `gpt-5.6-luna` with low reasoning, and Antigravity
-`Gemini 3.5 Flash (Low)`. xAI uses Grok Build's local `grok-build` model for the
-CLI and `grok-4.5` with low effort for the remote SDK. Override models with
+`Gemini 3.5 Flash (Low)`. Both xAI transports use `grok-4.5` with low effort;
+the CLI value matches the default reported by `grok models`. Override models with
 `AGENT_COLLAB_IT_CLAUDE_MODEL`, `AGENT_COLLAB_IT_CODEX_MODEL`, or
 `AGENT_COLLAB_IT_ANTIGRAVITY_MODEL`, or `AGENT_COLLAB_IT_XAI_MODEL`; override
 Claude/Codex/xAI effort with the

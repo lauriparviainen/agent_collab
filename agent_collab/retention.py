@@ -16,6 +16,8 @@ import stat as stat_module
 from pathlib import Path
 from typing import Any, Iterable, List, Mapping, Optional, Tuple
 
+from .durations import parse_whole_duration
+
 RUNNING = "running"
 AWAITING_INPUT = "awaiting_input"
 DONE = "done"
@@ -40,16 +42,14 @@ def parse_duration(text: Any) -> timedelta:
     not be one typo away.
     """
 
-    if not isinstance(text, str):
-        raise ValueError("duration must be a string like 7d (whole-number h, d, or w)")
-    value = text.strip()
-    number, unit = value[:-1], value[-1:]
-    if unit not in _DURATION_UNITS or not number.isascii() or not number.isdigit():
-        raise ValueError(f"invalid duration {text!r}; use a whole number with h, d, or w (e.g. 7d)")
-    count = int(number)
-    if count < 1:
-        raise ValueError(f"invalid duration {text!r}; the value must be at least 1")
-    return count * _DURATION_UNITS[unit]
+    return parse_whole_duration(
+        text,
+        units=_DURATION_UNITS,
+        allow_zero=False,
+        example="7d",
+        units_description="h, d, or w",
+        string_description="7d (whole-number h, d, or w)",
+    )
 
 
 def parse_timestamp(value: Any) -> Optional[datetime]:

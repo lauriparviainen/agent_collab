@@ -92,6 +92,22 @@ class OutcomeSanitizationTests(unittest.TestCase):
             outcome = TurnOutcome("failed", "provider_terminal_failure", provider_stop_reason=token)
             self.assertIsNone(outcome.provider_stop_reason)
 
+    def test_retry_after_is_typed_bounded_and_round_trips(self):
+        outcome = TurnOutcome("refused", "provider_turn_refused", retry_after_seconds=90)
+        record = TurnOutcomeRecord.from_outcome(
+            turn_id="turn-1",
+            stage_index=1,
+            agent_id="reviewer",
+            backend="xai_sdk",
+            outcome=outcome,
+        )
+        self.assertEqual(record.to_dict()["retry_after_seconds"], 90.0)
+        self.assertIsNone(
+            TurnOutcome(
+                "refused", "provider_turn_refused", retry_after_seconds=999999999
+            ).retry_after_seconds
+        )
+
     def test_forged_raw_fields_are_ignored_when_loading_a_record(self):
         record = TurnOutcomeRecord.from_dict(
             {

@@ -5,8 +5,12 @@ chat API, not the local Grok Build coding runtime. It requires `xai-sdk>=1.17,<2
 and `XAI_API_KEY`; imports are lazy and the async client is closed
 deterministically after each collected turn.
 
-Select it with `backend="sdk"`; `backend_options.xai_sdk.model` is required until a
-credentialed account/model check establishes a safe built-in default.
+Select it with `backend="sdk"`; the shipped normal-session model is
+`grok-4.5`, currently the SDK transport's verified model selection. The schema
+still requires a model after defaults are resolved, so a custom configuration
+that removes the shipped default must supply one; other provider-supported
+model IDs remain accepted. Normal sessions default to
+`thinking_level=high`; `grok-4.5` also supports `low` and `medium`.
 `thinking_level` is the preferred spelling and `reasoning_effort` is an alias;
 one effective `none`, `low`, `medium`, or `high` value maps to
 `chat.create(reasoning_effort=...)`. CLI-only

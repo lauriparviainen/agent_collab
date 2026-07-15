@@ -260,6 +260,22 @@ class BuiltinBackendContractTests(unittest.TestCase):
                 normalize_declared_options({}, schema)
             self.assertEqual(ctx.exception.field, "model")
 
+    def test_suggested_manifest_values_are_typed_advisory_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "options.toml"
+            path.write_text(
+                'schema_version = 1\n[options.model]\ntype = "string"\n'
+                'suggested = ["current", "economical"]\n',
+                encoding="utf-8",
+            )
+            schema = load_option_schema(path)
+            self.assertEqual(schema["model"].suggested, ("current", "economical"))
+            self.assertEqual(schema["model"].to_dict()["suggested"], ["current", "economical"])
+            self.assertEqual(
+                normalize_declared_options({"model": "future-model"}, schema),
+                {"model": "future-model"},
+            )
+
     def test_every_builtin_backend_has_well_formed_declarative_schema(self):
         config = builtin_config()
         for agent_type in ("claude", "codex", "antigravity", "xai"):

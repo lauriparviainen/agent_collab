@@ -50,12 +50,12 @@ through project config or dedicated Claude/Codex path flags.
 
 Built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml), so the base backend commands, option defaults, and built-in workflows are inspectable without reading Python code.
 
-Config files declare a top-level `schema_version` (currently `8`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. `./agent_collab.sh install` additionally rewrites the user config file on disk to the current schema (see [Migration](#migration-from-the-agents-first-schema)). Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
+Config files declare a top-level `schema_version` (currently `9`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. `./agent_collab.sh install` additionally rewrites the user config file on disk to the current schema (see [Migration](#migration-from-the-agents-first-schema)). Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
 ## Example
 
 ```toml
-schema_version = 8
+schema_version = 9
 
 [backends.claude_cli]
 enabled = true
@@ -120,7 +120,7 @@ workflow (it becomes start-eligible once the `grok` CLI is installed; enable an
 opt-in `sdk` backend first if you would rather use one of those):
 
 ```toml
-schema_version = 8
+schema_version = 9
 
 [workflows.triple-review]
 parallel = ["claude_cli", "codex_cli", "xai_cli"]
@@ -341,7 +341,7 @@ before creating session state or launching a subprocess.
 ```
 
 Each backend's colocated manifest is the shipped source of accepted keys and
-values (types, allowed values, ranges). Shipped default *values* live in the
+values (types, enforcing allowed values, advisory suggestions, ranges). Shipped default *values* live in the
 built-in config's `[backends.<canonical>.options]` tables in
 [agent_collab/default_config.toml](../agent_collab/default_config.toml), so
 they are ordinary, inspectable configuration rather than hard-coded manifest
@@ -410,22 +410,29 @@ on top for that agent; MCP values override both for that session.
 
 `backend_options.xai_cli` accepts `model`, `permission_mode`, `sandbox`,
 `provider_max_turns`, and the reasoning aliases. Its headless defaults are
-`permission_mode=bypassPermissions` and `sandbox=read-only`: inspection
+`model=grok-4.5`, `thinking_level=high`,
+`permission_mode=bypassPermissions`, and
+`sandbox=read-only`: inspection
 commands run without an interactive approval prompt while repository writes
-remain blocked. `provider_max_turns` maps to Grok's internal model/tool-loop
+remain blocked. Its verified model suggestions are `grok-4.5` and
+`grok-composer-2.5-fast`; other provider-supported model IDs remain accepted.
+`provider_max_turns` maps to Grok's internal model/tool-loop
 limit and is distinct from the top-level agent-collab workflow `max_turns`; it
 has no backend default. `backend_options.xai_sdk` accepts only `model` and the
-reasoning aliases; pass a model explicitly because no remote API model default
-is assumed without a credentialed account check. Its verified/current reasoning
-values are `none`, `low`, `medium`, and `high`. The SDK is remote message-only
-chat and does not provide the local coding/tool behavior of Grok Build.
+reasoning aliases. It also ships `model=grok-4.5` and `thinking_level=high`; a
+session override is optional, and `grok-4.5` is currently its verified model
+suggestion; other provider-supported model IDs remain accepted. Grok 4.5 supports
+`low`, `medium`, and `high`.
+The SDK schema also accepts `none` for compatible models. The SDK is remote
+message-only chat and does not provide the local coding/tool behavior of Grok
+Build.
 
 CLI callers can pass JSON option objects and select a backend:
 
 ```bash
 agent-collab start --backend-options '{"codex_cli":{"thinking_level":"medium"},"claude_cli":{"model":"opus"}}' "Task"
 agent-collab start --workflow solo --members '{"claude_cli":"antigravity_sdk"}' --backend-options '{"antigravity_sdk":{"model":"Gemini 3.1 Pro (High)"}}' "Task"
-agent-collab start --workflow solo --members '{"claude_cli":"xai_cli"}' --backend-options '{"xai_cli":{"model":"grok-build"}}' "Task"
+agent-collab start --workflow solo --members '{"claude_cli":"xai_cli"}' "Task"
 agent-collab start --workflow solo --members '{"claude_cli":"xai_sdk"}' --backend-options '{"xai_sdk":{"model":"grok-4.5","thinking_level":"low"}}' "Task"
 ```
 

@@ -22,7 +22,7 @@ from .api_schema import (
     TranscriptRequestModel,
     WaitEventsRequestModel,
 )
-from .config import SessionsConfig
+from .config import CollaborationConfig, SessionsConfig
 from .daemon import (
     SessionManager,
     SessionNotFoundError,
@@ -70,6 +70,8 @@ class AgentCollabHttpServer:
         session_index_path: Optional[Path] = None,
         auth_token: Optional[str] = None,
         sessions_config: Optional[SessionsConfig] = None,
+        daemon_config: Optional[CollaborationConfig] = None,
+        data_paths: Optional[GlobalDataPaths] = None,
     ):
         owns_manager = manager is None
         self.manager = manager or SessionManager(
@@ -82,7 +84,11 @@ class AgentCollabHttpServer:
         self.auth_token = auth_token
         # Daemon-global retention policy; run_server passes the user-config
         # value, direct construction (tests) gets the built-in defaults.
-        self.sessions_config = sessions_config or SessionsConfig()
+        self.daemon_config = daemon_config
+        self.sessions_config = sessions_config or (
+            daemon_config.sessions if daemon_config is not None else SessionsConfig()
+        )
+        self.data_paths = data_paths or GlobalDataPaths.resolve()
         # Seconds between scheduled retention runs; tests shrink this.
         self._retention_interval_seconds = float(self.sessions_config.cleanup_interval_hours * 3600)
 
@@ -91,6 +97,7 @@ class AgentCollabHttpServer:
         addresses = ", ".join(str(sock.getsockname()) for sock in server.sockets or [])
         print(f"agent-collab daemon listening on {addresses}", flush=True)
         retention_task = self.start_retention_task()
+        usage_window_task = self.start_usage_window_task()
         try:
             async with server:
                 await server.serve_forever()
@@ -102,6 +109,10 @@ class AgentCollabHttpServer:
                 retention_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await retention_task
+            if usage_window_task is not None:
+                usage_window_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await usage_window_task
 
     def start_retention_task(self) -> Optional[asyncio.Task]:
         """Start the periodic retention task; None when retention is disabled."""
@@ -110,6 +121,25 @@ class AgentCollabHttpServer:
             return None
         return asyncio.get_running_loop().create_task(
             self._retention_loop(), name="agent-collab-retention"
+        )
+
+    def start_usage_window_task(self) -> Optional[asyncio.Task]:
+        """Start daemon-global usage-window alignment when a target is enabled."""
+
+        if self.daemon_config is None:
+            return None
+        from .usage_windows import UsageWindowScheduler, enabled_usage_window_targets
+
+        if not enabled_usage_window_targets(self.daemon_config):
+            return None
+        scheduler = UsageWindowScheduler(
+            config=self.daemon_config,
+            manager=self.manager,
+            paths=self.data_paths,
+            logger=self._log,
+        )
+        return asyncio.get_running_loop().create_task(
+            scheduler.run(), name="agent-collab-usage-windows"
         )
 
     async def _retention_loop(self) -> None:
@@ -557,29 +587,28 @@ def _http_reason(status: int) -> str:
 
 
 def _load_sessions_config(home: Path) -> SessionsConfig:
-    """Load the daemon-global [sessions] policy from built-in + user config.
+    """Compatibility helper over the unified daemon-policy load."""
 
-    Project config never participates: the daemon's home is not a project, and
-    project-scope [sessions] sections are stripped during migration anyway. A
-    broken user config must not keep the daemon from starting, but it also
-    must not silently re-enable deletion the user may have opted out of with
-    ``retention_days = 0`` — so the fail-safe is retention disabled, not the
-    built-in 30-day default. Manual ``sessions prune --older-than`` still
-    works, and session starts will surface the underlying config error.
-    """
+    return _load_daemon_policy(home).sessions
+
+
+def _load_daemon_policy(home: Path) -> CollaborationConfig:
+    """Load all daemon-global policy once, disabling side effects on error."""
 
     from .config import ConfigError, load_user_config
     from .paths import AgentCollabHome
 
     resolved = AgentCollabHome(root=home, config_path=home / "config.toml")
     try:
-        return load_user_config(home=resolved).sessions
+        return load_user_config(home=resolved)
     except (ConfigError, OSError) as exc:
         print(
-            f"agent-collab daemon disabling automatic session retention; config error: {exc}",
+            "agent-collab daemon disabling automatic session retention and usage-window "
+            f"alignment; global config could not be loaded ({exc.__class__.__name__}); "
+            "run 'agent-collab config show' for details",
             flush=True,
         )
-        return SessionsConfig(retention_days=0)
+        return CollaborationConfig(sessions=SessionsConfig(retention_days=0))
 
 
 def run_server(
@@ -600,11 +629,13 @@ def run_server(
     except FileNotFoundError:
         pass
     token = ensure_daemon_token()
+    daemon_policy = _load_daemon_policy(paths.home)
     asyncio.run(
         AgentCollabHttpServer(
             default_workdir=default_workdir,
             session_log_dir=session_log_dir,
             auth_token=token,
-            sessions_config=_load_sessions_config(paths.home),
+            daemon_config=daemon_policy,
+            data_paths=paths,
         ).serve(host, port)
     )

@@ -14,11 +14,15 @@ import sys
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from .backends.base import BackendHealth, HEALTH_UNKNOWN
-from .config import CollaborationConfig, load_user_config
+from .config import (
+    CollaborationConfig,
+    UsageWindowTargetConfig,
+    load_user_config,
+)
 from .options import assess_backend
 
 
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
 MAX_PROBE_WORKERS = 4
 ProbeKey = Tuple[str, Optional[str]]
 
@@ -92,8 +96,64 @@ def collect_install_readiness(
         "selected_count": len(rows),
         "attention_count": attention_count,
         "disabled_backends": disabled_backends,
+        "usage_windows": _usage_window_summary(effective),
         "rows": rows,
     }
+
+
+def _usage_window_summary(config: CollaborationConfig) -> Dict[str, Any]:
+    usage = config.usage_windows
+    targets = []
+    for target in sorted(usage.targets.values(), key=lambda item: item.id):
+        policy = config.backends.get(target.backend)
+        if not target.enabled or policy is None or not policy.enabled:
+            continue
+        targets.append(
+            {
+                "backend": target.backend,
+                "model": target.model,
+                "overrides": _usage_window_overrides(target),
+            }
+        )
+    return {
+        "timezone": config.system.timezone,
+        "days": list(usage.days),
+        "work_time": (
+            f"{usage.work_time.start.strftime('%H:%M')}-{usage.work_time.end.strftime('%H:%M')}"
+        ),
+        "interval": _format_duration(usage.interval),
+        "jitter": _format_jitter(usage.jitter),
+        "targets": targets,
+    }
+
+
+def _usage_window_overrides(target: UsageWindowTargetConfig) -> List[str]:
+    overrides = []
+    if target.days is not None:
+        overrides.append("days=" + ",".join(target.days))
+    if target.work_time is not None:
+        overrides.append(
+            "work_time="
+            f"{target.work_time.start.strftime('%H:%M')}-"
+            f"{target.work_time.end.strftime('%H:%M')}"
+        )
+    if target.interval is not None:
+        overrides.append("interval=" + _format_duration(target.interval))
+    if target.jitter is not None:
+        overrides.append("jitter=" + _format_jitter(target.jitter))
+    return overrides
+
+
+def _format_duration(value: Any) -> str:
+    seconds = int(value.total_seconds())
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 60}m"
+
+
+def _format_jitter(value: Any) -> str:
+    rendered = _format_duration(value)
+    return rendered if not value else f"±{rendered}"
 
 
 def _group(

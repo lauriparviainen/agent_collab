@@ -22,11 +22,14 @@ class OptionSpec:
     default: Any = OPTION_UNSET
     inferred: bool = False
     required: bool = False
+    suggested: Optional[Tuple[Any, ...]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {"type": self.type}
         if self.allowed is not None:
             result["allowed"] = list(self.allowed)
+        if self.suggested is not None:
+            result["suggested"] = list(self.suggested)
         if self.minimum is not None:
             result["min"] = self.minimum
         if self.maximum is not None:
@@ -72,6 +75,7 @@ def load_option_schema(path: Path) -> Dict[str, OptionSpec]:
         extra = set(raw) - {
             "type",
             "allowed",
+            "suggested",
             "min",
             "max",
             "default",
@@ -86,6 +90,9 @@ def load_option_schema(path: Path) -> Dict[str, OptionSpec]:
         allowed = raw.get("allowed")
         if allowed is not None and not isinstance(allowed, list):
             raise ConfigError(f"{label}.allowed must be an array")
+        suggested = raw.get("suggested")
+        if suggested is not None and not isinstance(suggested, list):
+            raise ConfigError(f"{label}.suggested must be an array")
         minimum = raw.get("min")
         maximum = raw.get("max")
         for key, value in (("min", minimum), ("max", maximum)):
@@ -106,6 +113,7 @@ def load_option_schema(path: Path) -> Dict[str, OptionSpec]:
         spec = OptionSpec(
             option_type,
             allowed=tuple(allowed) if allowed is not None else None,
+            suggested=tuple(suggested) if suggested is not None else None,
             minimum=minimum,
             maximum=maximum,
             default=deepcopy(raw["default"]) if "default" in raw else OPTION_UNSET,
@@ -116,6 +124,9 @@ def load_option_schema(path: Path) -> Dict[str, OptionSpec]:
         if spec.allowed is not None:
             for index, value in enumerate(spec.allowed):
                 _validate_manifest_value(value, spec, f"{label}.allowed[{index}]", ConfigError)
+        if spec.suggested is not None:
+            for index, value in enumerate(spec.suggested):
+                _validate_manifest_value(value, spec, f"{label}.suggested[{index}]", ConfigError)
         if spec.default is not OPTION_UNSET:
             if spec.allowed is not None and spec.default not in spec.allowed:
                 raise ConfigError(f"{label}.default must be one of allowed")

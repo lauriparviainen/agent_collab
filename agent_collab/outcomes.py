@@ -95,6 +95,17 @@ def _safe_exit_code(value: Optional[int]) -> Optional[int]:
     return value
 
 
+def _safe_retry_after(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    seconds = float(value)
+    if seconds <= 0 or seconds > 7 * 24 * 60 * 60:
+        return None
+    return seconds
+
+
 @dataclass(frozen=True)
 class TurnOutcome:
     outcome: TurnOutcomeKind
@@ -102,6 +113,7 @@ class TurnOutcome:
     message: Optional[str] = None
     provider_stop_reason: Optional[str] = None
     process_exit_code: Optional[int] = None
+    retry_after_seconds: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.outcome not in OUTCOME_KINDS:
@@ -114,6 +126,7 @@ class TurnOutcome:
             self, "provider_stop_reason", _safe_stop_reason(self.provider_stop_reason)
         )
         object.__setattr__(self, "process_exit_code", _safe_exit_code(self.process_exit_code))
+        object.__setattr__(self, "retry_after_seconds", _safe_retry_after(self.retry_after_seconds))
         if self.outcome == "completed" and self.code is not None:
             raise ValueError("completed outcomes cannot carry a failure code")
         if self.outcome != "completed" and self.code is None:
@@ -134,6 +147,7 @@ class TurnOutcomeRecord:
     message: Optional[str] = None
     provider_stop_reason: Optional[str] = None
     process_exit_code: Optional[int] = None
+    retry_after_seconds: Optional[float] = None
 
     @classmethod
     def from_outcome(
@@ -155,6 +169,7 @@ class TurnOutcomeRecord:
             message=outcome.message,
             provider_stop_reason=outcome.provider_stop_reason,
             process_exit_code=outcome.process_exit_code,
+            retry_after_seconds=outcome.retry_after_seconds,
         )
 
     def __post_init__(self) -> None:
@@ -172,10 +187,12 @@ class TurnOutcomeRecord:
             self.message,
             self.provider_stop_reason,
             self.process_exit_code,
+            self.retry_after_seconds,
         )
         object.__setattr__(self, "message", normalized.message)
         object.__setattr__(self, "provider_stop_reason", normalized.provider_stop_reason)
         object.__setattr__(self, "process_exit_code", normalized.process_exit_code)
+        object.__setattr__(self, "retry_after_seconds", normalized.retry_after_seconds)
 
     def to_dict(self) -> Dict[str, Any]:
         return {key: value for key, value in asdict(self).items() if value is not None}
@@ -197,6 +214,7 @@ class SessionFailure:
     outcome: Optional[TurnOutcomeKind] = None
     provider_stop_reason: Optional[str] = None
     process_exit_code: Optional[int] = None
+    retry_after_seconds: Optional[float] = None
 
     @classmethod
     def from_record(cls, record: TurnOutcomeRecord) -> "SessionFailure":
@@ -211,6 +229,7 @@ class SessionFailure:
             outcome=record.outcome,
             provider_stop_reason=record.provider_stop_reason,
             process_exit_code=record.process_exit_code,
+            retry_after_seconds=record.retry_after_seconds,
         )
 
     def __post_init__(self) -> None:
@@ -224,6 +243,7 @@ class SessionFailure:
             self, "provider_stop_reason", _safe_stop_reason(self.provider_stop_reason)
         )
         object.__setattr__(self, "process_exit_code", _safe_exit_code(self.process_exit_code))
+        object.__setattr__(self, "retry_after_seconds", _safe_retry_after(self.retry_after_seconds))
         if self.outcome is not None and self.outcome not in OUTCOME_KINDS:
             raise ValueError(f"unknown turn outcome {self.outcome!r}")
         if self.stage_index is not None and (
@@ -261,6 +281,7 @@ class TerminalEvidence:
     outcome: TurnOutcomeKind
     code: Optional[str] = None
     provider_stop_reason: Optional[str] = None
+    retry_after_seconds: Optional[float] = None
 
     def to_outcome(self, process_exit_code: Optional[int] = None) -> TurnOutcome:
         return TurnOutcome(
@@ -268,6 +289,7 @@ class TerminalEvidence:
             self.code,
             provider_stop_reason=self.provider_stop_reason,
             process_exit_code=process_exit_code,
+            retry_after_seconds=self.retry_after_seconds,
         )
 
 

@@ -71,9 +71,11 @@ the effective backend of each globally enabled agent, honors configured CLI
 commands, and renders dependency, credential, version, and remediation facts
 in aligned backend-first tables: one row per probe target (canonical backend
 plus command identity) listing the agents that select it, with disabled
-backends collapsed into one summary line. Missing providers warn without
-failing installation; the checks never make a model call and do not claim
-project-workdir readiness.
+backends collapsed into one summary line. When usage-window targets participate,
+the output follows with the shared schedule configuration and a separate
+backend/model table, including per-target schedule overrides only when present.
+Missing providers warn without failing installation; the checks never make a
+model call and do not claim project-workdir readiness.
 
 `uninstall` reverses install: it stops the daemon, disables autostart,
 removes the venv and the command link (only when the link points into the
@@ -88,9 +90,14 @@ explicitly selected provider cannot run. Behavioral failures return `1`.
 
 Live tests use cheap, fast defaults because they verify backend transport and
 event fidelity rather than model quality: Claude `sonnet`/low, Codex
-`gpt-5.6-luna`/low, Antigravity `Gemini 3.5 Flash (Low)`, xAI CLI
-`grok-build`, and xAI SDK `grok-4.5`/low. See
+`gpt-5.6-luna`/low, Antigravity `Gemini 3.5 Flash (Low)`, and both xAI
+transports on `grok-4.5`/low. See
 `integration_tests/README.md` for environment overrides.
+
+Usage-window unit tests inject the clock, randomness, backend health, and
+invocation boundary; they never make provider calls. Any credentialed
+verification of a scheduled session belongs under `integration_tests/` and
+must be explicitly selected like the other live backend tests.
 
 Run a one-shot mock session:
 

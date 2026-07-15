@@ -446,6 +446,7 @@ NON_USER_START_FIELDS: Tuple[str, ...] = (
     "resolved_backends",
     "agent_options",
     "collab_config",
+    "internal_workdir_exempt",
 )
 
 

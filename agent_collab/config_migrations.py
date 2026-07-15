@@ -20,7 +20,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-CURRENT_CONFIG_SCHEMA = 8
+CURRENT_CONFIG_SCHEMA = 9
 
 _logger = logging.getLogger("agent_collab.config")
 
@@ -113,6 +113,8 @@ def _strip_project_only_sections(
         "daemon": "the daemon token is allowed only in the user config",
         "sessions": "session retention is allowed only in the user config",
         "workdir": "workdir policy is allowed only in the user config",
+        "system": "system settings are allowed only in the global user config",
+        "usage_windows": ("scheduled provider calls are allowed only in the global user config"),
     }
     for section, reason in sections.items():
         if section not in result:
@@ -283,6 +285,12 @@ def _migrate_v5_to_v6(data: Dict[str, Any], source: str, scope: str = "generic")
 
 def _migrate_v6_to_v7(data: Dict[str, Any], source: str, scope: str = "generic") -> Dict[str, Any]:
     """v7 adds flat parallel workflows."""
+
+    return data
+
+
+def _migrate_v8_to_v9(data: Dict[str, Any], source: str, scope: str = "generic") -> Dict[str, Any]:
+    """v9 adds global system and usage-window alignment policy."""
 
     return data
 
@@ -509,6 +517,7 @@ MIGRATIONS: Dict[int, Callable[[Dict[str, Any], str, str], Dict[str, Any]]] = {
     5: _migrate_v5_to_v6,
     6: _migrate_v6_to_v7,
     7: _migrate_v7_to_v8,
+    8: _migrate_v8_to_v9,
 }
 
 

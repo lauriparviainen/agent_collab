@@ -2,6 +2,7 @@ schema_version = 1
 
 [options.model]
 type = "string"
+suggested = ["grok-4.5"]
 required = true
 
 [options.thinking_level]

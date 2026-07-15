@@ -731,6 +731,54 @@ def _print_daemon_state(state: Dict[str, Any], live: bool = False) -> None:
         (key, state.get(key)) for key in ("server_url", "mcp_url", "data_dir", "daemon_log_path")
     )
     print_kv(pairs)
+    _print_usage_window_state()
+
+
+def _print_usage_window_state() -> None:
+    """Render configured schedules without making backend or provider calls."""
+
+    try:
+        from .config import load_user_config
+        from .paths import GlobalDataPaths
+        from .usage_windows import usage_window_status
+
+        paths = GlobalDataPaths.resolve()
+        status = usage_window_status(load_user_config(), paths.usage_window_state_path)
+    except Exception as exc:
+        print(f"usage windows: unavailable ({exc.__class__.__name__})")
+        return
+    print("usage windows:")
+    disabled = status["disabled_count"]
+    if disabled:
+        print(f"  disabled targets: {disabled}")
+    if not status["enabled"]:
+        print("  enabled targets: 0")
+        return
+    for target in status["enabled"]:
+        state = (
+            "pending restart"
+            if target["pending_restart"]
+            else (
+                "eligible" if target["eligible"] else target["ineligibility_reason"] or "ineligible"
+            )
+        )
+        print(
+            f"  {target['id']}: enabled, {state}; backend={target['backend']} "
+            f"model={target['model']}"
+        )
+        print(
+            f"    schedule: {','.join(target['days'])} {target['work_time']} "
+            f"{target['timezone']} every {target['interval']} jitter {target['jitter']}"
+        )
+        for label, key in (
+            ("next request", "next_planned_at"),
+            ("last attempt", "last_attempt_at"),
+            ("last success", "last_success_at"),
+            ("last outcome", "last_outcome"),
+            ("last session", "last_session_id"),
+        ):
+            if target.get(key):
+                print(f"    {label}: {target[key]}")
 
 
 def _warn_on_version_skew(state: Dict[str, Any]) -> None:
@@ -900,6 +948,30 @@ def _main_config(argv) -> int:
             f"sessions: retention_days={config.sessions.retention_days} "
             f"cleanup_interval_hours={config.sessions.cleanup_interval_hours}"
         )
+        print(f"system: timezone={config.system.timezone}")
+        from .config import effective_usage_window_schedule
+
+        for target_id, target in sorted(config.usage_windows.targets.items()):
+            days, work_time, interval, jitter = effective_usage_window_schedule(config, target)
+            policy = config.backends.get(target.backend)
+            eligible = bool(target.enabled and policy is not None and policy.enabled)
+            reason = (
+                "eligible"
+                if eligible
+                else ("disabled" if not target.enabled else "backend_disabled")
+            )
+            print(
+                f"usage-window {target_id}: enabled={str(target.enabled).lower()} "
+                f"eligibility={reason} backend={target.backend} model={target.model!r}"
+            )
+            print(
+                f"  schedule timezone={config.system.timezone} days={','.join(days)} "
+                f"work_time={work_time.start.strftime('%H:%M')}-{work_time.end.strftime('%H:%M')} "
+                f"interval={int(interval.total_seconds() // 60)}m "
+                f"jitter={int(jitter.total_seconds() // 60)}m"
+            )
+            for option, value in sorted(target.options.items()):
+                print(f"  option {option} = {value!r}")
         roots = config.workdir.restrict_workdir_roots
         rendered_roots = ", ".join(str(path) for path in roots) if roots else "(unrestricted)"
         print("restrict_workdir_roots: " + rendered_roots)

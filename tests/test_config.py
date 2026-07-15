@@ -47,7 +47,7 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_file_parses_with_fallback_toml_parser(self):
         data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(data["schema_version"], 8)
+        self.assertEqual(data["schema_version"], 9)
         self.assertNotIn("agents", data)
         # Shipped option defaults live in the built-in config, read-only first.
         self.assertEqual(data["backends"]["claude_cli"]["options"]["permission_mode"], "default")

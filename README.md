@@ -5,6 +5,12 @@
 **Cross-vendor review loops for AI-generated code. Generation is cheap. Review
 is the bottleneck.**
 
+> **BONUS: Event Windows (beta).** Opt into tiny scheduled provider calls that
+> may help align rolling usage windows with your workday, leaving more of your
+> available allowance ready when you are actually coding. Event Windows do not
+> increase, inspect, reset, or guarantee provider quota, and every call may
+> consume usage or incur cost. [Learn how Event Windows work](doc/event-windows.md).
+
 My coding agents produce more code than I can reliably review. I stopped
 pretending that another pass from the same model solves that problem. So I
 spend my limited human attention on the critical paths — and, only half
@@ -85,7 +91,8 @@ backend selected by each globally enabled agent from the durable environment.
 It prints an aligned table with command or SDK dependency status, best-effort
 credential evidence, and versions. These checks never make a model call;
 missing providers are actionable setup warnings rather than installation
-failures.
+failures. When Event Windows participate, the installer also prints their
+shared schedule configuration followed by a separate backend/model table.
 
 You can now run the TUI or other commands from any directory:
 
@@ -123,6 +130,38 @@ pip install '.[all]'          # everything
 
 A missing SDK never crashes the daemon: the backend reports itself unavailable
 with the matching install hint.
+
+### Optional: enable Event Windows (beta)
+
+Event Windows are disabled by default. To enable the economical inherited
+targets for all four CLI backends, add only these overrides to
+`~/.agent-collab/config.toml`:
+
+```toml
+[usage_windows.targets.claude_cli_sonnet]
+enabled = true
+
+[usage_windows.targets.codex_cli_luna]
+enabled = true
+
+[usage_windows.targets.antigravity_cli_flash_low]
+enabled = true
+
+[usage_windows.targets.xai_cli_grok_4_5]
+enabled = true
+```
+
+Then reload the daemon-owned schedule:
+
+```bash
+agent-collab daemon restart
+```
+
+Everything else—the models, low-cost options, weekdays, work time, interval,
+and jitter—is inherited from the built-in defaults. Enable only the providers
+you want called. See the [Event Windows guide](doc/event-windows.md) for
+one-target setup, SDK targets, custom models, schedule overrides, costs, and
+restart behavior.
 
 ## Install the review skills
 
@@ -429,6 +468,16 @@ execution-relevant settings live on the user-global `[backends.*]` sections. An 
 specific exceptional directory. Omitting the key is unrestricted; an empty list
 also means no restriction.
 
+## Event Windows (beta)
+
+Event Windows are optional daemon-owned schedules for minimal provider calls.
+They are intended to make rolling usage-window timing more useful during your
+working hours, while remaining visible as ordinary auditable sessions. The
+feature is disabled by default and cannot inspect or promise anything about a
+provider's quota accounting. The [Event Windows guide](doc/event-windows.md)
+explains the scheduling model, packaged targets, configuration, safety posture,
+status output, and troubleshooting.
+
 ## What you get
 
 - **Different reviewers, one bounded session.** Workflows define exactly which
@@ -494,6 +543,8 @@ backend also documents itself in `agent_collab/backends/<provider>_<backend>/REA
 - A workflow with three agent turns consumes roughly three turns' worth of
   provider usage. Parallel groups also run those turns concurrently. Start
   with Claude and Codex before adding more reviewers.
+- Usage-window alignment makes scheduled paid calls when explicitly enabled;
+  it does not reset or guarantee a provider quota window.
 - The daemon is local, but the provider tools it launches may send prompts and
   repository content to their vendors. Their data policies still apply.
 - The daemon is not a durable archive by default: terminal sessions older than

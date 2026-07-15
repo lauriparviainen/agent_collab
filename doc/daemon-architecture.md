@@ -93,6 +93,31 @@ hardcoded to exactly one Claude runner and one Codex runner. See
 7. Clients watch by reading event history from a cursor and then waiting for new events.
 8. Session status becomes `done`, `failed`, or `stopped`. Interactive sessions may pause in non-terminal `awaiting_input` before a terminal status. Session state is persisted to the global `session-index.json` on every change; after a daemon restart, sessions that were `running` or `awaiting_input` are reported as `interrupted` without a fabricated lost-turn outcome.
 
+## Usage-window scheduler
+
+At startup the server loads global daemon policy once and starts one
+usage-window scheduler only when at least one target is enabled. Pure planning
+derives local daily or overnight anchors from `[system].timezone`, persists a
+bounded jitter choice before sleeping, and always recalculates after a
+monotonic wake. Per-target attempt tasks prevent one slow backend from blocking
+another.
+
+Before a paid call, the scheduler runs the backend's side-effect-free health
+probe and atomically marks the anchor attempted. It then constructs an internal
+`StartSessionRequest` for the packaged `usage-window` workflow and calls the
+same `SessionManager.start_session` path as REST and MCP. The only special
+start flag exempts the scheduler's owner-only empty workdir from a configured
+workdir allowlist; the flag is absent from the wire DTO, so external callers
+remain confined. Scheduled sessions otherwise use the normal index, event,
+transcript, TUI, retention, timeout, and cleanup paths.
+
+Private state proves whether a persisted planned anchor was attempted. Missing,
+malformed, future-version, newly enabled, or fingerprint-changed state plans
+only a future anchor. Trustworthy missed state permits one jittered catch-up for
+the latest anchor while still inside its work interval; older or out-of-window
+anchors are skipped. A failed attempt is still an attempt and is never retried
+at the same anchor.
+
 ## Event cursor model
 
 Every session exposes a monotonic integer cursor:

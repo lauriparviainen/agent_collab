@@ -17,12 +17,14 @@ Global user-owned state (root overridable with `AGENT_COLLAB_HOME`):
     daemon/
       pid
       state.json
+      usage-window-state.json
       daemon.log
       daemon.stderr.log
     sessions/
       SESSION_ID.jsonl
       SESSION_ID.md
     tmp/
+      usage-windows/
     session-index.json
 ```
 
@@ -49,7 +51,11 @@ discovery, and non-secret daemon options. Tokens and provider credentials stay
 in their existing owner-only stores. `autostart disable` removes only this
 unit; it preserves the venv, command link, config, daemon logs, and sessions.
 
-`tmp/` is reserved for future temp review workdirs. `session-index.json` is the persistent session index that lets `list`/`status` survive daemon restarts.
+`tmp/usage-windows/` is the owner-only empty workdir for scheduled minimal
+requests. `usage-window-state.json` is atomically replaced with mode `0600`
+and contains schedule fingerprints, planned anchors, sanitized outcomes, and
+session ids—never provider response content or credentials. `session-index.json`
+is the persistent session index that lets `list`/`status` survive daemon restarts.
 
 The daemon directory is mode `0700`; `pid` and `state.json` are atomically
 replaced with mode `0600`. The daemon's permanent bearer token lives in the
@@ -109,11 +115,11 @@ daemon policy:     built-in defaults < global user config
 ```
 
 Execution settings live on the user-global `[backends.<canonical>]` sections
-(schema v8, backend-first); every enabled backend defines its default agent
+(schema v9, backend-first); every enabled backend defines its default agent
 under the canonical name, with options-only personae nested beneath it. The
 caller's current shell directory does not affect project config unless it
 is also the session `workdir`. Config files declare a `schema_version`
-(currently 8, missing means 1); `agent_collab/config_migrations.py` migrates
+(currently 9, missing means 1); `agent_collab/config_migrations.py` migrates
 known old shapes in memory before validation, so old files keep loading even
 if nobody reinstalls. `./agent_collab.sh install` additionally migrates the
 **user** config file on disk to the current schema — a `config.toml.bak`
@@ -131,6 +137,12 @@ config cannot widen the list. Workdir is a config root and default cwd, not an
 operating-system sandbox.
 
 The built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml). They are still the lowest-precedence layer, but they are an inspectable TOML file rather than an embedded Python dict.
+
+`[system]` and `[usage_windows]` are global-user-only daemon policy. Project
+copies are stripped with warnings. The scheduler loads this policy once at
+daemon startup, so edits require a restart; a configuration error disables
+both automatic retention and scheduled provider calls rather than falling
+back to side-effecting defaults.
 
 ## Legacy Project-Local Layout
 

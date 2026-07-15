@@ -52,6 +52,45 @@ def _sdk_health(module, version="4.5.6"):
 
 
 class InstallReadinessCollectionTests(unittest.TestCase):
+    def test_collects_enabled_usage_window_config_and_participants(self):
+        config = builtin_config()
+        merge_config_data(
+            config,
+            {
+                "usage_windows": {
+                    "targets": {
+                        "claude_cli_sonnet": {"enabled": True},
+                        "codex_cli_luna": {
+                            "enabled": True,
+                            "interval": "3h",
+                        },
+                    }
+                }
+            },
+        )
+
+        payload = collect_install_readiness(
+            config, health=lambda backend: _cli_health(backend.agent_type)
+        )
+
+        usage = payload["usage_windows"]
+        self.assertEqual(usage["timezone"], "local")
+        self.assertEqual(usage["days"], ["mon", "tue", "wed", "thu", "fri"])
+        self.assertEqual(usage["work_time"], "09:00-17:00")
+        self.assertEqual(usage["interval"], "5h")
+        self.assertEqual(usage["jitter"], "±5m")
+        self.assertEqual(
+            usage["targets"],
+            [
+                {"backend": "claude_cli", "model": "sonnet", "overrides": []},
+                {
+                    "backend": "codex_cli",
+                    "model": "gpt-5.6-luna",
+                    "overrides": ["interval=3h"],
+                },
+            ],
+        )
+
     def test_cli_probe_uses_the_agent_configured_command(self):
         from agent_collab import backends as backend_registry
 
@@ -348,6 +387,53 @@ class InstallReadinessTableTests(unittest.TestCase):
         self.assertIn("backend     dependency", output)
         self.assertIn("claude_cli  claude found", output)
         self.assertTrue(output.endswith("1.2.3\n\n"))
+
+    def test_installer_renders_usage_window_config_before_participants(self):
+        payload = {
+            "selected_count": 1,
+            "attention_count": 0,
+            "disabled_backends": [],
+            "rows": [
+                {
+                    "backend": "claude_cli",
+                    "agents": ["claude_cli"],
+                    "dependency": "claude found",
+                    "credentials": "not checked",
+                    "version": "1.2.3",
+                }
+            ],
+            "usage_windows": {
+                "timezone": "local",
+                "days": ["mon", "tue", "wed", "thu", "fri"],
+                "work_time": "09:00-17:00",
+                "interval": "5h",
+                "jitter": "±5m",
+                "targets": [
+                    {"backend": "claude_cli", "model": "sonnet", "overrides": []},
+                    {
+                        "backend": "codex_cli",
+                        "model": "gpt-5.6-luna",
+                        "overrides": [],
+                    },
+                ],
+            },
+        }
+
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            warned = _print_backend_readiness(payload)
+
+        output = stdout.getvalue()
+        self.assertFalse(warned)
+        self.assertIn("✓ 2 usage-window targets enabled", output)
+        self.assertIn("timezone   local", output)
+        self.assertIn("days       mon,tue,wed,thu,fri", output)
+        self.assertIn("work time  09:00-17:00", output)
+        self.assertIn("interval   5h", output)
+        self.assertIn("jitter     ±5m", output)
+        self.assertLess(output.index("timezone"), output.index("participating backends"))
+        self.assertIn("    backend     model", output)
+        self.assertIn("    claude_cli  sonnet", output)
+        self.assertIn("    codex_cli   gpt-5.6-luna", output)
 
 
 if __name__ == "__main__":
