@@ -467,10 +467,15 @@ codex exec --json "prompt"
 
 ### `antigravity`
 
-Google Antigravity, available on both backends. Disabled by default and opt-in.
+Google Antigravity, available on both backends. The `cli` backend is enabled by
+default (reported not-ready and skipped when `agy` is absent); the `sdk` backend
+is opt-in.
 
-- `antigravity_cli` runs `agy -p` in print mode. Requires the `agy` CLI installed and a
-  Google **OAuth sign-in cached under `~/.gemini/`**. Print mode emits **plain
+- `antigravity_cli` runs `agy -p` in print mode. Requires the `agy` CLI installed
+  and a Google **OAuth sign-in**. agent-collab looks for a cached token or an
+  active account under `~/.gemini/`, but recent `agy` may sign in through the OS
+  keyring, so an unverifiable sign-in is reported as `unknown` — a start warning,
+  never a block. Print mode emits **plain
   text only** (no JSON, no per-event markers), so its transcript fidelity is
   intentionally **message-only** — each non-empty output line is one
   `antigravity` message event; there is no tool/command/file-change structure.
@@ -504,8 +509,9 @@ enabled = true
 
 ### `xai`
 
-xAI is disabled by default and available through two intentionally asymmetric
-backends. `xai_cli` runs Grok Build headlessly with `streaming-json`, attributes
+xAI's `cli` backend is enabled by default (reported not-ready and skipped when
+`grok` is absent); the `sdk` backend is opt-in. The two are intentionally
+asymmetric. `xai_cli` runs Grok Build headlessly with `streaming-json`, attributes
 text/thought/end/error records, and captures the Grok session ID. Only
 `stopReason=EndTurn` is treated as success; cancelled and other unsuccessful
 terminal reasons become structured fatal errors. The observed 0.2.93 stream

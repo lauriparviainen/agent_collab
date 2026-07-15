@@ -4,7 +4,7 @@ Registered as `antigravity_cli` (`type="antigravity"`, `backend="cli"`). It runs
 
 ## Selection and requirements
 
-Select with `backend="cli"`; `agy` must be on PATH. The health probe checks the binary, version, and local Antigravity OAuth/account files. Agent-collab never manages those credentials. This opt-in backend blocks start when definitely unavailable.
+Select with `backend="cli"`; `agy` must be on PATH. The health probe checks the binary and version, and looks for a cached Antigravity OAuth token or an active Google account under `~/.gemini/`. It never returns a definite "missing" for credentials: recent `agy` may sign in through the OS keyring, so an unverifiable sign-in is reported as `unknown` (a start warning, not a block). Agent-collab never manages those credentials. This backend is enabled by default and blocks start only when `agy` itself is definitely unavailable.
 
 ## Options
 

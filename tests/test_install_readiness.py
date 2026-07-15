@@ -298,10 +298,12 @@ class InstallReadinessTableTests(unittest.TestCase):
 
         output = stdout.getvalue()
         self.assertTrue(warned)
-        # A not-ready backend is framed as "cannot run a workflow that uses it",
+        # A not-ready backend is framed as "a workflow that uses it will not
+        # succeed" (accurate whether it is start-gated or fails on first turn),
         # not an install failure.
         self.assertIn(
-            "ⓘ Info: 1 of 2 enabled backends is not ready yet; a workflow that uses one cannot run",
+            "ⓘ Info: 1 of 2 enabled backends is not ready yet; "
+            "a workflow that uses one will not succeed",
             output,
         )
         self.assertIn("disabled backends  antigravity_cli, xai_cli", output)
