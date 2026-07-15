@@ -1073,6 +1073,23 @@ class DaemonTokenTests(unittest.TestCase):
             self.assertIn("[daemon]", target.read_text(encoding="utf-8"))
             self.assertEqual(load_daemon_token(home), token)
 
+    def test_ensure_preserves_a_broken_symlinked_config(self):
+        # A dangling dotfile link (repository cloned, config target not written
+        # yet) must not be os.replaced with a regular file: the token config is
+        # created at the link target and the symlink survives.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self._home(tmp)
+            home.root.mkdir(parents=True)
+            target = Path(tmp) / "dotfiles" / "config.toml"
+            home.config_path.symlink_to(target)
+
+            token = ensure_daemon_token(home)
+
+            self.assertTrue(home.config_path.is_symlink())
+            self.assertEqual(home.config_path.resolve(), target.resolve())
+            self.assertIn("[daemon]", target.read_text(encoding="utf-8"))
+            self.assertEqual(load_daemon_token(home), token)
+
     def test_ensure_returns_concurrent_winner_without_overwriting(self):
         # Regression for #37: if another creator wins the race while we wait for
         # the lock, the re-check under the lock must return that persisted token

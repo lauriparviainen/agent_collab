@@ -697,15 +697,17 @@ def ensure_daemon_token(
 def _generate_daemon_token(home: AgentCollabHome) -> str:
     """Generate and persist a fresh daemon token. Call under the token lock."""
 
-    config_path = home.config_path
+    # Operate on the symlink target so a dotfile-managed config keeps its link:
+    # atomic_write_private_text os.replaces the path, which would sever a
+    # symlink at config_path itself. Resolve before the existence check so a
+    # dangling link (dotfiles cloned, target not written yet) creates the
+    # target instead of replacing the link with a regular file. This mirrors
+    # the config migration writer.
+    config_path = home.config_path.resolve()
     token = secrets.token_urlsafe(32)
     if not config_path.exists():
         atomic_write_private_text(config_path, render_user_config(token=token))
         return token
-    # Operate on the symlink target so a dotfile-managed config keeps its link:
-    # atomic_write_private_text os.replaces the path, which would sever a
-    # symlink at config_path itself. This mirrors the config migration writer.
-    config_path = config_path.resolve()
     if _config_is_permissive(config_path):
         raise ConfigError(
             f"refusing to write the daemon token into group/world-readable {config_path}; "
