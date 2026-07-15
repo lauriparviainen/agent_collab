@@ -532,7 +532,7 @@ def _main_options(argv) -> int:
         print(
             f"health: {discovery.get('health_request', payload['health_refresh'])} (advisory; start revalidates)"
         )
-        for name, item in sorted((result.get("canonical_backends") or {}).items()):
+        for name, item in sorted((result.get("backends") or {}).items()):
             probe = item.get("probe") or {}
             assessment = item.get("assessment") or {}
             policy = item.get("policy") or {}
@@ -543,7 +543,7 @@ def _main_options(argv) -> int:
                 f"start_probe={policy.get('start_probe_policy', 'unknown')}"
             )
         for workflow in result.get("workflows") or []:
-            selected = ", ".join(workflow.get("selected_canonical_backends") or []) or "(mock)"
+            selected = ", ".join(workflow.get("selected_backends") or []) or "(mock)"
             print(
                 f"workflow {workflow.get('id')}: {selected} eligible={str(workflow.get('start_eligible')).lower()}"
             )

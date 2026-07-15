@@ -301,7 +301,7 @@ sequence = ["xai_cli"]
         self.assertIsInstance(referee._runners()["xai_cli"], DryRunRunner)
 
         described = describe_options(config, health=lambda backend: BackendHealth(status="ok"))
-        policy = described["canonical_backends"]["xai_cli"]["policy"]
+        policy = described["backends"]["xai_cli"]["policy"]
         self.assertTrue(policy["enabled"])
         self.assertTrue(policy["selection_eligible"])
 

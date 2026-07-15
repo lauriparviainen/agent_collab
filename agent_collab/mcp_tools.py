@@ -44,8 +44,9 @@ TOOLS = [
     {
         "name": "agent_collab_describe_options",
         "description": (
-            "Run the versioned pre-start discovery protocol for one absolute workdir, including canonical "
-            "backends, effective workflow selections, probe evidence, policy, remediation, and accepted options."
+            "Run the versioned pre-start discovery protocol for one absolute workdir, including the "
+            "backend catalog, effective workflow selections, probe evidence, policy, remediation, "
+            "and accepted options."
         ),
         "inputSchema": {
             "type": "object",
@@ -341,7 +342,7 @@ def jsonrpc_error(request_id: Any, code: int, message: str) -> Dict[str, Any]:
 
 def content(payload: Any, is_error: bool = False) -> Dict[str, Any]:
     return {
-        "content": [{"type": "text", "text": json.dumps(payload, indent=2, ensure_ascii=False)}],
+        "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
         "isError": is_error,
     }
 
@@ -499,7 +500,7 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                     "only on terminal status, never an empty batch. Call agent_collab_guidance "
                     "for the full contract and its review-recipe topic for diff-review workflow. "
                     "Discovery is advisory; start revalidates freshly per backend policy. Before a "
-                    "paid review, confirm the selected models, canonical backends, and effective "
+                    "paid review, confirm the selected models, backends, and effective "
                     "options with the user. Use interactive=false for parallel review workflows, "
                     "and wait at least 20 seconds between routine nonterminal observation calls. "
                     "On validation errors, fix the named field paths instead of guessing."

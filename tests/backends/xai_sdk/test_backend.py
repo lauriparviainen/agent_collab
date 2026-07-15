@@ -133,7 +133,7 @@ class XaiSdkBackendTests(unittest.TestCase):
 
         payload = describe_options(_config(), health=lambda backend: BackendHealth(status="ok"))
         self.assertEqual(
-            payload["backend_options"]["properties"]["xai_sdk"]["required"],
+            payload["backends"]["xai_sdk"]["static"]["option_schema"]["required"],
             ["model"],
         )
 
@@ -152,10 +152,10 @@ class XaiSdkBackendTests(unittest.TestCase):
 
     def test_describe_options_exposes_dynamic_xai_sdk_contract(self):
         payload = describe_options(_config(), health=lambda backend: BackendHealth(status="ok"))
-        entry = payload["canonical_backends"]["xai_sdk"]
+        entry = payload["backends"]["xai_sdk"]
         self.assertEqual(entry["static"]["event_fidelity"], "message_only")
         self.assertEqual(entry["static"]["provider_session_id_kind"], "response")
-        properties = payload["backend_options"]["properties"]["xai_sdk"]["properties"]
+        properties = entry["static"]["option_schema"]["properties"]
         self.assertNotIn("permission_mode", properties)
         self.assertIn("reasoning_effort", properties)
 

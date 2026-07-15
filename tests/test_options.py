@@ -120,11 +120,8 @@ class BackendQualifiedOptionTests(unittest.TestCase):
 class DescribeOptionsTests(unittest.TestCase):
     def test_describe_exposes_one_schema_per_backend(self):
         payload = describe_options(_config())
-        schema = payload["backend_options"]
-        self.assertFalse(schema["additionalProperties"])
-        properties = schema["properties"]
         self.assertEqual(
-            set(properties),
+            set(payload["backends"]),
             {
                 "claude_cli",
                 "claude_sdk",
@@ -136,26 +133,24 @@ class DescribeOptionsTests(unittest.TestCase):
                 "xai_sdk",
             },
         )
-        self.assertIn("profile", properties["codex_cli"]["properties"])
-        self.assertNotIn("profile", properties["codex_sdk"]["properties"])
-        self.assertEqual(properties["claude_cli"]["properties"]["model"]["default"], "opus")
+        schemas = {
+            name: entry["static"]["option_schema"] for name, entry in payload["backends"].items()
+        }
+        for schema in schemas.values():
+            self.assertFalse(schema["additionalProperties"])
+        self.assertIn("profile", schemas["codex_cli"]["properties"])
+        self.assertNotIn("profile", schemas["codex_sdk"]["properties"])
+        self.assertEqual(schemas["claude_cli"]["properties"]["model"]["default"], "opus")
 
     def test_backend_health_and_capabilities_remain_discoverable(self):
         payload = describe_options(_config())
-        for provider in ("claude", "codex", "antigravity", "xai"):
-            section = payload["backends"][provider]
-            self.assertEqual(section["backends"], ["cli", "sdk"])
-            for entry in section["entries"].values():
-                self.assertIn("health", entry)
-                self.assertIn("capabilities", entry)
+        for entry in payload["backends"].values():
+            self.assertIn("health", entry["probe"])
+            self.assertIn("capabilities", entry["static"])
 
     def test_discovery_reports_canonical_effective_agent_and_workflow_backends(self):
         payload = describe_options(_config())
-        self.assertEqual(payload["discovery"]["protocol_version"], 1)
-        self.assertEqual(
-            set(payload["canonical_backends"]),
-            set(payload["backend_options"]["properties"]),
-        )
+        self.assertEqual(payload["discovery"]["protocol_version"], 2)
         agents = {item["id"]: item for item in payload["agents"]}
         self.assertEqual(agents["claude_cli"]["canonical_backend"], "claude_cli")
         # Derived agents always carry the backend selected by their canonical
@@ -163,7 +158,7 @@ class DescribeOptionsTests(unittest.TestCase):
         self.assertEqual(agents["claude_cli"]["selection_source"], "agent_config")
         workflow = next(item for item in payload["workflows"] if item["id"] == "cross-review")
         self.assertEqual(
-            workflow["selected_canonical_backends"],
+            workflow["selected_backends"],
             ["claude_cli", "codex_cli"],
         )
         self.assertEqual(workflow["effective_agents"][0]["canonical_backend"], "claude_cli")
@@ -177,7 +172,7 @@ class DescribeOptionsTests(unittest.TestCase):
         payload = describe_options(
             config, health=lambda backend: calls.append(backend) or BackendHealth()
         )
-        entry = payload["canonical_backends"]["claude_cli"]
+        entry = payload["backends"]["claude_cli"]
         self.assertFalse(entry["policy"]["enabled"])
         self.assertEqual(entry["probe"]["status"], "not_run")
         self.assertNotIn("claude_cli", [f"{item.agent_type}_{item.id}" for item in calls])
@@ -301,7 +296,6 @@ class WorkflowMemberSelectionTests(unittest.TestCase):
 
     def test_describe_options_advertises_per_slot_member_selection(self):
         payload = describe_options(self._config_with_xai())
-        self.assertTrue(payload["discovery"]["start"]["accepts_member_selection"])
         workflows = {item["id"]: item for item in payload["workflows"]}
 
         cross = workflows["cross-review"]["member_selection"]

@@ -699,7 +699,7 @@ sequence = ["claude_cli"]
         client = mock.Mock()
         client.describe_options.return_value = {
             "discovery": {"workdir": "/repo", "health_request": "fresh"},
-            "canonical_backends": {
+            "backends": {
                 "claude_cli": {
                     "probe": {"health": {"status": "ok"}},
                     "policy": {"enabled": True, "start_probe_policy": "not_probed"},
@@ -709,7 +709,7 @@ sequence = ["claude_cli"]
             "workflows": [
                 {
                     "id": "solo-claude-cli",
-                    "selected_canonical_backends": ["claude_cli"],
+                    "selected_backends": ["claude_cli"],
                     "start_eligible": True,
                 }
             ],

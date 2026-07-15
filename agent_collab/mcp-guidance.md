@@ -2,38 +2,34 @@
 
 Guidance for agents using the agent-collab MCP tools. Fetch a single topic
 with `agent_collab_guidance` and `topic` set to one of: `overview`, `start`,
-`watch`, `options`, `errors`, `workflows`, `review-recipe`. Calling it without a topic (or
-with `overview`) returns this whole document.
+`watch`, `options`, `errors`, `workflows`, `review-recipe`. Calling it without
+a topic (or with `overview`) returns this whole document.
 
 ## Overview
 
 agent-collab runs supervised collaboration sessions between coding agents
 (Claude Code and Codex by default; other providers can be configured). One
-global daemon owns all sessions;
-sessions for any number of projects can run side by side.
+global daemon owns all sessions across any number of projects.
 
 A session is one supervised run of a task:
 
 - it has a `session_id`, a `status` (`running`, `awaiting_input`, `done`,
   `failed`, `stopped`, `interrupted`), a `task`, a `workflow`, and a `workdir`,
-- its events are appended to a JSONL log and mirrored to a Markdown
-  transcript under the global data root (`~/.agent-collab/data/sessions`),
-- it survives daemon restarts in a persistent session index; sessions that
-  were running when the daemon died are marked `interrupted`.
+- its events append to a JSONL log mirrored as a Markdown transcript under
+  the global data root (`~/.agent-collab/data/sessions`),
+- it survives daemon restarts in a persistent session index; sessions running
+  when the daemon died are marked `interrupted`.
 
-The session `workdir` matters twice:
-
-- project config is loaded from `WORKDIR/.agent-collab/config.toml` and
-  layered over the user config and built-in defaults,
-- agent subprocesses run with `workdir` as their working directory.
-
-Always pass an explicit absolute `workdir`; MCP start and describe-options calls
-require it. The daemon's own location and the caller's shell directory never
-affect a session's config.
+The session `workdir` matters twice: project config is loaded from
+`WORKDIR/.agent-collab/config.toml` and layered over the user config and
+built-in defaults, and agent subprocesses run with `workdir` as their working
+directory. Always pass an explicit absolute `workdir`; MCP start and
+describe-options calls require it. The daemon's own location and the caller's
+shell directory never affect a session's config.
 
 ## Workflows
 
-A `workflow` names the orchestration pattern a session runs: either an ordered
+A `workflow` names the orchestration pattern a session runs: an ordered
 sequence of agent turns or one concurrent review group. Built-in workflows:
 
 - `solo` — one agent turn (Claude by default; pick any enabled agent with
@@ -43,35 +39,36 @@ sequence of agent turns or one concurrent review group. Built-in workflows:
 - `dual-review` — Claude and Codex independently, in parallel.
 
 Projects and users can define more under `[workflows.*]` in config. Call
-`agent_collab_describe_options` to list the workflows that exist for a
-given `workdir`, including each workflow's ordered member list, optional
-`parallel` list, and agent types. Parallel workflows are non-interactive.
+`agent_collab_describe_options` to list the workflows for a given `workdir`,
+including each workflow's ordered member list, optional `parallel` list, and
+agent types. Parallel workflows are non-interactive.
 
 ## Options
 
-Call `agent_collab_describe_options` with the intended absolute `workdir` before
-selecting a workflow or starting. Use `health_refresh: "cached"` normally, or
-`"fresh"` when a newer advisory snapshot matters. It returns:
+Call `agent_collab_describe_options` with the intended absolute `workdir`
+before selecting a workflow or starting. Use `health_refresh: "cached"`
+normally, or `"fresh"` when a newer advisory snapshot matters. It returns:
 
-- a canonical-name-keyed registered backend catalog with separate user
-  enablement policy, raw health/credential/native evidence, cache age, policy
-  assessment, uncertainty, and remediation,
-- each configured agent's effective backend and selection source, plus each
-  workflow occurrence's effective canonical backend,
-- one exact schema per canonical backend name, with allowed values and defaults
-  (for example `backend_options.claude_cli.model` and
+- a `backends` catalog keyed by backend name (`claude_cli`, `codex_cli`, …)
+  where each entry is fully self-describing: user enablement policy, raw
+  health/credential/native evidence, cache age, policy assessment,
+  uncertainty, remediation, and one exact option schema with allowed values
+  and defaults (for example `backend_options.claude_cli.model` and
   `backend_options.codex_sdk.sandbox`),
+- each configured agent's effective backend and selection source, plus each
+  workflow occurrence's effective backend,
 - each workflow's member slots under `workflows[].member_selection`: the slot
   name (the configured member id), its default, and the enabled agents
   eligible to fill it, plus `distinct_members` for parallel shapes.
 
-Only pass entries for backends selected by the chosen workflow; anything else
-is rejected. Omit options you do not need — backend-specific configured
-defaults are applied automatically and echoed back in the start response.
-The compatibility `available` boolean means only `health.status == "ok"`; use
-the separate policy and assessment fields for decisions. Discovery never makes
-a model call and cannot prove authentication, entitlement, model support, or a
-successful turn.
+Backends are isolated peers — `claude_cli` and `claude_sdk` are different
+backends that happen to share a vendor; never treat one as a variant or
+fallback of the other. Pass `backend_options` entries only for backends the
+chosen workflow selects; anything else is rejected. Omit options you do not
+need — configured defaults apply automatically and are echoed back in the
+start response. Use the policy and assessment fields for decisions. Discovery
+never makes a model call and cannot prove authentication, entitlement, model
+support, or a successful turn.
 
 ## Start
 
@@ -86,7 +83,9 @@ Start a session with `agent_collab_start`:
 ```
 
 Optional fields: `max_turns`, `timeout`, `mock`, `dry_run`, `interactive`,
-`interactive_idle_timeout`, `backend_options`, `backend`, `members`.
+`interactive_idle_timeout`, `backend_options`, `backend`, `members`. For a
+quick smoke test without provider calls, start
+`{"task": "...", "mock": true, "max_turns": 1}`.
 
 `members` runs a named workflow shape with different agents: it maps a slot
 (the configured member id from `member_selection.slots`) to any enabled agent,
@@ -98,84 +97,82 @@ paths. `members` chooses agents; `backend` and `backend_options` stay
 orthogonal transport and option choices.
 
 Start is authoritative for preflight: it reloads workdir config, re-resolves
-the exact selection, rejects disabled backends, revalidates options, and freshly
-probes selected backends whose `start_probe_policy` is `fresh`, all before
-creating session state. Backends marked `not_probed` deliberately defer health
-failure to the real turn. In every case, the first real turn remains the
-authority for provider-side failures a side-effect-free probe cannot establish.
+the exact selection, rejects disabled backends, revalidates options, and
+freshly probes selected backends whose `start_probe_policy` is `fresh`, all
+before creating session state. Backends marked `not_probed` deliberately defer
+health failure to the real turn, and `mock` or `dry_run` starts skip health
+probes entirely. In every case the first real turn remains the authority for
+provider-side failures a side-effect-free probe cannot establish.
 
-The response is your confirmation of what the server is about to run. Check
-it before watching:
+The response confirms what the server is about to run; check it before
+watching:
 
 - `workflow` and `settings.workflow.sequence` — the effective ordered members,
-- `settings.workflow.parallel` — the concurrent group, or null for a sequential workflow,
+- `settings.workflow.parallel` — the concurrent group (null when sequential),
 - `settings.agents.<id>` — the effective typed options per agent (model,
   thinking level, permission/sandbox settings where applicable),
-- `settings.agents.<id>.backend_summary` — the selected backend's own summary
-  of the exact normalized options passed to its runner,
+- `settings.agents.<id>.backend_summary` — the backend's own summary of the
+  exact normalized options passed to its runner,
 - `settings.agents.<id>.command_preview` — the exact subprocess command
   prefix, without the task prompt,
 - `jsonl_path` / `markdown_path` — where logs are written.
 
-If a setting is missing from the response it was not configured; nothing is
-invented. The same `settings` block is returned by
-`agent_collab_list_sessions` and `agent_collab_status`.
+A setting missing from the response was not configured; nothing is invented.
+`agent_collab_list_sessions` and `agent_collab_status` return the same
+`settings` block.
 
 Interactive sessions may move to `awaiting_input` after the planned workflow
 finishes. Use `agent_collab_post_message` with `text` and optional `target` to
-append referee input or ask one enabled session agent a directed question.
-Messages are accepted only for live sessions that were started with
-`interactive: true`.
+append referee input or ask one enabled session agent a directed question;
+messages are accepted only for live sessions started with `interactive: true`.
 
 ## Watch
 
 Read events incrementally with a cursor:
 
-1. call `agent_collab_read_events` with `cursor: 0` to get existing events
-   and the next cursor,
+1. call `agent_collab_read_events` with `cursor: 0` for existing events and
+   the next cursor,
 2. loop `agent_collab_wait_events` with the last returned `cursor` and a
-   bounded `timeout_ms` (for example 20000); it returns as soon as new
-   events exist or the timeout elapses,
-3. after a nonterminal response containing only routine progress or tool
-   events, wait at least 20 seconds before the next observation call; do not
-   immediately poll again merely because the long-poll returned early. Use a
-   tighter cadence only when the user requests it or an actionable event needs
-   an immediate follow-up,
+   bounded `timeout_ms` (for example 20000); it returns as soon as new events
+   exist or the timeout elapses,
+3. after a nonterminal response with only routine progress or tool events,
+   wait at least 20 seconds before the next observation call, even when the
+   long-poll returned early; poll tighter only when the user asks for it or
+   an actionable event needs an immediate follow-up,
 4. inspect `status`, `terminal`, `error`, `failure`, and `turn_outcomes` on
-   every read/wait response, including responses with `events: []`; stop when
-   `terminal` is true. `awaiting_input` is live, not terminal. An older daemon
-   may omit this additive view; only then use `agent_collab_status` as the
-   compatibility fallback.
+   every response, including ones with `events: []`; stop when `terminal` is
+   true. `awaiting_input` is live, not terminal. If the daemon predates this
+   additive view, fall back to `agent_collab_status`.
 
 Never make one unbounded blocking call. Always pass the cursor from the
-previous response, not a guess. Tool events default to compact summaries that
-include an absolute event id. If the payload is genuinely needed, fetch only
-that event with `cursor: EVENT_ID`, `limit: 1`, and `tool_output: "full"`.
-`agent_collab_read_transcript` likewise summarizes tool payloads by default;
-pass `tool_output: "full"` for the stored Markdown transcript.
+previous response, not a guess. Tool events default to compact summaries with
+an absolute event id; if a payload is genuinely needed, fetch that one event
+with `cursor: EVENT_ID`, `limit: 1`, and `tool_output: "full"`.
+`agent_collab_read_transcript` likewise summarizes tool payloads unless
+`tool_output: "full"` is passed.
 
 ## Errors
 
-If `agent_collab_start` returns `isError` with `invalid_start_options`, the
-`details` list contains one entry per problem with a field `path` (for
-example `backend_options.claude_cli.model`) and a `message` naming the allowed values.
-Fix exactly the named fields and retry; do not guess or drop the options.
-Backend failures also include a machine-readable `code`, canonical backend,
-check timestamp, and structured remediation when known. A disabled backend must
-be enabled in the user config, not project config. If discovery said usable but
-the real turn fails, prefer the turn error, request fresh discovery, and
-remediate deliberately rather than automatically oscillating between backends.
-If a workflow or agent is unknown, call `agent_collab_describe_options` for
-the same `workdir` and choose from what it lists. Unknown `session_id`
-errors usually mean the id was mistyped or belongs to a different daemon.
+An `isError` start with `invalid_start_options` lists one `details` entry per
+problem: a field `path` (for example `backend_options.claude_cli.model`) and a
+`message` naming the allowed values. Fix exactly the named fields and retry;
+do not guess or drop the options. Backend failures add a machine-readable
+`code`, the backend name, a check timestamp, and structured remediation when
+known. A disabled backend must be enabled in the user config, not project
+config. If discovery said usable but the real turn fails, prefer the turn
+error, request fresh discovery, and remediate deliberately instead of
+oscillating between backends. For an unknown workflow or agent, call
+`agent_collab_describe_options` for the same `workdir` and choose from what it
+lists. Unknown `session_id` errors usually mean a mistyped id or a different
+daemon.
 
-For a started session, treat `turn_outcomes` as the authoritative per-turn
-history and key entries by `turn_id`, never by array position. A required
-sequential or directed turn continues the workflow only when its outcome is
-`completed`. Use the structured `failure.code` and canonical `failure.message`
-for remediation. Provider identity, partial transcript prose, raw terminal
-payloads, an exit-zero status, and the absence of a Python exception do not
-prove success. Do not infer `refused` from model prose.
+For a started session, `turn_outcomes` is the authoritative per-turn history;
+key entries by `turn_id`, never by array position. A required sequential or
+directed turn continues the workflow only when its outcome is `completed`. Use
+the structured `failure.code` and canonical `failure.message` for remediation.
+Provider identity, partial transcript prose, raw terminal payloads, an
+exit-zero status, and the absence of a Python exception do not prove success.
+Do not infer `refused` from model prose.
 
 ## Review recipe
 
@@ -186,10 +183,9 @@ invent model or option values.
 ### 1. Freeze the scope
 
 1. Resolve the repository to an absolute `workdir`.
-2. Choose and state exactly one base:
-   - default current diff: working tree, staged changes, and untracked files
-     against `HEAD`, or
-   - an explicit base ref supplied by the user.
+2. Choose and state exactly one base: the default current diff (working tree,
+   staged changes, and untracked files against `HEAD`) or an explicit base ref
+   supplied by the user.
 3. Parse `git diff --name-status -z <base>` plus
    `git ls-files --others --exclude-standard -z`. Build a de-duplicated,
    one-path-per-line list:
@@ -205,16 +201,14 @@ invent model or option values.
 
 1. Call `agent_collab_describe_options` with the absolute workdir.
 2. Use only enabled, `start_eligible` workflows. Identify each reviewer by
-   agent id, underlying configured model, and canonical backend. Backend or
-   provider names alone do not prove model diversity; Antigravity can run a
-   Claude model.
+   agent id, configured model, and backend. Backend or provider names alone
+   do not prove model diversity; Antigravity can run a Claude model.
 3. Honor models named by the user. If a reviewer model is unclear, show each
-   eligible workflow member's configured model plus schema-allowed model
-   overrides and ask. Ask for a backend only when the selected model is
-   ambiguous across eligible backends. Do not silently pick the strongest or
-   cheapest.
-4. Before the paid start, show the workflow, agent ids, models, canonical
-   backends, effective configured defaults, and overrides. Ask for explicit
+   eligible member's configured model plus schema-allowed model overrides and
+   ask. Ask for a backend only when the selected model is ambiguous across
+   eligible backends. Do not silently pick the strongest or cheapest.
+4. Before the paid start, show the workflow, agent ids, models, backends,
+   effective configured defaults, and overrides, and ask for explicit
    confirmation. Defaults need no separate choice.
 
 ### 3. Build the prompt
@@ -271,9 +265,9 @@ while not batch.terminal:
 ```
 
 Terminate only when `terminal` is true, never because `events` is empty. For a
-parallel workflow, key member events and outcomes by `agent_id`, reconcile only
-after terminal status, and map each member to its canonical backend. Prefix
-every surfaced reviewer finding with `[<session_id> <canonical_backend>]`.
+parallel workflow, key member events and outcomes by `agent_id`, reconcile
+only after terminal status, and map each member to its backend. Prefix every
+surfaced reviewer finding with `[<session_id> <canonical_backend>]`.
 
 ### 5. Triage and reconcile
 
@@ -286,10 +280,10 @@ For every candidate finding:
    but narrower than claimed; drop unconfirmed claims.
 4. Never auto-apply a reviewer suggestion.
 
-For dual review, label same/overlapping-location findings with the same failure
-scenario as `Agreement`; agreement raises confidence but is not proof. Label
-conflicts and single-reviewer findings as `Disagreement`, then adjudicate by
-reading code and tests, never by majority vote.
+For dual review, label same/overlapping-location findings with the same
+failure scenario as `Agreement`; agreement raises confidence but is not proof.
+Label conflicts and single-reviewer findings as `Disagreement`, then
+adjudicate by reading code and tests, never by majority vote.
 
 ### Advisory backend quirks (2026-07-15)
 
@@ -300,5 +294,5 @@ reading code and tests, never by majority vote.
 | Codex | Include the explicit file list and prohibit broad repository greps. |
 
 Re-read allowed values, defaults, and models from
-`agent_collab_describe_options` at runtime. If this dated matrix conflicts with
-the schema, the schema wins.
+`agent_collab_describe_options` at runtime. If this dated matrix conflicts
+with the schema, the schema wins.

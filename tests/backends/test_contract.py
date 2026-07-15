@@ -151,14 +151,10 @@ class BackendContractExtensionTests(unittest.TestCase):
             config,
             health=lambda backend: BackendHealth(status=HEALTH_OK),
         )
-        entry = described["backends"]["claude"]["entries"]["contract-test"]
+        entry = described["backends"]["claude_contract-test"]
         self.assertEqual(
-            entry["option_schema"]["properties"]["contract_mode"]["allowed"],
+            entry["static"]["option_schema"]["properties"]["contract_mode"]["allowed"],
             ["fast", "careful"],
-        )
-        self.assertIn(
-            "contract_mode",
-            described["backend_options"]["properties"]["claude_contract-test"]["properties"],
         )
 
         settings = build_session_settings(

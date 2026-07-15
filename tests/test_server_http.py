@@ -403,7 +403,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertIn("workflows", response)
-        self.assertIn("backend_options", response)
+        self.assertIn("backends", response)
 
     async def test_options_get_route_accepts_workdir_query(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -414,7 +414,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 response = await server._dispatch("GET", f"/options?workdir={root}", {}, b"")
 
         self.assertIn("workflows", response)
-        self.assertIn("backend_options", response)
+        self.assertIn("backends", response)
 
     async def test_options_route_accepts_fresh_health_request(self):
         with tempfile.TemporaryDirectory() as tmp:

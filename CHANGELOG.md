@@ -13,6 +13,23 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Shrink discovery to one authoritative backend catalog (#31, protocol_version
+  2): drop the compatibility `backends`-by-provider and `provider_groups`
+  projections plus the top-level `backend_options` schema copy (configured
+  option defaults now overlay the catalog's own `option_schema`), rename
+  `canonical_backends` to `backends` and `selected_canonical_backends` to
+  `selected_backends`, and remove the redundant per-entry `available`/
+  `available_semantics` flags, `probe.checks` copy, and agents' duplicate
+  `backend` key. Backends are isolated peers — `claude_cli` and `claude_sdk`
+  are different backends, and grouping them by provider misrepresented that —
+  so the flat catalog is the only shape. The `discovery` preamble shrinks to
+  its four per-response data fields (`protocol_version`, `workdir`,
+  `generated_at`, `health_request`) and the static `examples` block is gone —
+  invariant contract semantics live in `agent_collab_guidance`, which now also
+  documents the mock/dry_run probe exception and the mock smoke-test start.
+  MCP tool results also serialize compactly (no indentation) — the consumer is
+  a model, not a human. A typical discovery response drops from ~81k to ~28k
+  characters.
 - Collapse the built-in `solo-<provider>-<cli|sdk>` workflow family (shipped
   in 0.8.1) into one `solo` workflow (`sequence = ["claude_cli"]`): with
   member selection the backend is a slot choice, not a workflow id. Existing

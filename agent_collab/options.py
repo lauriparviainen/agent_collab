@@ -618,9 +618,9 @@ def describe_options(
     from .events import utc_timestamp
 
     resolved_workdir = str(workdir.expanduser().resolve()) if workdir else "."
-    canonical_backends = _describe_canonical_backends(config, health, health_refresh)
+    backends = _describe_backends(config, health, health_refresh)
     agents = [
-        _describe_agent(config, agent, canonical_backends)
+        _describe_agent(config, agent, backends)
         for agent in sorted(config.agents.values(), key=lambda item: item.id)
     ]
     workflows = []
@@ -628,49 +628,27 @@ def describe_options(
     for workflow_id, workflow in sorted(config.workflows.items()):
         types = sorted(_workflow_agent_types(config, workflow_members(workflow)))
         workflow_agent_types[workflow_id] = types
-        workflows.append(_describe_workflow(config, workflow_id, types, canonical_backends))
+        workflows.append(_describe_workflow(config, workflow_id, types, backends))
 
-    provider_groups, compatibility_backends = _project_backend_groups(canonical_backends)
     generated_at = utc_timestamp()
 
+    # Invariant contract semantics (probe meaning, start revalidation, first-turn
+    # error authority) live in the guidance document, not in every response.
     payload: Dict[str, Any] = {
         "discovery": {
-            "protocol_version": 1,
-            "method": "agent_collab_describe_options",
-            "scope": "workdir",
+            "protocol_version": 2,
             "workdir": resolved_workdir,
             "generated_at": generated_at,
             "health_request": health_refresh,
-            "health_source": "side_effect_free_probe",
-            "cache_ttl_seconds": 60,
-            "probe_is_not_a_model_call": True,
-            "probe_proves_turn_success": False,
-            "workdir_reason": (
-                "selects project and user configuration, configured agents/workflows/backends/defaults, "
-                "and the later execution cwd"
-            ),
-            "start": {
-                "reloads_workdir_config": True,
-                "revalidates_selection_and_options": True,
-                "accepts_member_selection": True,
-                "rejects_disabled_backends": True,
-                "start_probe_policy_is_per_backend": True,
-                "applies_backend_policy": True,
-                "happens_before_session_creation": True,
-                "health_probe_exceptions": ["mock", "dry_run"],
-            },
-            "first_turn_error_remains_authoritative": True,
         },
         "workdir": resolved_workdir if workdir else None,
-        "canonical_backends": canonical_backends,
-        "provider_groups": provider_groups,
+        "backends": backends,
         "agents": agents,
         "workflows": workflows,
         "workflow_agent_types": workflow_agent_types,
-        "backends": compatibility_backends,
         "recommendations": {
             "agents": {
-                agent["id"]: _agent_recommendation(agent, canonical_backends)
+                agent["id"]: _agent_recommendation(agent, backends)
                 for agent in agents
                 if agent.get("canonical_backend")
             },
@@ -678,24 +656,6 @@ def describe_options(
                 workflow["id"]: _workflow_recommendation(workflow) for workflow in workflows
             },
         },
-        "backend_options": _backend_option_schemas(config),
-        "examples": [
-            {
-                "task": "Review this repository",
-                "workdir": resolved_workdir,
-                "workflow": "dual-review",
-                "backend_options": {
-                    "codex_cli": {"thinking_level": "medium", "sandbox": "workspace-write"},
-                    "claude_cli": {"model": "opus", "thinking_level": "high"},
-                },
-            },
-            {
-                "task": "Run a mock smoke test",
-                "workdir": resolved_workdir,
-                "mock": True,
-                "max_turns": 1,
-            },
-        ],
     }
     if config.warnings:
         payload["warnings"] = [dict(warning) for warning in config.warnings]
@@ -711,7 +671,7 @@ def describe_options_for_workdir(
     return describe_options(load_config(root), root, health_refresh=health_refresh)
 
 
-def _describe_canonical_backends(
+def _describe_backends(
     config: CollaborationConfig,
     health: Any,
     health_refresh: str,
@@ -729,6 +689,14 @@ def _describe_canonical_backends(
             option_schema = _option_object_schema(
                 _effective_backend_schema(backend, agent, f"backend_options.{canonical}", [])
             )
+            # Option defaults ship in the built-in config, not the backend
+            # manifests; overlay them so discovery keeps showing defaults.
+            section = config.backends.get(canonical)
+            if section is not None:
+                for key, value in section.default_options.items():
+                    spec = option_schema["properties"].get(key)
+                    if spec is not None:
+                        spec["default"] = value
             config_schema = _backend_configuration_schema(backend)
             probe = _probe_description(
                 backend,
@@ -767,9 +735,6 @@ def _describe_canonical_backends(
                 "probe": probe,
                 "policy": policy,
                 "assessment": assessment,
-                # Compatibility only: exactly health.status == ok.
-                "available": bool(probe.get("health", {}).get("status") == "ok"),
-                "available_semantics": "health_status_is_ok",
             }
     return result
 
@@ -780,7 +745,6 @@ def _probe_description(backend: Any, health: Any, *, fresh: bool, run: bool) -> 
             "status": "not_run",
             "reason": "disabled_by_user_config",
             "health": {},
-            "checks": {},
             "checked_at": None,
             "age_seconds": None,
             "cache_hit": False,
@@ -804,7 +768,6 @@ def _probe_description(backend: Any, health: Any, *, fresh: bool, run: bool) -> 
         "status": "completed",
         "source": "side_effect_free_probe",
         "health": status.to_dict(),
-        "checks": deepcopy(dict(status.checks)),
         "checked_at": status.checked_at,
         "age_seconds": round(age, 3),
         "cache_hit": cache_hit,
@@ -886,7 +849,7 @@ def assess_backend(
 def _describe_agent(
     config: CollaborationConfig,
     agent: AgentConfig,
-    canonical_backends: Mapping[str, Any],
+    backends: Mapping[str, Any],
 ) -> Dict[str, Any]:
     entry: Dict[str, Any] = {
         "id": agent.id,
@@ -894,7 +857,6 @@ def _describe_agent(
         "provider_type": agent.type,
         "enabled": agent.enabled,
         "name": agent.name,
-        "backend": agent.backend,
         "configured_backend": agent.backend,
     }
     if agent.type == "mock":
@@ -914,7 +876,7 @@ def _describe_agent(
             "selection_source": "agent_config" if agent.backend else "registry_default",
             "configured_session_defaults": _configured_defaults(backend, agent),
             "static_configuration": _safe_static_configuration(backend, agent),
-            "selection_eligible": bool(canonical_backends[canonical]["policy"]["enabled"]),
+            "selection_eligible": bool(backends[canonical]["policy"]["enabled"]),
         }
     )
     return entry
@@ -944,7 +906,7 @@ def _describe_workflow(
     config: CollaborationConfig,
     workflow_id: str,
     types: List[str],
-    canonical_backends: Mapping[str, Any],
+    backends: Mapping[str, Any],
 ) -> Dict[str, Any]:
     from . import backends as backend_registry
 
@@ -985,7 +947,7 @@ def _describe_workflow(
         )
         selected.append(canonical)
         provider_types.add(agent.type)
-        catalog = canonical_backends[canonical]
+        catalog = backends[canonical]
         if not catalog["policy"]["enabled"]:
             ineligible.append("backend_disabled")
             recommendation_blockers.append("backend_disabled")
@@ -1011,8 +973,8 @@ def _describe_workflow(
                 for agent_type in provider_types
             ]
             if all(
-                canonical_backends[name]["policy"]["enabled"]
-                and canonical_backends[name]["assessment"]["state"] != "unavailable"
+                backends[name]["policy"]["enabled"]
+                and backends[name]["assessment"]["state"] != "unavailable"
                 for name in names
             ):
                 resolved = {
@@ -1032,7 +994,7 @@ def _describe_workflow(
         "agent_types": types,
         "member_selection": _describe_member_selection(config, workflow),
         "effective_agents": effective_agents,
-        "selected_canonical_backends": sorted(set(selected)),
+        "selected_backends": sorted(set(selected)),
         "start_eligible": not ineligible,
         "ineligible_reasons": list(dict.fromkeys(ineligible)),
         "recommendation_blockers": list(dict.fromkeys(recommendation_blockers)),
@@ -1071,47 +1033,6 @@ def _describe_member_selection(
     }
 
 
-def _project_backend_groups(
-    canonical_backends: Mapping[str, Any],
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    from . import backends as backend_registry
-
-    provider_groups: Dict[str, Any] = {}
-    compatibility: Dict[str, Any] = {}
-    for canonical, item in canonical_backends.items():
-        identity = item["identity"]
-        provider = identity["provider_type"]
-        backend_id = identity["backend_id"]
-        group = provider_groups.setdefault(
-            provider,
-            {"registry_default": backend_registry.DEFAULT_BACKEND, "canonical_backends": []},
-        )
-        group["canonical_backends"].append(canonical)
-        compat = compatibility.setdefault(
-            provider,
-            {"default": backend_registry.DEFAULT_BACKEND, "backends": [], "entries": {}},
-        )
-        compat["backends"].append(backend_id)
-        compat["entries"][backend_id] = {
-            "available": item["available"],
-            "available_semantics": item["available_semantics"],
-            "capabilities": item["static"]["capabilities"],
-            "health": deepcopy(
-                item["probe"].get("health")
-                or {"status": "unknown", "reason": item["probe"].get("reason")}
-            ),
-            "option_schema": item["static"]["option_schema"],
-            "policy": deepcopy(item["policy"]),
-            "assessment": deepcopy(item["assessment"]),
-            "canonical_backend": canonical,
-        }
-    for group in provider_groups.values():
-        group["canonical_backends"].sort()
-    for group in compatibility.values():
-        group["backends"].sort()
-    return provider_groups, compatibility
-
-
 def _agent_recommendation(agent: Mapping[str, Any], catalog: Mapping[str, Any]) -> Dict[str, Any]:
     selected = agent["canonical_backend"]
     backend = catalog[selected]
@@ -1138,8 +1059,8 @@ def _agent_recommendation(agent: Mapping[str, Any], catalog: Mapping[str, Any]) 
 def _workflow_recommendation(workflow: Mapping[str, Any]) -> Dict[str, Any]:
     blocked = bool(workflow.get("recommendation_blockers"))
     return {
-        "selected": list(workflow["selected_canonical_backends"]),
-        "recommended": list(workflow["selected_canonical_backends"]) if not blocked else None,
+        "selected": list(workflow["selected_backends"]),
+        "recommended": list(workflow["selected_backends"]) if not blocked else None,
         "action": "remediate" if blocked else "keep",
         "reason_codes": list(
             workflow.get("recommendation_blockers")
@@ -1282,29 +1203,6 @@ def _validate_field_value(
     maximum = schema.get("max")
     if maximum is not None and value > maximum:
         errors.append({"path": path, "message": f"must be <= {maximum}"})
-
-
-def _backend_option_schemas(config: CollaborationConfig) -> Dict[str, Any]:
-    from . import backends as backend_registry
-
-    properties: Dict[str, Dict[str, Any]] = {}
-    for agent_type in backend_registry.registered_agent_types():
-        for backend_id in backend_registry.registered_backends(agent_type):
-            name = backend_registry.backend_name(agent_type, backend_id)
-            backend = backend_registry.get_backend(agent_type, backend_id)
-            agent = _representative_agent(config, agent_type, backend_id)
-            schema = _effective_backend_schema(backend, agent, f"backend_options.{name}", [])
-            object_schema = _option_object_schema(schema)
-            # Option defaults ship in the built-in config, not the backend
-            # manifests; overlay them so discovery keeps showing defaults.
-            section = config.backends.get(name)
-            if section is not None:
-                for key, value in section.default_options.items():
-                    option_schema = object_schema["properties"].get(key)
-                    if option_schema is not None:
-                        option_schema["default"] = value
-            properties[name] = object_schema
-    return {"type": "object", "additionalProperties": False, "properties": properties}
 
 
 def _representative_agent(
