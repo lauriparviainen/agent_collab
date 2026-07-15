@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-15 - Member selection and lean discovery
+
 - Shrink discovery to one authoritative backend catalog (#31, protocol_version
   2): drop the compatibility `backends`-by-provider and `provider_groups`
   projections plus the top-level `backend_options` schema copy (configured
