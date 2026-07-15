@@ -19,6 +19,11 @@ into a detailed work log.
   cloned, config not written) was replaced by a regular file. The path is now
   resolved first and the token config is created at the link target, keeping
   the symlink. Found by a cross-model review of the 0.9.1 range.
+- Document the upgrade path for the 0.9.3 default-on backends (#38): a user
+  config scaffolded before 0.9.3 wrote an explicit `enabled = false` for the
+  then-opt-in backends and upgrades keep those values, so the README and the
+  triple-review recipe now say to set `enabled = true` yourself on an older
+  install instead of implying the packaged default applies.
 
 ## [0.9.3] - 2026-07-15 - Antigravity/xAI CLIs default-on and sign-in fix
 

@@ -126,6 +126,17 @@ schema_version = 8
 parallel = ["claude_cli", "codex_cli", "xai_cli"]
 ```
 
+"Enabled by default" applies to the packaged defaults, which a scaffolded user
+config overrides: installs created before 0.9.3 wrote an explicit
+`enabled = false` for every then-opt-in backend, and upgrades keep those
+values. If your config predates 0.9.3, flip the backend on yourself before the
+workflow becomes start-eligible:
+
+```toml
+[backends.xai_cli]
+enabled = true
+```
+
 Parallel workflows are user-config-only: project config may continue to define
 `sequence` workflows, but a project `parallel` table is ignored with a sanitized
 warning because concurrent fan-out changes execution posture. Parallel sessions

@@ -476,7 +476,10 @@ Claude and Codex power the built-in workflows. All four `cli` backends are
 enabled by default, so a local Antigravity or Grok setup works without extra
 config; a provider whose CLI is absent is simply reported unavailable and
 skipped — never an install failure or a crash, the daemon still runs and you
-just cannot launch that backend. The `sdk` backends stay opt-in (they need
+just cannot launch that backend. A user config scaffolded before 0.9.3 wrote
+an explicit `enabled = false` for the then-opt-in backends and upgrades keep
+those values, so on an older install set `enabled = true` under
+`[backends.antigravity_cli]` / `[backends.xai_cli]` yourself. The `sdk` backends stay opt-in (they need
 their provider SDK). Disable any backend you will not use by setting
 `enabled = false` under its `[backends.<name>]` section in the user config.
 
