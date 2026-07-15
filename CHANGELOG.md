@@ -13,6 +13,15 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Fix `agent-collab daemon autostart enable` aborting and leaving the daemon
+  stopped when a manually-started daemon was already running (#34). The stop
+  handoff's post-signal wait loops no longer treat a transient
+  `IDENTITY_UNKNOWN` — a pid we already attributed and signaled becoming
+  momentarily unreadable while it exits — as fatal; they keep polling for exit
+  or pid recycle. The terminal post-SIGKILL check now preserves daemon state
+  and reports failure for any still-live pid that is not a confirmed recycle,
+  so an unreadable-but-alive daemon is never falsely reported as killed.
+
 ## [0.9.0] - 2026-07-15 - Member selection and lean discovery
 
 - Shrink discovery to one authoritative backend catalog (#31, protocol_version

@@ -358,6 +358,96 @@ class DaemonSupervisorTests(unittest.TestCase):
             self.assertFalse(paths.pid_path.exists())
             self.assertFalse(paths.state_path.exists())
 
+    def test_stop_tolerates_transient_unknown_identity_during_shutdown(self):
+        # Regression for #34: a pid we already attributed and SIGTERM'd can
+        # momentarily report IDENTITY_UNKNOWN while it tears down (its procfs
+        # cmdline empties before it is reaped). The post-signal wait must keep
+        # polling for exit instead of raising, which previously aborted the
+        # stop and left the daemon running during autostart handoff.
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            paths.pid_path.write_text("4242\n", encoding="utf-8")
+            paths.state_path.write_text(
+                json.dumps({"pid": 4242, "process_identity": self.PROCESS_IDENTITY}),
+                encoding="utf-8",
+            )
+            # Alive for the pre-signal check and the first post-SIGTERM poll,
+            # then the process exits.
+            running = iter([True, True, False])
+            # Attributed before signaling, then transiently unreadable.
+            identities = iter(["match", "unknown"])
+            signals = []
+
+            def fake_running(_pid):
+                return next(running, False)
+
+            def fake_identity(_pid, _state):
+                return next(identities, "unknown")
+
+            with (
+                mock.patch(
+                    "agent_collab.daemon_supervisor.os.kill",
+                    side_effect=lambda _pid, sig: signals.append(sig),
+                ),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._is_running",
+                    side_effect=fake_running,
+                ),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._daemon_identity_status",
+                    side_effect=fake_identity,
+                ),
+            ):
+                status = stop_daemon(paths, grace_seconds=1.0)
+
+            self.assertFalse(status.running)
+            self.assertIn(signal.SIGTERM, signals)
+            self.assertNotIn(signal.SIGKILL, signals)
+            self.assertFalse(paths.pid_path.exists())
+            self.assertFalse(paths.state_path.exists())
+
+    def test_stop_preserves_state_when_pid_survives_sigkill_with_unknown_identity(self):
+        # Regression for #34 review: tolerating a transient IDENTITY_UNKNOWN in
+        # the post-SIGKILL wait must not let a pid that stays alive (e.g. stuck
+        # in uninterruptible sleep) with an unreadable identity be reported as a
+        # clean kill. That would discard state for a live daemon and let a later
+        # start spawn a second one on the same port.
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            paths.pid_path.write_text("4242\n", encoding="utf-8")
+            paths.state_path.write_text(
+                json.dumps({"pid": 4242, "process_identity": self.PROCESS_IDENTITY}),
+                encoding="utf-8",
+            )
+            signals = []
+            # Attributed at the pre-SIGTERM and pre-SIGKILL guards, then its
+            # identity becomes and stays unreadable while the pid never dies.
+            identities = iter(["match", "match"])
+
+            with (
+                mock.patch(
+                    "agent_collab.daemon_supervisor.os.kill",
+                    side_effect=lambda _pid, sig: signals.append(sig),
+                ),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._is_running",
+                    return_value=True,
+                ),
+                mock.patch(
+                    "agent_collab.daemon_supervisor._daemon_identity_status",
+                    side_effect=lambda _pid, _state: next(identities, "unknown"),
+                ),
+            ):
+                with self.assertRaisesRegex(DaemonSupervisorError, "failed to stop"):
+                    stop_daemon(paths, grace_seconds=0)
+
+            self.assertIn(signal.SIGTERM, signals)
+            self.assertIn(signal.SIGKILL, signals)
+            # State must be preserved: the daemon is still alive.
+            self.assertTrue(paths.state_path.exists())
+
     def test_stop_refuses_to_signal_systemd_owned_process(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._paths(tmp)

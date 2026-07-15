@@ -254,10 +254,11 @@ def stop_daemon(
         if identity == IDENTITY_MISMATCH:
             _remove_pid_state(paths)
             return DaemonStatus(False, state, f"agent-collab daemon stopped pid {pid}")
-        if identity == IDENTITY_UNKNOWN:
-            raise DaemonSupervisorError(
-                f"identity for pid {pid} became unavailable after SIGTERM; refusing further signals"
-            )
+        # A pid we already attributed and signaled can momentarily become
+        # unattributable while it tears down (its procfs cmdline empties before
+        # the process is reaped). This wait only observes; it sends no new
+        # signal, so a transient IDENTITY_UNKNOWN is not a safety concern. Keep
+        # polling until the process exits or its pid is recycled (MISMATCH).
         time.sleep(0.05)
 
     if _is_running(pid):
@@ -279,10 +280,16 @@ def stop_daemon(
         identity = _daemon_identity_status(pid, state)
         if identity == IDENTITY_MISMATCH:
             break
-        if identity == IDENTITY_UNKNOWN:
-            raise DaemonSupervisorError(f"identity for pid {pid} became unavailable after SIGKILL")
+        # As in the post-SIGTERM wait, a transient IDENTITY_UNKNOWN here is the
+        # signaled process tearing down, not an unrelated pid. Keep polling for
+        # exit rather than aborting the stop.
         time.sleep(0.05)
-    if _is_running(pid) and _daemon_identity_status(pid, state) == IDENTITY_MATCH:
+    if _is_running(pid) and _daemon_identity_status(pid, state) != IDENTITY_MISMATCH:
+        # The pid is still alive and is not a confirmed recycle, so we cannot
+        # attest the daemon died. That includes IDENTITY_UNKNOWN: an
+        # unreadable-but-live pid must not be reported as a clean kill, or its
+        # state would be discarded and a later start could spawn a second
+        # daemon on the same port.
         raise DaemonSupervisorError(f"failed to stop agent-collab daemon pid {pid}")
     _remove_pid_state(paths)
     return DaemonStatus(False, state, f"agent-collab daemon killed pid {pid}")
