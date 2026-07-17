@@ -180,6 +180,7 @@ sequence = ["antigravity_cli"]
                 "solo-antigravity",
                 normalized,
                 agent_backends=selection.agent_backends,
+                turn_timeout=900,
                 workdir=root,
             )
             entry = settings["agents"]["antigravity_cli"]
@@ -190,6 +191,9 @@ sequence = ["antigravity_cli"]
             self.assertEqual(entry["command_preview"][0], "agy")
             self.assertIn("--add-dir", entry["command_preview"])
             self.assertIn(str(root.resolve()), entry["command_preview"])
+            timeout_index = entry["command_preview"].index("--print-timeout")
+            self.assertEqual(entry["command_preview"][timeout_index + 1], "900s")
+            self.assertLess(timeout_index, entry["command_preview"].index("-p"))
             # mode is a displayed settings field, defaulted from the built-in
             # config's read-only posture.
             self.assertEqual(entry["mode"], "plan")
@@ -312,6 +316,8 @@ sequence = ["antigravity_cli"]
                 )
             command_events = [e for e in events if e.type == "command"]
             self.assertEqual(command_events[0].raw["argv"][0], "agy")
+            timeout_index = command_events[0].raw["argv"].index("--print-timeout")
+            self.assertEqual(command_events[0].raw["argv"][timeout_index + 1], "5s")
 
 
 if __name__ == "__main__":

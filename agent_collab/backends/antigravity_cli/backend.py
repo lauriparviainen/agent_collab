@@ -83,6 +83,10 @@ class AntigravityCliBackend:
             command = remove_flag(command, "--sandbox", has_value=False)
             if options["sandbox"]:
                 command = insert_before_print_prompt(command, ["--sandbox"])
+        if agent.timeout is not None and not has_flag(command, "--print-timeout"):
+            command = insert_before_print_prompt(
+                command, ["--print-timeout", f"{max(0, int(agent.timeout))}s"]
+            )
         if run_dir is not None and not has_flag(command, "--add-dir"):
             command = insert_before_print_prompt(command, ["--add-dir", str(run_dir.resolve())])
         return command

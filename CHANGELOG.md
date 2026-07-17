@@ -13,6 +13,14 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Align Antigravity CLI print mode with agent-collab's per-agent turn
+  timeout (#44). Runs now pass the effective session deadline to
+  `agy --print-timeout` (900
+  seconds by default), preventing `agy -p`'s five-minute provider default from
+  ending otherwise valid turns early. Dry-run and start-response command
+  previews show the same value; an explicit `--print-timeout` in backend
+  `args` remains an intentional override.
+
 ## [0.10.0] - 2026-07-16 - Event Windows beta
 
 - Add opt-in daemon-owned usage-window alignment (#41). Schema v9 ships one

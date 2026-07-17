@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import asyncio
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -156,6 +156,10 @@ class Referee:
         for agent_id, agent in self.collab_config.agents.items():
             if not agent.enabled:
                 continue
+            # Carry the session's authoritative per-turn deadline into backend
+            # command construction. Most backends do not need it, but provider
+            # CLIs with their own print deadline can keep both limits aligned.
+            runtime_agent = replace(agent, timeout=max(0, int(self.config.timeout)))
             if self.config.mock:
                 name = agent.name or agent.id
                 runners[agent_id] = MockRunner(name, source=_mock_source(agent.type, name))
@@ -165,7 +169,7 @@ class Referee:
                 backend_id = self._backend_for(agent_id) or resolve_backend_id(agent)
                 backend = get_backend(agent.type, backend_id)
                 options = self._options_for(agent_id)
-                preview = backend.command_preview(agent, options, self.workdir)
+                preview = backend.command_preview(runtime_agent, options, self.workdir)
                 runners[agent_id] = (
                     DryRunRunner(agent.id, preview, cwd=agent.cwd)
                     if preview is not None
@@ -173,7 +177,7 @@ class Referee:
                 )
             else:
                 runners[agent_id] = configured_runner(
-                    agent,
+                    runtime_agent,
                     self.config.verbose,
                     self._options_for(agent_id),
                     self._backend_for(agent_id),

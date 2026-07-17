@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -1081,6 +1081,7 @@ def build_session_settings(
     warnings: Optional[Sequence[Mapping[str, str]]] = None,
     interactive: bool = False,
     interactive_idle_timeout: float = 600.0,
+    turn_timeout: Optional[int] = None,
     workdir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Build the effective session settings confirmation for start responses.
@@ -1102,6 +1103,8 @@ def build_session_settings(
         if agent_id in agents:
             continue
         agent = config.agents[agent_id]
+        if turn_timeout is not None:
+            agent = replace(agent, timeout=max(0, int(turn_timeout)))
         entry: Dict[str, Any] = {"type": agent.type}
         backend_id = (
             None

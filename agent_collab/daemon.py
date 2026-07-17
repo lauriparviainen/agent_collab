@@ -493,6 +493,7 @@ class SessionManager:
             warnings=[*collab_config.warnings, *selection.warnings],
             interactive=interactive,
             interactive_idle_timeout=interactive_idle_timeout,
+            turn_timeout=int(request.timeout),
             workdir=workdir,
         )
         capabilities = self._session_capabilities(collab_config, selection.agent_backends)

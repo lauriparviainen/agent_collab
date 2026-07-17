@@ -69,6 +69,24 @@ class AntigravityCliBackendTests(unittest.TestCase):
         self.assertEqual(command.count("--add-dir"), 1)
         self.assertEqual(command[command.index("--add-dir") + 1], "/configured")
 
+    def test_turn_timeout_maps_to_print_timeout_before_print_mode(self):
+        command = self.backend.build_command(self.agent(timeout=900), {}, Path("/tmp/work"))
+
+        self.assertEqual(command.count("--print-timeout"), 1)
+        timeout_index = command.index("--print-timeout")
+        self.assertEqual(command[timeout_index + 1], "900s")
+        self.assertLess(timeout_index, command.index("-p"))
+
+    def test_explicit_print_timeout_arg_is_preserved(self):
+        command = self.backend.build_command(
+            self.agent(["--print-timeout=20m", "-p"], timeout=900),
+            {},
+            Path("/tmp/work"),
+        )
+
+        self.assertIn("--print-timeout=20m", command)
+        self.assertNotIn("900s", command)
+
     def test_invalid_inferred_mode_and_missing_command_are_rejected(self):
         with self.assertRaises(BackendOptionError):
             self.backend.normalize_options(self.agent(["--mode", "turbo", "-p"]), {})
