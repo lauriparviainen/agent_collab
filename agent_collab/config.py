@@ -182,6 +182,8 @@ class CollaborationConfig:
 
 DEFAULT_WORKFLOW = "cross-review"
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("default_config.toml")
+BACKEND_DEFAULTS_ROOT = Path(__file__).with_name("backends")
+BACKEND_DEFAULTS_FILENAME = "defaults.toml"
 
 
 SUBPROCESS_AGENT_TYPES = {"claude", "codex", "antigravity", "xai"}
@@ -190,14 +192,264 @@ MAX_PARALLEL_WORKFLOW_WIDTH = 4
 
 
 def builtin_config() -> CollaborationConfig:
-    config = CollaborationConfig()
-    data = load_toml_file(DEFAULT_CONFIG_PATH)
-    merge_config_data(
-        config,
-        migrate_config_data(data, source=str(DEFAULT_CONFIG_PATH), scope="built_in"),
-        scope="built_in",
+    from .backends import registered_backend_names
+
+    return _load_builtin_config(
+        DEFAULT_CONFIG_PATH,
+        BACKEND_DEFAULTS_ROOT,
+        registered_backend_names(),
     )
+
+
+def _load_builtin_config(
+    default_config_path: Path,
+    backend_root: Path,
+    registered_names: List[str],
+) -> CollaborationConfig:
+    data, backend_sources, target_sources = _compose_builtin_config_data(
+        default_config_path,
+        backend_root,
+        registered_names,
+    )
+    config = CollaborationConfig()
+    try:
+        migrated = migrate_config_data(
+            data,
+            source=str(default_config_path),
+            scope="built_in",
+        )
+        merge_config_data(config, migrated, scope="built_in")
+        _validate_builtin_config(
+            config,
+            default_config_path,
+            backend_sources,
+            target_sources,
+        )
+    except ConfigError as exc:
+        _raise_builtin_config_error(
+            exc,
+            default_config_path,
+            backend_sources,
+            target_sources,
+        )
     return config
+
+
+def _compose_builtin_config_data(
+    default_config_path: Path,
+    backend_root: Path,
+    registered_names: List[str],
+) -> tuple[Dict[str, Any], Dict[str, Path], Dict[str, Path]]:
+    """Assemble the one built-in config layer from packaged TOML files."""
+
+    data = load_toml_file(default_config_path)
+    if "backends" in data:
+        raise ConfigError(f"{default_config_path}: central defaults must not define [backends]")
+    usage_windows = data.get("usage_windows")
+    if usage_windows is not None and not isinstance(usage_windows, Mapping):
+        raise ConfigError(f"{default_config_path}: [usage_windows] must be a table")
+    if isinstance(usage_windows, Mapping) and "targets" in usage_windows:
+        raise ConfigError(
+            f"{default_config_path}: central defaults must not define [usage_windows.targets]"
+        )
+
+    expected = set(registered_names)
+    discovered_paths = sorted(backend_root.glob(f"*/{BACKEND_DEFAULTS_FILENAME}"))
+    discovered_dirs = {path.parent.name for path in discovered_paths}
+    missing = sorted(expected - discovered_dirs)
+    if missing:
+        path = backend_root / missing[0] / BACKEND_DEFAULTS_FILENAME
+        raise ConfigError(f"{path}: missing defaults for registered backend {missing[0]!r}")
+    orphaned = sorted(discovered_dirs - expected)
+    if orphaned:
+        path = backend_root / orphaned[0] / BACKEND_DEFAULTS_FILENAME
+        raise ConfigError(f"{path}: defaults belong to unregistered backend {orphaned[0]!r}")
+
+    backends_data: Dict[str, Any] = {}
+    targets_data: Dict[str, Any] = {}
+    backend_sources: Dict[str, Path] = {}
+    target_sources: Dict[str, Path] = {}
+    for path in discovered_paths:
+        fragment = load_toml_file(path)
+        _validate_builtin_fragment(
+            fragment,
+            path,
+            path.parent.name,
+            backends_data,
+            targets_data,
+            backend_sources,
+            target_sources,
+        )
+
+    declared = set(backends_data)
+    if declared != expected:
+        missing_declaration = sorted(expected - declared)
+        if missing_declaration:
+            name = missing_declaration[0]
+            path = backend_root / name / BACKEND_DEFAULTS_FILENAME
+            raise ConfigError(f"{path}: missing declaration for registered backend {name!r}")
+        extra = sorted(declared - expected)[0]
+        raise ConfigError(
+            f"{backend_sources[extra]}: declaration names unregistered backend {extra!r}"
+        )
+
+    data["backends"] = {name: backends_data[name] for name in sorted(backends_data)}
+    if targets_data:
+        usage = dict(usage_windows or {})
+        usage["targets"] = {name: targets_data[name] for name in sorted(targets_data)}
+        data["usage_windows"] = usage
+    return data, backend_sources, target_sources
+
+
+def _validate_builtin_fragment(
+    fragment: Mapping[str, Any],
+    path: Path,
+    directory_name: str,
+    backends_data: Dict[str, Any],
+    targets_data: Dict[str, Any],
+    backend_sources: Dict[str, Path],
+    target_sources: Dict[str, Path],
+) -> None:
+    unknown_top = sorted(set(fragment) - {"backends", "usage_windows"})
+    if unknown_top:
+        raise ConfigError(f"{path}: fragment must not define {unknown_top[0]!r}")
+    raw_backends = fragment.get("backends")
+    if not isinstance(raw_backends, Mapping):
+        raise ConfigError(f"{path}: [backends] must be a table")
+    if len(raw_backends) != 1:
+        raise ConfigError(f"{path}: fragment must define exactly one [backends.<canonical>] table")
+    raw_name, raw_section = next(iter(raw_backends.items()))
+    canonical = str(raw_name)
+    if canonical != directory_name:
+        raise ConfigError(
+            f"{path}: declares backend {canonical!r}, but its directory is {directory_name!r}"
+        )
+    if canonical in backends_data:
+        raise ConfigError(
+            f"{path}: duplicate backend {canonical!r}; first declared by "
+            f"{backend_sources[canonical]}"
+        )
+    if not isinstance(raw_section, Mapping):
+        raise ConfigError(f"{path}: [backends.{canonical}] must be a table")
+    if "enabled" not in raw_section:
+        raise ConfigError(f"{path}: backends.{canonical}.enabled is required")
+    if not isinstance(raw_section["enabled"], bool):
+        raise ConfigError(f"{path}: backends.{canonical}.enabled must be a boolean")
+    if "agents" in raw_section:
+        raise ConfigError(f"{path}: backends.{canonical}.agents is not allowed in shipped defaults")
+
+    raw_usage = fragment.get("usage_windows", {})
+    if not isinstance(raw_usage, Mapping):
+        raise ConfigError(f"{path}: [usage_windows] must be a table")
+    unknown_usage = sorted(set(raw_usage) - {"targets"})
+    if unknown_usage:
+        raise ConfigError(f"{path}: fragment must not define usage_windows.{unknown_usage[0]}")
+    raw_targets = raw_usage.get("targets", {})
+    if not isinstance(raw_targets, Mapping):
+        raise ConfigError(f"{path}: [usage_windows.targets] must be a table")
+    allowed_target_fields = {
+        "enabled",
+        "backend",
+        "model",
+        "options",
+        "days",
+        "work_time",
+        "interval",
+        "jitter",
+    }
+    for raw_target_id, raw_target in raw_targets.items():
+        target_id = str(raw_target_id)
+        label = f"usage_windows.targets.{target_id}"
+        if not isinstance(raw_target, Mapping):
+            raise ConfigError(f"{path}: [{label}] must be a table")
+        unknown_target = sorted(set(raw_target) - allowed_target_fields)
+        if unknown_target:
+            raise ConfigError(f"{path}: unknown field {label}.{unknown_target[0]}")
+        if raw_target.get("enabled") is not False:
+            raise ConfigError(f"{path}: {label}.enabled must be explicitly false")
+        if raw_target.get("backend") != canonical:
+            raise ConfigError(f"{path}: {label}.backend must be {canonical!r}")
+        model = raw_target.get("model")
+        if not isinstance(model, str) or not model.strip():
+            raise ConfigError(f"{path}: {label}.model must be a non-empty string")
+        if target_id in targets_data:
+            raise ConfigError(
+                f"{path}: duplicate Event Window target {target_id!r}; first declared by "
+                f"{target_sources[target_id]}"
+            )
+        targets_data[target_id] = dict(raw_target)
+        target_sources[target_id] = path
+
+    backends_data[canonical] = dict(raw_section)
+    backend_sources[canonical] = path
+
+
+def _validate_builtin_config(
+    config: CollaborationConfig,
+    default_config_path: Path,
+    backend_sources: Mapping[str, Path],
+    target_sources: Mapping[str, Path],
+) -> None:
+    """Validate shipped sections even when their public policy is disabled."""
+
+    for canonical, section in config.backends.items():
+        agent_type, backend_id = split_canonical_backend(canonical)
+        representative = AgentConfig(
+            id=canonical,
+            type=agent_type,
+            command=section.command,
+            args=list(section.args),
+            enabled=section.enabled,
+            name=section.name,
+            env=dict(section.env),
+            cwd=section.cwd,
+            timeout=section.timeout,
+            backend_config=dict(section.backend_config),
+            options={},
+            default_options=dict(section.default_options),
+            backend=backend_id,
+        )
+        try:
+            validate_agent(representative)
+        except ConfigError as exc:
+            _raise_builtin_config_error(
+                exc,
+                default_config_path,
+                backend_sources,
+                target_sources,
+            )
+    try:
+        validate_config(config)
+    except ConfigError as exc:
+        _raise_builtin_config_error(
+            exc,
+            default_config_path,
+            backend_sources,
+            target_sources,
+        )
+
+
+def _raise_builtin_config_error(
+    exc: ConfigError,
+    default_config_path: Path,
+    backend_sources: Mapping[str, Path],
+    target_sources: Mapping[str, Path],
+) -> None:
+    message = str(exc)
+    for target_id in sorted(target_sources, key=len, reverse=True):
+        if f"usage_windows.targets.{target_id}" in message:
+            source = target_sources[target_id]
+            break
+    else:
+        source = default_config_path
+        for canonical in sorted(backend_sources, key=len, reverse=True):
+            if f"backends.{canonical}" in message:
+                source = backend_sources[canonical]
+                break
+    prefix = f"{source}:"
+    if message.startswith(prefix):
+        raise exc
+    raise ConfigError(f"{source}: {message}") from exc
 
 
 def config_search_paths(
@@ -1088,7 +1340,9 @@ def validate_agent(agent: AgentConfig) -> None:
             config_normalizer(agent)
         backend_impl.normalize_options(agent, {})
     except BackendOptionError as exc:
-        section = "options" if exc.field in agent.options else ""
+        section = (
+            "options" if exc.field in agent.options or exc.field in agent.default_options else ""
+        )
         path = (
             f"backends.{_config_path(agent.id)}.{section + '.' if section else ''}{exc.field}"
         ).rstrip(".")
@@ -1151,16 +1405,27 @@ def load_toml_text(text: str, source: str = "config") -> Dict[str, Any]:
     try:
         import tomllib  # type: ignore
     except ModuleNotFoundError:
-        return _parse_toml_subset(text)
+        return _parse_toml_subset(text, source=source)
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:  # type: ignore[name-defined]
         raise ConfigError(f"{source}: {exc}") from exc
 
 
-def _parse_toml_subset(text: str) -> Dict[str, Any]:
+def _parse_toml_subset(text: str, source: str = "config") -> Dict[str, Any]:
+    try:
+        return _parse_toml_subset_data(text)
+    except ConfigError as exc:
+        raise ConfigError(f"{source}: {exc}") from exc
+
+
+def _parse_toml_subset_data(text: str) -> Dict[str, Any]:
     root: Dict[str, Any] = {}
     current: Dict[str, Any] = root
+    current_path: tuple[str, ...] = ()
+    declared_tables: set[tuple[str, ...]] = set()
+    implicit_dotted_tables: set[tuple[str, ...]] = set()
+    inline_table_values: set[tuple[str, ...]] = set()
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         line = _strip_comment(raw_line).strip()
         if not line:
@@ -1169,8 +1434,21 @@ def _parse_toml_subset(text: str) -> Dict[str, Any]:
             section = line[1:-1].strip()
             if not section:
                 raise ConfigError(f"line {line_number}: empty TOML section")
+            parts = _split_section_parts(section, line_number)
+            table_path = tuple(parts)
+            inline_conflict = any(
+                table_path[: len(inline_path)] == inline_path for inline_path in inline_table_values
+            )
+            if (
+                table_path in declared_tables
+                or table_path in implicit_dotted_tables
+                or inline_conflict
+            ):
+                raise ConfigError(f"line {line_number}: duplicate TOML table {section!r}")
+            declared_tables.add(table_path)
+            current_path = table_path
             current = root
-            for part in _split_section_parts(section, line_number):
+            for part in parts:
                 key = part.strip()
                 if not key:
                     raise ConfigError(f"line {line_number}: invalid TOML section {section!r}")
@@ -1187,9 +1465,30 @@ def _parse_toml_subset(text: str) -> Dict[str, Any]:
         key = key.strip()
         if not key:
             raise ConfigError(f"line {line_number}: empty TOML key")
-        _set_dotted_key(
-            current, key, _parse_toml_value(raw_value.strip(), line_number), line_number
+        value = _parse_toml_value(raw_value.strip(), line_number)
+        parts = _dotted_key_parts(key, line_number)
+        full_path = current_path + tuple(parts)
+        dotted_tables = [current_path + tuple(parts[:index]) for index in range(1, len(parts))]
+        dotted_conflict = next(
+            (
+                dotted_path
+                for dotted_path in dotted_tables
+                if dotted_path in declared_tables
+                or any(
+                    dotted_path[: len(inline_path)] == inline_path
+                    for inline_path in inline_table_values
+                )
+            ),
+            None,
         )
+        if dotted_conflict is not None:
+            raise ConfigError(
+                f"line {line_number}: dotted key redefines TOML table {'.'.join(dotted_conflict)!r}"
+            )
+        implicit_dotted_tables.update(dotted_tables)
+        if isinstance(value, dict):
+            inline_table_values.add(full_path)
+        _set_dotted_key(current, key, value, line_number)
     return root
 
 
@@ -1215,16 +1514,25 @@ def _split_section_parts(section: str, line_number: int) -> List[str]:
 
 
 def _set_dotted_key(current: Dict[str, Any], key: str, value: Any, line_number: int) -> None:
-    parts = [part.strip() for part in key.split(".")]
-    if any(not part for part in parts):
-        raise ConfigError(f"line {line_number}: invalid dotted key {key!r}")
+    parts = _dotted_key_parts(key, line_number)
+
     target = current
     for part in parts[:-1]:
         child = target.setdefault(part, {})
         if not isinstance(child, dict):
             raise ConfigError(f"line {line_number}: key conflicts with table {key!r}")
         target = child
-    target[parts[-1]] = value
+    final = parts[-1]
+    if final in target:
+        raise ConfigError(f"line {line_number}: duplicate TOML key {key!r}")
+    target[final] = value
+
+
+def _dotted_key_parts(key: str, line_number: int) -> List[str]:
+    parts = [part.strip() for part in key.split(".")]
+    if any(not part for part in parts):
+        raise ConfigError(f"line {line_number}: invalid dotted key {key!r}")
+    return parts
 
 
 def _strip_comment(line: str) -> str:
@@ -1279,6 +1587,8 @@ def _parse_inline_table(value: str, line_number: int) -> Dict[str, Any]:
         key = key.strip()
         if not key:
             raise ConfigError(f"line {line_number}: empty inline table key")
+        if key in result:
+            raise ConfigError(f"line {line_number}: duplicate TOML key {key!r}")
         result[key] = _parse_toml_value(raw_value.strip(), line_number)
     return result
 

@@ -48,7 +48,12 @@ options remain highest precedence.
 Agent commands should be changed in the global `agent-collab` config, not
 through project config or dedicated Claude/Codex path flags.
 
-Built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml), so the base backend commands, option defaults, and built-in workflows are inspectable without reading Python code.
+Built-in defaults are assembled from
+[agent_collab/default_config.toml](../agent_collab/default_config.toml) and each
+registered backend's colocated `defaults.toml`. The central file owns the
+schema, shared Event Window schedule, system settings, and workflows; backend
+fragments own backend commands, option defaults, and disabled Event Window
+targets. All shipped values remain inspectable without reading Python code.
 
 Config files declare a top-level `schema_version` (currently `9`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. `./agent_collab.sh install` additionally rewrites the user config file on disk to the current schema (see [Migration](#migration-from-the-agents-first-schema)). Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
@@ -284,9 +289,11 @@ agent's provider does not register that mechanism. Explicit options are
 rejected when their named backend is not selected or cannot honor them, with a
 `backend_options.<provider>_<mechanism>.<key>` field path.
 
-Each backend package declares its MCP/session options in `options.toml` and
-normalizes only its own `backend_options` entry. Static backend configuration
-stays directly under its `[backends.<canonical>]` section. CLI backends may
+Each backend package declares its MCP/session options in `options.toml`, its
+shipped values in `defaults.toml`, and optional static-field schema in
+`config.toml`; it normalizes only its own `backend_options` entry. Static
+backend configuration stays directly under its `[backends.<canonical>]`
+section. CLI backends may
 infer values from configured argv; SDK backends do not inherit CLI-only argv
 values. The start response and runner use the same per-agent normalized map.
 
@@ -340,12 +347,12 @@ before creating session state or launching a subprocess.
 }
 ```
 
-Each backend's colocated manifest is the shipped source of accepted keys and
-values (types, enforcing allowed values, advisory suggestions, ranges). Shipped default *values* live in the
-built-in config's `[backends.<canonical>.options]` tables in
-[agent_collab/default_config.toml](../agent_collab/default_config.toml), so
-they are ordinary, inspectable configuration rather than hard-coded manifest
-data. They rank below flags configured in `args` and below a user config's
+Each backend's colocated `options.toml` is the shipped source of accepted keys
+and values (types, enforcing allowed values, advisory suggestions, ranges).
+Shipped default *values* live in the same package's `defaults.toml`
+`[backends.<canonical>.options]` table, so they are ordinary, inspectable
+configuration rather than hard-coded manifest data. They rank below flags
+configured in `args` and below a user config's
 `options` table, and overriding one value never drops the others. A backend
 section's `options` table sets concrete session defaults. MCP exposes the
 effective schemas — with the shipped defaults overlaid — through

@@ -1,0 +1,20 @@
+[backends.codex_cli]
+enabled = true
+command = "codex"
+args = ["exec", "--json"]
+
+[backends.codex_cli.options]
+model = "gpt-5.6-sol"
+thinking_level = "high"
+# Commands run but cannot write outside the sandbox; use "workspace-write"
+# for turns that must edit files.
+sandbox = "read-only"
+
+[usage_windows.targets.codex_cli_luna]
+enabled = false
+backend = "codex_cli"
+model = "gpt-5.6-luna"
+
+[usage_windows.targets.codex_cli_luna.options]
+thinking_level = "low"
+sandbox = "read-only"

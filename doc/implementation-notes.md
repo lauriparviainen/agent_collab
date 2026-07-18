@@ -26,8 +26,11 @@ Project agent tables may set only `name`; all execution fields and project-only
 agents are ignored. Project workflows may reference only agents already enabled
 by built-in or global user config.
 
-Built-in defaults live in
-[agent_collab/default_config.toml](../agent_collab/default_config.toml).
+General built-in defaults live in
+[agent_collab/default_config.toml](../agent_collab/default_config.toml);
+backend-specific shipped settings and Event Window targets live in each
+backend's `defaults.toml`. `builtin_config()` validates and assembles these
+package-data files into one built-in layer before applying user configuration.
 Compatibility handling for old config shapes belongs in
 `agent_collab/config_migrations.py`; runtime code consumes the latest schema.
 
@@ -58,8 +61,9 @@ separate from its execution `backend` (`cli` or an in-process `sdk`). SDK
 packages install with the project on Python >=3.10; their imports remain lazy.
 
 Each pair lives in `agent_collab/backends/<provider>_<backend>/` with its own
-`backend.py`, `options.toml`, optional static `config.toml`, and `README.md`. A single registry list registers
-packages by `(agent_type, backend_id)`. Backend resolution order is:
+`backend.py`, `options.toml`, `defaults.toml`, optional static `config.toml`,
+and `README.md`. A single registry list registers packages by
+`(agent_type, backend_id)`. Backend resolution order is:
 
 ```text
 start request > the backend kind encoded in the canonical section name > cli
@@ -73,11 +77,12 @@ The resolved per-agent backend map is computed once at start validation and
 threaded through `RefereeConfig` to the runner construction path. It must reach
 execution, not only the returned settings.
 
-Every backend owns a declarative `options.toml`, plus `normalize_options`,
-`settings_summary`, `command_preview`, and runner construction. The manifest
-declares accepted keys and values only; shipped default values live in the
-built-in config's `[backends.<canonical>.options]` tables and rank below argv
-inference and user-config options (`configured_defaults` in
+Every backend owns declarative `options.toml` and `defaults.toml` files, plus
+`normalize_options`, `settings_summary`, `command_preview`, and runner
+construction. The option manifest declares accepted keys and values only;
+shipped default values live in the backend fragment's
+`[backends.<canonical>.options]` table and rank below argv inference and
+user-config options (`configured_defaults` in
 `normalize_declared_options`). Requests use one dynamic `backend_options` map
 keyed by canonical names such as `claude_cli` and `codex_sdk`; there are no
 provider-wide option fields or central support table. Only CLI backends infer

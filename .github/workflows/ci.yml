@@ -40,4 +40,5 @@ jobs:
       - name: Verify SDK-free base install
         run: |
           python -m pip install .
-          agent-collab --help
+          cd "$RUNNER_TEMP"
+          agent-collab config show --workdir "$RUNNER_TEMP"

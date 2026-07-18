@@ -1,0 +1,15 @@
+# The xAI SDK backend is remote chat only and enables no tools.
+[backends.xai_sdk]
+enabled = false
+
+[backends.xai_sdk.options]
+model = "grok-4.5"
+thinking_level = "high"
+
+[usage_windows.targets.xai_sdk_grok_4_5]
+enabled = false
+backend = "xai_sdk"
+model = "grok-4.5"
+
+[usage_windows.targets.xai_sdk_grok_4_5.options]
+thinking_level = "low"

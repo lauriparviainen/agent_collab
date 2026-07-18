@@ -5,6 +5,10 @@ chat API, not the local Grok Build coding runtime. It requires `xai-sdk>=1.17,<2
 and `XAI_API_KEY`; imports are lazy and the async client is closed
 deterministically after each collected turn.
 
+[`options.toml`](options.toml) declares accepted MCP/session options;
+[`defaults.toml`](defaults.toml) owns the shipped option values and disabled
+Event Window target.
+
 Select it with `backend="sdk"`; the shipped normal-session model is
 `grok-4.5`, currently the SDK transport's verified model selection. The schema
 still requires a model after defaults are resolved, so a custom configuration

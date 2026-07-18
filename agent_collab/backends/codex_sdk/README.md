@@ -8,7 +8,12 @@ Select with `backend="sdk"`. The `openai-codex` wheel and its runtime are requir
 
 ## Options
 
-[`options.toml`](options.toml) is authoritative for accepted keys and values; shipped defaults live in the built-in config, including the read-only `sandbox = "read-only"` posture. Model, effort, and sandbox map to SDK fields. `thinking_level` and `reasoning_effort` are aliases. CLI profile, approval, and search options are unsupported. Nothing is inferred from CLI argv.
+[`options.toml`](options.toml) is authoritative for accepted keys and values;
+[`defaults.toml`](defaults.toml) owns the shipped backend settings and disabled
+Event Window target, including the read-only `sandbox = "read-only"` posture.
+Model, effort, and sandbox map to SDK fields. `thinking_level` and
+`reasoning_effort` are aliases. CLI profile, approval, and search options are
+unsupported. Nothing is inferred from CLI argv.
 
 ## Events and identity
 

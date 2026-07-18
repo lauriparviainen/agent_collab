@@ -1,0 +1,12 @@
+# The Antigravity SDK exposes no mode/permission control; its write posture
+# follows the provider default.
+[backends.antigravity_sdk]
+enabled = false
+
+[backends.antigravity_sdk.options]
+model = "Gemini 3.5 Flash (High)"
+
+[usage_windows.targets.antigravity_sdk_flash_low]
+enabled = false
+backend = "antigravity_sdk"
+model = "Gemini 3.5 Flash (Low)"

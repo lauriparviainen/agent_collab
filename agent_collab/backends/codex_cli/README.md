@@ -8,7 +8,13 @@ Select with `backend="cli"`; the agent needs a configured `codex` command. Codex
 
 ## Options
 
-[`options.toml`](options.toml) is authoritative for accepted keys and values; shipped defaults live in the built-in config. Model, profile, effort, sandbox, approval policy, and search map to CLI flags/config. `thinking_level` and `reasoning_effort` are aliases and must agree. Values may be inferred from argv. The shipped `sandbox` default is `read-only` (commands run, writes are blocked); `workspace-write` is the write opt-in.
+[`options.toml`](options.toml) is authoritative for accepted keys and values;
+[`defaults.toml`](defaults.toml) owns the shipped backend settings and disabled
+Event Window target. Model, profile, effort, sandbox, approval policy, and
+search map to CLI flags/config. `thinking_level` and `reasoning_effort` are
+aliases and must agree. Values may be inferred from argv. The shipped `sandbox`
+default is `read-only` (commands run, writes are blocked); `workspace-write` is
+the write opt-in.
 
 ## Events and identity
 

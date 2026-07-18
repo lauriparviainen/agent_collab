@@ -11,7 +11,9 @@ Select with `backend="sdk"`. The `google-antigravity` wheel and Gemini/Vertex cr
 [`options.toml`](options.toml) declares the MCP/session option `model`.
 [`config.toml`](config.toml) separately declares static `vertex`, `project`, and
 `location` configuration; project and location are required when Vertex is
-enabled. CLI `mode` is unsupported. Nothing is inferred from CLI argv.
+enabled. [`defaults.toml`](defaults.toml) owns the shipped backend settings and
+disabled Event Window target. CLI `mode` is unsupported. Nothing is inferred
+from CLI argv.
 
 ```toml
 [agents.antigravity_sdk]

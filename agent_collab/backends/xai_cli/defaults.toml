@@ -1,0 +1,30 @@
+# xAI is enabled so a local `grok` setup works out of the box; when the CLI is
+# absent the backend is reported unavailable and skipped. Grok Build uses
+# newline-delimited streaming JSON in headless single-turn mode. Turn it off
+# with `enabled = false` in your user config.
+[backends.xai_cli]
+enabled = true
+command = "grok"
+args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
+
+[backends.xai_cli.options]
+model = "grok-4.5"
+thinking_level = "high"
+# Inspection commands run without approval prompts while the read-only
+# sandbox blocks repository writes: the sandbox, not the prompt gate, is the
+# safety boundary. Do not switch headless runs to "auto" (or "plan"): a
+# command grok's classifier will not auto-approve — reliably a ";"-chained
+# pipeline — raises a permission prompt no one can answer headlessly, and
+# after 15s grok cancels the whole turn (surfaced as provider_turn_cancelled).
+permission_mode = "bypassPermissions"
+sandbox = "read-only"
+
+[usage_windows.targets.xai_cli_grok_4_5]
+enabled = false
+backend = "xai_cli"
+model = "grok-4.5"
+
+[usage_windows.targets.xai_cli_grok_4_5.options]
+thinking_level = "low"
+sandbox = "read-only"
+provider_max_turns = 1

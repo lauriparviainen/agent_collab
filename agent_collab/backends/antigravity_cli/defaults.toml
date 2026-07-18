@@ -1,0 +1,24 @@
+# Antigravity is enabled so a local `agy` setup works out of the box. When the
+# CLI is absent the backend is simply reported unavailable and skipped; no
+# built-in workflow references it, so default Claude/Codex behavior is
+# unaffected. Turn it off with `enabled = false` in your user config.
+[backends.antigravity_cli]
+enabled = true
+command = "agy"
+args = ["-p"]
+
+[backends.antigravity_cli.options]
+model = "Gemini 3.5 Flash (High)"
+# "plan" is read-only and does not stall headless runs on approval prompts;
+# "accept-edits" auto-approves edits and is the explicit write opt-in. The
+# boolean sandbox option additionally restricts terminal commands.
+mode = "plan"
+
+[usage_windows.targets.antigravity_cli_flash_low]
+enabled = false
+backend = "antigravity_cli"
+model = "Gemini 3.5 Flash (Low)"
+
+[usage_windows.targets.antigravity_cli_flash_low.options]
+mode = "plan"
+sandbox = true

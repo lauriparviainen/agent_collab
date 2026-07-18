@@ -1,0 +1,20 @@
+[backends.claude_cli]
+enabled = true
+command = "claude"
+args = ["-p", "--output-format", "stream-json", "--verbose"]
+
+[backends.claude_cli.options]
+model = "opus"
+thinking_level = "high"
+# Headless "default" denies write/exec tools instead of prompting; "plan" is
+# the strictest read-only mode. Writes need "acceptEdits" or stronger.
+permission_mode = "default"
+
+[usage_windows.targets.claude_cli_sonnet]
+enabled = false
+backend = "claude_cli"
+model = "sonnet"
+
+[usage_windows.targets.claude_cli_sonnet.options]
+thinking_level = "low"
+permission_mode = "plan"

@@ -82,8 +82,9 @@ following local day.
 
 ## Packaged targets
 
-The built-in config contains one disabled economical target for every shipped
-real backend:
+Each backend's colocated `defaults.toml` contributes one disabled economical
+target to the assembled built-in config. The central `default_config.toml`
+owns only the shared Event Window schedule. The initial target matrix is:
 
 | Target | Backend | Model |
 | --- | --- | --- |

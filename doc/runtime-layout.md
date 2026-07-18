@@ -136,7 +136,12 @@ populated entry may be a broad root or one exact exceptional directory. Project
 config cannot widen the list. Workdir is a config root and default cwd, not an
 operating-system sandbox.
 
-The built-in defaults are stored in [agent_collab/default_config.toml](../agent_collab/default_config.toml). They are still the lowest-precedence layer, but they are an inspectable TOML file rather than an embedded Python dict.
+The lowest-precedence built-in layer is assembled in memory from
+[agent_collab/default_config.toml](../agent_collab/default_config.toml) plus one
+`agent_collab/backends/<canonical>/defaults.toml` per registered backend. The
+central file owns general policy and workflows; backend fragments own their
+execution settings, shipped option values, and disabled Event Window targets.
+These package-data files are never written into user or project config.
 
 `[system]` and `[usage_windows]` are global-user-only daemon policy. Project
 copies are stripped with warnings. The scheduler loads this policy once at

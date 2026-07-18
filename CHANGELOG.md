@@ -13,6 +13,18 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-18 - Backend defaults and timeout alignment
+
+- Move shipped backend definitions, option defaults, and disabled Event Window
+  targets into each backend package's colocated `defaults.toml` (#42). The
+  central `default_config.toml` now owns only shared policy and workflows;
+  `builtin_config()` deterministically assembles and validates one equivalent
+  built-in layer with source-qualified fragment errors. Packaging and
+  installed-wheel checks cover all eight fragments. Public config syntax,
+  schema, precedence, effective values, and user/project config files remain
+  unchanged. The Python 3.10 fallback TOML parser now also reports source paths
+  and rejects duplicate keys and tables consistently with `tomllib`.
+
 - Align Antigravity CLI print mode with agent-collab's per-agent turn
   timeout (#44). Runs now pass the effective session deadline to
   `agy --print-timeout` (900

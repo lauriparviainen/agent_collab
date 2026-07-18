@@ -1,0 +1,17 @@
+# SDK backends are opt-in and require their provider SDK.
+[backends.claude_sdk]
+enabled = false
+
+[backends.claude_sdk.options]
+model = "opus"
+thinking_level = "high"
+permission_mode = "default"
+
+[usage_windows.targets.claude_sdk_sonnet]
+enabled = false
+backend = "claude_sdk"
+model = "sonnet"
+
+[usage_windows.targets.claude_sdk_sonnet.options]
+thinking_level = "low"
+permission_mode = "plan"

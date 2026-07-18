@@ -145,10 +145,10 @@ class InstallReadinessCollectionTests(unittest.TestCase):
             payload["disabled_backends"],
             [
                 "antigravity_cli",
-                "xai_cli",
+                "antigravity_sdk",
                 "claude_sdk",
                 "codex_sdk",
-                "antigravity_sdk",
+                "xai_cli",
                 "xai_sdk",
             ],
         )

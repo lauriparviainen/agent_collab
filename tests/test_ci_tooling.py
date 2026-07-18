@@ -102,7 +102,8 @@ class StaticToolingContractTests(unittest.TestCase):
         self.assertIn("python -m unittest discover -s tests -t .", workflow)
         self.assertIn("./agent_collab_dev.sh build --check", workflow)
         self.assertIn("python -m pip install .", workflow)
-        self.assertIn("agent-collab --help", workflow)
+        self.assertIn('cd "$RUNNER_TEMP"', workflow)
+        self.assertIn('agent-collab config show --workdir "$RUNNER_TEMP"', workflow)
 
         uses = re.findall(r"(?m)^\s+uses:\s+([^\s#]+)", workflow)
         self.assertIn("actions/checkout", {action.partition("@")[0] for action in uses})

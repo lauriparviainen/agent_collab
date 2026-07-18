@@ -8,6 +8,10 @@ Authentication uses `XAI_API_KEY` or Grok's own cached sign-in under
 `~/.grok/auth.json`. Agent-collab checks only for non-empty credential evidence
 and never reads credential values into events or logs.
 
+[`options.toml`](options.toml) declares accepted MCP/session options;
+[`defaults.toml`](defaults.toml) owns the shipped command, option values, and
+disabled Event Window target.
+
 `model`, `permission_mode`, and `sandbox` map to the corresponding Grok flags.
 The shipped normal-session model is `grok-4.5`, matching the default reported
 by the installed Grok CLI's `grok models` catalog; callers can override it with
