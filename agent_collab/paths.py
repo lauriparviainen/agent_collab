@@ -30,6 +30,7 @@ class GlobalDataPaths:
     daemon_dir: Path
     session_dir: Path
     tmp_dir: Path
+    cache_dir: Path
     session_index_path: Path
     daemon_start_lock_path: Path
     pid_path: Path
@@ -50,6 +51,7 @@ class GlobalDataPaths:
             daemon_dir=daemon_dir,
             session_dir=data_dir / "sessions",
             tmp_dir=data_dir / "tmp",
+            cache_dir=data_dir / "cache",
             session_index_path=data_dir / "session-index.json",
             daemon_start_lock_path=daemon_dir / "start.lock",
             pid_path=daemon_dir / "pid",
@@ -71,6 +73,10 @@ class GlobalDataPaths:
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self.tmp_dir.chmod(0o700)
+        # Discovered model catalogs are non-secret observations, but the cache
+        # sits under the same owner-only data root as sessions/tmp; keep it 0700.
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_dir.chmod(0o700)
 
 
 def atomic_write_private_text(path: Path, text: str) -> None:
