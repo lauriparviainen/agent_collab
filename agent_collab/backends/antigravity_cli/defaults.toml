@@ -8,7 +8,7 @@ command = "agy"
 args = ["-p"]
 
 [backends.antigravity_cli.options]
-model = "Gemini 3.5 Flash (High)"
+model = "Gemini 3.6 Flash (High)"
 # "plan" is read-only and does not stall headless runs on approval prompts;
 # "accept-edits" auto-approves edits and is the explicit write opt-in. The
 # boolean sandbox option additionally restricts terminal commands.

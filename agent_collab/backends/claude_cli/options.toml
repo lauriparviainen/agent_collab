@@ -2,7 +2,7 @@ schema_version = 1
 
 [options.model]
 type = "string"
-allowed = ["fable", "sonnet", "opus"]
+suggested = ["fable", "sonnet", "opus"]
 inferred = true
 
 [options.permission_mode]

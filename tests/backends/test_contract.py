@@ -276,6 +276,109 @@ class BuiltinBackendContractTests(unittest.TestCase):
                 {"model": "future-model"},
             )
 
+    def test_model_option_accepts_custom_non_blank_strings(self):
+        # The formerly allowlisted CLI/SDK backends now advertise their models as
+        # advisory ``suggested`` values, so a freshly released model outside the
+        # shipped list must normalize through unchanged.
+        for backend_id in ("claude_cli", "claude_sdk", "antigravity_cli", "antigravity_sdk"):
+            path = (
+                Path(__file__).parents[2]
+                / "agent_collab"
+                / "backends"
+                / backend_id
+                / "options.toml"
+            )
+            schema = load_option_schema(path)
+            with self.subTest(backend=backend_id):
+                self.assertIsNone(schema["model"].allowed)
+                self.assertIsNotNone(schema["model"].suggested)
+                self.assertEqual(
+                    normalize_declared_options({"model": "brand-new-model-9"}, schema)["model"],
+                    "brand-new-model-9",
+                )
+
+    def test_model_option_rejects_blank_and_whitespace_strings(self):
+        schema = {"model": OptionSpec("string")}
+        for value in ("", "   ", "\t", "\n"):
+            with self.subTest(value=value), self.assertRaises(BackendOptionError) as ctx:
+                normalize_declared_options({"model": value}, schema)
+            self.assertEqual(ctx.exception.field, "model")
+
+    def test_non_model_string_options_still_accept_blank_when_unconstrained(self):
+        # The non-blank rule is scoped to ``model`` alone; other open-ended
+        # string options keep their prior permissiveness.
+        schema = {"profile": OptionSpec("string")}
+        self.assertEqual(
+            normalize_declared_options({"profile": ""}, schema),
+            {"profile": ""},
+        )
+
+    def test_non_model_enums_retain_strict_allowed_validation(self):
+        for backend_id, field, bad in (
+            ("claude_cli", "permission_mode", "unrestricted"),
+            ("codex_cli", "sandbox", "read-write"),
+            ("codex_cli", "reasoning_effort", "extreme"),
+        ):
+            path = (
+                Path(__file__).parents[2]
+                / "agent_collab"
+                / "backends"
+                / backend_id
+                / "options.toml"
+            )
+            schema = load_option_schema(path)
+            with self.subTest(backend=backend_id, field=field):
+                self.assertIsNotNone(schema[field].allowed)
+                with self.assertRaises(BackendOptionError) as ctx:
+                    normalize_declared_options({field: bad}, schema)
+                self.assertEqual(ctx.exception.field, field)
+
+    def test_shipped_default_models_validate_as_non_blank_strings(self):
+        from agent_collab.config import load_toml_file
+
+        root = Path(__file__).parents[2] / "agent_collab" / "backends"
+        for name in backends.registered_backend_names():
+            defaults = load_toml_file(root / name / "defaults.toml")
+            schema = load_option_schema(root / name / "options.toml")
+            section = defaults.get("backends", {}).get(name, {})
+            configured = dict(section.get("options", {}))
+            with self.subTest(backend=name):
+                model = configured.get("model")
+                self.assertIsInstance(model, str)
+                self.assertTrue(model.strip())
+                # The shipped default normalizes without tripping the non-blank
+                # rule or any surviving enum constraint.
+                normalized = normalize_declared_options({}, schema, configured=configured)
+                self.assertEqual(normalized["model"], model)
+
+            # Usage-window target models ride the same non-blank path.
+            targets = defaults.get("usage_windows", {}).get("targets", {})
+            for target_name, target in targets.items():
+                target_model = target.get("model")
+                with self.subTest(backend=name, target=target_name):
+                    self.assertIsInstance(target_model, str)
+                    self.assertTrue(target_model.strip())
+                    self.assertEqual(
+                        normalize_declared_options({"model": target_model}, schema)["model"],
+                        target_model,
+                    )
+
+    def test_describe_options_advertises_model_as_suggested_without_allowed(self):
+        config = builtin_config()
+        described = describe_options(
+            config,
+            health=lambda backend: BackendHealth(status=HEALTH_OK),
+        )
+        for canonical in ("claude_cli", "antigravity_cli"):
+            with self.subTest(backend=canonical):
+                model = described["backends"][canonical]["static"]["option_schema"]["properties"][
+                    "model"
+                ]
+                self.assertNotIn("allowed", model)
+                self.assertIn("suggested", model)
+                # Shipped defaults still surface on the model property.
+                self.assertTrue(str(model.get("default", "")).strip())
+
     def test_every_builtin_backend_has_well_formed_declarative_schema(self):
         config = builtin_config()
         for agent_type in ("claude", "codex", "antigravity", "xai"):

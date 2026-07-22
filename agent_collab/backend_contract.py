@@ -10,6 +10,14 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 OPTION_UNSET = object()
 
+# Model identifiers are validated only as non-blank strings — never against a
+# static allowlist — so newly released models are accepted without a release.
+# The check is keyed on the option name because ``model`` is the one option
+# whose value namespace is open-ended and provider-defined across every backend;
+# discrete enums (permission modes, sandboxes, reasoning effort) keep ``allowed``
+# and so already reject blanks.
+_NON_BLANK_STRING_OPTIONS = frozenset({"model"})
+
 
 @dataclass(frozen=True)
 class OptionSpec:
@@ -210,6 +218,8 @@ def _validate_values(values: Mapping[str, Any], schema: Mapping[str, OptionSpec]
         )
         if not valid_type:
             raise BackendOptionError(field, f"must be a {spec.type}")
+        if field in _NON_BLANK_STRING_OPTIONS and isinstance(value, str) and not value.strip():
+            raise BackendOptionError(field, "must not be blank")
         if spec.allowed is not None and value not in spec.allowed:
             raise BackendOptionError(
                 field,

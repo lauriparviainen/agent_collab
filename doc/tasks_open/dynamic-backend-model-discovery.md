@@ -1,6 +1,6 @@
 # Dynamic backend model discovery at installation and startup
 
-**Status:** Open — architecture approved with final dual-review clarifications incorporated. Refined 2026-07-22 with CLI-first/SDK-later phasing and lifecycle clarifications (fingerprint version, cache precedence, cache directory, refresh cost gate). Default handling revised same day from catalog-based suppression to **warn-only** (catalog membership is not proof: option values are aliases/display names, catalogs list canonical IDs); discovery is cache-only and never writes config.
+**Status:** Open — architecture approved with final dual-review clarifications incorporated. Refined 2026-07-22 with CLI-first/SDK-later phasing and lifecycle clarifications (fingerprint version, cache precedence, cache directory, refresh cost gate). Default handling revised same day from catalog-based suppression to **warn-only** (catalog membership is not proof: option values are aliases/display names, catalogs list canonical IDs); discovery is cache-only and never writes config. **Phase 1 shipped 2026-07-22** (option contract shifted `model.allowed` → `suggested`; non-blank model validation; tests) and the CLI capability spike is partially recorded (see §2). Phases 2–3 (discovery module, cache, MCP/installer integration) remain open.
 
 **Created:** 2026-07-22.
 
@@ -122,7 +122,29 @@ Keep model catalog discovery strictly separate from side-effect-free health prob
   ```
 - **Not side-effect-free.** Unlike `health.py` probes (standard-library only, never a model call), catalog discovery runs the provider's `models` listing, which — per the `health.py` contract note — can **require live auth and incur cost**. This is exactly why discovery is a separate module gated behind explicit refresh modes, install, and background startup, and is never invoked under `model_refresh` `"none"`/`"cached"`.
 - **Effective Configuration & Security Fingerprinting**: `discover_models(agent_config)` accepts the effective backend configuration (executable paths, API endpoints, project, region) **and the resolved provider CLI/SDK version**. It strips secret tokens/headers before computing a SHA-256 digest for `source_fingerprint`. The version is included so a provider upgrade (which can change the catalog with identical config) invalidates a cached catalog.
-- **Capability Matrix**: Probe backends using verified local CLI/SDK mechanisms (candidates to confirm in the spike: `grok models`, `agy models`, or SDK catalog endpoints). Backends without an explicit catalog discovery mechanism return `status="unsupported"` and fall back to static suggestions.
+- **Capability Matrix**: Attempt discovery from the CLI wherever the backend's
+  binary exposes a model-listing command; where none exists the backend returns
+  `status="unsupported"` and falls back to static suggestions. Discovery is
+  therefore opportunistic and per-backend, never assumed uniform across
+  providers ([[agent-collab-backends-are-isolated]]).
+
+  Verified local CLI capabilities (checked live 2026-07-22 — supersedes the
+  earlier "candidates to confirm" list):
+
+  | Backend | CLI list command | Auth needed | Output shape (observed) | Discovery source |
+  | --- | --- | --- | --- | --- |
+  | `antigravity_cli` | `agy models` | No (local) | newline-delimited **canonical IDs** (`gemini-3.6-flash-high`, `gemini-3.5-flash-low`, `claude-opus-4-6-thinking`, …) | `cli` — supported |
+  | `xai_cli` | `grok models` (per CLI docs) | TBD in spike | TBD in spike (capture exact format) | `cli` — likely supported |
+  | `codex_cli` | TBD in spike (confirm a `codex … models`-style command exists) | TBD | TBD | `cli` if a command exists, else `unsupported` |
+  | `claude_cli` | **none** — the `claude` CLI has no `models` subcommand; `--model` takes aliases (`opus`/`sonnet`/`fable`) or full IDs (`claude-opus-4-8`) | n/a | n/a | `unsupported` for the CLI source; a catalog would require the auth'd Models API (`GET /v1/models`), out of scope for the CLI milestone |
+
+  Note the **naming-mismatch** this table already exposes and which the
+  warn-only default policy anticipates: `agy models` emits canonical IDs
+  (`gemini-3.6-flash-high`) while the `antigravity_cli` option-value namespace
+  is display strings (`"Gemini 3.6 Flash (High)"`). An `ok`+`complete`
+  observation therefore proves the listing succeeded, not that it speaks the
+  option-value namespace — so a configured default "missing from catalog" stays
+  warn-only, never a silent drop.
 - **Per-backend parser**: Each source owns a tolerant parser for its listing output (format unknown until the spike — JSON vs. table vs. prose, and version-fragile). Any parse or nonzero-exit failure yields `status="error"` with `complete=False` and falls back to static suggestions; it never raises into the caller.
 - **Concrete Execution Boundaries**:
   - Execute CLI probes via `asyncio.create_subprocess_exec` wrapped in `asyncio.wait_for` for the per-probe deadline (e.g., 2s), with an overall collection deadline. Dependencies (runner, clock, credential evidence) are injectable exactly as in `health.py` so tests drive discovery with fake runners and never touch real CLIs, SDKs, or the network.
@@ -177,7 +199,7 @@ SDK source slots into the Phase 2 interface.
    - `describe_options` outputs expected schema without regressions.
 
 #### Phase 2: Capability spike & discovery module (CLI source)
-1. Conduct a capability spike for the four `*_cli` backends: confirm the `models` listing command exists, capture its exact output format, and record whether it requires auth.
+1. Conduct a capability spike for the four `*_cli` backends: confirm the `models` listing command exists, capture its exact output format, and record whether it requires auth. **Partially recorded already** in the verified-capabilities table under [§2 Capability Matrix](#2-decoupled-model-discovery-module): `antigravity_cli` (`agy models`, no auth, canonical IDs) and `claude_cli` (no CLI command → `unsupported`) are done; the spike still owes `xai_cli` (`grok models` exact format + auth) and `codex_cli` (whether any listing command exists). The rule is **discover from the CLI where a command exists; otherwise `unsupported` + static fallback** — never fabricate a probe for a backend that has none.
 2. Implement `agent_collab/backends/common/model_discovery.py` — the `ModelCatalogObservation` contract, the fingerprint (config + provider version, secrets stripped), the `source="cli"` probes with per-backend tolerant parsers, and local cache storage. Add the `cache_dir` to `GlobalDataPaths`.
 
 #### Phase 3: Daemon, MCP & installer integration (CLI)
