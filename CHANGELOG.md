@@ -36,6 +36,14 @@ into a detailed work log.
   usage-window targets) with a comment-preserving write-back; unknown model
   values and other backends are never rewritten.
 
+- Split `config_migrations.py` into a `config_migrations/` package with one
+  file per migration step (#46). The import path and public surface
+  (`CURRENT_CONFIG_SCHEMA`, `ConfigError`, `ConfigMigrationError`, `MIGRATIONS`,
+  `migrate_config_data`, `migrate_user_config_file`) are unchanged; shared
+  machinery moves into `base`/`scope`/`writeback` core modules and `MIGRATIONS`
+  is built from explicit step imports. Pure structural refactor with no
+  behavior change.
+
 ## [0.10.1] - 2026-07-18 - Backend defaults and timeout alignment
 
 - Move shipped backend definitions, option defaults, and disabled Event Window
