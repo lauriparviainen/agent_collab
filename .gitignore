@@ -9,6 +9,11 @@ __pycache__/
 /build/
 /dist/
 
+# uv writes this when a reviewer (or anyone) runs `uv run` in the repo; the
+# project resolves deps from pyproject.toml with pip, not uv, so the lockfile
+# is not part of the workflow.
+uv.lock
+
 # Local Python environments.
 .venv/
 venv/
