@@ -47,7 +47,27 @@ agent types. Parallel workflows are non-interactive.
 
 Call `agent_collab_describe_options` with the intended absolute `workdir`
 before selecting a workflow or starting. Use `health_refresh: "cached"`
-normally, or `"fresh"` when a newer advisory snapshot matters. It returns:
+normally, or `"fresh"` when a newer advisory snapshot matters.
+
+`model_refresh` (`"none" | "cached" | "fresh"`, default `"cached"`) controls
+the per-backend **model catalog**. It deliberately adds `"none"` beyond the
+`health_refresh` modes because catalog probes run the provider's model-listing
+command, which can require live auth and incur cost: `"none"` and `"cached"`
+are strictly local and never contact a provider, while `"fresh"` runs live
+listing commands — treat it like other paid actions and confirm with the user
+first (repeated `"fresh"` calls are additionally bounded by a per-backend
+minimum re-probe interval). Serve precedence is: fresh successful catalog,
+then the last-known-good cached catalog (flagged `stale`), then the static
+`suggested` fallback. Each backend entry carries `model_catalog` (observation
+status, timestamps, discovered models) and `effective.option_schema`, whose
+`model.suggested` merges `[configured default] + [discovered catalog] +
+[static fallback]` with order-preserving dedup. The configured default model
+is warn-only: an authoritative (`ok` + complete, not stale) catalog that omits
+it adds the non-fatal `configured_default_not_in_catalog` reason code, but the
+default is always passed through unchanged — catalog naming may differ from
+option values, and the provider's first-turn error remains the authority.
+
+It returns:
 
 - a `backends` catalog keyed by backend name (`claude_cli`, `codex_cli`, …)
   where each entry is fully self-describing: user enablement policy, raw

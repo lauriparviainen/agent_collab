@@ -612,13 +612,17 @@ def describe_options(
     *,
     health: Any = None,
     health_refresh: str = "cached",
+    model_refresh: str = "cached",
+    model_catalogs: Any = None,
 ) -> Dict[str, Any]:
     if health_refresh not in {"cached", "fresh"}:
         raise ValueError("health_refresh must be 'cached' or 'fresh'")
+    if model_refresh not in {"none", "cached", "fresh"}:
+        raise ValueError("model_refresh must be 'none', 'cached', or 'fresh'")
     from .events import utc_timestamp
 
     resolved_workdir = str(workdir.expanduser().resolve()) if workdir else "."
-    backends = _describe_backends(config, health, health_refresh)
+    backends = _describe_backends(config, health, health_refresh, model_refresh, model_catalogs)
     agents = [
         _describe_agent(config, agent, backends)
         for agent in sorted(config.agents.values(), key=lambda item: item.id)
@@ -640,6 +644,7 @@ def describe_options(
             "workdir": resolved_workdir,
             "generated_at": generated_at,
             "health_request": health_refresh,
+            "model_request": model_refresh,
         },
         "workdir": resolved_workdir if workdir else None,
         "backends": backends,
@@ -663,22 +668,28 @@ def describe_options(
 
 
 def describe_options_for_workdir(
-    workdir: Path, *, health_refresh: str = "cached"
+    workdir: Path, *, health_refresh: str = "cached", model_refresh: str = "cached"
 ) -> Dict[str, Any]:
     from .config import resolve_existing_workdir
 
     root = resolve_existing_workdir(workdir)
-    return describe_options(load_config(root), root, health_refresh=health_refresh)
+    return describe_options(
+        load_config(root), root, health_refresh=health_refresh, model_refresh=model_refresh
+    )
 
 
 def _describe_backends(
     config: CollaborationConfig,
     health: Any,
     health_refresh: str,
+    model_refresh: str,
+    model_catalogs: Any = None,
 ) -> Dict[str, Any]:
     from . import backends as backend_registry
     from .config import backend_policy
+    from .model_catalog import default_service
 
+    catalogs = model_catalogs if model_catalogs is not None else default_service()
     result: Dict[str, Any] = {}
     for agent_type in backend_registry.registered_agent_types():
         for backend_id in backend_registry.registered_backends(agent_type):
@@ -717,6 +728,16 @@ def _describe_backends(
                 ),
             }
             assessment = assess_backend(canonical, probe, policy)
+            model_catalog, effective_schema = _describe_model_catalog(
+                catalogs,
+                canonical,
+                backend,
+                agent,
+                option_schema,
+                probe,
+                model_refresh,
+                enabled=user_policy.enabled,
+            )
             result[canonical] = {
                 "identity": {
                     "provider_type": agent_type,
@@ -732,11 +753,94 @@ def _describe_backends(
                     "option_schema": option_schema,
                     "configuration_schema": config_schema,
                 },
+                "effective": {"option_schema": effective_schema},
+                "model_catalog": model_catalog,
                 "probe": probe,
                 "policy": policy,
                 "assessment": assessment,
             }
     return result
+
+
+def _describe_model_catalog(
+    catalogs: Any,
+    canonical: str,
+    backend: Any,
+    agent: AgentConfig,
+    option_schema: Mapping[str, Any],
+    probe: Mapping[str, Any],
+    model_refresh: str,
+    *,
+    enabled: bool,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Serve one backend's catalog and derive the effective option schema.
+
+    The provider version for the cache fingerprint is reused from the health
+    probe already in this response, so ``none``/``cached`` never trigger any
+    extra call; ``fresh`` probes inline only for enabled discoverable backends.
+    The effective schema merges suggestions as ``[configured_default] +
+    [discovered_catalog] + [static_fallback]`` (order-preserving dedup); the
+    configured default always leads and remains the default — the warn-only
+    ``configured_default_not_in_catalog`` reason code never removes it."""
+
+    from .model_catalog import (
+        configured_default_model,
+        configured_default_warning,
+        merge_model_suggestions,
+    )
+
+    health_info = probe.get("health") or {}
+    version = health_info.get("version")
+    view = catalogs.serve(
+        canonical,
+        agent,
+        version=version if isinstance(version, str) else None,
+        refresh=model_refresh,
+        allow_probe=enabled,
+    )
+    model_spec = option_schema.get("properties", {}).get("model") or {}
+    schema_default = model_spec.get("default")
+    configured_default = configured_default_model(agent, backend) or (
+        schema_default if isinstance(schema_default, str) and schema_default.strip() else None
+    )
+    warning = configured_default_warning(canonical, view, configured_default)
+    observation = view.observation
+    reason_codes: List[str] = []
+    if observation is not None and observation.reason_code:
+        reason_codes.append(observation.reason_code)
+    if warning is not None:
+        reason_codes.append(warning["code"])
+    entry: Dict[str, Any] = {
+        "supported": view.supported,
+        "request": model_refresh,
+        "probed": view.probed,
+        "probe_gate": view.probe_gate,
+        "served_from": view.served_from,
+        "status": observation.status if observation is not None else "absent",
+        "source": observation.source if observation is not None else None,
+        "models": list(view.models),
+        "complete": bool(observation.complete) if observation is not None else False,
+        "stale": view.stale,
+        "authoritative": view.authoritative,
+        "checked_at": observation.checked_at if observation is not None else None,
+        "last_attempt_at": observation.last_attempt_at if observation is not None else None,
+        "last_success_at": observation.last_success_at if observation is not None else None,
+        "configured_default": configured_default,
+        "reason_codes": reason_codes,
+        "warnings": [warning] if warning is not None else [],
+    }
+    effective_schema = deepcopy(dict(option_schema))
+    effective_model_spec = effective_schema.get("properties", {}).get("model")
+    if effective_model_spec is not None:
+        merged = merge_model_suggestions(
+            configured_default, view.models, effective_model_spec.get("suggested")
+        )
+        if merged:
+            effective_model_spec["suggested"] = merged
+        if configured_default is not None:
+            # The configured default always remains the effective default.
+            effective_model_spec["default"] = configured_default
+    return entry, effective_schema
 
 
 def _probe_description(backend: Any, health: Any, *, fresh: bool, run: bool) -> Dict[str, Any]:

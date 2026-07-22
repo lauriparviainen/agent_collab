@@ -11,7 +11,10 @@ from agent_collab.backends.base import (
 )
 from agent_collab.cli_output import format_table
 from agent_collab.config import AgentConfig, builtin_config, merge_config_data
-from agent_collab.install_readiness import collect_install_readiness
+from agent_collab.install_readiness import (
+    collect_install_readiness,
+    default_model_discovery,
+)
 from agent_collab.user_install import _print_backend_readiness
 
 
@@ -49,6 +52,65 @@ def _sdk_health(module, version="4.5.6"):
             "credentials": {"status": "unknown"},
         },
     )
+
+
+class InstallModelDiscoveryWiringTests(unittest.TestCase):
+    """The install-time model-discovery hook: invoked with per-backend health
+    versions, folded into the payload, hermetically skipped by default, and
+    non-fatal on failure."""
+
+    def test_hook_receives_config_and_health_versions_and_lands_in_payload(self):
+        received = {}
+
+        def fake_discovery(config, versions):
+            received["config"] = config
+            received["versions"] = dict(versions)
+            return {"attempted": ["antigravity_cli"], "backends": {}, "warnings": []}
+
+        payload = collect_install_readiness(
+            builtin_config(),
+            health=lambda backend: _cli_health(backend.agent_type, version="9.9"),
+            model_discovery=fake_discovery,
+        )
+
+        self.assertEqual(payload["snapshot_version"], 4)
+        self.assertEqual(
+            payload["model_discovery"],
+            {"attempted": ["antigravity_cli"], "backends": {}, "warnings": []},
+        )
+        self.assertIs(received["config"].__class__, builtin_config().__class__)
+        # Every probed backend contributes its health version to the map the
+        # discovery fingerprints with.
+        self.assertEqual(received["versions"].get("antigravity_cli"), "9.9")
+        self.assertEqual(received["versions"].get("xai_cli"), "9.9")
+
+    def test_default_none_skips_discovery_hermetically(self):
+        payload = collect_install_readiness(
+            builtin_config(), health=lambda backend: _cli_health(backend.agent_type)
+        )
+        self.assertTrue(payload["model_discovery"]["skipped"])
+        self.assertEqual(payload["model_discovery"]["warnings"], [])
+
+    def test_main_wires_the_default_discovery_hook(self):
+        from agent_collab import install_readiness
+
+        with mock.patch.object(
+            install_readiness,
+            "collect_install_readiness",
+            return_value={"rows": []},
+        ) as collect:
+            with mock.patch("sys.stdout", new=io.StringIO()):
+                self.assertEqual(install_readiness.main([]), 0)
+        self.assertIs(collect.call_args.kwargs.get("model_discovery"), default_model_discovery)
+
+    def test_default_model_discovery_degrades_to_non_fatal_warning(self):
+        with mock.patch(
+            "agent_collab.model_catalog.run_install_discovery",
+            side_effect=RuntimeError("boom"),
+        ):
+            summary = default_model_discovery(builtin_config(), {})
+        self.assertEqual(summary["backends"], {})
+        self.assertEqual(summary["warnings"][0]["code"], "model_discovery_failed")
 
 
 class InstallReadinessCollectionTests(unittest.TestCase):

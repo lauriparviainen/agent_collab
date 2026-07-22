@@ -135,16 +135,16 @@ sequence = ["antigravity_cli"]
                 config,
                 "solo-antigravity",
                 backend_options={
-                    "antigravity_cli": {"model": "Gemini 3.5 Flash (Low)", "mode": "plan"}
+                    "antigravity_cli": {"model": "gemini-3.5-flash-low", "mode": "plan"}
                 },
             )
-            self.assertEqual(validated["antigravity_cli"]["model"], "Gemini 3.5 Flash (Low)")
+            self.assertEqual(validated["antigravity_cli"]["model"], "gemini-3.5-flash-low")
             self.assertEqual(validated["antigravity_cli"]["mode"], "plan")
 
             agent = config.agents["antigravity_cli"]
             command = AntigravityCliBackend().build_command(agent, validated["antigravity_cli"])
             self.assertIn("--model", command)
-            self.assertIn("Gemini 3.5 Flash (Low)", command)
+            self.assertIn("gemini-3.5-flash-low", command)
             self.assertIn("--mode", command)
             self.assertIn("plan", command)
             self.assertEqual(command.count("--mode"), 1)  # replaced, not duplicated

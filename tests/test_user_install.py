@@ -69,7 +69,7 @@ class UserInstallTests(unittest.TestCase):
             ["/durable/venv/bin/python", "-m", "agent_collab.install_readiness"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
             check=False,
         )
 

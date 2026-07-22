@@ -31,7 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LIVE_OPTIONS: Dict[str, Dict[str, Any]] = {
     "claude": {"model": "sonnet", "thinking_level": "low"},
     "codex": {"model": "gpt-5.6-luna", "thinking_level": "low"},
-    "antigravity": {"model": "Gemini 3.5 Flash (Low)"},
+    "antigravity": {"model": "gemini-3.5-flash-low"},
     "xai": {"model": "grok-4.5", "thinking_level": "low"},
 }
 

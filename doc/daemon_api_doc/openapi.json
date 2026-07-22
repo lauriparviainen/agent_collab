@@ -183,6 +183,15 @@
             ],
             "type": "string"
           },
+          "model_refresh": {
+            "default": "cached",
+            "enum": [
+              "none",
+              "cached",
+              "fresh"
+            ],
+            "type": "string"
+          },
           "workdir": {
             "minLength": 1,
             "pattern": ".*\\S.*",
@@ -830,6 +839,20 @@
             "schema": {
               "default": "cached",
               "enum": [
+                "cached",
+                "fresh"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model_refresh",
+            "required": false,
+            "schema": {
+              "default": "cached",
+              "enum": [
+                "none",
                 "cached",
                 "fresh"
               ],

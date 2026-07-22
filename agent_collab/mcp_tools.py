@@ -46,13 +46,16 @@ TOOLS = [
         "description": (
             "Run the versioned pre-start discovery protocol for one absolute workdir, including the "
             "backend catalog, effective workflow selections, probe evidence, policy, remediation, "
-            "and accepted options."
+            "and accepted options. model_refresh controls the per-backend model catalog: 'none' and "
+            "'cached' (default) never contact a provider; 'fresh' runs live model-listing commands "
+            "that can require auth and incur cost — confirm with the user before requesting it."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "workdir": {"type": "string"},
                 "health_refresh": {"type": "string", "enum": ["cached", "fresh"]},
+                "model_refresh": {"type": "string", "enum": ["none", "cached", "fresh"]},
             },
             "required": ["workdir"],
         },
@@ -227,6 +230,7 @@ class SessionManagerToolBackend:
         return await self.manager.describe_options_async(
             Path(_required_str(payload, "workdir")),
             health_refresh=str(payload.get("health_refresh", "cached")),
+            model_refresh=str(payload.get("model_refresh", "cached")),
         )
 
     async def list_sessions(self) -> Dict[str, Any]:
@@ -591,11 +595,15 @@ def _post_message_payload(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _describe_payload(args: Dict[str, Any]) -> Dict[str, Any]:
-    payload = {key: args[key] for key in ("workdir", "health_refresh") if key in args}
+    payload = {
+        key: args[key] for key in ("workdir", "health_refresh", "model_refresh") if key in args
+    }
     if not isinstance(payload.get("workdir"), str) or not payload["workdir"].strip():
         raise McpToolError("workdir is required")
     if payload.get("health_refresh", "cached") not in {"cached", "fresh"}:
         raise McpToolError("health_refresh must be 'cached' or 'fresh'")
+    if payload.get("model_refresh", "cached") not in {"none", "cached", "fresh"}:
+        raise McpToolError("model_refresh must be 'none', 'cached', or 'fresh'")
     return payload
 
 

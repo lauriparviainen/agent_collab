@@ -261,6 +261,31 @@ class McpServerTests(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertEqual(_payload(result), {"error": "health_refresh must be 'cached' or 'fresh'"})
 
+    def test_describe_options_maps_model_refresh_and_rejects_invalid(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            client.describe_options.return_value = {"discovery": {"model_request": "none"}}
+
+            result = handle_tool(
+                "agent_collab_describe_options",
+                {"workdir": "/repo", "model_refresh": "none"},
+            )
+
+        client.describe_options.assert_called_once_with(
+            {"workdir": "/repo", "model_refresh": "none"}
+        )
+        _assert_tool_result(self, result, {"discovery": {"model_request": "none"}})
+
+        rejected = handle_tool(
+            "agent_collab_describe_options",
+            {"workdir": "/repo", "model_refresh": "eventually"},
+        )
+        self.assertTrue(rejected.get("isError"))
+        self.assertEqual(
+            _payload(rejected),
+            {"error": "model_refresh must be 'none', 'cached', or 'fresh'"},
+        )
+
     def test_describe_options_rejects_missing_workdir(self):
         result = handle_tool("agent_collab_describe_options", {})
 

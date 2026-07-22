@@ -121,9 +121,9 @@ class BuiltinDefaultsCompositionTests(unittest.TestCase):
             "antigravity_cli": (
                 "agy",
                 ["-p"],
-                {"model": "Gemini 3.6 Flash (High)", "mode": "plan"},
+                {"model": "gemini-3.6-flash-high", "mode": "plan"},
             ),
-            "antigravity_sdk": (None, [], {"model": "Gemini 3.6 Flash (High)"}),
+            "antigravity_sdk": (None, [], {"model": "gemini-3.6-flash-high"}),
             "claude_cli": (
                 "claude",
                 ["-p", "--output-format", "stream-json", "--verbose"],
@@ -166,12 +166,12 @@ class BuiltinDefaultsCompositionTests(unittest.TestCase):
         expected_targets = {
             "antigravity_cli_flash_low": (
                 "antigravity_cli",
-                "Gemini 3.5 Flash (Low)",
+                "gemini-3.5-flash-low",
                 {"mode": "plan", "sandbox": True},
             ),
             "antigravity_sdk_flash_low": (
                 "antigravity_sdk",
-                "Gemini 3.5 Flash (Low)",
+                "gemini-3.5-flash-low",
                 {},
             ),
             "claude_cli_sonnet": (

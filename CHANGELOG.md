@@ -13,6 +13,29 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Serve dynamically discovered model catalogs (#45, Phase 3, CLI backends).
+  `agent_collab_describe_options` and `POST /options` accept
+  `model_refresh = "none" | "cached" | "fresh"` (default `cached`; `none` and
+  `cached` never contact a provider, `fresh` is rate-limited per backend) and
+  return per-backend `model_catalog` and `effective.option_schema` fields with
+  suggestions merged as configured default, then discovered catalog, then
+  static fallback. Serve precedence is fresh probe, then last-known-good
+  (flagged stale), then static. The daemon refreshes catalogs in a background
+  task started after readiness and logs catalog transitions; the installer
+  awaits discovery with non-fatal degradation. The configured default model is
+  warn-only: an authoritative catalog that omits it adds the non-fatal
+  `configured_default_not_in_catalog` reason code (also echoed in start
+  responses) but never changes which model runs. Discovery writes only the
+  cache, never config; running sessions keep their snapshotted options.
+
+- Retire the Antigravity display-name model namespace (#45). Shipped
+  `antigravity_cli`/`antigravity_sdk` manifests now use the canonical ids the
+  `agy` catalog emits (for example `gemini-3.6-flash-high`, verified accepted
+  by `agy --model`). Config schema v10 migrates the historical display-name
+  model values in user configs (backend options, personae, and antigravity
+  usage-window targets) with a comment-preserving write-back; unknown model
+  values and other backends are never rewritten.
+
 ## [0.10.1] - 2026-07-18 - Backend defaults and timeout alignment
 
 - Move shipped backend definitions, option defaults, and disabled Event Window

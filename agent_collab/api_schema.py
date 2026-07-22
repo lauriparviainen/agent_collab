@@ -546,20 +546,41 @@ class OptionsRequestModel:
 
     Requiring it here fixes ``client.describe_options()``'s current no-payload
     path (it sends ``{}`` and the server 400s).
+
+    ``model_refresh`` is deliberately asymmetric with ``health_refresh``: it
+    adds ``"none"`` because model-catalog probes can require live auth and
+    incur provider cost, so callers must be able to demand a purely local
+    answer. ``"none"`` and ``"cached"`` never initiate a catalog probe.
     """
 
     workdir: str
     health_refresh: str = "cached"
+    model_refresh: str = "cached"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "OptionsRequestModel":
         health_refresh = data.get("health_refresh", "cached")
         if not isinstance(health_refresh, str) or health_refresh not in {"cached", "fresh"}:
             raise ValueError("health_refresh must be 'cached' or 'fresh'")
-        return cls(workdir=_required_str(data, "workdir"), health_refresh=health_refresh)
+        model_refresh = data.get("model_refresh", "cached")
+        if not isinstance(model_refresh, str) or model_refresh not in {
+            "none",
+            "cached",
+            "fresh",
+        }:
+            raise ValueError("model_refresh must be 'none', 'cached', or 'fresh'")
+        return cls(
+            workdir=_required_str(data, "workdir"),
+            health_refresh=health_refresh,
+            model_refresh=model_refresh,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"workdir": self.workdir, "health_refresh": self.health_refresh}
+        return {
+            "workdir": self.workdir,
+            "health_refresh": self.health_refresh,
+            "model_refresh": self.model_refresh,
+        }
 
 
 @dataclass

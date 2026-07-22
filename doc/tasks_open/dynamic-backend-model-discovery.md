@@ -1,6 +1,6 @@
 # Dynamic backend model discovery at installation and startup
 
-**Status:** Open — architecture approved with final dual-review clarifications incorporated. Refined 2026-07-22 with CLI-first/SDK-later phasing and lifecycle clarifications (fingerprint version, cache precedence, cache directory, refresh cost gate). Default handling revised same day from catalog-based suppression to **warn-only** (catalog membership is not proof: option values are aliases/display names, catalogs list canonical IDs); discovery is cache-only and never writes config. **Phase 1 shipped 2026-07-22** (option contract shifted `model.allowed` → `suggested`; non-blank model validation; tests) and the CLI capability spike is partially recorded (see §2). Phases 2–3 (discovery module, cache, MCP/installer integration) remain open.
+**Status:** Open — architecture approved with final dual-review clarifications incorporated. Refined 2026-07-22 with CLI-first/SDK-later phasing and lifecycle clarifications (fingerprint version, cache precedence, cache directory, refresh cost gate). Default handling revised same day from catalog-based suppression to **warn-only** (catalog membership is not proof: option values are aliases/display names, catalogs list canonical IDs); discovery is cache-only and never writes config. **Phase 1 shipped 2026-07-22** (option contract shifted `model.allowed` → `suggested`; non-blank model validation; tests); the CLI capability spike is recorded in §2. **Phase 2 shipped 2026-07-22** (`backends/common/model_discovery.py`: observation contract, fingerprint, `agy`/`grok` probes + parsers, in-flight dedup, cache + `cache_dir`). **Phase 3 implemented 2026-07-22** (`model_catalog.py` serving layer; `model_refresh` on `describe_options`/`api_schema` with `model_catalog` + `effective.option_schema` fields; daemon background refresher with transition logging and start-response warning echo; installer discovery with non-fatal degradation). **Antigravity display-name namespace retired 2026-07-22** (config schema v10): the shipped `antigravity_*` manifests/defaults now use the canonical ids `agy models` emits (`gemini-3.6-flash-high`, verified accepted by `agy --model` live), and the v9→v10 migration renames the historical display-name model values in user configs (backend options, personae, antigravity usage-window targets) — see `_ANTIGRAVITY_MODEL_RENAMES` in `config_migrations.py`. The warn-only default policy is unchanged and still applies to any backend whose option namespace may diverge from its catalog. Part 2 (Phase 4, SDK source) remains open; the SDK's acceptance of canonical ids is asserted by the unified namespace but is verified only for the CLI — the Phase 4 spike must confirm it.
 
 **Created:** 2026-07-22.
 
@@ -138,13 +138,17 @@ Keep model catalog discovery strictly separate from side-effect-free health prob
   | `codex_cli` | TBD in spike (confirm a `codex … models`-style command exists) | TBD | TBD | `cli` if a command exists, else `unsupported` |
   | `claude_cli` | **none** — the `claude` CLI has no `models` subcommand; `--model` takes aliases (`opus`/`sonnet`/`fable`) or full IDs (`claude-opus-4-8`) | n/a | n/a | `unsupported` for the CLI source; a catalog would require the auth'd Models API (`GET /v1/models`), out of scope for the CLI milestone |
 
-  Note the **naming-mismatch** this table already exposes and which the
+  Note the **naming-mismatch** this table originally exposed and which the
   warn-only default policy anticipates: `agy models` emits canonical IDs
   (`gemini-3.6-flash-high`) while the `antigravity_cli` option-value namespace
-  is display strings (`"Gemini 3.6 Flash (High)"`). An `ok`+`complete`
-  observation therefore proves the listing succeeded, not that it speaks the
-  option-value namespace — so a configured default "missing from catalog" stays
-  warn-only, never a silent drop.
+  historically was display strings (`"Gemini 3.6 Flash (High)"`). An
+  `ok`+`complete` observation therefore proves the listing succeeded, not that
+  it speaks the option-value namespace — so a configured default "missing from
+  catalog" stays warn-only, never a silent drop. *Update 2026-07-22:* the
+  Antigravity display-name namespace was retired (config schema v10) after
+  verifying `agy --model` accepts canonical IDs; shipped manifests and migrated
+  user configs now speak the catalog namespace directly. The warn-only policy
+  stays: other backends (and unmigrated free-form values) can still diverge.
 - **Per-backend parser**: Each source owns a tolerant parser for its listing output (format unknown until the spike — JSON vs. table vs. prose, and version-fragile). Any parse or nonzero-exit failure yields `status="error"` with `complete=False` and falls back to static suggestions; it never raises into the caller.
 - **Concrete Execution Boundaries**:
   - Execute CLI probes via `asyncio.create_subprocess_exec` wrapped in `asyncio.wait_for` for the per-probe deadline (e.g., 2s), with an overall collection deadline. Dependencies (runner, clock, credential evidence) are injectable exactly as in `health.py` so tests drive discovery with fake runners and never touch real CLIs, SDKs, or the network.

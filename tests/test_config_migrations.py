@@ -597,5 +597,160 @@ class MigrateUserConfigFileTests(unittest.TestCase):
             self.assertFalse(path.with_name("config.toml.bak").exists())
 
 
+class V10AntigravityModelRenameTests(unittest.TestCase):
+    """v10 retires the Antigravity display-name model namespace: known display
+    names are renamed to canonical catalog ids in backend options, personae,
+    and antigravity usage-window targets; everything else passes through."""
+
+    def _write(self, directory: Path, text: str) -> Path:
+        path = directory / "config.toml"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_v9_display_names_are_renamed_across_all_model_sites(self):
+        data = {
+            "schema_version": 9,
+            "backends": {
+                "antigravity_cli": {
+                    "options": {"model": "Gemini 3.5 Flash (High)"},
+                    "agents": {"pro": {"options": {"model": "Gemini 3.1 Pro (High)"}}},
+                },
+                "antigravity_sdk": {"options": {"model": "Claude Sonnet 4.6 (Thinking)"}},
+                # Other backends are never rewritten, even for a lookalike value.
+                "claude_cli": {"options": {"model": "Gemini 3.5 Flash (High)"}},
+            },
+            "usage_windows": {
+                "targets": {
+                    "agy_low": {"backend": "antigravity_cli", "model": "Gemini 3.5 Flash (Low)"},
+                    "claude": {"backend": "claude_cli", "model": "sonnet"},
+                }
+            },
+        }
+
+        migrated = migrate_config_data(data, "test")
+
+        self.assertEqual(migrated["schema_version"], CURRENT_CONFIG_SCHEMA)
+        backends = migrated["backends"]
+        self.assertEqual(backends["antigravity_cli"]["options"]["model"], "gemini-3.5-flash-high")
+        self.assertEqual(
+            backends["antigravity_cli"]["agents"]["pro"]["options"]["model"],
+            "gemini-3.1-pro-high",
+        )
+        self.assertEqual(backends["antigravity_sdk"]["options"]["model"], "claude-sonnet-4-6")
+        self.assertEqual(backends["claude_cli"]["options"]["model"], "Gemini 3.5 Flash (High)")
+        targets = migrated["usage_windows"]["targets"]
+        self.assertEqual(targets["agy_low"]["model"], "gemini-3.5-flash-low")
+        self.assertEqual(targets["claude"]["model"], "sonnet")
+
+    def test_unknown_model_values_pass_through_unchanged(self):
+        data = {
+            "schema_version": 9,
+            "backends": {
+                "antigravity_cli": {"options": {"model": "gemini-99-experimental"}},
+                "antigravity_sdk": {"options": {"model": "Gemini 99 Ultra (Max)"}},
+            },
+        }
+
+        migrated = migrate_config_data(data, "test")
+
+        # A value outside the known display-name table is the user's own
+        # choice; the migration never guesses.
+        self.assertEqual(
+            migrated["backends"]["antigravity_cli"]["options"]["model"],
+            "gemini-99-experimental",
+        )
+        self.assertEqual(
+            migrated["backends"]["antigravity_sdk"]["options"]["model"],
+            "Gemini 99 Ultra (Max)",
+        )
+
+    @unittest.skipUnless(_tomlkit_available(), "tomlkit is not installed")
+    def test_v9_write_back_renames_models_preserving_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = (
+                "# my agent-collab config\n"
+                "schema_version = 9\n\n"
+                "[backends.antigravity_cli]\n"
+                'command = "agy"\n\n'
+                "# the model I picked\n"
+                "[backends.antigravity_cli.options]\n"
+                'model = "Gemini 3.5 Flash (High)"\n\n'
+                "[usage_windows.targets.agy_low]\n"
+                'backend = "antigravity_cli"\n'
+                'model = "Gemini 3.5 Flash (Low)"\n\n'
+                "[daemon]\n"
+                'token = "test-token-value"\n'
+            )
+            path = self._write(Path(tmp), text)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "migrated")
+            self.assertEqual(result.previous_version, 9)
+            self.assertEqual(result.backup_path.read_text(encoding="utf-8"), text)
+            migrated = path.read_text(encoding="utf-8")
+            self.assertIn(f"schema_version = {CURRENT_CONFIG_SCHEMA}", migrated)
+            self.assertIn('model = "gemini-3.5-flash-high"', migrated)
+            self.assertIn('model = "gemini-3.5-flash-low"', migrated)
+            self.assertNotIn("Gemini 3.5 Flash", migrated)
+            self.assertIn("# my agent-collab config", migrated)
+            self.assertIn("# the model I picked", migrated)
+            self.assertIn('token = "test-token-value"', migrated)
+
+    def test_v9_write_back_without_antigravity_models_only_stamps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = "schema_version = 9\n\n[backends.claude_cli.options]\nmodel = 'opus'\n"
+            path = self._write(Path(tmp), text)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "migrated")
+            migrated = path.read_text(encoding="utf-8")
+            self.assertIn(f"schema_version = {CURRENT_CONFIG_SCHEMA}", migrated)
+            self.assertIn("model = 'opus'", migrated)
+
+    @unittest.skipUnless(_tomlkit_available(), "tomlkit is not installed")
+    def test_pre_v8_write_back_renames_models_in_kept_sections_too(self):
+        # Round-5 review finding: the pre-v8 structural rewrite keeps sections
+        # like [usage_windows] as original text; the rename pass must still
+        # reach them, or a display-name model would be frozen on disk under
+        # the freshly stamped current version and never migrated again.
+        with tempfile.TemporaryDirectory() as tmp:
+            text = (
+                "schema_version = 7\n\n"
+                "[agents.antigravity]\n"
+                'type = "antigravity"\n'
+                'backend = "cli"\n\n'
+                "[agents.antigravity.options]\n"
+                'model = "Gemini 3.5 Flash (High)"\n\n'
+                "[usage_windows.targets.agy_low]\n"
+                'backend = "antigravity_cli"\n'
+                'model = "Gemini 3.5 Flash (Low)"\n'
+            )
+            path = self._write(Path(tmp), text)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "migrated")
+            migrated = path.read_text(encoding="utf-8")
+            self.assertIn(f"schema_version = {CURRENT_CONFIG_SCHEMA}", migrated)
+            self.assertIn('model = "gemini-3.5-flash-high"', migrated)
+            self.assertIn('model = "gemini-3.5-flash-low"', migrated)
+            self.assertNotIn("Gemini 3.5 Flash", migrated)
+
+    def test_v9_write_back_with_renames_requires_tomlkit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = (
+                "schema_version = 9\n\n"
+                "[backends.antigravity_cli.options]\n"
+                'model = "Gemini 3.5 Flash (High)"\n'
+            )
+            path = self._write(Path(tmp), text)
+
+            with mock.patch.dict(sys.modules, {"tomlkit": None}):
+                with self.assertRaisesRegex(ConfigMigrationError, "tomlkit"):
+                    migrate_user_config_file(path)
+
+
 if __name__ == "__main__":
     unittest.main()

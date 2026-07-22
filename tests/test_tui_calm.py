@@ -128,9 +128,9 @@ class ContextAgentClusterTests(unittest.TestCase):
         self.assertEqual(_info_text(segments), "reviewer codex_cli: gpt-5")
 
     def test_agent_id_equal_to_canonical_name_is_not_duplicated(self):
-        agent = AgentInfo("antigravity_cli", "antigravity", "Gemini 3.1 Pro (High)", "cli")
+        agent = AgentInfo("antigravity_cli", "antigravity", "gemini-3.1-pro-high", "cli")
         segments = build_context_agent_segments([agent], 100)
-        self.assertEqual(_info_text(segments), "antigravity_cli: Gemini 3.1 Pro (High)")
+        self.assertEqual(_info_text(segments), "antigravity_cli: gemini-3.1-pro-high")
 
     def test_agent_without_backend_falls_back_to_bare_id(self):
         mock = AgentInfo("mock", "mock", "", "")

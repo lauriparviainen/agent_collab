@@ -4,9 +4,9 @@
 enabled = false
 
 [backends.antigravity_sdk.options]
-model = "Gemini 3.6 Flash (High)"
+model = "gemini-3.6-flash-high"
 
 [usage_windows.targets.antigravity_sdk_flash_low]
 enabled = false
 backend = "antigravity_sdk"
-model = "Gemini 3.5 Flash (Low)"
+model = "gemini-3.5-flash-low"

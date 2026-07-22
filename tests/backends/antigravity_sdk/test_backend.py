@@ -642,14 +642,14 @@ class SdkSelectionTests(unittest.TestCase):
         settings = build_session_settings(
             config,
             "solo",
-            {"antigravity_sdk": {"model": "Gemini 3.1 Pro (High)"}},
+            {"antigravity_sdk": {"model": "gemini-3.1-pro-high"}},
             agent_backends={"ag": "sdk"},
         )
         entry = settings["agents"]["ag"]
         self.assertEqual(entry["backend"], "sdk")
         self.assertNotIn("command_preview", entry)
         self.assertEqual(entry["backend_summary"]["package"], "google-antigravity")
-        self.assertEqual(entry["backend_summary"]["options"], {"model": "Gemini 3.1 Pro (High)"})
+        self.assertEqual(entry["backend_summary"]["options"], {"model": "gemini-3.1-pro-high"})
 
 
 if __name__ == "__main__":

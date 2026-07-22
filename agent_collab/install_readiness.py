@@ -22,9 +22,11 @@ from .config import (
 from .options import assess_backend
 
 
-SNAPSHOT_VERSION = 3
+SNAPSHOT_VERSION = 4
 MAX_PROBE_WORKERS = 4
 ProbeKey = Tuple[str, Optional[str]]
+
+ModelDiscoveryFn = Callable[[CollaborationConfig, Mapping[str, Optional[str]]], Dict[str, Any]]
 
 
 def collect_install_readiness(
@@ -32,12 +34,17 @@ def collect_install_readiness(
     *,
     health: Optional[Callable[[Any], BackendHealth]] = None,
     probe_source: str = "installed environment",
+    model_discovery: Optional[ModelDiscoveryFn] = None,
 ) -> Dict[str, Any]:
     """Collect fresh facts for effective backends of globally configured agents.
 
     Rows are backend-first: one row per probe target (canonical backend plus
     the agent-configured command identity), aggregating every enabled agent
     that selects it. Disabled agents are summarized, never probed.
+
+    ``model_discovery`` runs live model-catalog discovery (the installer passes
+    ``default_model_discovery``); the default ``None`` skips it so this
+    function stays hermetic for embedded callers and tests.
     """
 
     from . import backends as backend_registry
@@ -83,6 +90,14 @@ def collect_install_readiness(
         if row["state"] != "usable":
             attention_count += 1
 
+    if model_discovery is not None:
+        versions: Dict[str, Optional[str]] = {}
+        for (canonical, _identity), observed in health_results.items():
+            versions.setdefault(canonical, observed.version)
+        discovery_summary = model_discovery(effective, versions)
+    else:
+        discovery_summary = {"attempted": [], "backends": {}, "warnings": [], "skipped": True}
+
     return {
         "snapshot_version": SNAPSHOT_VERSION,
         "scope": "global user config",
@@ -97,8 +112,35 @@ def collect_install_readiness(
         "attention_count": attention_count,
         "disabled_backends": disabled_backends,
         "usage_windows": _usage_window_summary(effective),
+        "model_discovery": discovery_summary,
         "rows": rows,
     }
+
+
+def default_model_discovery(
+    config: CollaborationConfig, versions: Mapping[str, Optional[str]]
+) -> Dict[str, Any]:
+    """Awaited install-time discovery with non-fatal degradation: any failure
+    becomes a warning and the install completes on static fallbacks."""
+
+    from .model_catalog import MODEL_DISCOVERY_FAILED, run_install_discovery
+
+    try:
+        return run_install_discovery(config, versions)
+    except Exception as exc:
+        return {
+            "attempted": [],
+            "backends": {},
+            "warnings": [
+                {
+                    "code": MODEL_DISCOVERY_FAILED,
+                    "message": (
+                        "model catalog discovery failed "
+                        f"({exc.__class__.__name__}); continuing with static model suggestions"
+                    ),
+                }
+            ],
+        }
 
 
 def _usage_window_summary(config: CollaborationConfig) -> Dict[str, Any]:
@@ -304,7 +346,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--probe-source", default="installed environment")
     args = parser.parse_args(argv)
     try:
-        payload = collect_install_readiness(probe_source=args.probe_source)
+        payload = collect_install_readiness(
+            probe_source=args.probe_source, model_discovery=default_model_discovery
+        )
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1

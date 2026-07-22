@@ -281,6 +281,10 @@ class SessionManager:
             Path(default_log_dir).expanduser().resolve() if default_log_dir else None
         )
         self._index = SessionIndex(Path(index_path)) if index_path else None
+        # Set by the HTTP server when the daemon's background model-catalog
+        # refresher is running; a ``cached`` describe that served a stale or
+        # missing catalog nudges it (never blocks on it).
+        self.model_catalog_kick: Optional[Callable[[], None]] = None
         self._restore_from_index()
 
     def _restore_from_index(self) -> None:
@@ -484,13 +488,14 @@ class SessionManager:
         normalized_options = normalized.backend_options
         interactive = bool(request.interactive)
         interactive_idle_timeout = self._normalize_idle_timeout(request.interactive_idle_timeout)
+        catalog_warnings = self._model_catalog_warnings(request, collab_config, selection)
         settings = build_session_settings(
             collab_config,
             request.workflow,
             normalized_options,
             agent_backends=selection.agent_backends,
             agent_options=normalized.agent_options,
-            warnings=[*collab_config.warnings, *selection.warnings],
+            warnings=[*collab_config.warnings, *selection.warnings, *catalog_warnings],
             interactive=interactive,
             interactive_idle_timeout=interactive_idle_timeout,
             turn_timeout=int(request.timeout),
@@ -508,6 +513,26 @@ class SessionManager:
             capabilities=capabilities,
             interactive_idle_timeout=interactive_idle_timeout,
         )
+
+    def _model_catalog_warnings(
+        self,
+        request: StartSessionRequest,
+        config: CollaborationConfig,
+        selection: Any,
+    ) -> List[Dict[str, str]]:
+        """Echo the cached-catalog warn-only default check into the start
+        response's effective settings. Cache-only — a start never probes a
+        catalog — and mock/dry-run starts skip it entirely so they stay
+        hermetic. Never fails a start."""
+
+        if request.mock or request.dry_run:
+            return []
+        try:
+            from .model_catalog import start_catalog_warnings
+
+            return start_catalog_warnings(config, selection.agent_backends)
+        except Exception:
+            return []
 
     def _session_capabilities(self, config: Any, agent_backends: Dict[str, str]) -> Dict[str, bool]:
         from . import backends as backend_registry
@@ -532,6 +557,7 @@ class SessionManager:
         workdir: Optional[Union[str, Path]] = None,
         *,
         health_refresh: str = "cached",
+        model_refresh: str = "cached",
     ) -> Dict[str, Any]:
         requested_workdir = Path(workdir) if workdir is not None else self.default_workdir
         try:
@@ -539,19 +565,34 @@ class SessionManager:
             config = load_config(root)
         except ConfigError as exc:
             raise SessionRequestError(str(exc)) from exc
-        return describe_options(config, root, health_refresh=health_refresh)
+        return describe_options(
+            config, root, health_refresh=health_refresh, model_refresh=model_refresh
+        )
 
     async def describe_options_async(
         self,
         workdir: Optional[Union[str, Path]] = None,
         *,
         health_refresh: str = "cached",
+        model_refresh: str = "cached",
     ) -> Dict[str, Any]:
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             self.describe_options,
             workdir,
             health_refresh=health_refresh,
+            model_refresh=model_refresh,
         )
+        # ``cached`` permits nudging the daemon's background refresher when the
+        # response served a stale or missing catalog; ``none`` is a strictly
+        # local read that never triggers any activity. The inline read path
+        # itself never probes in either mode.
+        if model_refresh == "cached" and self.model_catalog_kick is not None:
+            if _model_catalog_refresh_wanted(result):
+                try:
+                    self.model_catalog_kick()
+                except Exception:
+                    pass
+        return result
 
     async def stop_session(self, session_id: str) -> SessionState:
         managed = self._get_managed(session_id)
@@ -1252,6 +1293,27 @@ class SessionManager:
     def _log_lifecycle(self, message: str) -> None:
         if self._lifecycle_logger is not None:
             self._lifecycle_logger(message)
+
+
+def _model_catalog_refresh_wanted(payload: Dict[str, Any]) -> bool:
+    """True when a ``cached`` describe served a non-authoritative catalog
+    (missing, stale, or a cached failed observation) for an enabled,
+    discovery-supported backend — the signal to nudge the daemon's background
+    refresher."""
+
+    backends = payload.get("backends")
+    if not isinstance(backends, dict):
+        return False
+    for entry in backends.values():
+        if not isinstance(entry, dict):
+            continue
+        catalog = entry.get("model_catalog") or {}
+        policy = entry.get("policy") or {}
+        if not catalog.get("supported") or not policy.get("enabled"):
+            continue
+        if not catalog.get("authoritative"):
+            return True
+    return False
 
 
 def _execute_transcript_unlinks(

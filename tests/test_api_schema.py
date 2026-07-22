@@ -299,6 +299,11 @@ class ModelRoundTripTests(unittest.TestCase):
                 {"task": "t", "workdir": "/w", "backend": "cli", "max_turns": 2},
             ),
             (OptionsRequestModel, {"workdir": "/w"}),
+            (OptionsRequestModel, {"workdir": "/w", "model_refresh": "none"}),
+            (
+                OptionsRequestModel,
+                {"workdir": "/w", "health_refresh": "fresh", "model_refresh": "fresh"},
+            ),
             (PostMessageRequestModel, {"text": "go"}),
             (PostMessageRequestModel, {"text": "go", "source": "human", "target": "codex"}),
             (ReadEventsRequestModel, {"cursor": 4, "limit": 1, "tool_output": "full"}),
@@ -316,6 +321,13 @@ class ModelRoundTripTests(unittest.TestCase):
     def test_options_request_requires_workdir(self):
         with self.assertRaises(ValueError):
             OptionsRequestModel.from_dict({})
+
+    def test_options_request_validates_model_refresh(self):
+        model = OptionsRequestModel.from_dict({"workdir": "/w"})
+        self.assertEqual(model.model_refresh, "cached")
+        for value in ("eventually", "", 3, True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                OptionsRequestModel.from_dict({"workdir": "/w", "model_refresh": value})
 
     def test_prune_request_rejects_bad_input(self):
         for payload in (

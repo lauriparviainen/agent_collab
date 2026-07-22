@@ -32,7 +32,11 @@ class UserInstallError(RuntimeError):
 DEFAULT_BIN_DIR_ENV = "AGENT_COLLAB_BIN_DIR"
 EDITABLE_ENV = "AGENT_COLLAB_INSTALL_EDITABLE"
 INSTALL_LOG_NAME = "install.log"
-READINESS_TIMEOUT_SECONDS = 30
+# Outer guard for the readiness helper subprocess. It must exceed the helper's
+# own inner deadlines (health probes plus the awaited model-catalog discovery,
+# see install_readiness/model_catalog) so degradation stays the helper's
+# non-fatal warning, not a hard subprocess kill.
+READINESS_TIMEOUT_SECONDS = 60
 
 
 def install_user_command(
@@ -451,6 +455,7 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
             "A backend you will not use can be turned off (and drop off this table) with "
             "enabled = false under its [backends.<name>] section in the user config."
         )
+    _print_model_discovery(payload.get("model_discovery"))
     usage_windows = payload.get("usage_windows") or {}
     usage_targets = usage_windows.get("targets") or []
     if usage_targets:
@@ -492,6 +497,37 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
             )
     print()
     return attention_count > 0
+
+
+def _print_model_discovery(discovery: Any) -> None:
+    """Report install-time model-catalog discovery; warnings are non-fatal."""
+
+    if not isinstance(discovery, dict) or discovery.get("skipped"):
+        return
+    backends = discovery.get("backends")
+    entries = {
+        str(name): entry
+        for name, entry in (backends.items() if isinstance(backends, dict) else ())
+        if isinstance(entry, dict)
+    }
+    discovered = {
+        name: entry
+        for name, entry in entries.items()
+        if entry.get("status") == "ok" and entry.get("complete")
+    }
+    attempted = discovery.get("attempted") or []
+    if discovered:
+        summary = ", ".join(
+            f"{name} ({entry.get('models', 0)} models)"
+            for name, entry in sorted(discovered.items())
+        )
+        ok(f"Discovered live model catalogs: {summary}")
+    elif attempted:
+        info("No live model catalogs discovered; static model suggestions remain in effect")
+    for warning in discovery.get("warnings") or []:
+        message = warning.get("message") if isinstance(warning, dict) else None
+        if message:
+            warn(str(message))
 
 
 def _main_install(args: argparse.Namespace) -> int:

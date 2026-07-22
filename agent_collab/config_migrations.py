@@ -20,7 +20,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-CURRENT_CONFIG_SCHEMA = 9
+CURRENT_CONFIG_SCHEMA = 10
 
 _logger = logging.getLogger("agent_collab.config")
 
@@ -295,6 +295,90 @@ def _migrate_v8_to_v9(data: Dict[str, Any], source: str, scope: str = "generic")
     return data
 
 
+# v10 retires the Antigravity display-name model namespace. The shipped
+# manifests and defaults now use the canonical ids that ``agy models`` emits;
+# this table maps every display name any earlier release ever shipped (the
+# full historical set — verified against the manifest git history) to its
+# canonical id. Values outside this table pass through unchanged: the model
+# option is a free-form string and an unknown value is the user's own choice,
+# never something a migration may guess about.
+_ANTIGRAVITY_MODEL_RENAMES: Dict[str, str] = {
+    "Gemini 3.6 Flash (Medium)": "gemini-3.6-flash-medium",
+    "Gemini 3.6 Flash (High)": "gemini-3.6-flash-high",
+    "Gemini 3.6 Flash (Low)": "gemini-3.6-flash-low",
+    "Gemini 3.5 Flash (Medium)": "gemini-3.5-flash-medium",
+    "Gemini 3.5 Flash (High)": "gemini-3.5-flash-high",
+    "Gemini 3.5 Flash (Low)": "gemini-3.5-flash-low",
+    "Gemini 3.1 Pro (Low)": "gemini-3.1-pro-low",
+    "Gemini 3.1 Pro (High)": "gemini-3.1-pro-high",
+    # The Antigravity UI labels Sonnet 4.6 "(Thinking)" but its catalog id
+    # carries no suffix; Opus 4.6 keeps the "-thinking" suffix in the catalog.
+    "Claude Sonnet 4.6 (Thinking)": "claude-sonnet-4-6",
+    "Claude Opus 4.6 (Thinking)": "claude-opus-4-6-thinking",
+    "GPT-OSS 120B (Medium)": "gpt-oss-120b-medium",
+}
+_ANTIGRAVITY_BACKENDS = ("antigravity_cli", "antigravity_sdk")
+
+
+def _apply_antigravity_model_renames(root: Any) -> List[str]:
+    """Rewrite known display-name model values to canonical ids in place.
+
+    Works on plain dicts (in-memory migration) and tomlkit documents (the
+    comment-preserving write-back) alike — both are mutable mappings. Returns
+    a human-readable description per rename; an empty list means the config
+    carried no display-name model values.
+    """
+
+    renamed: List[str] = []
+
+    def rename(container: Any, key: str, location: str) -> None:
+        value = container.get(key)
+        if isinstance(value, str) and value in _ANTIGRAVITY_MODEL_RENAMES:
+            replacement = _ANTIGRAVITY_MODEL_RENAMES[value]
+            container[key] = replacement
+            renamed.append(f"{location}: {value!r} -> {replacement!r}")
+
+    backends = root.get("backends") if isinstance(root, Mapping) else None
+    if isinstance(backends, Mapping):
+        for canonical in _ANTIGRAVITY_BACKENDS:
+            section = backends.get(canonical)
+            if not isinstance(section, Mapping):
+                continue
+            options = section.get("options")
+            if isinstance(options, Mapping):
+                rename(options, "model", f"backends.{canonical}.options.model")
+            personae = section.get("agents")
+            if isinstance(personae, Mapping):
+                for persona_id, persona in personae.items():
+                    if not isinstance(persona, Mapping):
+                        continue
+                    persona_options = persona.get("options")
+                    if isinstance(persona_options, Mapping):
+                        rename(
+                            persona_options,
+                            "model",
+                            f"backends.{canonical}.agents.{persona_id}.options.model",
+                        )
+    usage_windows = root.get("usage_windows") if isinstance(root, Mapping) else None
+    if isinstance(usage_windows, Mapping):
+        targets = usage_windows.get("targets")
+        if isinstance(targets, Mapping):
+            for target_id, target in targets.items():
+                if not isinstance(target, Mapping):
+                    continue
+                if target.get("backend") in _ANTIGRAVITY_BACKENDS:
+                    rename(target, "model", f"usage_windows.targets.{target_id}.model")
+    return renamed
+
+
+def _migrate_v9_to_v10(data: Dict[str, Any], source: str, scope: str = "generic") -> Dict[str, Any]:
+    """v10 retires Antigravity display-name model values for canonical ids."""
+
+    for description in _apply_antigravity_model_renames(data):
+        _logger.warning("%s: migrated antigravity model name %s", source, description)
+    return data
+
+
 # The v7 built-in agents and their effective canonical backends, used to
 # rewrite workflow references to agents the user file never redefined.
 _V7_BUILTIN_AGENTS = {
@@ -518,6 +602,7 @@ MIGRATIONS: Dict[int, Callable[[Dict[str, Any], str, str], Dict[str, Any]]] = {
     6: _migrate_v6_to_v7,
     7: _migrate_v7_to_v8,
     8: _migrate_v8_to_v9,
+    9: _migrate_v9_to_v10,
 }
 
 
@@ -539,9 +624,10 @@ def migrate_user_config_file(path: Path) -> UserConfigWriteBack:
     layer, never a replacement for it. The original file is backed up to
     ``<name>.bak`` first, and user comments and formatting are preserved: an
     existing ``schema_version`` value is updated through tomlkit, a missing
-    one is prepended as text. Every migration so far only stamps the version;
-    a future shape-changing migration must implement a comment-preserving
-    counterpart here before it ships.
+    one is prepended as text. Shape-changing migrations implement a
+    comment-preserving counterpart here (the pre-v8 structural rewrite; the
+    v10 antigravity model renames) — a future one must do the same before it
+    ships.
     """
 
     path = path.expanduser()
@@ -564,11 +650,17 @@ def migrate_user_config_file(path: Path) -> UserConfigWriteBack:
     backup_path = path.with_name(path.name + ".bak")
     atomic_write_private_text(backup_path, text)
     if int(raw_version) < 8:
-        new_text = _rewrite_backend_first(text, migrated, path)
-    elif "schema_version" in data:
-        new_text = _stamp_schema_version(text, path)
+        # The structural rewrite regenerates agents/backends/workflows from
+        # the fully migrated data, so the v10 model renames ride along for
+        # those sections. Sections it deliberately leaves as original text
+        # (e.g. a hand-added [usage_windows]) still need the rename pass —
+        # otherwise a display-name model would be frozen on disk under the
+        # freshly stamped current version and never migrated again.
+        new_text = _apply_model_renames_to_rendered(
+            _rewrite_backend_first(text, migrated, path), path
+        )
     else:
-        new_text = f"schema_version = {CURRENT_CONFIG_SCHEMA}\n\n{text}"
+        new_text = _rewrite_model_renames_and_stamp(text, data, path)
     atomic_write_private_text(path, new_text)
     return UserConfigWriteBack(
         status="migrated",
@@ -635,14 +727,77 @@ def _rewrite_backend_first(text: str, migrated: Mapping[str, Any], path: Path) -
     return rendered
 
 
+def _apply_model_renames_to_rendered(text: str, path: Path) -> str:
+    """Apply pending antigravity model renames to already-rendered config text.
+
+    Post-pass for the pre-v8 structural rewrite, whose output can still carry
+    display-name models in sections it keeps as original text. Returns the
+    text unchanged when nothing needs renaming. Callers reach here only via
+    ``_rewrite_backend_first``, which already required tomlkit.
+    """
+
+    from .config import load_toml_text
+
+    data = load_toml_text(text, source=str(path))
+    probe = copy.deepcopy(dict(data))
+    if not _apply_antigravity_model_renames(probe):
+        return text
+    try:
+        import tomlkit
+    except ImportError:
+        raise ConfigMigrationError(
+            f"{path}: migrating antigravity model names to schema v{CURRENT_CONFIG_SCHEMA} "
+            "requires tomlkit; install it with: pip install tomlkit"
+        ) from None
+    document = tomlkit.parse(text)
+    _apply_antigravity_model_renames(document)
+    return tomlkit.dumps(document)
+
+
+def _rewrite_model_renames_and_stamp(text: str, data: Mapping[str, Any], path: Path) -> str:
+    """Write back a v8/v9 config: apply the v10 model renames (if any values
+    need them) and stamp the schema version, preserving comments/formatting.
+
+    A config with no display-name model values reduces to the plain version
+    stamp (keeping the tomlkit-free bootstrap fallback usable); one that needs
+    renames is a shape change and requires tomlkit, per the write-back
+    contract in ``migrate_user_config_file``.
+    """
+
+    probe = copy.deepcopy(dict(data))
+    if not _apply_antigravity_model_renames(probe):
+        if "schema_version" in data:
+            return _stamp_schema_version(text, path)
+        return f"schema_version = {CURRENT_CONFIG_SCHEMA}\n\n{text}"
+    try:
+        import tomlkit
+    except ImportError:
+        raise ConfigMigrationError(
+            f"{path}: migrating antigravity model names to schema v{CURRENT_CONFIG_SCHEMA} "
+            "requires tomlkit; install it with: pip install tomlkit"
+        ) from None
+    document = tomlkit.parse(text)
+    _apply_antigravity_model_renames(document)
+    had_version = "schema_version" in document
+    if had_version:
+        document["schema_version"] = CURRENT_CONFIG_SCHEMA
+    rendered = tomlkit.dumps(document)
+    if not had_version:
+        # Appending a top-level scalar after tables would parse inside the
+        # last table; a missing version is prepended as text instead.
+        rendered = f"schema_version = {CURRENT_CONFIG_SCHEMA}\n\n{rendered}"
+    return rendered
+
+
 def _stamp_schema_version(text: str, path: Path) -> str:
     """Update an existing ``schema_version`` value, preserving everything else.
 
     tomlkit is the primary, fully style-preserving writer. The regex fallback
-    is exactly equivalent while every migration only stamps the version — it
-    lets a bootstrap Python without tomlkit (fresh machine, dotfile-carried
-    old config) still complete install. The first shape-changing migration
-    must drop the fallback and require tomlkit here.
+    is exactly equivalent whenever stamping is the only change needed for this
+    file — it lets a bootstrap Python without tomlkit (fresh machine,
+    dotfile-carried old config) still complete install. Shape-changing paths
+    (``_rewrite_backend_first``, ``_rewrite_model_renames_and_stamp`` with
+    pending renames) never route here; they require tomlkit outright.
     """
 
     try:

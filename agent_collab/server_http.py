@@ -98,6 +98,10 @@ class AgentCollabHttpServer:
         print(f"agent-collab daemon listening on {addresses}", flush=True)
         retention_task = self.start_retention_task()
         usage_window_task = self.start_usage_window_task()
+        # Started only after the listener is up: catalog refresh must never
+        # delay daemon readiness, and running sessions are untouched (options
+        # are snapshotted into session settings at start).
+        model_catalog_task = self.start_model_catalog_task()
         try:
             async with server:
                 await server.serve_forever()
@@ -113,6 +117,10 @@ class AgentCollabHttpServer:
                 usage_window_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await usage_window_task
+            if model_catalog_task is not None:
+                model_catalog_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await model_catalog_task
 
     def start_retention_task(self) -> Optional[asyncio.Task]:
         """Start the periodic retention task; None when retention is disabled."""
@@ -140,6 +148,20 @@ class AgentCollabHttpServer:
         )
         return asyncio.get_running_loop().create_task(
             scheduler.run(), name="agent-collab-usage-windows"
+        )
+
+    def start_model_catalog_task(self) -> Optional[asyncio.Task]:
+        """Start the background model-catalog refresher; None outside a full
+        daemon (direct construction in tests passes no daemon config)."""
+
+        if self.daemon_config is None:
+            return None
+        from .model_catalog import ModelCatalogRefresher
+
+        refresher = ModelCatalogRefresher(logger=self._log)
+        self.manager.model_catalog_kick = refresher.kick
+        return asyncio.get_running_loop().create_task(
+            refresher.run(), name="agent-collab-model-catalogs"
         )
 
     async def _retention_loop(self) -> None:
@@ -335,6 +357,7 @@ class AgentCollabHttpServer:
         return await self.manager.describe_options_async(
             Path(options_request.workdir),
             health_refresh=options_request.health_refresh,
+            model_refresh=options_request.model_refresh,
         )
 
     async def _route_start_session(

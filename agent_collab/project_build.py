@@ -90,6 +90,7 @@ _FIELD_SCHEMAS: Dict[Tuple[type, str], Dict[str, Any]] = {
     (StartSessionRequestModel, "workdir"): {"minLength": 1, "pattern": r".*\S.*"},
     (OptionsRequestModel, "workdir"): {"minLength": 1, "pattern": r".*\S.*"},
     (OptionsRequestModel, "health_refresh"): {"enum": ["cached", "fresh"]},
+    (OptionsRequestModel, "model_refresh"): {"enum": ["none", "cached", "fresh"]},
     (PostMessageRequestModel, "text"): {"minLength": 1, "pattern": r".*\S.*"},
     (PostMessageRequestModel, "source"): {"enum": ["human", "referee"]},
     (ReadEventsRequestModel, "cursor"): {"minimum": 0},
