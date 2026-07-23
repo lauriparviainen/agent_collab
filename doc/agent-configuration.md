@@ -452,74 +452,100 @@ Prefer `thinking_level` across providers:
 - xAI CLI accepts `low`, `medium`, `high`, or model-specific `xhigh`; the SDK accepts `none`, `low`, `medium`, or `high`. Both map one effective value to `reasoning_effort`.
 - Codex `reasoning_effort` is kept as a provider-specific alias for compatibility. Claude `thinking_budget_tokens` is kept for advanced raw-token configurations, but should not be combined with `thinking_level`.
 
-## Providers
+## Backend configuration guides
 
-Start with a small set:
+Add the block for each backend you want to configure to the global user file,
+`~/.agent-collab/config.toml` (or `$AGENT_COLLAB_HOME/config.toml`). These
+examples spell out the shipped defaults so each backend can be understood in
+isolation; unchanged fields may be omitted. Run `agent-collab config init` to
+generate all registered sections and `agent-collab config show` to inspect the
+effective result.
 
-```text
-claude
-codex
-antigravity   (cli enabled by default; sdk opt-in)
-xai           (cli enabled by default; sdk opt-in)
-mock
+Values in `env` are passed only to that backend. They are stored as plain text
+in the user config, so protect the file as a secret and use placeholders below.
+When a backend supports the provider's local sign-in, omit its API-key `env`
+line to use that sign-in instead. Restart the daemon after changing its config.
+
+### `claude_cli`
+
+Uses the installed Claude Code CLI and Claude Code's own local sign-in. The
+credential is not stored by agent-collab. See the
+[backend reference](../agent_collab/backends/claude_cli/README.md) for its
+event and option contract.
+
+```toml
+[backends.claude_cli]
+enabled = true
+command = "claude"
+args = ["-p", "--output-format", "stream-json", "--verbose"]
+
+[backends.claude_cli.options]
+model = "opus"
+thinking_level = "high"
+permission_mode = "default"
 ```
 
-The provider (the first half of the canonical backend name) controls event
-parsing and prompt handling. The mechanism (the second half) controls
-execution (see [Backends](#backends)).
+### `claude_sdk`
 
-`command` and `args` on the backend section control process launch.
+Uses `claude-agent-sdk` in-process. It accepts `ANTHROPIC_API_KEY` or the SDK's
+Claude Code sign-in; omit `env` for the latter. See the
+[backend reference](../agent_collab/backends/claude_sdk/README.md).
 
-### `claude`
+```toml
+[backends.claude_sdk]
+enabled = true
+env = { ANTHROPIC_API_KEY = "sk-ant-your-key-here" }
 
-Uses Claude stream JSON parsing.
-
-Default command:
-
-```bash
-claude -p --output-format stream-json --verbose "prompt"
+[backends.claude_sdk.options]
+model = "opus"
+thinking_level = "high"
+permission_mode = "default"
 ```
 
-### `codex`
+### `codex_cli`
 
-Uses Codex JSONL parsing.
+Uses the installed Codex CLI. Codex owns authentication, through either local
+sign-in or an API key; uncomment the `env` line only for backend-specific key
+configuration. See the
+[backend reference](../agent_collab/backends/codex_cli/README.md).
 
-Default command:
+```toml
+[backends.codex_cli]
+enabled = true
+command = "codex"
+args = ["exec", "--json"]
+# env = { OPENAI_API_KEY = "sk-your-key-here" }
 
-```bash
-codex exec --json "prompt"
+[backends.codex_cli.options]
+model = "gpt-5.6-sol"
+thinking_level = "high"
+sandbox = "read-only"
 ```
 
-### `antigravity`
+### `codex_sdk`
 
-Google Antigravity, available on both backends. The `cli` backend is enabled by
-default (reported not-ready and skipped when `agy` is absent); the `sdk` backend
-is opt-in.
+Uses `openai-codex` in-process. It accepts `OPENAI_API_KEY` or Codex local
+sign-in; omit `env` for local sign-in. No `command` or `args` belong on an SDK
+backend. See the
+[backend reference](../agent_collab/backends/codex_sdk/README.md).
 
-- `antigravity_cli` runs `agy -p` in print mode. Requires the `agy` CLI installed
-  and a Google **OAuth sign-in**. agent-collab looks for a cached token or an
-  active account under `~/.gemini/`, but recent `agy` may sign in through the OS
-  keyring, so an unverifiable sign-in is reported as `unknown` — a start warning,
-  never a block. Print mode emits **plain
-  text only** (no JSON, no per-event markers), so its transcript fidelity is
-  intentionally **message-only** — each non-empty output line is one
-  `antigravity` message event; there is no tool/command/file-change structure.
-  The shipped `mode` default is `plan`: read-only, and it does not stall `-p`
-  on the interactive request-review approval prompt. Turns that must write
-  need `mode = "accept-edits"` (which auto-approves edits — the historical
-  default until it deleted files in a nominally read-only review). Choose the
-  SDK backend for structured events.
-- `antigravity_sdk` runs the `google-antigravity` SDK in-process (installed with the project,
-  Python ≥ 3.10, lazy-imported). Needs a **Gemini API key** (`GEMINI_API_KEY` env,
-  or `LocalAgentConfig(api_key=...)`, or Vertex/ADC) — the SDK does **not** use the
-  `~/.gemini` OAuth. It maps typed SDK events to `tool_call`/`command`/`file_change`,
-  degrading to message-only if a turn has no tool calls.
-  `backend_options.antigravity_sdk.mode` is unsupported; mode belongs to
-  `antigravity_cli` only.
+```toml
+[backends.codex_sdk]
+enabled = true
+env = { OPENAI_API_KEY = "sk-your-key-here" }
 
-The two backends authenticate differently (OAuth for `cli`, an API key for
-`sdk`). Auth is the provider's own concern: agent-collab only passes the
-environment through and never manages or logs credentials.
+[backends.codex_sdk.options]
+model = "gpt-5.6-sol"
+thinking_level = "high"
+sandbox = "read-only"
+```
+
+### `antigravity_cli`
+
+Uses the installed `agy` CLI and its Google OAuth sign-in (including sign-in
+cached through the OS keyring). It does not use `GEMINI_API_KEY`. Output is
+message-only, and `mode = "plan"` is the shipped read-only posture. See the
+[backend reference](../agent_collab/backends/antigravity_cli/README.md).
 
 ```toml
 [backends.antigravity_cli]
@@ -527,37 +553,94 @@ enabled = true
 command = "agy"
 args = ["-p"]
 
-# Or the in-process SDK backend (no command):
-[backends.antigravity_sdk]
-enabled = true
+[backends.antigravity_cli.options]
+model = "gemini-3.6-flash-high"
+mode = "plan"
 ```
 
-### `xai`
+### `antigravity_sdk`
 
-xAI's `cli` backend is enabled by default (reported not-ready and skipped when
-`grok` is absent); the `sdk` backend is opt-in. The two are intentionally
-asymmetric. `xai_cli` runs Grok Build headlessly with `streaming-json`, attributes
-text/thought/end/error records, and captures the Grok session ID. Only
-`stopReason=EndTurn` is treated as success; cancelled and other unsuccessful
-terminal reasons become structured fatal errors. The observed 0.2.93 stream
-exposes no typed tool records. `xai_sdk` uses the remote async chat API, maps only
-response content and response identity, requires `XAI_API_KEY`, and does not
-enable tools. Both report resume, interrupt, and tool-gate as false.
+Uses `google-antigravity` in-process and does not reuse the CLI's Google OAuth
+sign-in. For the Gemini API, configure `GEMINI_API_KEY`:
+
+```toml
+[backends.antigravity_sdk]
+enabled = true
+env = { GEMINI_API_KEY = "your-gemini-key-here" }
+
+[backends.antigravity_sdk.options]
+model = "gemini-3.6-flash-high"
+```
+
+For Vertex AI instead, enable its static fields and use Application Default
+Credentials. The explicit credentials-file environment entry is optional when
+standard ADC discovery already works:
+
+```toml
+[backends.antigravity_sdk]
+enabled = true
+env = { GOOGLE_APPLICATION_CREDENTIALS = "/absolute/path/to/credentials.json" }
+vertex = true
+project = "my-gcp-project"
+location = "us-central1"
+
+[backends.antigravity_sdk.options]
+model = "gemini-3.6-flash-high"
+```
+
+Do not combine both examples as duplicate TOML sections. See the
+[backend reference](../agent_collab/backends/antigravity_sdk/README.md) for
+the static-field and event contract.
+
+### `xai_cli`
+
+Uses the installed Grok Build CLI. It accepts `XAI_API_KEY` or Grok's cached
+sign-in under `~/.grok/auth.json`; uncomment `env` only for backend-specific
+key configuration. See the
+[backend reference](../agent_collab/backends/xai_cli/README.md).
 
 ```toml
 [backends.xai_cli]
 enabled = true
 command = "grok"
 args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
+# env = { XAI_API_KEY = "xai-your-key-here" }
+
+[backends.xai_cli.options]
+model = "grok-4.5"
+thinking_level = "high"
+permission_mode = "bypassPermissions"
+sandbox = "read-only"
+```
+
+### `xai_sdk`
+
+Uses the remote `xai-sdk` chat API, requires `XAI_API_KEY`, and exposes no
+coding tools. See the
+[backend reference](../agent_collab/backends/xai_sdk/README.md).
+
+```toml
+[backends.xai_sdk]
+enabled = true
+env = { XAI_API_KEY = "xai-your-key-here" }
+
+[backends.xai_sdk.options]
+model = "grok-4.5"
+thinking_level = "high"
 ```
 
 ### `mock`
 
-A pseudo-backend: `[backends.mock]` defines the agent `mock`, which uses the
-existing mock runner and does not launch a subprocess. The session-level
-`mock` start flag is independent of this section.
+The test-only pseudo-backend does not launch a provider or require
+authentication. The session-level `mock` start flag is independent of this
+section.
 
-Useful for tests and demos.
+```toml
+[backends.mock]
+enabled = true
+```
+
+It is useful for tests and demos.
 
 ### Future: `command-jsonl`
 

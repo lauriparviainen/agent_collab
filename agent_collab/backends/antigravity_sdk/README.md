@@ -22,16 +22,15 @@ disabled Event Window target. CLI `mode` is unsupported. Nothing is inferred
 from CLI argv.
 
 ```toml
-[agents.antigravity_sdk]
-type = "antigravity"
-backend = "sdk"
-env = { GOOGLE_APPLICATION_CREDENTIALS = "/home/me/.config/gcloud/application_default_credentials.json" }
+[backends.antigravity_sdk]
+enabled = true
+env = { GOOGLE_APPLICATION_CREDENTIALS = "/absolute/path/to/credentials.json" }
 vertex = true
 project = "my-gcp-project"
 location = "us-central1"
 
-[agents.antigravity_sdk.options]
-model = "Gemini 3.1 Pro (High)"
+[backends.antigravity_sdk.options]
+model = "gemini-3.6-flash-high"
 ```
 
 ## Events and identity
