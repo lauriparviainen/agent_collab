@@ -5,6 +5,12 @@ chat API, not the local Grok Build coding runtime. It requires `xai-sdk>=1.17,<2
 and `XAI_API_KEY`; imports are lazy and the async client is closed
 deterministically after each collected turn.
 
+Dynamic model discovery uses
+`AsyncClient.models.list_language_models()` and includes canonical names plus
+accepted aliases returned for the authenticated API key. An agent-scoped
+`XAI_API_KEY` is passed explicitly to both discovery and chat turns; otherwise
+both use the SDK's normal process-environment lookup.
+
 [`options.toml`](options.toml) declares accepted MCP/session options;
 [`defaults.toml`](defaults.toml) owns the shipped option values and disabled
 Event Window target.

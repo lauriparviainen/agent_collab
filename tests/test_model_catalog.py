@@ -1,8 +1,8 @@
-"""Hermetic tests for Phase 3 model-catalog wiring (#45).
+"""Hermetic tests for model-catalog serving and lifecycle wiring (#45).
 
-Every path runs against an injected cache directory, fake CLI runner or
-discoverer, fake clock, and fake version resolver — nothing touches real CLIs,
-the network, or the user's agent-collab home.
+Every path runs against an injected cache directory, fake CLI/SDK runner or
+discoverer, fake clock, and fake version resolver — nothing touches real
+providers, optional SDKs, or the user's agent-collab home.
 """
 
 import asyncio
@@ -66,12 +66,13 @@ def _observation(
     complete=True,
     checked=RECENT,
     reason_code=None,
+    source=None,
 ):
     return ModelCatalogObservation(
         backend_id=canonical,
         status=status,
         models=tuple(models),
-        source="cli",
+        source=source or ("sdk" if canonical.endswith("_sdk") else "cli"),
         complete=complete,
         checked_at=checked,
         last_attempt_at=checked,
@@ -99,10 +100,29 @@ class _ScriptedRunner:
         return CliResult(returncode=0, stdout=text)
 
 
-def _service(tmp, *, runner=None, now=None, monotonic=None, min_fresh_interval=60.0):
+class _ScriptedSdkRunner:
+    def __init__(self, responses=None):
+        self.responses = responses or {}
+        self.calls = []
+
+    async def __call__(self, canonical, agent, timeout):
+        self.calls.append(canonical)
+        return self.responses[canonical]
+
+
+def _service(
+    tmp,
+    *,
+    runner=None,
+    sdk_runner=None,
+    now=None,
+    monotonic=None,
+    min_fresh_interval=60.0,
+):
     return ModelCatalogService(
         cache_dir=Path(tmp),
         runner=runner,
+        sdk_runner=sdk_runner,
         now=now or _clock(),
         monotonic=monotonic or (lambda: 0.0),
         min_fresh_interval=min_fresh_interval,
@@ -135,6 +155,19 @@ class ServiceServeTests(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(Path(tmp).stat().st_mode & 0o777, 0o700)
         self.assertEqual(runner.calls, [("agy", "models")])
+
+    def test_fresh_sdk_probe_uses_same_serving_and_cache_contract(self):
+        sdk_runner = _ScriptedSdkRunner(
+            {"codex_sdk": SimpleNamespace(data=[SimpleNamespace(model="gpt-5.6-sol")])}
+        )
+        with TemporaryDirectory() as tmp:
+            service = _service(tmp, sdk_runner=sdk_runner)
+            view = service.serve("codex_sdk", _agent("codex"), version="0.144.4", refresh="fresh")
+            self.assertTrue(view.supported)
+            self.assertEqual(view.observation.source, "sdk")
+            self.assertEqual(view.models, ("gpt-5.6-sol",))
+            self.assertTrue((Path(tmp) / "models_codex_sdk.json").exists())
+        self.assertEqual(sdk_runner.calls, ["codex_sdk"])
 
     def test_fresh_min_interval_gates_repeated_probes(self):
         runner = _ScriptedRunner({"agy": AGY_OUTPUT})
@@ -471,7 +504,13 @@ class DescribeOptionsIntegrationTests(unittest.TestCase):
 
     def test_fresh_probes_only_enabled_supported_backends(self):
         runner = _ScriptedRunner({"agy": AGY_OUTPUT, "grok": GROK_OUTPUT})
-        service = _service(self.cache_dir, runner=runner)
+        sdk_runner = _ScriptedSdkRunner(
+            {
+                "codex_sdk": SimpleNamespace(data=[]),
+                "xai_sdk": [],
+            }
+        )
+        service = _service(self.cache_dir, runner=runner, sdk_runner=sdk_runner)
         payload = self._describe(service, model_refresh="fresh")
         probed = {argv[0] for argv in runner.calls}
         self.assertEqual(probed, {"agy", "grok"})
@@ -483,6 +522,14 @@ class DescribeOptionsIntegrationTests(unittest.TestCase):
         # Both canonical defaults are present in their catalogs: no warnings.
         self.assertEqual(xai["reason_codes"], [])
         self.assertEqual(antigravity["reason_codes"], [])
+        # SDK catalog APIs are advertised but the shipped SDK backends are
+        # disabled, so fresh describe gates them without making a paid call.
+        self.assertTrue(payload["backends"]["codex_sdk"]["model_catalog"]["supported"])
+        self.assertEqual(
+            payload["backends"]["codex_sdk"]["model_catalog"]["probe_gate"],
+            "backend_disabled",
+        )
+        self.assertEqual(sdk_runner.calls, [])
 
     def test_discovery_writes_only_cache_files_never_config(self):
         runner = _ScriptedRunner({"agy": AGY_OUTPUT, "grok": GROK_OUTPUT})
@@ -868,6 +915,34 @@ class RefresherTests(unittest.IsolatedAsyncioTestCase):
 
 
 class InstallDiscoveryTests(unittest.TestCase):
+    def test_enabled_sdk_backend_uses_existing_install_lifecycle(self):
+        config = _refresher_config()
+        config.agents["codex_sdk"] = AgentConfig(
+            id="codex_sdk",
+            type="codex",
+            command="codex",
+            backend="sdk",
+            default_options={"model": "gpt-5.6-sol"},
+        )
+        discoverer = _FakeDiscoverer(
+            {
+                "antigravity_cli": ("ok", ("gemini-9.9-flash-high",)),
+                "codex_sdk": ("ok", ("gpt-5.6-sol",)),
+                "xai_cli": ("ok", ("grok-4.5",)),
+            }
+        )
+        with TemporaryDirectory() as tmp:
+            summary = run_install_discovery(
+                config,
+                {"antigravity_cli": "9.9", "codex_sdk": "0.144.4", "xai_cli": "9.9"},
+                service=_service(tmp),
+                discoverer=discoverer,
+            )
+            cached = json.loads((Path(tmp) / "models_codex_sdk.json").read_text(encoding="utf-8"))
+            self.assertEqual(cached["source"], "sdk")
+        self.assertEqual(summary["attempted"], ["antigravity_cli", "codex_sdk", "xai_cli"])
+        self.assertEqual(discoverer.calls, summary["attempted"])
+
     def test_warns_only_for_ok_complete_catalog_missing_default(self):
         config = _refresher_config()
         discoverer = _FakeDiscoverer(

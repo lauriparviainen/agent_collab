@@ -4,7 +4,11 @@ Registered as `claude_sdk` (`type="claude"`, `backend="sdk"`). It calls `claude-
 
 ## Selection and requirements
 
-Select with `backend="sdk"`. Python and the `claude-agent-sdk` wheel are required. Authentication may use `ANTHROPIC_API_KEY` or the SDK's Claude Code sign-in; agent-collab never stores credentials.
+Select with `backend="sdk"`. Python and `claude-agent-sdk>=0.2.126,<0.3.0`
+are required. Authentication may use `ANTHROPIC_API_KEY` or the SDK's Claude
+Code sign-in; agent-collab never stores credentials. The Agent SDK exposes
+model selection but no public model-list API, so catalog suggestions remain
+static.
 
 ## Options
 

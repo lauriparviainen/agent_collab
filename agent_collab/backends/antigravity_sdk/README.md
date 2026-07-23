@@ -4,7 +4,13 @@ Registered as `antigravity_sdk` (`type="antigravity"`, `backend="sdk"`). It uses
 
 ## Selection and requirements
 
-Select with `backend="sdk"`. The `google-antigravity` wheel and Gemini/Vertex credentials are required. The probe recognizes `GEMINI_API_KEY`; absence is `unknown` because ADC may work. Credentials are never stored by agent-collab. Vertex uses Google Application Default Credentials, including gcloud's standard `~/.config/gcloud/application_default_credentials.json` file.
+Select with `backend="sdk"`. `google-antigravity>=0.1.7,<0.2.0` and
+Gemini/Vertex credentials are required. The probe recognizes `GEMINI_API_KEY`;
+absence is `unknown` because ADC may work. Credentials are never stored by
+agent-collab. Vertex uses Google Application Default Credentials, including
+gcloud's standard `~/.config/gcloud/application_default_credentials.json`
+file. The SDK exposes model targets but no public model-list API, so catalog
+suggestions remain static.
 
 ## Options
 

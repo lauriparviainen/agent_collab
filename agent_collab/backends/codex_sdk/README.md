@@ -4,7 +4,13 @@ Registered as `codex_sdk` (`type="codex"`, `backend="sdk"`). It uses `openai-cod
 
 ## Selection and requirements
 
-Select with `backend="sdk"`. The `openai-codex` wheel and its runtime are required. Authentication uses `OPENAI_API_KEY` or Codex local sign-in and remains provider-managed.
+Select with `backend="sdk"`. `openai-codex>=0.144.4,<0.145.0` and its runtime
+are required. Authentication uses `OPENAI_API_KEY` or Codex local sign-in and
+remains provider-managed. Dynamic model discovery uses the SDK's public
+`AsyncCodex.models()` catalog. Agent-scoped environment values are passed to
+both discovery and turns. If Codex reports a `next_cursor` that its public SDK
+cannot follow, agent-collab marks the observation incomplete and retains
+static suggestions rather than treating the first page as authoritative.
 
 ## Options
 

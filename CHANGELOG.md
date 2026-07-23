@@ -13,7 +13,9 @@ into a detailed work log.
 
 ## [Unreleased]
 
-- Serve dynamically discovered model catalogs (#45, Phase 3, CLI backends).
+## [0.11.0] - 2026-07-23 - Dynamic model discovery
+
+- Serve dynamically discovered model catalogs (#45).
   `agent_collab_describe_options` and `POST /options` accept
   `model_refresh = "none" | "cached" | "fresh"` (default `cached`; `none` and
   `cached` never contact a provider, `fresh` is rate-limited per backend) and
@@ -27,6 +29,16 @@ into a detailed work log.
   `configured_default_not_in_catalog` reason code (also echoed in start
   responses) but never changes which model runs. Discovery writes only the
   cache, never config; running sessions keep their snapshotted options.
+  Phase 4 extends the same observation/cache contract to SDK backends:
+  `codex_sdk` and `xai_sdk` use their public model catalogs, while
+  `claude_sdk` and `antigravity_sdk` explicitly fall back to static suggestions
+  because their SDKs expose no catalog API. Optional SDK floors are refreshed
+  to Claude Agent SDK 0.2.126, OpenAI Codex SDK 0.144.4, and Antigravity SDK
+  0.1.7; xAI remains at 1.17. SDK discovery and turns now share the same
+  agent-scoped credentials, SDK cache fingerprints include a non-reversible
+  digest of effective agent/process API keys, and a paginated Codex response
+  remains incomplete and non-authoritative instead of producing false
+  catalog warnings.
 
 - Retire the Antigravity display-name model namespace (#45). Shipped
   `antigravity_cli`/`antigravity_sdk` manifests now use the canonical ids the

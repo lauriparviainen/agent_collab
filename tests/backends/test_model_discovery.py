@@ -1,16 +1,18 @@
-"""Hermetic tests for CLI model-catalog discovery.
+"""Hermetic tests for CLI/SDK model-catalog discovery.
 
-Every probe here runs through a fake async runner and a fake clock, so nothing
-touches a real CLI, the SDK, or the network.
+Every provider probe here runs through a fake async runner and a fake clock, so
+nothing touches a real CLI, SDK package, or network.
 """
 
 import asyncio
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from unittest import mock
 
 from agent_collab.backends.common.model_discovery import (
     DEFAULT_TTL_SECONDS,
@@ -19,10 +21,14 @@ from agent_collab.backends.common.model_discovery import (
     ModelCatalogCache,
     ModelCatalogObservation,
     ModelDiscoverer,
+    SdkUnavailableError,
     compute_source_fingerprint,
     default_cli_runner,
+    default_sdk_runner,
+    parse_codex_sdk_models,
     parse_agy_models,
     parse_grok_models,
+    parse_xai_sdk_models,
 )
 
 
@@ -50,6 +56,24 @@ class _Runner:
 
     async def __call__(self, argv, timeout):
         self.calls.append((tuple(argv), timeout))
+        if self.delay_event is not None:
+            await self.delay_event.wait()
+        if self.raises is not None:
+            raise self.raises
+        return self.result
+
+
+class _SdkRunner:
+    """Fake SDK runner: replays one raw provider response or exception."""
+
+    def __init__(self, result=None, *, raises=None, delay_event=None):
+        self.result = result
+        self.raises = raises
+        self.delay_event = delay_event
+        self.calls = []
+
+    async def __call__(self, canonical, agent, timeout):
+        self.calls.append((canonical, agent, timeout))
         if self.delay_event is not None:
             await self.delay_event.wait()
         if self.raises is not None:
@@ -98,6 +122,33 @@ class ParserTests(unittest.TestCase):
         out = "Available models:\n  * grok-4.5\n\nNext steps:\n  * upgrade now\n"
         self.assertEqual(parse_grok_models(out), ("grok-4.5",))
 
+    def test_codex_sdk_parser_uses_model_option_values(self):
+        response = SimpleNamespace(
+            data=[
+                SimpleNamespace(model="gpt-5.6-sol", id="internal-1"),
+                SimpleNamespace(model="gpt-5.6-luna", id="internal-2"),
+            ]
+        )
+        self.assertEqual(parse_codex_sdk_models(response), ("gpt-5.6-sol", "gpt-5.6-luna"))
+
+    def test_codex_sdk_parser_tolerates_mapping_shape(self):
+        response = {"data": [{"model": "gpt-5.6-sol"}, {"displayName": "noise"}]}
+        self.assertEqual(parse_codex_sdk_models(response), ("gpt-5.6-sol",))
+
+    def test_xai_sdk_parser_includes_canonical_names_and_aliases(self):
+        response = [
+            SimpleNamespace(name="grok-4-0709", aliases=["grok-4", "grok-4.5"]),
+            SimpleNamespace(name="grok-4-fast", aliases=["grok-4.5", "grok-fast"]),
+        ]
+        self.assertEqual(
+            parse_xai_sdk_models(response),
+            ("grok-4-0709", "grok-4", "grok-4.5", "grok-4-fast", "grok-fast"),
+        )
+
+    def test_sdk_parsers_reject_prose_and_malformed_shapes(self):
+        self.assertEqual(parse_codex_sdk_models({"data": "not-a-list"}), ())
+        self.assertEqual(parse_xai_sdk_models("not-a-model-sequence"), ())
+
 
 class FingerprintTests(unittest.TestCase):
     def test_fingerprint_is_stable_and_config_sensitive(self):
@@ -114,7 +165,7 @@ class FingerprintTests(unittest.TestCase):
         new = compute_source_fingerprint("antigravity_cli", _agent(command="agy"), "1.2.0")
         self.assertNotEqual(old, new)
 
-    def test_secret_value_rotation_does_not_invalidate_fingerprint(self):
+    def test_cli_secret_value_rotation_does_not_invalidate_fingerprint(self):
         # Same key, different secret value -> same fingerprint (a token refresh
         # must not blow away the catalog, which does not depend on the token).
         a = _agent(command="grok", env={"PATH": "/usr/bin", "XAI_API_KEY": "sk-1"})
@@ -123,6 +174,34 @@ class FingerprintTests(unittest.TestCase):
             compute_source_fingerprint("xai_cli", a, "0.2.101"),
             compute_source_fingerprint("xai_cli", b, "0.2.101"),
         )
+
+    def test_sdk_agent_key_rotation_invalidates_account_scoped_fingerprint(self):
+        cases = (
+            ("xai_sdk", "XAI_API_KEY", "1.17.0"),
+            ("codex_sdk", "OPENAI_API_KEY", "0.144.4"),
+        )
+        for canonical, key, version in cases:
+            with self.subTest(canonical=canonical):
+                a = _agent(env={key: "account-a-key"})
+                b = _agent(env={key: "account-b-key"})
+                self.assertNotEqual(
+                    compute_source_fingerprint(canonical, a, version),
+                    compute_source_fingerprint(canonical, b, version),
+                )
+
+    def test_sdk_process_key_rotation_invalidates_account_scoped_fingerprint(self):
+        cases = (
+            ("xai_sdk", "XAI_API_KEY", "1.17.0"),
+            ("codex_sdk", "OPENAI_API_KEY", "0.144.4"),
+        )
+        for canonical, key, version in cases:
+            with self.subTest(canonical=canonical):
+                agent = _agent()
+                with mock.patch.dict(os.environ, {key: "process-account-a"}):
+                    first = compute_source_fingerprint(canonical, agent, version)
+                with mock.patch.dict(os.environ, {key: "process-account-b"}):
+                    second = compute_source_fingerprint(canonical, agent, version)
+                self.assertNotEqual(first, second)
 
     def test_non_secret_field_change_invalidates_fingerprint(self):
         # Distinct non-secret identity (e.g. a different project) must not collapse
@@ -142,8 +221,13 @@ class FingerprintTests(unittest.TestCase):
 
 
 class DiscoverTests(unittest.TestCase):
-    def _discover(self, canonical, agent, *, runner, version="1.0"):
-        discoverer = ModelDiscoverer(runner=runner, now=_fixed_clock())
+    def _discover(self, canonical, agent, *, runner=None, sdk_runner=None, version="1.0"):
+        kwargs = {"now": _fixed_clock()}
+        if runner is not None:
+            kwargs["runner"] = runner
+        if sdk_runner is not None:
+            kwargs["sdk_runner"] = sdk_runner
+        discoverer = ModelDiscoverer(**kwargs)
         return asyncio.run(discoverer.discover(canonical, agent, version=version))
 
     def test_successful_probe_yields_ok_complete_catalog(self):
@@ -168,6 +252,68 @@ class DiscoverTests(unittest.TestCase):
         self.assertFalse(obs.complete)
         self.assertEqual(obs.reason_code, "no_cli_catalog_command")
         self.assertEqual(runner.calls, [])
+
+    def test_sdk_without_catalog_api_is_unsupported_without_probing(self):
+        runner = _SdkRunner([SimpleNamespace(name="should-not-run", aliases=[])])
+        obs = self._discover("claude_sdk", _agent(), sdk_runner=runner)
+        self.assertEqual(obs.status, "unsupported")
+        self.assertEqual(obs.source, "sdk")
+        self.assertEqual(obs.reason_code, "no_sdk_catalog_api")
+        self.assertEqual(runner.calls, [])
+
+    def test_codex_sdk_success_uses_public_catalog_response(self):
+        runner = _SdkRunner(SimpleNamespace(data=[SimpleNamespace(model="gpt-5.6-sol")]))
+        obs = self._discover("codex_sdk", _agent(command="codex"), sdk_runner=runner)
+        self.assertEqual(obs.status, "ok")
+        self.assertTrue(obs.complete)
+        self.assertEqual(obs.source, "sdk")
+        self.assertEqual(obs.models, ("gpt-5.6-sol",))
+        self.assertEqual(runner.calls[0][0], "codex_sdk")
+
+    def test_codex_sdk_paginated_response_is_non_authoritative(self):
+        runner = _SdkRunner(
+            SimpleNamespace(
+                data=[SimpleNamespace(model="gpt-5.6-sol")],
+                next_cursor="page-2",
+            )
+        )
+        obs = self._discover("codex_sdk", _agent(command="codex"), sdk_runner=runner)
+        self.assertEqual(obs.status, "ok")
+        self.assertFalse(obs.complete)
+        self.assertEqual(obs.models, ("gpt-5.6-sol",))
+        self.assertEqual(obs.reason_code, "catalog_paginated")
+
+    def test_xai_sdk_success_includes_aliases(self):
+        runner = _SdkRunner([SimpleNamespace(name="grok-4-0709", aliases=["grok-4.5"])])
+        obs = self._discover("xai_sdk", _agent(), sdk_runner=runner)
+        self.assertEqual(obs.status, "ok")
+        self.assertEqual(obs.models, ("grok-4-0709", "grok-4.5"))
+
+    def test_sdk_timeout_never_raises(self):
+        async def slow(_canonical, _agent_config, _timeout):
+            await asyncio.sleep(30)
+
+        discoverer = ModelDiscoverer(sdk_runner=slow, now=_fixed_clock(), per_probe_timeout=0.01)
+        obs = asyncio.run(discoverer.discover("xai_sdk", _agent(), version="1"))
+        self.assertEqual(obs.status, "timeout")
+        self.assertEqual(obs.reason_code, "probe_timeout")
+
+    def test_missing_sdk_is_unavailable(self):
+        runner = _SdkRunner(raises=SdkUnavailableError("missing"))
+        obs = self._discover("codex_sdk", _agent(), sdk_runner=runner)
+        self.assertEqual(obs.status, "unavailable")
+        self.assertEqual(obs.reason_code, "sdk_not_importable")
+
+    def test_sdk_auth_or_transport_failure_is_error(self):
+        runner = _SdkRunner(raises=RuntimeError("unauthenticated"))
+        obs = self._discover("xai_sdk", _agent(), sdk_runner=runner)
+        self.assertEqual(obs.status, "error")
+        self.assertEqual(obs.reason_code, "probe_failed")
+
+    def test_empty_sdk_response_is_error_not_raise(self):
+        obs = self._discover("codex_sdk", _agent(), sdk_runner=_SdkRunner({"data": []}))
+        self.assertEqual(obs.status, "error")
+        self.assertEqual(obs.reason_code, "empty_or_unparseable")
 
     def test_timeout_never_raises_and_marks_timeout(self):
         runner = _Runner(raises=asyncio.TimeoutError())
@@ -316,6 +462,72 @@ class RealRunnerTests(unittest.TestCase):
 
         elapsed = asyncio.run(run())
         self.assertLess(elapsed, 5.0)  # killed near the deadline, not after 30s
+
+
+class DefaultSdkRunnerTests(unittest.TestCase):
+    def test_codex_runner_uses_public_models_api_and_effective_runtime(self):
+        captured = {}
+        module = ModuleType("openai_codex")
+
+        class CodexConfig:
+            def __init__(self, **kwargs):
+                captured["config"] = kwargs
+
+        class AsyncCodex:
+            def __init__(self, config):
+                captured["client_config"] = config
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def models(self, *, include_hidden):
+                captured["include_hidden"] = include_hidden
+                return SimpleNamespace(data=[SimpleNamespace(model="gpt-5.6-sol")])
+
+        module.CodexConfig = CodexConfig
+        module.AsyncCodex = AsyncCodex
+        agent = _agent(command="codex", env={"OPENAI_API_KEY": "secret"})
+        with (
+            mock.patch.dict(sys.modules, {"openai_codex": module}),
+            mock.patch(
+                "agent_collab.backends.common.model_discovery.shutil.which",
+                return_value="/opt/codex",
+            ),
+        ):
+            response = asyncio.run(default_sdk_runner("codex_sdk", agent, 8.0))
+        self.assertEqual(parse_codex_sdk_models(response), ("gpt-5.6-sol",))
+        self.assertEqual(captured["config"]["codex_bin"], "/opt/codex")
+        self.assertEqual(captured["config"]["env"]["OPENAI_API_KEY"], "secret")
+        self.assertFalse(captured["include_hidden"])
+
+    def test_xai_runner_passes_agent_scoped_key_and_closes_client(self):
+        captured = {}
+        module = ModuleType("xai_sdk")
+
+        class AsyncClient:
+            def __init__(self, **kwargs):
+                captured["kwargs"] = kwargs
+                self.models = SimpleNamespace(list_language_models=self._list)
+
+            async def _list(self):
+                return [SimpleNamespace(name="grok-4-0709", aliases=["grok-4.5"])]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                captured["closed"] = True
+
+        module.AsyncClient = AsyncClient
+        agent = _agent(env={"XAI_API_KEY": "secret"})
+        with mock.patch.dict(sys.modules, {"xai_sdk": module}):
+            response = asyncio.run(default_sdk_runner("xai_sdk", agent, 3.0))
+        self.assertEqual(parse_xai_sdk_models(response), ("grok-4-0709", "grok-4.5"))
+        self.assertEqual(captured["kwargs"], {"timeout": 3.0, "api_key": "secret"})
+        self.assertTrue(captured["closed"])
 
 
 class CacheTests(unittest.TestCase):

@@ -9,3 +9,10 @@ class CodexSdkLiveTests(LiveBackendTestCase):
         events = self.run_live()
         self.assert_message(events)
         self.assert_session_kind(events, "thread")
+
+    def test_model_catalog(self):
+        observation = self.discover_live_models()
+        self.assertEqual(observation.status, "ok")
+        self.assertEqual(observation.source, "sdk")
+        self.assertTrue(observation.complete)
+        self.assertTrue(observation.models)

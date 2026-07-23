@@ -1,7 +1,8 @@
 import asyncio
+import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 from agent_collab import backends
@@ -14,6 +15,7 @@ from agent_collab.backends.base import (
 )
 from agent_collab.backends.common.health import xai_api_key_credentials
 from agent_collab.backends.xai_sdk import XaiSdkBackend
+from agent_collab.backends.xai_sdk.backend import _default_turn_stream
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.options import StartOptionsError, describe_options, validate_start_backends
 
@@ -194,6 +196,65 @@ class XaiSdkBackendTests(unittest.TestCase):
         self.assertFalse(
             any(event.type in {"tool_call", "command", "file_change"} for event in events)
         )
+
+    def test_production_stream_uses_agent_scoped_api_key(self):
+        captured = {}
+        module = ModuleType("xai_sdk")
+        chat_module = ModuleType("xai_sdk.chat")
+
+        class FakeChat:
+            def append(self, message):
+                captured["message"] = message
+
+            async def sample(self):
+                return SimpleNamespace(
+                    content="fixture response",
+                    id="resp-agent-env",
+                    finish_reason="STOP",
+                )
+
+        class FakeAsyncClient:
+            def __init__(self, **kwargs):
+                captured["client_kwargs"] = kwargs
+                self.chat = SimpleNamespace(create=self._create)
+
+            def _create(self, **kwargs):
+                captured["chat_kwargs"] = kwargs
+                return FakeChat()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                captured["closed"] = True
+
+        module.AsyncClient = FakeAsyncClient
+        chat_module.user = lambda prompt: ("user", prompt)
+        agent = AgentConfig(
+            id="xai",
+            type="xai",
+            backend="sdk",
+            env={"XAI_API_KEY": "agent-scoped-key"},
+        )
+        runner = XaiSdkBackend(turn_stream=_default_turn_stream).create_runner(
+            agent,
+            False,
+            {"model": "grok-4.5", "thinking_level": "high"},
+        )
+        with mock.patch.dict(
+            sys.modules,
+            {"xai_sdk": module, "xai_sdk.chat": chat_module},
+        ):
+            events = asyncio.run(_collect(runner))
+
+        self.assertEqual(captured["client_kwargs"], {"api_key": "agent-scoped-key"})
+        self.assertEqual(
+            captured["chat_kwargs"],
+            {"model": "grok-4.5", "reasoning_effort": "high"},
+        )
+        self.assertEqual(captured["message"], ("user", "fixture prompt"))
+        self.assertTrue(captured["closed"])
+        self.assertTrue(any(event.type == "message" for event in events))
 
     def test_finish_reason_and_content_control_outcome(self):
         async def stream_with(response):

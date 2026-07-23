@@ -6,7 +6,7 @@ So importing this module (which the registry does at startup) costs nothing, and
 a missing wheel degrades to an *unavailable* backend (a fast, hinted start
 rejection) rather than an import crash.
 
-**API shapes CONFIRMED live** against ``google-antigravity`` 0.1.5 (Python 3.12)
+**API shapes CONFIRMED live** against ``google-antigravity`` 0.1.7 (Python 3.12)
 — see ``tests/fixtures/antigravity/sdk-introspection.json``:
 
 - ``from google.antigravity import Agent, LocalAgentConfig``; ``Agent`` is an
@@ -531,7 +531,7 @@ def _map_sdk_config(agent: AgentConfig) -> Dict[str, Any]:
 def _default_agent_factory(agent: AgentConfig, options: Dict[str, Any], workdir: Path) -> Any:
     """Lazily import the real SDK and build its agent context manager.
 
-    Names/kwargs confirmed against google-antigravity 0.1.6. The working dir is a
+    Names/kwargs confirmed against google-antigravity 0.1.7. The working dir is a
     workspace. Authentication comes from GEMINI_API_KEY or Vertex Application
     Default Credentials and is never managed here.
     """

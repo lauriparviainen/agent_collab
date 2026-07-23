@@ -19,3 +19,10 @@ class XaiSdkLiveTests(LiveBackendTestCase):
         self.assertFalse(
             any(event.type in {"tool_call", "command", "file_change"} for event in events)
         )
+
+    def test_model_catalog(self):
+        observation = self.discover_live_models()
+        self.assertEqual(observation.status, "ok")
+        self.assertEqual(observation.source, "sdk")
+        self.assertTrue(observation.complete)
+        self.assertIn("grok-4.5", observation.models)

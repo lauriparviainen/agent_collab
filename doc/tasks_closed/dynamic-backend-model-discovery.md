@@ -1,8 +1,21 @@
 # Dynamic backend model discovery at installation and startup
 
-**Status:** Open — architecture approved with final dual-review clarifications incorporated. Refined 2026-07-22 with CLI-first/SDK-later phasing and lifecycle clarifications (fingerprint version, cache precedence, cache directory, refresh cost gate). Default handling revised same day from catalog-based suppression to **warn-only** (catalog membership is not proof: option values are aliases/display names, catalogs list canonical IDs); discovery is cache-only and never writes config. **Phase 1 shipped 2026-07-22** (option contract shifted `model.allowed` → `suggested`; non-blank model validation; tests); the CLI capability spike is recorded in §2. **Phase 2 shipped 2026-07-22** (`backends/common/model_discovery.py`: observation contract, fingerprint, `agy`/`grok` probes + parsers, in-flight dedup, cache + `cache_dir`). **Phase 3 implemented 2026-07-22** (`model_catalog.py` serving layer; `model_refresh` on `describe_options`/`api_schema` with `model_catalog` + `effective.option_schema` fields; daemon background refresher with transition logging and start-response warning echo; installer discovery with non-fatal degradation). **Antigravity display-name namespace retired 2026-07-22** (config schema v10): the shipped `antigravity_*` manifests/defaults now use the canonical ids `agy models` emits (`gemini-3.6-flash-high`, verified accepted by `agy --model` live), and the v9→v10 migration renames the historical display-name model values in user configs (backend options, personae, antigravity usage-window targets) — see `_ANTIGRAVITY_MODEL_RENAMES` in `config_migrations.py`. The warn-only default policy is unchanged and still applies to any backend whose option namespace may diverge from its catalog. Part 2 (Phase 4, SDK source) remains open; the SDK's acceptance of canonical ids is asserted by the unified namespace but is verified only for the CLI — the Phase 4 spike must confirm it.
+**Status:** Closed — all four phases implemented. Phase 1 shifted model
+validation to advisory suggestions; Phases 2–3 added CLI discovery, caching,
+serving, daemon/installer lifecycle integration, and warn-only default
+reporting. Phase 4 shipped 2026-07-23: `codex_sdk` and `xai_sdk` now discover
+models through their public SDK catalog APIs, while `claude_sdk` and
+`antigravity_sdk` explicitly report `unsupported` and retain static
+suggestions because their installed SDKs expose no catalog API. SDK dependency
+floors were refreshed to the versions used for the spike. Discovery remains
+cache-only and never changes configured or running-session model choices.
+Post-review hardening on 2026-07-23 aligned SDK discovery/turn credentials,
+made SDK fingerprints account-sensitive without storing secrets, and kept
+paginated Codex responses non-authoritative.
 
 **Created:** 2026-07-22.
+
+**Closed:** 2026-07-23.
 
 **Issue:** [#45](https://github.com/lauriparviainen/agent_collab/issues/45)
 
@@ -117,11 +130,19 @@ Keep model catalog discovery strictly separate from side-effect-free health prob
       checked_at: str  # ISO-8601 UTC string (e.g. "2026-07-22T00:51:21Z")
       last_success_at: Optional[str]  # ISO-8601 UTC string or None
       last_attempt_at: str  # ISO-8601 UTC string
-      source_fingerprint: str  # SHA-256 of non-secret effective config + provider version
+      source_fingerprint: str  # SHA-256 of effective catalog identity + provider version
       reason_code: Optional[str] = None
   ```
 - **Not side-effect-free.** Unlike `health.py` probes (standard-library only, never a model call), catalog discovery runs the provider's `models` listing, which — per the `health.py` contract note — can **require live auth and incur cost**. This is exactly why discovery is a separate module gated behind explicit refresh modes, install, and background startup, and is never invoked under `model_refresh` `"none"`/`"cached"`.
-- **Effective Configuration & Security Fingerprinting**: `discover_models(agent_config)` accepts the effective backend configuration (executable paths, API endpoints, project, region) **and the resolved provider CLI/SDK version**. It strips secret tokens/headers before computing a SHA-256 digest for `source_fingerprint`. The version is included so a provider upgrade (which can change the catalog with identical config) invalidates a cached catalog.
+- **Effective Configuration & Security Fingerprinting**:
+  `discover_models(agent_config)` accepts the effective backend configuration
+  (executable paths, API endpoints, project, region) **and the resolved
+  provider CLI/SDK version**. It strips secret tokens/headers before computing
+  `source_fingerprint`; discoverable SDKs additionally contribute a
+  non-reversible digest of the effective agent/process API key so an account
+  change invalidates an account-scoped catalog without persisting the key. The
+  version is included so a provider upgrade (which can change the catalog with
+  identical config) invalidates a cached catalog.
 - **Capability Matrix**: Attempt discovery from the CLI wherever the backend's
   binary exposes a model-listing command; where none exists the backend returns
   `status="unsupported"` and falls back to static suggestions. Discovery is
@@ -137,6 +158,20 @@ Keep model catalog discovery strictly separate from side-effect-free health prob
   | `xai_cli` | `grok models` (per CLI docs) | TBD in spike | TBD in spike (capture exact format) | `cli` — likely supported |
   | `codex_cli` | TBD in spike (confirm a `codex … models`-style command exists) | TBD | TBD | `cli` if a command exists, else `unsupported` |
   | `claude_cli` | **none** — the `claude` CLI has no `models` subcommand; `--model` takes aliases (`opus`/`sonnet`/`fable`) or full IDs (`claude-opus-4-8`) | n/a | n/a | `unsupported` for the CLI source; a catalog would require the auth'd Models API (`GET /v1/models`), out of scope for the CLI milestone |
+
+  Verified SDK capabilities (source/API inspection 2026-07-23):
+
+  | Backend | SDK catalog API | Auth | Response shape | Discovery source |
+  | --- | --- | --- | --- | --- |
+  | `claude_sdk` | None. Claude Agent SDK wraps Claude Code sessions and exposes no model-list operation. | n/a | n/a | `unsupported` + static suggestions |
+  | `codex_sdk` | `AsyncCodex.models(include_hidden=False)` | Existing Codex login/session through the configured local Codex runtime | `ModelListResponse.data[*].model`; non-empty `next_cursor` means incomplete because the public method exposes no cursor argument | `sdk` — supported |
+  | `antigravity_sdk` | None. `ModelTarget` accepts a configured model id but does not enumerate the provider catalog. | n/a | n/a | `unsupported` + static suggestions |
+  | `xai_sdk` | `AsyncClient.models.list_language_models()` | `XAI_API_KEY` | language-model `name` plus aliases | `sdk` — supported |
+
+  The SDK probe uses the same per-probe deadline, observation, fingerprint,
+  cache, serve-precedence, and failure-isolation contracts as CLI discovery.
+  Import/API incompatibilities and provider/auth failures become structured
+  non-authoritative observations rather than escaping into callers.
 
   Note the **naming-mismatch** this table originally exposed and which the
   warn-only default policy anticipates: `agy models` emits canonical IDs
@@ -211,11 +246,20 @@ SDK source slots into the Phase 2 interface.
 2. Connect daemon startup non-blocking refresh task and installer discovery awaiter with non-fatal degradation.
 3. Wire the warn-only default check: install warning, `configured_default_not_in_catalog` reason code in `describe_options`/start responses, and the catalog-transition daemon log/event.
 
-### Part 2 — SDK backends (follow-up)
+### Part 2 — SDK backends (completed 2026-07-23)
 
 #### Phase 4: SDK source
-1. Spike each SDK's model-list endpoint (`claude_sdk`, `codex_sdk`, `antigravity_sdk`, `xai_sdk`) and its auth requirements.
-2. Implement `source="sdk"` behind the existing `ModelCatalogObservation` interface, with separate credentialed integration tests. No changes to the option contract, cache format, or MCP/API surface.
+1. Completed the SDK capability spike; results are recorded in the SDK table
+   under [§2 Capability Matrix](#2-decoupled-model-discovery-module).
+2. Implemented `source="sdk"` for `codex_sdk` and `xai_sdk` behind the existing
+   `ModelCatalogObservation` interface. `claude_sdk` and `antigravity_sdk`
+   return explicit `unsupported` observations because no public catalog API is
+   available. Added hermetic fake-SDK coverage and separate credentialed live
+   catalog tests without changing the option contract, cache format, or
+   MCP/API surface. Post-review hardening made discovery use the same
+   agent-scoped credentials as turns, keyed SDK caches to a non-reversible
+   effective-credential digest, and prevented paginated Codex first pages from
+   being marked complete.
 
 ## Verification plan
 
@@ -225,4 +269,7 @@ SDK source slots into the Phase 2 interface.
 - Warn-only default cases: the `configured_default_not_in_catalog` warning fires **only** on an `ok`+`complete` catalog that omits the configured default; it does **not** fire on `unsupported`/`unavailable`/`timeout`/`error`/incomplete/`stale`/fingerprint-mismatch observations; the warning clears when the model reappears or the fingerprint changes; the configured default is passed through unchanged in **every** case, warning or not; discovery output is never written to any config file; a catalog change after session start does not alter the running session's snapshotted options.
 
 ### Integration tests
-- Credentialed CLI backend model discovery probes verifying real `models` listing against live provider environments (Part 1). SDK-endpoint probes added with Part 2.
+- Credentialed CLI backend model discovery probes verify real `models`
+  listings against live provider environments. Credentialed SDK catalog tests
+  cover `codex_sdk` and `xai_sdk`; unsupported SDK backends remain covered
+  hermetically.

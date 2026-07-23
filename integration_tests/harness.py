@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, Optional, Set
 
 from agent_collab import backends
 from agent_collab.backends.base import CREDENTIALS_MISSING, HEALTH_UNAVAILABLE
+from agent_collab.backends.common.model_discovery import ModelDiscoverer
 from agent_collab.config import AgentConfig, builtin_config, load_user_config
 from agent_collab.daemon import SessionManager
 from agent_collab.paths import AgentCollabHome, GlobalDataPaths
@@ -113,12 +114,12 @@ class LiveBackendTestCase(unittest.TestCase):
 
         return None
 
-    def run_live(self, prompt: Optional[str] = None) -> list:
+    def live_agent(self) -> AgentConfig:
         config = builtin_config()
         source = config.agents[self.provider]
         backend_config = dict(source.backend_config)
         backend_config.update(self.agent_backend_config())
-        agent = AgentConfig(
+        return AgentConfig(
             id=source.id,
             type=source.type,
             command=source.command,
@@ -129,6 +130,9 @@ class LiveBackendTestCase(unittest.TestCase):
             backend=self.backend_id,
             backend_config=backend_config,
         )
+
+    def run_live(self, prompt: Optional[str] = None) -> list:
+        agent = self.live_agent()
         backend = backends.get_backend(self.provider, self.backend_id)
         options = backend.normalize_options(agent, self.requested_options())
         runner = backend.create_runner(agent, True, options)
@@ -158,6 +162,30 @@ class LiveBackendTestCase(unittest.TestCase):
                         os.environ.pop(key, None)
                     else:
                         os.environ[key] = value
+
+    def discover_live_models(self):
+        """Run the backend's credentialed model-list endpoint without logging payloads."""
+
+        agent = self.live_agent()
+        backend = backends.get_backend(self.provider, self.backend_id)
+        version = backend.probe().version
+        overrides = dict(self.environment_overrides())
+        previous = {key: os.environ.get(key) for key in overrides}
+        os.environ.update(overrides)
+        try:
+            return asyncio.run(
+                ModelDiscoverer().discover(
+                    f"{self.provider}_{self.backend_id}",
+                    agent,
+                    version=version,
+                )
+            )
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def assert_message(self, events: list) -> None:
         errors = [event.text for event in events if event.type == "error"]

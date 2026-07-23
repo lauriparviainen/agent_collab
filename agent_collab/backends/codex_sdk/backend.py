@@ -1,7 +1,7 @@
 """The Codex ``sdk`` backend (``openai-codex``), lazy + first-class.
 
 The real ``openai_codex`` module is imported lazily by the production turn
-factory.  The verified ``openai-codex==0.1.0b3`` async surface is:
+factory. The verified ``openai-codex==0.144.4`` async surface is:
 
 ``async with AsyncCodex() -> await thread_start(...) -> await thread.run(...)``.
 
@@ -39,6 +39,7 @@ from ..base import (
 )
 from ..common.health import codex_api_key_credentials, probe_sdk_backend
 from ..common.sdk import (
+    agent_environment,
     backend_unavailable_event,
     close_async_stream,
     package_version,
@@ -451,17 +452,21 @@ async def _default_item_stream(
         raise _backend_unavailable("openai_codex has no compatible AsyncCodex.thread_start API")
 
     client_config = None
+    config_kwargs: Dict[str, Any] = {}
     codex_bin = _configured_codex_bin(agent)
     if codex_bin:
+        config_kwargs["codex_bin"] = codex_bin
+    env = agent_environment(agent)
+    if env:
+        config_kwargs["env"] = env
+    if config_kwargs:
         config_cls = getattr(openai_codex, "CodexConfig", None)
         if config_cls is None:
             raise _backend_unavailable("openai_codex has no compatible CodexConfig API")
         try:
-            client_config = config_cls(codex_bin=codex_bin)
+            client_config = config_cls(**config_kwargs)
         except Exception as exc:
-            raise _backend_unavailable(
-                f"could not configure Codex executable {codex_bin!r}: {exc}"
-            ) from exc
+            raise _backend_unavailable(f"could not configure Codex SDK client: {exc}") from exc
 
     mapped = _map_sdk_options(options)
     start_kwargs: Dict[str, Any] = {"cwd": str(workdir)}

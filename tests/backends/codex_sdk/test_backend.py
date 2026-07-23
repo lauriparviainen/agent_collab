@@ -1,6 +1,6 @@
 """Codex ``sdk`` backend tests (real-shape fakes; no live model call).
 
-The fake object graph mirrors ``openai-codex==0.1.0b3``: a collected
+The fake object graph mirrors ``openai-codex==0.144.4``: a collected
 ``TurnResult`` owns ``ThreadItem`` root models, and the thread id lives on the
 ``AsyncThread`` rather than individual items.  The production-factory tests
 replace the imported module with an async-context-manager fake, so the verified
@@ -392,8 +392,9 @@ class CodexProductionFactoryTests(unittest.TestCase):
         module = ModuleType("openai_codex")
 
         class FakeCodexConfig:
-            def __init__(self, *, codex_bin=None):
+            def __init__(self, *, codex_bin=None, env=None):
                 self.codex_bin = codex_bin
+                self.env = env
 
         class FakeSandbox:
             read_only = object()
@@ -467,6 +468,7 @@ class CodexProductionFactoryTests(unittest.TestCase):
             type="codex",
             command="codex",
             backend="sdk",
+            env={"OPENAI_API_KEY": "agent-scoped-key"},
         )
         runner = CodexSdkRunner(
             configured_agent,
@@ -503,6 +505,10 @@ class CodexProductionFactoryTests(unittest.TestCase):
         self.assertTrue(state["open_during_run"])
         self.assertFalse(state["open"])
         self.assertEqual(state["client_config"].codex_bin, "/opt/codex/bin/codex")
+        self.assertEqual(
+            state["client_config"].env,
+            {"OPENAI_API_KEY": "agent-scoped-key"},
+        )
         self.assertEqual(
             state["thread_start"],
             {"cwd": "/workspace", "model": "gpt-5-codex", "sandbox": sandbox.workspace_write},

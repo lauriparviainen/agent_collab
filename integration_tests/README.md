@@ -22,6 +22,10 @@ makes an additional paid request. The test uses the fixed application prompt,
 the owner-only empty daemon workdir, and the normal session manager path; it
 does not wait for a wall-clock schedule.
 
+`codex_sdk` and `xai_sdk` additionally exercise their authenticated public
+model-list endpoints. Claude Agent SDK and Google Antigravity have no public
+catalog method, so their SDK backends keep static model suggestions.
+
 Selection can also use comma-separated canonical names in
 `AGENT_COLLAB_IT_BACKENDS`, such as `claude_sdk,codex_cli`.
 `AGENT_COLLAB_IT_STRICT=1` makes missing dependencies/credentials for explicitly

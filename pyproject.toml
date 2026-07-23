@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-collab"
-version = "0.10.1"
+version = "0.11.0"
 description = "Local supervisor for bounded collaboration across configured AI agents."
 readme = "README.md"
 license = "Apache-2.0"
@@ -24,29 +24,28 @@ dependencies = [
     "tomlkit>=0.13,<1",
 ]
 
-# SDK ranges are bounded to the minor line verified during Stage 5.1 A1 on
-# Python 3.12.13. Codex needs an explicit prerelease floor; 0.1.0b3 installs the
-# pinned openai-codex-cli-bin 0.137.0a4 runtime dependency. xai-sdk 1.17.0 was
-# verified for AsyncClient/chat.sample and deterministic async context-manager
-# cleanup. `all` must stay the exact union of the provider extras; a hermetic
-# test enforces this.
+# SDK ranges are bounded to the compatible release lines verified on Python
+# 3.12.13. The 2026-07-23 refresh covers Claude 0.2.126, Codex 0.144.4,
+# Antigravity 0.1.7, and xAI 1.17.0, including the Codex/xAI model-list APIs.
+# `all` must stay the exact union of the provider extras; a hermetic test
+# enforces this.
 [project.optional-dependencies]
 claude = [
-    "claude-agent-sdk>=0.2.114,<0.3.0",
+    "claude-agent-sdk>=0.2.126,<0.3.0",
 ]
 codex = [
-    "openai-codex>=0.1.0b3,<0.2.0",
+    "openai-codex>=0.144.4,<0.145.0",
 ]
 antigravity = [
-    "google-antigravity>=0.1.5,<0.2.0",
+    "google-antigravity>=0.1.7,<0.2.0",
 ]
 xai = [
     "xai-sdk>=1.17,<2",
 ]
 all = [
-    "claude-agent-sdk>=0.2.114,<0.3.0",
-    "openai-codex>=0.1.0b3,<0.2.0",
-    "google-antigravity>=0.1.5,<0.2.0",
+    "claude-agent-sdk>=0.2.126,<0.3.0",
+    "openai-codex>=0.144.4,<0.145.0",
+    "google-antigravity>=0.1.7,<0.2.0",
     "xai-sdk>=1.17,<2",
 ]
 dev = [

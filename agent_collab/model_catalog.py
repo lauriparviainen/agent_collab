@@ -1,6 +1,6 @@
 """Model-catalog serving, background refresh, and install-time discovery.
 
-Phase 3 wiring for dynamic backend model discovery (#45). This module decides
+Phases 3–4 wiring for dynamic backend model discovery (#45). This module decides
 *what to serve* — a fresh successful catalog, else the last-known-good catalog
 flagged ``stale``, else static suggestions — while
 ``backends/common/model_discovery.py`` decides *how to observe*. The split
@@ -35,18 +35,19 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from .backends.common.model_discovery import (
-    CLI_DISCOVERY,
     DEFAULT_PROBE_TIMEOUT,
     DEFAULT_TTL_SECONDS,
+    DISCOVERABLE_BACKENDS,
     STATUS_ERROR,
     STATUS_OK,
     CliRunner,
     ModelCatalogCache,
     ModelCatalogObservation,
     ModelDiscoverer,
+    SdkRunner,
     ServedCatalog,
-    cli_discovery_spec,
     compute_source_fingerprint,
+    discovery_source,
 )
 from .events import utc_timestamp
 from .paths import GlobalDataPaths
@@ -195,6 +196,7 @@ class ModelCatalogService:
         *,
         cache_dir: CacheDirSource = None,
         runner: Optional[CliRunner] = None,
+        sdk_runner: Optional[SdkRunner] = None,
         now: Callable[[], str] = utc_timestamp,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
         per_probe_timeout: float = DEFAULT_PROBE_TIMEOUT,
@@ -203,6 +205,7 @@ class ModelCatalogService:
     ) -> None:
         self._cache_dir = cache_dir
         self._runner = runner
+        self._sdk_runner = sdk_runner
         self._now = now
         self._ttl = ttl_seconds
         self._probe_timeout = per_probe_timeout
@@ -284,14 +287,15 @@ class ModelCatalogService:
         """Serve one backend's catalog under the requested refresh mode.
 
         ``"none"`` and ``"cached"`` are strictly local: cache read only, no
-        network/CLI call of any kind. ``"fresh"`` probes inline when the
+        provider call of any kind. ``"fresh"`` probes inline when the
         backend is discoverable, enabled (``allow_probe``), and outside the
         minimum re-probe interval; a failed fresh probe serves the
         last-known-good catalog flagged ``stale``."""
 
         if refresh not in MODEL_REFRESH_MODES:
             raise ValueError("model_refresh must be 'none', 'cached', or 'fresh'")
-        supported = cli_discovery_spec(canonical_backend) is not None
+        source = discovery_source(canonical_backend)
+        supported = source is not None
         if not supported:
             # No discovery source means no cache entry can exist; skip the
             # cache entirely (this also keeps the serve path safe for
@@ -389,6 +393,8 @@ class ModelCatalogService:
         kwargs: Dict[str, Any] = {"now": self._now, "per_probe_timeout": self._probe_timeout}
         if self._runner is not None:
             kwargs["runner"] = self._runner
+        if self._sdk_runner is not None:
+            kwargs["sdk_runner"] = self._sdk_runner
         discoverer = ModelDiscoverer(**kwargs)
         try:
             return asyncio.run(
@@ -403,7 +409,8 @@ class ModelCatalogService:
                 backend_id=canonical_backend,
                 status=STATUS_ERROR,
                 models=(),
-                source="cli",
+                source=discovery_source(canonical_backend)
+                or ("sdk" if canonical_backend.endswith("_sdk") else "cli"),
                 complete=False,
                 checked_at=now,
                 last_attempt_at=now,
@@ -457,8 +464,7 @@ def start_catalog_warnings(
     """Echo the ``configured_default_not_in_catalog`` warning into a start.
 
     Cache-only (``refresh="cached"``): a start never probes a catalog, and
-    backends without a CLI listing command are skipped entirely — so
-    ``claude_cli``/``codex_cli`` keep their never-probed start contract. Any
+    backends without a verified CLI/SDK listing API are skipped entirely. Any
     internal failure yields no warnings rather than failing the start."""
 
     from . import backends as backend_registry
@@ -471,7 +477,7 @@ def start_catalog_warnings(
         try:
             agent = config.agents[agent_id]
             canonical = backend_registry.backend_name(agent.type, backend_id)
-            if cli_discovery_spec(canonical) is None:
+            if discovery_source(canonical) is None:
                 continue
             backend = backend_registry.get_backend(agent.type, backend_id)
             default = configured_default_model(agent, backend)
@@ -558,7 +564,7 @@ class ModelCatalogRefresher:
 
     async def refresh_once(self) -> None:
         config = await asyncio.to_thread(self._load_config)
-        for canonical in sorted(CLI_DISCOVERY):
+        for canonical in DISCOVERABLE_BACKENDS:
             # Derived default agents exist only for enabled backends, so a
             # disabled backend is skipped without any probe.
             agent = config.agents.get(canonical)
@@ -660,7 +666,7 @@ def run_install_discovery(
 
     active_service = service or default_service()
     requests = []
-    for canonical in sorted(CLI_DISCOVERY):
+    for canonical in DISCOVERABLE_BACKENDS:
         agent = config.agents.get(canonical)
         if agent is None:  # disabled backends have no derived agent; never probed
             continue

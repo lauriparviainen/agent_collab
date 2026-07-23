@@ -1,6 +1,6 @@
 """Antigravity `sdk` backend tests.
 
-The SDK's API shapes were CONFIRMED live against google-antigravity 0.1.5 (see
+The SDK's API shapes were confirmed against google-antigravity 0.1.7 (see
 tests/fixtures/antigravity/sdk-introspection.json); only a live *chat* is blocked
 (it needs a Gemini API key agent-collab does not manage). The event mapper is
 driven by a fake agent built to the confirmed protocol: async ``resolve()``
@@ -483,9 +483,9 @@ class NativeRuntimeProbeTests(unittest.TestCase):
         return BackendHealth(
             status="ok",
             credentials="ok",
-            version="0.1.5",
+            version="0.1.7",
             checked_at="t",
-            checks={"dependency": {"status": "present", "version": "0.1.5"}},
+            checks={"dependency": {"status": "present", "version": "0.1.7"}},
         )
 
     def test_glibc_comparison_is_injectable(self):

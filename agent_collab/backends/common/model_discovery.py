@@ -1,4 +1,4 @@
-"""Dynamic backend model-catalog discovery (CLI source).
+"""Dynamic backend model-catalog discovery (CLI and SDK sources).
 
 Unlike ``health.py`` probes — standard-library only, never a model call — catalog
 discovery runs the provider's ``models`` *listing* command, which per the
@@ -7,15 +7,14 @@ a separate module, gated behind explicit refresh modes/install/background
 startup, and driven by injectable dependencies (an async CLI runner and a clock)
 so tests never touch real CLIs or the network.
 
-Scope here is Part 1 / Phase 2: the ``ModelCatalogObservation`` contract, the
-non-secret ``source_fingerprint`` (config + resolved provider version), the
-``source="cli"`` probes with per-backend tolerant parsers, in-flight
-deduplication, and local cache storage. Wiring into MCP/API/daemon/installer is
-Phase 3. Only backends whose CLI exposes a listing command are discoverable
-(verified live 2026-07-22: ``antigravity_cli`` -> ``agy models`` and
-``xai_cli`` -> ``grok models``, both local/no-auth; ``codex_cli`` and
-``claude_cli`` have no such command -> ``unsupported`` + static fallback).
-Discovery never writes configuration and never raises into the caller.
+The Phase 2 CLI sources are ``antigravity_cli`` (``agy models``) and
+``xai_cli`` (``grok models``). Phase 4 adds the public SDK listing surfaces:
+``codex_sdk`` (``AsyncCodex.models()``) and ``xai_sdk``
+(``AsyncClient.models.list_language_models()``). ``claude-agent-sdk`` and
+``google-antigravity`` expose model selection but no catalog method, so their
+SDK backends honestly remain ``unsupported`` + static fallback. All provider
+imports are lazy, tests inject fake runners, discovery never writes
+configuration, and failures never raise into callers.
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +34,7 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Sequence, 
 
 from ...events import utc_timestamp
 from ...paths import atomic_write_private_text
+from .sdk import agent_environment
 
 SCHEMA_VERSION = 1
 DEFAULT_TTL_SECONDS = 24 * 60 * 60.0
@@ -54,17 +55,17 @@ STATUS_TIMEOUT = "timeout"
 STATUS_ERROR = "error"
 
 # Config keys whose *value* is a secret. The fingerprint only stores a one-way
-# SHA-256 digest (never the payload), so this is not leak prevention — it keeps
-# the cache key stable across credential rotation (a refreshed token must not
-# invalidate a catalog that does not depend on which token was used) while a
-# change to a non-secret identity field still re-keys. Matched as case-folded
+# SHA-256 digest (never the payload), so this is not leak prevention. It keeps
+# CLI cache keys stable across credential rotation, while SDK catalogs add a
+# separate non-reversible credential-identity digest because their visible
+# models can vary by account. A change to a non-secret identity field also
+# re-keys. Matched as case-folded
 # substrings; the value is redacted (not the key dropped) so a config that
 # merely *has* a secret-named field stays distinguishable from one that does
 # not. ``authorization`` (not bare ``auth``) and the omission of ``credential``
 # avoid false positives on non-secret routing/identity fields like ``auth_url``
 # and ``GOOGLE_APPLICATION_CREDENTIALS`` (a file path). Precise, per-field secret
-# classification is a backend-parser concern deferred to the SDK backends
-# (Phase 4), which actually carry endpoints/projects/keys.
+# classification is backend-specific for SDK credential identity below.
 _SECRET_MARKERS = (
     "token",
     "key",
@@ -111,6 +112,9 @@ class CliResult:
 # An injectable async CLI runner: given argv and a per-probe deadline, return a
 # CliResult, or raise asyncio.TimeoutError (deadline) / OSError (exec failure).
 CliRunner = Callable[[Sequence[str], float], Awaitable[CliResult]]
+# SDK runners return the provider response object. Parsing stays separate so
+# provider API drift is tested without importing an optional SDK.
+SdkRunner = Callable[[str, Any, float], Awaitable[Any]]
 
 
 @dataclass(frozen=True)
@@ -124,7 +128,7 @@ class ModelCatalogObservation:
     complete: bool
     checked_at: str  # ISO-8601 UTC
     last_attempt_at: str  # ISO-8601 UTC
-    source_fingerprint: str  # SHA-256 of non-secret effective config + version
+    source_fingerprint: str  # SHA-256 of effective catalog identity + version
     schema_version: int = SCHEMA_VERSION
     last_success_at: Optional[str] = None  # ISO-8601 UTC or None
     reason_code: Optional[str] = None
@@ -217,6 +221,15 @@ class CliDiscoverySpec:
     parser: Callable[[str], Tuple[str, ...]]
 
 
+@dataclass(frozen=True)
+class SdkDiscoverySpec:
+    """How to parse one discoverable SDK backend's model-list response."""
+
+    backend_id: str
+    parser: Callable[[Any], Tuple[str, ...]]
+    complete: Optional[Callable[[Any], bool]] = None
+
+
 def _dedupe(values: Any) -> Tuple[str, ...]:
     """Order-preserving de-dup of tokens that match the model-id shape.
 
@@ -271,6 +284,77 @@ def parse_grok_models(text: str) -> Tuple[str, ...]:
     return _dedupe(models)
 
 
+def _field(value: Any, name: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def parse_codex_sdk_models(response: Any) -> Tuple[str, ...]:
+    """Parse ``AsyncCodex.models()``.
+
+    The public ``ModelListResponse.data`` entries carry both an internal ``id``
+    and the model option value in ``model``. Only ``model`` is accepted here:
+    display names and internal ids are not asserted to be valid thread-start
+    values.
+    """
+
+    data = _field(response, "data")
+    if not isinstance(data, (list, tuple)):
+        return ()
+    return _dedupe(
+        model for item in data for model in (_field(item, "model"),) if isinstance(model, str)
+    )
+
+
+def parse_xai_sdk_models(response: Any) -> Tuple[str, ...]:
+    """Parse ``AsyncClient.models.list_language_models()``.
+
+    xAI returns canonical ``name`` plus accepted aliases. Both are useful model
+    identifiers for the chat SDK, so the catalog contains the canonical name
+    followed by its aliases, with stable de-duplication.
+    """
+
+    if not isinstance(response, (list, tuple)):
+        # Protobuf repeated containers implement Sequence without necessarily
+        # inheriting from list/tuple. Exclude strings/mappings, then tolerate
+        # any other iterable response.
+        if isinstance(response, (str, bytes, Mapping)):
+            return ()
+        try:
+            response = tuple(response)
+        except TypeError:
+            return ()
+    values = []
+    for item in response:
+        name = _field(item, "name")
+        if isinstance(name, str):
+            values.append(name)
+        aliases = _field(item, "aliases")
+        if isinstance(aliases, (str, bytes, Mapping)) or aliases is None:
+            continue
+        try:
+            values.extend(alias for alias in aliases if isinstance(alias, str))
+        except TypeError:
+            continue
+    return _dedupe(values)
+
+
+def _codex_sdk_catalog_complete(response: Any) -> bool:
+    """False when Codex says another model-list page exists.
+
+    ``AsyncCodex.models`` 0.144.4 exposes no cursor argument even though its
+    public ``ModelListResponse`` carries ``next_cursor``. A non-empty cursor
+    therefore means the result must remain non-authoritative rather than
+    claiming the first page is a complete provider catalog.
+    """
+
+    cursor = _field(response, "next_cursor")
+    if cursor is None and isinstance(response, Mapping):
+        cursor = response.get("nextCursor")
+    return cursor is None or cursor == ""
+
+
 # Only these backends have a verified local CLI listing command. Any canonical
 # backend absent from this map returns ``status="unsupported"``.
 CLI_DISCOVERY: Dict[str, CliDiscoverySpec] = {
@@ -288,9 +372,37 @@ CLI_DISCOVERY: Dict[str, CliDiscoverySpec] = {
     ),
 }
 
+# Public SDK catalog surfaces verified against the shipped dependency ranges.
+# Claude Agent SDK is a Claude Code subprocess wrapper with no model-list API;
+# google-antigravity exposes ModelTarget configuration but no catalog API.
+SDK_DISCOVERY: Dict[str, SdkDiscoverySpec] = {
+    "codex_sdk": SdkDiscoverySpec(
+        backend_id="codex_sdk",
+        parser=parse_codex_sdk_models,
+        complete=_codex_sdk_catalog_complete,
+    ),
+    "xai_sdk": SdkDiscoverySpec(
+        backend_id="xai_sdk",
+        parser=parse_xai_sdk_models,
+    ),
+}
+DISCOVERABLE_BACKENDS = tuple(sorted((*CLI_DISCOVERY, *SDK_DISCOVERY)))
+
 
 def cli_discovery_spec(canonical_backend: str) -> Optional[CliDiscoverySpec]:
     return CLI_DISCOVERY.get(canonical_backend)
+
+
+def sdk_discovery_spec(canonical_backend: str) -> Optional[SdkDiscoverySpec]:
+    return SDK_DISCOVERY.get(canonical_backend)
+
+
+def discovery_source(canonical_backend: str) -> Optional[str]:
+    if canonical_backend in CLI_DISCOVERY:
+        return "cli"
+    if canonical_backend in SDK_DISCOVERY:
+        return "sdk"
+    return None
 
 
 def _strip_secrets(mapping: Any) -> Dict[str, Any]:
@@ -310,15 +422,43 @@ def _strip_secrets(mapping: Any) -> Dict[str, Any]:
     return redacted
 
 
+_SDK_CREDENTIAL_ENV: Dict[str, Tuple[str, ...]] = {
+    "codex_sdk": ("OPENAI_API_KEY",),
+    "xai_sdk": ("XAI_API_KEY",),
+}
+
+
+def _sdk_credential_identity(canonical_backend: str, agent_config: Any) -> Dict[str, str]:
+    """Return non-reversible digests for effective SDK API-key credentials.
+
+    SDK catalogs can vary by account. The ordinary config payload redacts
+    secret values, but SDK cache identity must still change when an agent- or
+    process-scoped key changes. Only a SHA-256 digest is fed into the outer
+    source fingerprint; neither the key nor this intermediate digest is stored.
+    Provider-managed local-login identity has no stable public identifier and
+    remains bounded by the normal catalog TTL.
+    """
+
+    agent_env = agent_environment(agent_config)
+    identity: Dict[str, str] = {}
+    for name in _SDK_CREDENTIAL_ENV.get(canonical_backend, ()):
+        value = agent_env.get(name) or os.environ.get(name)
+        if isinstance(value, str) and value:
+            identity[name] = hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()
+    return identity
+
+
 def compute_source_fingerprint(
     canonical_backend: str, agent_config: Any, version: Optional[str]
 ) -> str:
-    """SHA-256 of the non-secret effective config plus the resolved provider
-    version. The version is included so a provider upgrade (which can change the
-    catalog with identical config) invalidates a cached catalog. Secret env and
-    ``backend_config`` values are redacted first. Never raises: a malformed
-    config falls back to a digest of its ``repr`` so discovery always produces an
-    observation rather than propagating an exception into the caller."""
+    """SHA-256 of effective catalog identity plus the provider version.
+
+    Secret config values are redacted. Discoverable SDKs additionally
+    contribute a digest of their effective agent/process API key so an account
+    change invalidates an account-scoped catalog without persisting the key.
+    Never raises: malformed config falls back to a digest of its ``repr`` so
+    discovery always produces an observation.
+    """
 
     try:
         payload = {
@@ -327,6 +467,7 @@ def compute_source_fingerprint(
             "args": list(getattr(agent_config, "args", []) or []),
             "env": _strip_secrets(getattr(agent_config, "env", None)),
             "backend_config": _strip_secrets(getattr(agent_config, "backend_config", None)),
+            "sdk_credential_identity": _sdk_credential_identity(canonical_backend, agent_config),
             "version": version,
         }
         blob = json.dumps(payload, sort_keys=True, default=str)
@@ -398,8 +539,87 @@ async def default_cli_runner(argv: Sequence[str], timeout: float) -> CliResult:
     )
 
 
+class SdkUnavailableError(RuntimeError):
+    """The optional SDK package/runtime needed for discovery is unavailable."""
+
+
+class SdkIncompatibleError(RuntimeError):
+    """The installed SDK lacks the public catalog API agent-collab expects."""
+
+
+async def _run_codex_sdk_catalog(agent_config: Any) -> Any:
+    try:
+        import openai_codex  # type: ignore
+    except ImportError as exc:
+        raise SdkUnavailableError("openai_codex is not importable") from exc
+
+    async_codex = getattr(openai_codex, "AsyncCodex", None)
+    config_cls = getattr(openai_codex, "CodexConfig", None)
+    if async_codex is None or not callable(getattr(async_codex, "models", None)):
+        raise SdkIncompatibleError("openai_codex has no compatible AsyncCodex.models API")
+    if config_cls is None:
+        raise SdkIncompatibleError("openai_codex has no compatible CodexConfig API")
+
+    config_kwargs: Dict[str, Any] = {}
+    command = getattr(agent_config, "command", None)
+    if isinstance(command, str) and command.strip():
+        resolved = shutil.which(command.strip())
+        if resolved:
+            # Match the turn backend: prefer the project's configured Codex
+            # runtime, with the SDK-bundled runtime as fallback.
+            config_kwargs["codex_bin"] = resolved
+    env = agent_environment(agent_config)
+    if env:
+        config_kwargs["env"] = env
+    try:
+        client = async_codex(config_cls(**config_kwargs))
+    except Exception as exc:
+        raise SdkIncompatibleError("could not construct the Codex SDK client") from exc
+    async with client as codex:
+        models = getattr(codex, "models", None)
+        if not callable(models):
+            raise SdkIncompatibleError("openai_codex has no compatible models API")
+        return await models(include_hidden=False)
+
+
+async def _run_xai_sdk_catalog(agent_config: Any, timeout: float) -> Any:
+    try:
+        from xai_sdk import AsyncClient  # type: ignore
+    except ImportError as exc:
+        raise SdkUnavailableError("xai_sdk is not importable") from exc
+
+    kwargs: Dict[str, Any] = {"timeout": timeout}
+    api_key = agent_environment(agent_config).get("XAI_API_KEY")
+    if api_key:
+        # Pass an agent-scoped key explicitly; otherwise the SDK uses the
+        # process environment exactly as the turn backend does.
+        kwargs["api_key"] = api_key
+    try:
+        client = AsyncClient(**kwargs)
+    except Exception:
+        # Missing/invalid credentials and constructor drift are provider-facing
+        # probe failures, not proof that the optional package is absent.
+        raise
+    async with client:
+        models_api = getattr(client, "models", None)
+        list_models = getattr(models_api, "list_language_models", None)
+        if not callable(list_models):
+            raise SdkIncompatibleError("xai_sdk has no compatible models.list_language_models API")
+        return await list_models()
+
+
+async def default_sdk_runner(canonical_backend: str, agent_config: Any, timeout: float) -> Any:
+    """Run one public SDK model-list call with lazy optional imports."""
+
+    if canonical_backend == "codex_sdk":
+        return await _run_codex_sdk_catalog(agent_config)
+    if canonical_backend == "xai_sdk":
+        return await _run_xai_sdk_catalog(agent_config, timeout)
+    raise SdkIncompatibleError(f"no SDK catalog implementation for {canonical_backend}")
+
+
 class ModelDiscoverer:
-    """Run CLI catalog probes with per-probe deadlines and in-flight dedup.
+    """Run CLI/SDK catalog probes with deadlines and in-flight dedup.
 
     Concurrent ``discover`` calls for the same backend share a single probe, so a
     burst of ``fresh`` requests or a background refresh racing an install cannot
@@ -409,10 +629,12 @@ class ModelDiscoverer:
         self,
         *,
         runner: CliRunner = default_cli_runner,
+        sdk_runner: SdkRunner = default_sdk_runner,
         now: NowFn = utc_timestamp,
         per_probe_timeout: float = DEFAULT_PROBE_TIMEOUT,
     ) -> None:
         self._runner = runner
+        self._sdk_runner = sdk_runner
         self._now = now
         self._timeout = per_probe_timeout
         self._inflight: Dict[Tuple[str, str], "asyncio.Future[ModelCatalogObservation]"] = {}
@@ -462,6 +684,7 @@ class ModelDiscoverer:
         self, canonical_backend: str, agent_config: Any, fingerprint: str
     ) -> ModelCatalogObservation:
         attempt = self._now()
+        source = "sdk" if canonical_backend.endswith("_sdk") else "cli"
 
         def observe(
             status: str,
@@ -475,7 +698,7 @@ class ModelDiscoverer:
                 backend_id=canonical_backend,
                 status=status,
                 models=models,
-                source="cli",
+                source=source,
                 complete=complete,
                 checked_at=attempt,
                 last_attempt_at=attempt,
@@ -484,39 +707,71 @@ class ModelDiscoverer:
                 reason_code=reason_code,
             )
 
-        spec = CLI_DISCOVERY.get(canonical_backend)
-        if spec is None:
-            return observe(STATUS_UNSUPPORTED, (), False, reason_code="no_cli_catalog_command")
+        cli_spec = CLI_DISCOVERY.get(canonical_backend)
+        sdk_spec = SDK_DISCOVERY.get(canonical_backend)
+        if cli_spec is None and sdk_spec is None:
+            reason = (
+                "no_sdk_catalog_api"
+                if canonical_backend.endswith("_sdk")
+                else "no_cli_catalog_command"
+            )
+            return observe(STATUS_UNSUPPORTED, (), False, reason_code=reason)
 
-        binary = getattr(agent_config, "command", None) or spec.default_binary
-        argv = (binary, *spec.list_args)
-        try:
-            result = await self._runner(argv, self._timeout)
-        except asyncio.TimeoutError:
-            return observe(STATUS_TIMEOUT, (), False, reason_code="probe_timeout")
-        except OSError:
-            return observe(STATUS_UNAVAILABLE, (), False, reason_code="binary_not_executable")
-        except asyncio.CancelledError:
-            # Cancellation is a control-plane signal (task teardown, daemon
-            # shutdown), not a probe outcome — propagate it rather than
-            # disguising it as a timeout observation. It is a BaseException, so
-            # the broad ``except Exception`` below would not catch it anyway;
-            # this clause is explicit for clarity.
-            raise
-        except Exception:
-            # A tolerant parser never runs on a failed exec; any other runner
-            # error still must not raise into the caller.
-            return observe(STATUS_ERROR, (), False, reason_code="probe_failed")
+        complete = True
+        if cli_spec is not None:
+            binary = getattr(agent_config, "command", None) or cli_spec.default_binary
+            argv = (binary, *cli_spec.list_args)
+            try:
+                result = await self._runner(argv, self._timeout)
+            except asyncio.TimeoutError:
+                return observe(STATUS_TIMEOUT, (), False, reason_code="probe_timeout")
+            except OSError:
+                return observe(STATUS_UNAVAILABLE, (), False, reason_code="binary_not_executable")
+            except asyncio.CancelledError:
+                # Cancellation is a control-plane signal (task teardown, daemon
+                # shutdown), not a probe outcome.
+                raise
+            except Exception:
+                return observe(STATUS_ERROR, (), False, reason_code="probe_failed")
 
-        if result.returncode != 0:
-            return observe(STATUS_ERROR, (), False, reason_code="nonzero_exit")
-        try:
-            models = spec.parser(result.stdout)
-        except Exception:
-            models = ()
+            if result.returncode != 0:
+                return observe(STATUS_ERROR, (), False, reason_code="nonzero_exit")
+            try:
+                models = cli_spec.parser(result.stdout)
+            except Exception:
+                models = ()
+        else:
+            try:
+                response = await asyncio.wait_for(
+                    self._sdk_runner(canonical_backend, agent_config, self._timeout),
+                    timeout=self._timeout,
+                )
+            except asyncio.TimeoutError:
+                return observe(STATUS_TIMEOUT, (), False, reason_code="probe_timeout")
+            except SdkUnavailableError:
+                return observe(STATUS_UNAVAILABLE, (), False, reason_code="sdk_not_importable")
+            except SdkIncompatibleError:
+                return observe(STATUS_ERROR, (), False, reason_code="sdk_api_incompatible")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                return observe(STATUS_ERROR, (), False, reason_code="probe_failed")
+            try:
+                models = sdk_spec.parser(response) if sdk_spec is not None else ()
+                if sdk_spec is not None and sdk_spec.complete is not None:
+                    complete = sdk_spec.complete(response)
+            except Exception:
+                models = ()
+
         if not models:
             return observe(STATUS_ERROR, (), False, reason_code="empty_or_unparseable")
-        return observe(STATUS_OK, models, True, reason_code=None, success=True)
+        return observe(
+            STATUS_OK,
+            models,
+            complete,
+            reason_code=None if complete else "catalog_paginated",
+            success=True,
+        )
 
 
 def _parse_iso(value: str) -> Optional[datetime]:

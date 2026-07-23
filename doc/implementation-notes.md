@@ -113,13 +113,32 @@ Backend capabilities (`resume`, `interrupt`, `tool_gate`) are honest runtime
 facts and are not inferred from provider brand. Live backend health gates starts
 on certainty and is reported by `describe_options`, not by daemon status.
 
-Stage 5.1 A1 resolved all SDKs together under Python 3.12.13:
+The original Stage 5.1 A1 spike resolved all SDKs together under Python
+3.12.13:
 
 - `claude-agent-sdk==0.2.114`,
 - `openai-codex==0.1.0b3` with
   `openai-codex-cli-bin==0.137.0a4`,
 - `google-antigravity==0.1.5`.
 - `xai-sdk==1.17.0` (bounded by the project to `>=1.17,<2`).
+
+The 2026-07-23 Phase 4 refresh raised the active verified floors to:
+
+- `claude-agent-sdk==0.2.126`,
+- `openai-codex==0.144.4`,
+- `google-antigravity==0.1.7`,
+- `xai-sdk==1.17.0`.
+
+Codex 0.144.4 exposes `AsyncCodex.models()` and xAI 1.17.0 exposes
+`AsyncClient.models.list_language_models()`; those are the two SDK dynamic
+catalog sources. Claude Agent SDK and Google Antigravity expose model selection
+but no public catalog method, so those two backends retain static suggestions.
+SDK discovery and turns resolve the same agent-scoped credentials. Catalog
+fingerprints incorporate a non-reversible digest of effective agent/process
+API keys so account changes invalidate cached SDK catalogs without persisting
+secrets. Codex's response also carries `next_cursor`, but its public
+`AsyncCodex.models()` method has no cursor argument; such a response is
+therefore stored as incomplete and never treated as authoritative.
 
 Codex's installed `AsyncCodex` initialized its bundled app-server and created
 and read an ephemeral thread without a model call. Antigravity's installed
@@ -128,17 +147,14 @@ cursors for thoughts/tool calls. Claude's installed options and typed message
 blocks confirmed the coding presets, effort/budget fields, tool results, and
 result metadata used by the backend.
 
-The built-in Codex model default is `gpt-5.6-sol`. The latest Python beta pins
-an older Codex runtime, so the SDK backend intentionally uses the agent's
-configured local `codex` executable through `CodexConfig(codex_bin=...)` when
-it resolves on `PATH`; otherwise it falls back to the SDK-pinned runtime. The
-backend summary reports which runtime path is active. On 2026-07-09 the local
-standalone `0.141.0` was still too old for `gpt-5.6-sol`, while `codex update`
-found `0.144.0` but no downloadable release asset, so the 5.6 live gate remains
-an upstream-runtime release check.
+The built-in Codex model default is `gpt-5.6-sol`. The SDK backend
+intentionally uses the agent's configured local `codex` executable through
+`CodexConfig(codex_bin=...)` when it resolves on `PATH`; otherwise it falls
+back to the SDK-pinned runtime. The backend summary reports which runtime path
+is active.
 
 Antigravity is opt-in. Its `cli` path uses `agy` print mode as message-only
-plain text. Its `sdk` path targets the installed `google-antigravity` 0.1.5
+plain text. Its `sdk` path targets the installed `google-antigravity` 0.1.7
 shapes:
 
 - `Agent`

@@ -6,6 +6,8 @@ live in each module; only the cross-provider glue lives here:
 
 - :func:`classify_tool_kind` — one tool-name classifier so a file edit, a shell
   command, and a generic tool call read the same across providers.
+- :func:`agent_environment` — one validated view of agent-scoped environment
+  values for in-process SDK factories.
 - :func:`package_version` — best-effort installed version for backend summaries.
 - :func:`provider_session_event` — the one status event that carries a provider
   session id into central session state under a uniform schema
@@ -31,6 +33,25 @@ from ...events import Event
 _FILE_CHANGE_TOKENS = ("edit", "write", "patch", "create_file")
 _COMMAND_TOKENS = ("command", "bash", "exec", "shell")
 SDK_CLOSE_GRACE_SECONDS = 1.0
+
+
+def agent_environment(agent_config: Any) -> Dict[str, str]:
+    """Return one agent's validated string environment.
+
+    SDKs run in-process, so they cannot receive ``AgentConfig.env`` through the
+    subprocess runner used by CLI backends. Provider factories use this helper
+    to pass the same agent-scoped values explicitly wherever the SDK supports
+    them. Invalid test/config shapes degrade to an empty mapping.
+    """
+
+    raw = getattr(agent_config, "env", None)
+    if not isinstance(raw, Mapping):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
 
 
 def classify_tool_kind(name: Any) -> str:

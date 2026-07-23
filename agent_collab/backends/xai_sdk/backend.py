@@ -25,6 +25,7 @@ from ..base import BackendCapabilities, BackendHealth, BackendUnavailable
 from ..common.health import probe_sdk_backend, xai_api_key_credentials
 from ..common.options import canonical_reasoning
 from ..common.sdk import (
+    agent_environment,
     backend_unavailable_event,
     close_async_stream,
     package_version,
@@ -206,7 +207,7 @@ async def _default_turn_stream(
     workdir: Path,
     prompt: str,
 ) -> AsyncIterator[Any]:
-    del agent, workdir
+    del workdir
     try:
         from xai_sdk import AsyncClient  # type: ignore
         from xai_sdk.chat import user  # type: ignore
@@ -223,7 +224,11 @@ async def _default_turn_stream(
             "an xAI SDK model is required",
             "pass backend_options.xai_sdk.model",
         )
-    async with AsyncClient() as client:
+    client_kwargs: Dict[str, Any] = {}
+    api_key = agent_environment(agent).get("XAI_API_KEY")
+    if api_key:
+        client_kwargs["api_key"] = api_key
+    async with AsyncClient(**client_kwargs) as client:
         chat = client.chat.create(**mapped)
         chat.append(user(prompt))
         yield await chat.sample()
