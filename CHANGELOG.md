@@ -13,6 +13,15 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add native **Codex SDK thread continuity** (#47, stage 4). One runner now
+  holds an `AsyncCodex` client/thread across live-session turns, reconnects a
+  captured thread id after abnormal turns through `thread_resume`, and fails a
+  rejected resume without silently starting fresh. `codex_sdk` now advertises
+  `continuity: true` and `conversation: "persistent"` after hermetic lifecycle
+  coverage plus a credentialed two-turn provider-memory check; `resume`,
+  `interrupt`, and `tool_gate` stay false. The collected `final_response` event
+  is marked final so `wait_result` prefers it over trailing non-final Codex
+  messages.
 - Add the backend-neutral **thread-continuity groundwork** (#47, stage 3), with
   zero behavior change this stage. New `AgentRunner.conversation_active()` /
   `close()` defaults (a stateless no-op for every CLI and mock runner), a

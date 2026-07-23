@@ -134,6 +134,25 @@ handle #20's `interrupt()` and restart-safe resume build on.
   killer reaps orphaned CLI subprocesses on ungraceful exit. This is the
   precondition for the `can_use_tool` callback — `tool_gate` cannot exist on a
   one-shot `query()`.
+- **Codex SDK — implementation-time `openai-codex` 0.1.0b3 with
+  `openai-codex-cli-bin` 0.137.0a4; configured local CLI 0.144.4:** one open
+  `AsyncCodex` owns an `AsyncThread` whose public `run()` accepts repeated
+  collected turns. A credentialed `luna`/low provider-memory fixture completed
+  two turns on one thread; turn 2 received no codeword in its prompt and recalled
+  turn 1's codeword. The public `openai-codex` 0.144.4 wheel was also inspected
+  and has the same relevant `AsyncCodex` / `AsyncThread` APIs.
+  `AsyncCodex.thread_resume(thread_id, ...)` reopens a materialized thread after
+  the first client closes: a one-turn `luna`/low fixture resumed the exact id and
+  read its persisted turn. A no-model `thread_start` alone does not materialize
+  the thread (`includeTurns` is rejected before the first user message), so one
+  lowest-cost turn is the minimum reconnect fixture.
+  `AsyncThread.run()` waits through `asyncio.to_thread` on the synchronous
+  notification queue. Cancelling its asyncio waiter does not itself interrupt
+  the provider worker; cleanup requires `AsyncCodex.close()` to terminate the
+  app-server transport. The adapter therefore serializes run/reset/close, resets
+  after abnormal turns while retaining the captured id, and never treats local
+  cancellation as provider interruption. `codex_sdk.continuity` is true;
+  `resume`, `interrupt`, and `tool_gate` remain false.
 
 ## Capability semantics
 
@@ -204,17 +223,19 @@ not regress to the one-shot `query()` helper.
 
 ### Codex SDK
 
-Verify the installed `openai-codex`/app-server shapes for:
+Continuity was verified on the implementation-time pin as recorded above. For
+the remaining #20 capabilities, re-verify the installed
+`openai-codex`/app-server shapes for:
 
-- reopening or resuming a thread by persisted ID after client/daemon restart
-  (the restart-safe resume half; in-client thread reuse across turns is what
-  `continuity` proves);
+- restoring the persisted thread descriptor after an agent-collab daemon
+  restart and validating its fingerprint before calling the already-proven
+  `thread_resume` API (the public restart-safe resume half);
 - turn cancellation and acknowledgement;
 - command/file-change approval notifications and response methods.
 
-Starting a new thread with the same transcript is not thread resume. If the
-pinned SDK only supports in-client continuation, `continuity` may still qualify
-while the public `resume` capability stays false under the strict definition.
+Starting a new thread with the same transcript is not thread resume. The adapter
+fails a rejected/expired `thread_resume` structurally and never falls back to
+`thread_start`.
 
 ### Antigravity SDK
 

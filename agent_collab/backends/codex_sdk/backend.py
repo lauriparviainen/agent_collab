@@ -1,29 +1,25 @@
 """The Codex ``sdk`` backend (``openai-codex``), lazy + first-class.
 
-The real ``openai_codex`` module is imported lazily by the production turn
-factory. The verified ``openai-codex==0.144.4`` async surface is:
+The installed ``openai-codex==0.1.0b3`` surface keeps one ``AsyncCodex`` client
+and ``AsyncThread`` open across collected ``thread.run(...)`` calls. A captured
+thread id reconnects through ``AsyncCodex.thread_resume(...)`` after an abnormal
+turn resets the live client. The conversation adapter serializes run/reset/close
+because SDK cancellation stops only the asyncio waiter while its blocking worker
+continues until the provider turn or client transport settles.
 
-``async with AsyncCodex() -> await thread_start(...) -> await thread.run(...)``.
-
-``run`` returns one collected ``TurnResult``.  Its ``final_response`` is the
+``run`` returns one collected ``TurnResult``. Its ``final_response`` is the
 stable, message-first surface; its ``items`` are ``ThreadItem`` root models.
-Only the installed public item roots are mapped here: agent messages, reasoning,
-command execution, and file changes.  Unknown roots remain verbose status data
-instead of being treated like guessed ``codex exec --json`` events.
-
-The async generator used for the production path deliberately yields the
-collected result *inside* the ``AsyncCodex`` context.  Consequently the SDK
-client and app-server connection stay alive until the runner has mapped every
-event.  No SDK import, client construction, or model call happens at module
-import time.
+Only installed public item roots are mapped. No SDK import, client construction,
+or model call happens at module import time.
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Protocol
 
 from ...config import AgentConfig
 from ...events import Event, compact_json
@@ -39,9 +35,9 @@ from ..base import (
 )
 from ..common.health import codex_api_key_credentials, probe_sdk_backend
 from ..common.sdk import (
+    SDK_CLOSE_GRACE_SECONDS,
     agent_environment,
     backend_unavailable_event,
-    close_async_stream,
     package_version,
     sdk_settings_summary,
     provider_session_event,
@@ -74,16 +70,28 @@ class CodexTurnOutcome:
     result: Any
 
 
-# A factory owns the SDK resources for one turn and yields its collected result
-# while those resources are still open.  It is injectable so unit tests use
-# real-shape fakes without importing the SDK or making a live model call.
-ItemStreamFactory = Callable[
-    [AgentConfig, Dict[str, Any], Path, str], AsyncIterator[CodexTurnOutcome]
+class CodexConversation(Protocol):
+    """One runner-owned provider conversation; fakeable without the real SDK."""
+
+    def active(self) -> bool: ...
+
+    async def run(self, prompt: str) -> CodexTurnOutcome: ...
+
+    def note_session_id(self, thread_id: str) -> None: ...
+
+    async def reset(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+ConversationFactory = Callable[
+    [AgentConfig, Dict[str, Any], Path],
+    CodexConversation,
 ]
 
 
 class CodexSdkBackend:
-    """Registered as ``(codex, "sdk")``. Capabilities are all false."""
+    """Registered as ``(codex, "sdk")`` with live-session continuity."""
 
     id = "sdk"
     agent_type = "codex"
@@ -91,11 +99,11 @@ class CodexSdkBackend:
     event_fidelity = "message_first"
     provider_session_id_kind = "thread"
 
-    def __init__(self, item_stream: Optional[ItemStreamFactory] = None) -> None:
-        self.capabilities = BackendCapabilities()
+    def __init__(self, conversation_factory: Optional[ConversationFactory] = None) -> None:
+        self.capabilities = BackendCapabilities(continuity=True)
         self.checks_credentials = True
         self.block_on_unavailable = True
-        self._item_stream = item_stream
+        self._conversation_factory = conversation_factory
 
     def probe(self) -> BackendHealth:
         return probe_sdk_backend(
@@ -130,11 +138,12 @@ class CodexSdkBackend:
     def create_runner(
         self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
     ) -> AgentRunner:
-        factory = self._item_stream or _default_item_stream
-        return CodexSdkRunner(agent, verbose, dict(options or {}), item_stream=factory)
+        factory = self._conversation_factory or _default_conversation
+        return CodexSdkRunner(agent, verbose, dict(options or {}), conversation_factory=factory)
 
     def settings_summary(self, agent: AgentConfig, options: Mapping[str, Any]) -> Mapping[str, Any]:
         summary = sdk_settings_summary(PACKAGE_NAME, _map_sdk_options(options))
+        summary["conversation"] = "persistent"
         codex_bin = _configured_codex_bin(agent)
         summary["runtime"] = "configured_cli" if codex_bin else "sdk_pinned"
         if codex_bin:
@@ -148,64 +157,85 @@ class CodexSdkRunner(AgentRunner):
         agent: AgentConfig,
         verbose: bool,
         options: Dict[str, Any],
-        item_stream: ItemStreamFactory,
+        conversation_factory: ConversationFactory,
     ) -> None:
         self.name = agent.id
         self.agent = agent
         self.verbose = verbose
         self.options = options
-        self._item_stream = item_stream
+        self._conversation_factory = conversation_factory
+        self._conversation: Optional[CodexConversation] = None
+        self._workdir: Optional[Path] = None
+
+    def conversation_active(self) -> bool:
+        return self._conversation is not None and self._conversation.active()
+
+    async def close(self) -> None:
+        if self._conversation is not None:
+            await self._conversation.close()
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         if self.verbose:
             await emit(Event.create("codex", "status", f"codex sdk starting in {workdir}"))
 
-        stream: Optional[AsyncIterator[CodexTurnOutcome]] = None
+        conversation: Optional[CodexConversation] = None
         thread_id: Optional[str] = None
         evidence = TerminalEvidenceAccumulator()
         exception_code: Optional[str] = None
-        clean_close = True
         try:
-            stream = self._item_stream(self.agent, self.options, workdir, prompt)
-            async for outcome in stream:
-                if outcome.thread_id and outcome.thread_id != thread_id:
-                    thread_id = outcome.thread_id
-                    await emit(provider_session_event("codex", self.name, thread_id, "thread"))
-                status = _enum_value(getattr(outcome.result, "status", None))
-                if status == "completed":
-                    evidence.add(TerminalEvidence("completed"))
-                elif status == "interrupted":
-                    evidence.add(
-                        TerminalEvidence(
-                            "cancelled",
-                            "provider_turn_cancelled",
-                            provider_stop_reason="interrupted",
-                        )
+            conversation = self._conversation_for(workdir)
+            outcome = await conversation.run(prompt)
+            if outcome.thread_id:
+                thread_id = outcome.thread_id
+                conversation.note_session_id(thread_id)
+                await emit(provider_session_event("codex", self.name, thread_id, "thread"))
+            status = _enum_value(getattr(outcome.result, "status", None))
+            if status == "completed":
+                evidence.add(TerminalEvidence("completed"))
+            elif status == "interrupted":
+                evidence.add(
+                    TerminalEvidence(
+                        "cancelled",
+                        "provider_turn_cancelled",
+                        provider_stop_reason="interrupted",
                     )
-                elif status == "failed":
-                    evidence.add(TerminalEvidence("failed", "provider_terminal_failure"))
-                else:
-                    exception_code = "provider_output_invalid"
-                for event in iter_codex_turn_events(outcome.result, self.verbose):
-                    await emit(event)
+                )
+            elif status == "failed":
+                evidence.add(TerminalEvidence("failed", "provider_terminal_failure"))
+            else:
+                exception_code = "provider_output_invalid"
+            for event in iter_codex_turn_events(outcome.result, self.verbose):
+                await emit(event)
+        except asyncio.CancelledError:
+            if conversation is not None:
+                await _reset_conversation_bounded(conversation)
+            raise
         except BackendUnavailable as exc:
             await emit(backend_unavailable_event(exc))
             exception_code = "provider_transport_failed"
         except Exception as exc:  # startup, auth, and turn errors reach the transcript
             await emit(sdk_error_event("codex", exc))
             exception_code = "provider_transport_failed"
-        finally:
-            # Explicitly close an injected/production async generator if the
-            # consumer cancels before exhausting the transcript.  This unwinds
-            # the production AsyncCodex context promptly.
-            clean_close = await close_async_stream(stream)
 
-        if not clean_close and exception_code is None:
-            exception_code = "provider_transport_failed"
-
+        result = evidence.resolve(exception_code=exception_code)
+        if result.outcome != "completed" and conversation is not None:
+            await _reset_conversation_bounded(conversation)
         if self.verbose:
             await emit(Event.create("codex", "status", "codex sdk turn complete"))
-        return evidence.resolve(exception_code=exception_code)
+        return result
+
+    def _conversation_for(self, workdir: Path) -> CodexConversation:
+        resolved = workdir.resolve()
+        if self._conversation is None:
+            self._conversation = self._conversation_factory(
+                self.agent,
+                self.options,
+                resolved,
+            )
+            self._workdir = resolved
+        elif self._workdir != resolved:
+            raise RuntimeError("codex sdk conversation workdir changed between turns")
+        return self._conversation
 
 
 def iter_codex_turn_events(result: Any, verbose: bool) -> Iterator[Event]:
@@ -226,7 +256,12 @@ def iter_codex_turn_events(result: Any, verbose: bool) -> Iterator[Event]:
             "codex",
             "message",
             final_response,
-            {"text": final_response, "turn_id": turn_id or None, "status": status},
+            {
+                "text": final_response,
+                "turn_id": turn_id or None,
+                "status": status,
+                "final": True,
+            },
         )
 
     items = getattr(result, "items", None)
@@ -437,10 +472,12 @@ def _configured_codex_bin(agent: AgentConfig) -> Optional[str]:
     return shutil.which(command.strip())
 
 
-async def _default_item_stream(
-    agent: AgentConfig, options: Dict[str, Any], workdir: Path, prompt: str
-) -> AsyncIterator[CodexTurnOutcome]:
-    """Run one turn through the verified async SDK while owning its resources."""
+def _default_conversation(
+    agent: AgentConfig,
+    options: Dict[str, Any],
+    workdir: Path,
+) -> CodexConversation:
+    """Build one lazy-imported persistent conversation for a runner."""
 
     try:
         import openai_codex  # type: ignore
@@ -448,8 +485,15 @@ async def _default_item_stream(
         raise _backend_unavailable(f"{MODULE_NAME} is not importable") from exc
 
     async_codex = getattr(openai_codex, "AsyncCodex", None)
-    if async_codex is None or not hasattr(async_codex, "thread_start"):
-        raise _backend_unavailable("openai_codex has no compatible AsyncCodex.thread_start API")
+    if (
+        async_codex is None
+        or not hasattr(async_codex, "thread_start")
+        or not hasattr(async_codex, "thread_resume")
+        or not hasattr(async_codex, "close")
+    ):
+        raise _backend_unavailable(
+            "openai_codex has no compatible AsyncCodex thread_start/thread_resume/close API"
+        )
 
     client_config = None
     config_kwargs: Dict[str, Any] = {}
@@ -494,17 +538,162 @@ async def _default_item_stream(
             )
         run_kwargs["effort"] = getattr(effort_cls, effort_name)
 
-    # Yield from inside the context: the runner maps the provider session and
-    # every TurnResult item before asking this generator for its next value,
-    # which is when __aexit__ finally closes the SDK client.
-    client = async_codex(client_config) if client_config is not None else async_codex()
-    async with client as codex:
-        thread = await codex.thread_start(**start_kwargs)
-        thread_id = stringify(getattr(thread, "id", None))
-        run = getattr(thread, "run", None)
-        if not thread_id or not callable(run):
-            raise _backend_unavailable("openai_codex returned an incompatible AsyncThread")
-        result = await run(prompt, **run_kwargs)
-        if not hasattr(result, "final_response") or not hasattr(result, "items"):
-            raise _backend_unavailable("openai_codex returned an incompatible TurnResult")
-        yield CodexTurnOutcome(thread_id=thread_id, result=result)
+    return _PersistentCodexConversation(
+        async_codex,
+        client_config,
+        start_kwargs,
+        run_kwargs,
+    )
+
+
+class _PersistentCodexConversation:
+    """Serialize one live SDK client/thread and its reconnect identity."""
+
+    def __init__(
+        self,
+        client_factory: Any,
+        client_config: Any,
+        thread_kwargs: Dict[str, Any],
+        run_kwargs: Dict[str, Any],
+    ) -> None:
+        self._client_factory = client_factory
+        self._client_config = client_config
+        self._thread_kwargs = dict(thread_kwargs)
+        self._run_kwargs = dict(run_kwargs)
+        self._lock = asyncio.Lock()
+        self._client: Any = None
+        self._thread: Any = None
+        self._thread_id: Optional[str] = None
+        self._pending_prompt: Optional[str] = None
+        self._closed = False
+
+    def active(self) -> bool:
+        # A reset drops only the live transport. The retained id still names
+        # provider-side context that the next run will resume, so the referee
+        # must keep sending delta prompts rather than replaying the full task.
+        return not self._closed and (
+            self._thread_id is not None or self._pending_prompt is not None
+        )
+
+    def note_session_id(self, thread_id: str) -> None:
+        if self._thread_id is not None and self._thread_id != thread_id:
+            raise RuntimeError("Codex resumed a different provider thread")
+        self._thread_id = thread_id
+
+    async def run(self, prompt: str) -> CodexTurnOutcome:
+        # Referee watermarks advance when a prompt is built, before transport
+        # delivery. Queue it before waiting for the lifecycle lock so a failed
+        # connect/resume—or cancellation behind a slow reset—cannot orphan that
+        # delta. Once handed to thread.run(), delivery is uncertain and replay
+        # would risk duplication, so clear it at that boundary.
+        self._pending_prompt = _join_pending_prompt(self._pending_prompt, prompt)
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("codex sdk conversation is closed")
+            if self._thread is None:
+                await self._connect_locked()
+            thread_id = stringify(getattr(self._thread, "id", None))
+            run = getattr(self._thread, "run", None)
+            if not thread_id or not callable(run):
+                raise _backend_unavailable("openai_codex returned an incompatible AsyncThread")
+            effective_prompt = self._pending_prompt
+            if effective_prompt is None:
+                raise RuntimeError("codex sdk pending prompt was lost")
+            self._pending_prompt = None
+            result = await _await_provider_run(run(effective_prompt, **self._run_kwargs))
+            if not hasattr(result, "final_response") or not hasattr(result, "items"):
+                raise _backend_unavailable("openai_codex returned an incompatible TurnResult")
+            return CodexTurnOutcome(thread_id=thread_id, result=result)
+
+    async def reset(self) -> None:
+        async with self._lock:
+            client = self._drop_live_locked(keep_thread_id=True)
+            if client is not None:
+                await client.close()
+
+    async def close(self) -> None:
+        async with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            client = self._drop_live_locked(keep_thread_id=False)
+            if client is not None:
+                await client.close()
+
+    async def _connect_locked(self) -> None:
+        client = (
+            self._client_factory(self._client_config)
+            if self._client_config is not None
+            else self._client_factory()
+        )
+        try:
+            await client.__aenter__()
+            resume_id = self._thread_id
+            if resume_id is None:
+                thread = await client.thread_start(**self._thread_kwargs)
+            else:
+                thread = await client.thread_resume(resume_id, **self._thread_kwargs)
+            thread_id = stringify(getattr(thread, "id", None))
+            if not thread_id or not callable(getattr(thread, "run", None)):
+                raise _backend_unavailable("openai_codex returned an incompatible AsyncThread")
+            if resume_id is not None and thread_id != resume_id:
+                raise _backend_unavailable("openai_codex resumed a different provider thread")
+        except BaseException:
+            await client.close()
+            raise
+        self._client = client
+        self._thread = thread
+        self._thread_id = thread_id
+
+    def _drop_live_locked(self, *, keep_thread_id: bool) -> Any:
+        client = self._client
+        self._client = None
+        self._thread = None
+        if not keep_thread_id:
+            self._thread_id = None
+            self._pending_prompt = None
+        return client
+
+
+def _join_pending_prompt(pending: Optional[str], prompt: str) -> str:
+    if not pending:
+        return prompt
+    return f"{pending}\n\n{prompt}"
+
+
+async def _await_provider_run(awaitable: Any) -> Any:
+    """Keep SDK worker ownership until a cancellation-insensitive run settles."""
+
+    task = asyncio.ensure_future(awaitable)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await asyncio.shield(task)
+        except BaseException:
+            pass
+        raise
+
+
+async def _reset_conversation_bounded(conversation: CodexConversation) -> bool:
+    """Reset once; a slow SDK close continues as a background reaper."""
+
+    task = asyncio.create_task(conversation.reset())
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=SDK_CLOSE_GRACE_SECONDS)
+        return True
+    except asyncio.TimeoutError:
+        task.add_done_callback(_consume_background_result)
+        return False
+    except asyncio.CancelledError:
+        task.add_done_callback(_consume_background_result)
+        raise
+    except Exception:
+        return False
+
+
+def _consume_background_result(task: asyncio.Future) -> None:
+    try:
+        task.result()
+    except BaseException:
+        pass

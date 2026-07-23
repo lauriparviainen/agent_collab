@@ -1,6 +1,8 @@
 # Codex SDK backend
 
-Registered as `codex_sdk` (`type="codex"`, `backend="sdk"`). It uses `openai-codex` `AsyncCodex`, starts an ephemeral thread, runs a turn, and maps the collected result.
+Registered as `codex_sdk` (`type="codex"`, `backend="sdk"`). It keeps one
+`openai-codex` `AsyncCodex` client/thread per live runner, runs collected turns
+on that thread, and reconnects a captured thread id after an abnormal turn.
 
 ## Selection and requirements
 
@@ -23,18 +25,33 @@ unsupported. Nothing is inferred from CLI argv.
 
 ## Events and identity
 
-The stable final response is message-first; known command/file/reasoning items are mapped and unknown items become verbose status. The thread id is captured with identity kind `thread`; resume is not implemented. A configured local `codex` binary is preferred over the SDK-pinned runtime when available.
+The stable final response is message-first and marked as the final ledger answer;
+known command/file/reasoning items are mapped and unknown items become verbose
+status. The thread id is captured with identity kind `thread`. A configured
+local `codex` binary is preferred over the SDK-pinned runtime when available.
+An abnormal turn closes the live client but keeps the id; the next turn calls
+native `thread_resume`. A rejected resume fails structurally and never starts a
+fresh thread. A prompt that could not reach `thread.run()` because connect or
+resume failed is retained and prepended after a later successful reconnect, so
+the referee's already-advanced delta watermark cannot discard it.
 
 ## Turn outcome
 
 Collected `TurnStatus.completed` completes, `interrupted` maps to provider
 `cancelled`, and `failed` fails. An in-progress/unknown collected status,
-missing result, SDK exception, or uncertain bounded close fails. Item-level
+missing result, SDK exception, or uncertain bounded reset fails. Item-level
 command failures are diagnostic unless the collected turn itself fails.
+Reset cleanup never overwrites an already definitive provider cancellation or
+terminal failure; an over-grace reset continues under background ownership.
 
 ## Capabilities and security
 
-`resume`, `interrupt`, and `tool_gate` are false. Threads are ephemeral and cwd-scoped. Missing/incompatible runtime setup fails probing or produces an error event.
+`continuity` is true: follow-up turns within one live agent-collab session use
+the held provider thread and receive delta prompts. `resume`, `interrupt`, and
+`tool_gate` remain false under their stricter public definitions. The adapter
+serializes run/reset/close; cancelling the asyncio waiter does not claim a
+provider interrupt. Missing/incompatible runtime setup fails probing or produces
+an error event.
 
 ## Testing
 

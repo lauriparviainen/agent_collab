@@ -112,6 +112,18 @@ class CapabilityReducerTests(unittest.TestCase):
         self.assertFalse(backends.summarize_session_capabilities(mixed)["continuity"])
         self.assertTrue(mixed["a"].to_dict()["continuity"])
 
+    def test_codex_sdk_continuity_pin_and_mixed_session_reducer(self):
+        codex = backends.capabilities_for("codex", "sdk")
+        claude = backends.capabilities_for("claude", "sdk")
+        self.assertTrue(codex.continuity)
+        self.assertFalse(claude.continuity)
+        self.assertTrue(backends.summarize_session_capabilities({"codex_sdk": codex})["continuity"])
+        self.assertFalse(
+            backends.summarize_session_capabilities({"codex_sdk": codex, "claude_sdk": claude})[
+                "continuity"
+            ]
+        )
+
     def test_empty_agent_set_is_not_resumable(self):
         self.assertEqual(
             backends.summarize_session_capabilities({}),
