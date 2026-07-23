@@ -1,6 +1,7 @@
 # Subagent-style delegation and SDK thread continuity
 
-**Status:** Open — Stage 1 (`wait_result`) shipped; Stages 2–7 open.
+**Status:** Open — Stages 1–5 shipped (`wait_result`; surface shape; continuity
+groundwork; `codex_sdk` continuity; `claude_sdk` continuity); Stages 6–7 open.
 
 **Created:** 2026-07-23.
 
@@ -121,12 +122,14 @@ end-to-end pass over all ten-plus tool descriptions and every guidance topic.
 - Runners are created once per session and reused for all sequential,
   parallel, and directed turns (`Referee.run` calls `self._runners()` once) —
   a stateful runner needs no scheduling change, only a cleanup hook.
-- The installed `claude-agent-sdk` 0.2.114 supports a persistent
-  `ClaudeSDKClient` (connect / query / receive_response / interrupt /
-  disconnect) and `ClaudeAgentOptions.resume` + `fork_session`. Its reader
-  task is loop-scoped (`spawn_detached` uses `loop.create_task`), so a client
-  connected during one turn's task survives into the next; an `atexit` child
-  killer reaps orphaned CLI subprocesses on ungraceful exit.
+- The installed `claude-agent-sdk` (0.2.114 at planning time; re-verified on
+  0.2.126 at Stage 5 implementation time — see `sdk-session-control.md` for
+  the full verified facts) supports a persistent `ClaudeSDKClient` (connect /
+  query / receive_response / interrupt / disconnect) and
+  `ClaudeAgentOptions.resume` + `fork_session`. Its reader task is loop-scoped
+  (`spawn_detached` uses `loop.create_task`), so a client connected during one
+  turn's task survives into the next; an `atexit` child killer reaps orphaned
+  CLI subprocesses on ungraceful exit.
 - `post_message` enqueues onto `managed.input_queue` before returning;
   `_process_pending_inputs` / `_await_interactive_input` call
   `queue.task_done()` in `finally`; status stays `awaiting_input` during
@@ -392,15 +395,22 @@ the surface-only Stage 1.
 
 ## Stage 5 — `claude_sdk` continuity
 
-SDK facts already verified on 0.2.114 (see Verified enablers). Replace the
-per-turn `MessageStreamFactory` seam in
-`agent_collab/backends/claude_sdk/backend.py` with the conversation adapter
-holding one persistent `ClaudeSDKClient` per runner; reconnect after reset
-uses `ClaudeAgentOptions(resume=<sid>, fork_session=False)`; the lazy SDK
-import stays inside the factory (`BackendUnavailable` on ImportError);
-`build_claude_agent_options` grows an optional `resume` parameter. The
-`run_turn` message loop (event mapping, provider-session capture, evidence
-accumulation) stays as it is.
+**Shipped.** SDK facts re-verified on the implementation-time
+`claude-agent-sdk` 0.2.126 (latest release at the time; no bump available —
+full connect/query/resume/cancellation facts recorded in
+`sdk-session-control.md`). The per-turn `MessageStreamFactory` seam in
+`agent_collab/backends/claude_sdk/backend.py` was replaced with the
+conversation adapter holding one persistent `ClaudeSDKClient` per runner;
+reconnect after reset uses `ClaudeAgentOptions(resume=<sid>,
+fork_session=False)` and a rejected resume fails the turn structurally; the
+lazy SDK import stays inside the factory (`BackendUnavailable` on
+ImportError); `build_claude_agent_options` grew an optional resume-session
+parameter emitted only on reconnect. The `run_turn` message loop (event
+mapping, provider-session capture, evidence accumulation) stayed as it was.
+`claude_sdk` flips `continuity=true` with hermetic fake-conversation coverage
+plus the credentialed provider-memory integration test
+(`integration_tests/backends/claude_sdk/test_live.py`), which also asserts the
+follow-up turn used the Stage 3 delta prompt and a stable provider session id.
 
 ## Stage 6 — `antigravity_sdk` continuity
 

@@ -1,14 +1,17 @@
 """Claude `sdk` backend tests (fake-module based; no real SDK, no model call).
 
-The Claude Agent SDK's ``query(...)`` yields typed messages whose blocks are
-``TextBlock``/``ToolUseBlock``/``ThinkingBlock`` and whose terminal message
-carries ``session_id``/``is_error``. These are exercised with FAKE message
-objects with the pinned constructors' real fields so the event mapper, option
-mapping, probe, and provider-session capture are all covered without installing
-``claude-agent-sdk`` or calling a model.
+The Claude Agent SDK's typed messages carry ``TextBlock``/``ToolUseBlock``/
+``ThinkingBlock`` blocks and a terminal message with ``session_id``/``is_error``.
+These are exercised with FAKE message objects with the pinned constructors' real
+fields so the event mapper, option mapping, probe, and provider-session capture
+are all covered without installing ``claude-agent-sdk`` or calling a model.
+Production tests replace the lazy SDK import with a fake persistent
+``ClaudeSDKClient``, including resume after reset and undelivered-prompt replay
+(lifecycle verified on ``claude-agent-sdk`` 0.2.126).
 """
 
 import asyncio
+import sys
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -19,7 +22,7 @@ from agent_collab.backends.base import BackendUnavailable
 from agent_collab.backends.claude_sdk.backend import (
     ClaudeSdkBackend,
     ClaudeSdkRunner,
-    _default_message_stream,
+    _default_conversation,
     _map_sdk_options,
     build_claude_agent_options,
     iter_claude_events,
@@ -124,24 +127,71 @@ class SystemMessage:
         self.data = data
 
 
-async def _aiter(items):
-    for item in items:
-        yield item
+class _FakeConversation:
+    """Runner-seam fake following the adapter contract; one turn per run()."""
+
+    def __init__(self, turns, *, error=None):
+        self.turns = [list(turn) for turn in turns]
+        self.error = error
+        self.prompts = []
+        self.noted_ids = []
+        self.reset_calls = 0
+        self.close_calls = 0
+        self.is_active = False
+        self.is_closed = False
+
+    def active(self):
+        return not self.is_closed and (self.is_active or bool(self.noted_ids))
+
+    async def run(self, prompt):
+        self.prompts.append(prompt)
+        self.is_active = True
+        if self.error is not None:
+            raise self.error
+        if not self.turns:
+            raise RuntimeError("no fake turn")
+        for message in self.turns.pop(0):
+            yield message
+
+    def note_session_id(self, session_id):
+        self.noted_ids.append(session_id)
+
+    async def reset(self):
+        self.reset_calls += 1
+        self.is_active = False
+
+    async def close(self):
+        if self.is_closed:
+            return
+        self.is_closed = True
+        self.close_calls += 1
+        self.is_active = False
 
 
-def _stream_factory(messages, *, error=None):
-    def factory(agent, options, workdir, prompt):
-        if error is not None:
-            raise error
-        return _aiter(messages)
+def _conversation_factory(conversation):
+    return lambda _agent, _options, _workdir: conversation
+
+
+def _factory_error(error):
+    def factory(_agent, _options, _workdir):
+        raise error
 
     return factory
 
 
-def _run(messages, *, verbose=False, options=None, error=None):
-    runner = ClaudeSdkRunner(
-        AGENT, verbose, options or {}, message_stream=_stream_factory(messages, error=error)
-    )
+def _runner_for(conversation=None, *, verbose=False, options=None, factory=None):
+    factory = factory or _conversation_factory(conversation)
+    return ClaudeSdkRunner(AGENT, verbose, options or {}, conversation_factory=factory)
+
+
+def _run(messages, *, verbose=False, options=None, error=None, factory_error=None):
+    if factory_error is not None:
+        runner = _runner_for(
+            verbose=verbose, options=options, factory=_factory_error(factory_error)
+        )
+    else:
+        conversation = _FakeConversation([messages], error=error)
+        runner = _runner_for(conversation, verbose=verbose, options=options)
 
     async def collect():
         events = []
@@ -156,9 +206,8 @@ def _run(messages, *, verbose=False, options=None, error=None):
 
 
 def _outcome(messages, *, error=None):
-    runner = ClaudeSdkRunner(
-        AGENT, False, {}, message_stream=_stream_factory(messages, error=error)
-    )
+    conversation = _FakeConversation([messages], error=error)
+    runner = _runner_for(conversation)
 
     async def collect():
         async def emit(_event):
@@ -303,10 +352,12 @@ class ClaudeEventMappingTests(unittest.TestCase):
         self.assertEqual(loud[0].raw["usage"]["output_tokens"], 7)
         self.assertEqual(loud[0].raw["model_usage"]["claude-test"]["costUSD"], 0.012)
 
-    def test_missing_import_at_stream_open_surfaces_error_event(self):
+    def test_missing_import_at_conversation_creation_surfaces_error_event(self):
         events = _run(
             [],
-            error=BackendUnavailable("claude", "sdk", "claude_agent_sdk is not importable", "hint"),
+            factory_error=BackendUnavailable(
+                "claude", "sdk", "claude_agent_sdk is not importable", "hint"
+            ),
         )
         self.assertTrue(any(e.type == "error" and "not importable" in e.text for e in events))
 
@@ -316,6 +367,143 @@ class ClaudeEventMappingTests(unittest.TestCase):
         self.assertEqual(events[0].source, "error")
         self.assertIn("unexpected keyword 'system_prompt'", events[0].text)
         self.assertEqual(events[0].raw["exception"], "TypeError")
+
+
+class ClaudeConversationLifecycleTests(unittest.TestCase):
+    def test_conversation_active_transitions_after_materialized_turn(self):
+        conversation = _FakeConversation([[_result()]])
+        runner = _runner_for(conversation)
+
+        async def scenario():
+            self.assertFalse(runner.conversation_active())
+
+            async def emit(_event):
+                return None
+
+            outcome = await runner.run_turn("one", Path("."), emit)
+            self.assertTrue(runner.conversation_active())
+            await runner.close()
+            self.assertFalse(runner.conversation_active())
+            return outcome
+
+        outcome = asyncio.run(scenario())
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertEqual(conversation.noted_ids, ["sess-1"])
+        self.assertEqual(conversation.reset_calls, 0)
+
+    def test_two_turns_reuse_the_same_conversation_and_feed_back_the_id(self):
+        conversation = _FakeConversation(
+            [
+                [SystemMessage("init", {"session_id": "sess-1"}), _result()],
+                [_assistant([TextBlock("two")]), _result()],
+            ]
+        )
+        runner = _runner_for(conversation)
+
+        async def scenario():
+            async def emit(_event):
+                return None
+
+            first = await runner.run_turn("one", Path("."), emit)
+            second = await runner.run_turn("two", Path("."), emit)
+            await runner.close()
+            await runner.close()
+            return first, second
+
+        first, second = asyncio.run(scenario())
+        self.assertEqual((first.outcome, second.outcome), ("completed", "completed"))
+        self.assertEqual(conversation.prompts, ["one", "two"])
+        # The id is noted once per turn it is observed in, always the same value.
+        self.assertEqual(conversation.noted_ids, ["sess-1", "sess-1"])
+        self.assertEqual(conversation.close_calls, 1)
+
+    def test_abnormal_result_resets_once_and_retains_continuation_identity(self):
+        conversation = _FakeConversation([[_result(is_error=True, subtype="error")]])
+        runner = _runner_for(conversation)
+
+        async def scenario():
+            async def emit(_event):
+                return None
+
+            outcome = await runner.run_turn("fail", Path("."), emit)
+            return outcome, runner.conversation_active()
+
+        outcome, active = asyncio.run(scenario())
+        self.assertEqual(outcome.outcome, "failed")
+        self.assertEqual(conversation.reset_calls, 1)
+        self.assertTrue(active)
+
+    def test_missing_result_message_resets_once(self):
+        conversation = _FakeConversation([[_assistant([TextBlock("partial")])]])
+        runner = _runner_for(conversation)
+
+        async def scenario():
+            async def emit(_event):
+                return None
+
+            return await runner.run_turn("incomplete", Path("."), emit)
+
+        outcome = asyncio.run(scenario())
+        self.assertEqual(outcome.code, "provider_output_incomplete")
+        self.assertEqual(conversation.reset_calls, 1)
+
+    def test_cancellation_resets_once_and_closes_the_stream(self):
+        async def scenario():
+            entered = asyncio.Event()
+            release = asyncio.Event()
+
+            class BlockingConversation(_FakeConversation):
+                async def run(self, prompt):
+                    self.prompts.append(prompt)
+                    self.is_active = True
+                    entered.set()
+                    await release.wait()
+                    yield _result()
+
+            conversation = BlockingConversation([])
+            runner = _runner_for(conversation)
+
+            async def collect():
+                async def emit(_event):
+                    return None
+
+                await runner.run_turn("cancel me", Path("."), emit)
+
+            consumer = asyncio.create_task(collect())
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            consumer.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await consumer
+            self.assertEqual(conversation.reset_calls, 1)
+
+        asyncio.run(scenario())
+
+    def test_slow_reset_preserves_definitive_provider_outcome(self):
+        class SlowResetConversation(_FakeConversation):
+            async def reset(self):
+                self.reset_calls += 1
+                await asyncio.sleep(0.05)
+
+        conversation = SlowResetConversation([[_result(is_error=True, subtype="error")]])
+        runner = _runner_for(conversation)
+
+        async def scenario():
+            async def emit(_event):
+                return None
+
+            return await runner.run_turn("fail", Path("."), emit)
+
+        with mock.patch(
+            "agent_collab.backends.claude_sdk.backend.SDK_CLOSE_GRACE_SECONDS",
+            0.001,
+        ):
+            outcome = asyncio.run(scenario())
+
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("failed", "provider_terminal_failure"),
+        )
+        self.assertEqual(conversation.reset_calls, 1)
 
 
 class ClaudeSessionCaptureTests(unittest.TestCase):
@@ -345,54 +533,6 @@ class ClaudeSessionCaptureTests(unittest.TestCase):
             )
         )
         self.assertFalse(any((e.raw or {}).get("provider_session_id") for e in events))
-
-    def test_cancellation_closes_message_stream(self):
-        async def scenario(close_error):
-            entered = asyncio.Event()
-
-            class BlockingStream:
-                def __init__(self):
-                    self.closed = False
-
-                def __aiter__(self):
-                    return self
-
-                async def __anext__(self):
-                    entered.set()
-                    await asyncio.Event().wait()
-
-                async def aclose(self):
-                    self.closed = True
-                    if close_error:
-                        raise RuntimeError("close failed")
-
-            stream = BlockingStream()
-            runner = ClaudeSdkRunner(
-                AGENT,
-                False,
-                {},
-                message_stream=lambda *_args: stream,
-            )
-
-            async def collect():
-                events = []
-
-                async def emit(event):
-                    events.append(event)
-
-                await runner.run_turn("cancel me", Path("."), emit)
-                return events
-
-            consumer = asyncio.create_task(collect())
-            await asyncio.wait_for(entered.wait(), timeout=1.0)
-            consumer.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await consumer
-            self.assertTrue(stream.closed)
-
-        for close_error in (False, True):
-            with self.subTest(close_error=close_error):
-                asyncio.run(scenario(close_error))
 
 
 class ClaudeOptionMappingTests(unittest.TestCase):
@@ -457,6 +597,30 @@ class ClaudeOptionMappingTests(unittest.TestCase):
         self.assertEqual(captured["system_prompt"], {"type": "preset", "preset": "claude_code"})
         self.assertEqual(captured["tools"], {"type": "preset", "preset": "claude_code"})
 
+    def test_build_agent_options_omits_resume_fields_on_fresh_connections(self):
+        captured = {}
+
+        class FakeOptions:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        build_claude_agent_options(FakeOptions, {"model": "sonnet"}, Path("/w"))
+        self.assertNotIn("resume", captured)
+        self.assertNotIn("fork_session", captured)
+
+    def test_build_agent_options_continues_captured_session_on_reconnect(self):
+        captured = {}
+
+        class FakeOptions:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        build_claude_agent_options(
+            FakeOptions, {"model": "sonnet"}, Path("/w"), resume_session_id="sess-9"
+        )
+        self.assertEqual(captured["resume"], "sess-9")
+        self.assertIs(captured["fork_session"], False)
+
     def test_build_agent_options_passes_raw_thinking_budget(self):
         captured = {}
 
@@ -480,13 +644,501 @@ class ClaudeOptionMappingTests(unittest.TestCase):
         self.assertIn("tools", kwargs)
 
 
+class ClaudeProductionFactoryTests(unittest.TestCase):
+    @staticmethod
+    def _fake_module(state, turns):
+        module = ModuleType("claude_agent_sdk")
+        state.setdefault("clients", [])
+        state.setdefault("connects", 0)
+        state.setdefault("disconnects", 0)
+        state.setdefault("queries", [])
+        state.setdefault("open", 0)
+        state["turns"] = list(turns)
+
+        class FakeOptions:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class FakeClient:
+            def __init__(self, options):
+                state["clients"].append(dict(options.kwargs))
+                self.options = dict(options.kwargs)
+                self.is_open = False
+
+            async def connect(self):
+                error = state.get("connect_error")
+                if error is not None:
+                    raise error
+                if self.options.get("resume") is not None:
+                    resume_error = state.get("resume_error")
+                    if resume_error is not None:
+                        raise resume_error
+                state["connects"] += 1
+                state["open"] += 1
+                self.is_open = True
+
+            async def query(self, prompt):
+                if not self.is_open:
+                    raise AssertionError("query on a disconnected client")
+                error = state.get("query_error")
+                if error is not None:
+                    raise error
+                gate = state.get("query_gate")
+                if gate is not None:
+                    state["query_entered"].set()
+                    await gate.wait()
+                state["queries"].append(prompt)
+
+            async def receive_response(self):
+                if not self.is_open:
+                    raise AssertionError("receive on a disconnected client")
+                turn = state["turns"].pop(0)
+                if isinstance(turn, BaseException):
+                    raise turn
+                for message in turn:
+                    if callable(message):
+                        message = await message()
+                    if not self.is_open:
+                        raise AssertionError("receive on a disconnected client")
+                    yield message
+
+            async def disconnect(self):
+                if not self.is_open:
+                    return
+                self.is_open = False
+                state["open"] -= 1
+                state["disconnects"] += 1
+
+        module.ClaudeSDKClient = FakeClient
+        module.ClaudeAgentOptions = FakeOptions
+        return module
+
+    @staticmethod
+    def _runner(agent=AGENT, options=None):
+        return ClaudeSdkRunner(
+            agent,
+            False,
+            options or {},
+            conversation_factory=_default_conversation,
+        )
+
+    @staticmethod
+    async def _collect(runner, prompt):
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        outcome = await runner.run_turn(prompt, Path("/workspace"), emit)
+        return events, outcome
+
+    def test_one_client_connect_spans_two_completed_turns(self):
+        state = {}
+        module = self._fake_module(
+            state,
+            [
+                [
+                    SystemMessage("init", {"session_id": "sess-live"}),
+                    _result(session_id="sess-live"),
+                ],
+                [_assistant([TextBlock("two")]), _result(session_id="sess-live")],
+            ],
+        )
+        runner = self._runner(
+            options={"model": "sonnet", "permission_mode": "default", "thinking_level": "low"}
+        )
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                self.assertFalse(runner.conversation_active())
+                first = await self._collect(runner, "turn one")
+                self.assertTrue(runner.conversation_active())
+                second = await self._collect(runner, "turn two")
+                self.assertTrue(runner.conversation_active())
+                await runner.close()
+                await runner.close()
+                return first, second
+
+            first, second = asyncio.run(scenario())
+
+        self.assertEqual(first[1].outcome, "completed")
+        self.assertEqual(second[1].outcome, "completed")
+        # One client, one connect, two query/receive cycles on the live client.
+        self.assertEqual(len(state["clients"]), 1)
+        self.assertEqual(state["connects"], 1)
+        self.assertEqual(state["queries"], ["turn one", "turn two"])
+        self.assertEqual(state["disconnects"], 1)
+        self.assertEqual(state["open"], 0)
+        # Fresh first connection: presets and cwd present, resume/fork absent.
+        fresh = state["clients"][0]
+        self.assertEqual(fresh["cwd"], "/workspace")
+        self.assertEqual(fresh["setting_sources"], [])
+        self.assertEqual(fresh["system_prompt"], {"type": "preset", "preset": "claude_code"})
+        self.assertEqual(fresh["tools"], {"type": "preset", "preset": "claude_code"})
+        self.assertEqual(fresh["model"], "sonnet")
+        self.assertEqual(fresh["effort"], "low")
+        self.assertNotIn("resume", fresh)
+        self.assertNotIn("fork_session", fresh)
+        for events, _outcome in (first, second):
+            self.assertTrue(
+                any((event.raw or {}).get("provider_session_id") == "sess-live" for event in events)
+            )
+        self.assertFalse(runner.conversation_active())
+
+    def test_abnormal_turn_resets_once_then_reconnects_with_captured_id(self):
+        state = {}
+        module = self._fake_module(
+            state,
+            [
+                [_result(session_id="sess-live")],
+                [_result(session_id="sess-live", is_error=True, subtype="error")],
+                [_assistant([TextBlock("three")]), _result(session_id="sess-live")],
+            ],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                first = await self._collect(runner, "one")
+                failed = await self._collect(runner, "two")
+                self.assertTrue(runner.conversation_active())
+                third = await self._collect(runner, "three")
+                await runner.close()
+                return first, failed, third
+
+            first, failed, third = asyncio.run(scenario())
+
+        self.assertEqual(
+            [item[1].outcome for item in (first, failed, third)],
+            ["completed", "failed", "completed"],
+        )
+        self.assertEqual(len(state["clients"]), 2)
+        fresh, reconnect = state["clients"]
+        self.assertNotIn("resume", fresh)
+        self.assertEqual(reconnect["resume"], "sess-live")
+        self.assertIs(reconnect["fork_session"], False)
+        self.assertEqual(state["connects"], 2)
+        # One reset disconnect after the failed turn plus the final close.
+        self.assertEqual(state["disconnects"], 2)
+
+    def test_resume_rejection_is_structured_and_never_starts_fresh(self):
+        state = {}
+        module = self._fake_module(
+            state,
+            [
+                [_result(session_id="sess-live")],
+                [_result(session_id="sess-live", is_error=True, subtype="error")],
+            ],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                await self._collect(runner, "one")
+                await self._collect(runner, "fail and reset")
+                state["resume_error"] = RuntimeError(
+                    "No conversation found with session ID: sess-live"
+                )
+                rejected = await self._collect(runner, "must resume")
+                rejected_again = await self._collect(runner, "must still resume")
+                await runner.close()
+                return rejected, rejected_again
+
+            rejected, rejected_again = asyncio.run(scenario())
+
+        self.assertEqual(rejected[1].code, "provider_transport_failed")
+        self.assertTrue(
+            any(
+                event.type == "error" and "No conversation found" in event.text
+                for event in rejected[0]
+            )
+        )
+        self.assertEqual(rejected_again[1].code, "provider_transport_failed")
+        # Only the first fresh connect ever happened; every reconnect carried
+        # the captured resume id and none opened a fresh provider session.
+        self.assertEqual(state["connects"], 1)
+        self.assertEqual(
+            [client.get("resume") for client in state["clients"]],
+            [None, "sess-live", "sess-live"],
+        )
+        self.assertFalse(runner.conversation_active())
+
+    def test_failed_resume_replays_undelivered_delta_after_recovery(self):
+        state = {}
+        module = self._fake_module(
+            state,
+            [
+                [_result(session_id="sess-live")],
+                [_result(session_id="sess-live", is_error=True, subtype="error")],
+                [_assistant([TextBlock("recovered")]), _result(session_id="sess-live")],
+            ],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                await self._collect(runner, "one")
+                await self._collect(runner, "fail and reset")
+                state["resume_error"] = RuntimeError("temporary reconnect failure")
+                rejected = await self._collect(runner, "SECRET_BLUE")
+                del state["resume_error"]
+                recovered = await self._collect(runner, "what was blue?")
+                await runner.close()
+                return rejected, recovered
+
+            rejected, recovered = asyncio.run(scenario())
+
+        self.assertEqual(rejected[1].code, "provider_transport_failed")
+        self.assertEqual(recovered[1].outcome, "completed")
+        self.assertEqual(
+            state["queries"],
+            ["one", "fail and reset", "SECRET_BLUE\n\nwhat was blue?"],
+        )
+
+    def test_connect_failure_retains_undelivered_prompt(self):
+        state = {}
+        module = self._fake_module(
+            state,
+            [[_assistant([TextBlock("late")]), _result(session_id="sess-live")]],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                state["connect_error"] = RuntimeError("spawn failed")
+                failed = await self._collect(runner, "first delta")
+                del state["connect_error"]
+                recovered = await self._collect(runner, "second delta")
+                await runner.close()
+                return failed, recovered
+
+            failed, recovered = asyncio.run(scenario())
+
+        self.assertEqual(failed[1].code, "provider_transport_failed")
+        self.assertEqual(recovered[1].outcome, "completed")
+        self.assertEqual(state["queries"], ["first delta\n\nsecond delta"])
+
+    def test_query_failure_is_structured_and_never_replays_the_handed_off_prompt(self):
+        # Once the prompt is handed to the client's query() call, delivery is
+        # uncertain and a replay would risk a duplicate provider turn — the
+        # same hand-off boundary the codex adapter uses.
+        state = {}
+        module = self._fake_module(
+            state,
+            [[_assistant([TextBlock("ok")]), _result(session_id="sess-live")]],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                state["query_error"] = RuntimeError("transport write failed")
+                failed = await self._collect(runner, "first")
+                del state["query_error"]
+                recovered = await self._collect(runner, "second")
+                await runner.close()
+                return failed, recovered
+
+            failed, recovered = asyncio.run(scenario())
+
+        self.assertEqual(failed[1].code, "provider_transport_failed")
+        self.assertEqual(recovered[1].outcome, "completed")
+        self.assertEqual(state["queries"], ["second"])
+        # The failed turn's client was reset (disconnected) exactly once.
+        self.assertEqual(state["disconnects"], 2)  # reset + final close
+
+    def test_cancellation_inside_query_never_replays_the_prompt(self):
+        # A cancel that lands inside query() after hand-off must not queue the
+        # prompt for replay: the CLI may already have accepted the message and
+        # a replay would duplicate the user turn on the resumed session.
+        state = {}
+        module = self._fake_module(
+            state,
+            [[_assistant([TextBlock("ok")]), _result(session_id="sess-live")]],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                state["query_gate"] = asyncio.Event()
+                state["query_entered"] = asyncio.Event()
+                turn = asyncio.create_task(self._collect(runner, "first"))
+                await state["query_entered"].wait()
+                turn.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await turn
+                del state["query_gate"]
+                recovered = await self._collect(runner, "second")
+                await runner.close()
+                return recovered
+
+            recovered = asyncio.run(scenario())
+
+        self.assertEqual(recovered[1].outcome, "completed")
+        self.assertEqual(state["queries"], ["second"])
+
+    def test_receive_failure_resets_then_recovers_on_the_captured_session(self):
+        state = {}
+        module = self._fake_module(
+            state,
+            [
+                [_result(session_id="sess-live")],
+                RuntimeError("stream broke"),
+                [_assistant([TextBlock("three")]), _result(session_id="sess-live")],
+            ],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                first = await self._collect(runner, "one")
+                broken = await self._collect(runner, "two")
+                self.assertTrue(runner.conversation_active())
+                third = await self._collect(runner, "three")
+                await runner.close()
+                return first, broken, third
+
+            first, broken, third = asyncio.run(scenario())
+
+        self.assertEqual(first[1].outcome, "completed")
+        self.assertEqual(broken[1].code, "provider_transport_failed")
+        self.assertTrue(
+            any(event.type == "error" and "stream broke" in event.text for event in broken[0])
+        )
+        # The mid-receive failure dirties the live client: recovery must be a
+        # reconnect that resumes the captured id, never a fresh session.
+        self.assertEqual(third[1].outcome, "completed")
+        self.assertEqual(len(state["clients"]), 2)
+        self.assertEqual(state["clients"][1]["resume"], "sess-live")
+        self.assertIs(state["clients"][1]["fork_session"], False)
+        self.assertEqual(state["queries"], ["one", "two", "three"])
+        # Reset after the broken turn, then the final close of the reconnect.
+        self.assertEqual(state["disconnects"], 2)
+
+    def test_missing_result_keeps_captured_id_and_resumes_never_fresh(self):
+        # A session id can be observed before any ResultMessage (the CLI's
+        # init message). If the turn then ends without a terminal result, the
+        # delivered prompt already lives in provider context — the reconnect
+        # must resume the captured id, never silently open a fresh session
+        # (verified resumable on 0.2.126 even when turn 1 never finished).
+        state = {}
+        module = self._fake_module(
+            state,
+            [
+                [SystemMessage("init", {"session_id": "sess-live"})],
+                [_assistant([TextBlock("two")]), _result(session_id="sess-live")],
+            ],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                incomplete = await self._collect(runner, "one")
+                self.assertTrue(runner.conversation_active())
+                second = await self._collect(runner, "two")
+                await runner.close()
+                return incomplete, second
+
+            incomplete, second = asyncio.run(scenario())
+
+        self.assertEqual(incomplete[1].code, "provider_output_incomplete")
+        self.assertEqual(second[1].outcome, "completed")
+        self.assertEqual(len(state["clients"]), 2)
+        self.assertNotIn("resume", state["clients"][0])
+        self.assertEqual(state["clients"][1]["resume"], "sess-live")
+        self.assertIs(state["clients"][1]["fork_session"], False)
+
+    def test_close_serializes_behind_an_in_flight_turn(self):
+        state = {}
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocking_message():
+            started.set()
+            await release.wait()
+            return _result(session_id="sess-live")
+
+        module = self._fake_module(state, [[blocking_message]])
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                turn = asyncio.create_task(self._collect(runner, "block"))
+                await started.wait()
+                close = asyncio.create_task(runner.close())
+                await asyncio.sleep(0)
+                self.assertFalse(close.done())
+                self.assertEqual(state["disconnects"], 0)
+                release.set()
+                events, outcome = await turn
+                await close
+                return outcome
+
+            outcome = asyncio.run(scenario())
+
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertEqual(state["disconnects"], 1)
+        self.assertEqual(state["open"], 0)
+
+    def test_close_serializes_behind_a_cancelled_turn(self):
+        state = {}
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocking_message():
+            started.set()
+            await release.wait()
+            return _result(session_id="sess-live")
+
+        module = self._fake_module(state, [[blocking_message]])
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                turn = asyncio.create_task(self._collect(runner, "block"))
+                await started.wait()
+                turn.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await turn
+                await runner.close()
+
+            asyncio.run(scenario())
+
+        self.assertEqual(state["disconnects"], 1)
+        self.assertEqual(state["open"], 0)
+
+    def test_default_conversation_reports_missing_or_incompatible_module(self):
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": None}):
+            with self.assertRaises(BackendUnavailable) as missing:
+                _default_conversation(AGENT, {}, Path("."))
+        self.assertIn("claude-agent-sdk", str(missing.exception))
+
+        incompatible = ModuleType("claude_agent_sdk")
+        incompatible.ClaudeSDKClient = object
+        incompatible.ClaudeAgentOptions = object
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": incompatible}):
+            with self.assertRaises(BackendUnavailable) as wrong_api:
+                _default_conversation(AGENT, {}, Path("."))
+        self.assertIn("connect", str(wrong_api.exception))
+
+
 class ClaudeBackendSurfaceTests(unittest.TestCase):
     def test_registered_pair_and_honest_capabilities(self):
         self.assertTrue(backends.is_registered("claude", "sdk"))
         caps = backends.capabilities_for("claude", "sdk")
         self.assertEqual(
             caps.to_dict(),
-            {"resume": False, "interrupt": False, "tool_gate": False, "continuity": False},
+            {"resume": False, "interrupt": False, "tool_gate": False, "continuity": True},
         )
 
     def test_probe_reports_unavailable_with_install_hint(self):
@@ -509,41 +1161,7 @@ class ClaudeBackendSurfaceTests(unittest.TestCase):
         self.assertEqual(summary["setting_sources"], "none")
         self.assertEqual(summary["system_prompt"], "claude_code")
         self.assertEqual(summary["tools"], "claude_code")
-
-    def test_default_stream_calls_query_and_returns_its_async_iterator(self):
-        captured = {}
-        fake_module = ModuleType("claude_agent_sdk")
-
-        class FakeOptions:
-            def __init__(self, **kwargs):
-                captured["options"] = kwargs
-
-        async def fake_query(*, prompt, options):
-            captured["prompt"] = prompt
-            captured["instance"] = options
-            yield _assistant([TextBlock("fake response")])
-
-        fake_module.ClaudeAgentOptions = FakeOptions
-        fake_module.query = fake_query
-        with mock.patch.dict("sys.modules", {"claude_agent_sdk": fake_module}):
-            stream = _default_message_stream(AGENT, {"model": "sonnet"}, Path("/w"), "hi")
-
-        async def collect():
-            return [message async for message in stream]
-
-        messages = asyncio.run(collect())
-        self.assertEqual(messages[0].content[0].text, "fake response")
-        self.assertEqual(captured["prompt"], "hi")
-        self.assertEqual(captured["options"]["model"], "sonnet")
-        self.assertEqual(captured["options"]["tools"]["preset"], "claude_code")
-
-    def test_default_stream_raises_backend_unavailable_when_module_absent(self):
-        import sys
-
-        with mock.patch.dict(sys.modules, {"claude_agent_sdk": None}):
-            with self.assertRaises(BackendUnavailable) as ctx:
-                _default_message_stream(AGENT, {}, Path("."), "hi")
-        self.assertIn("claude-agent-sdk", str(ctx.exception))
+        self.assertEqual(summary["conversation"], "persistent")
 
 
 if __name__ == "__main__":

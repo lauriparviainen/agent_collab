@@ -13,6 +13,16 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add native **Claude SDK session continuity** (#47, stage 5). One runner now
+  holds a persistent `ClaudeSDKClient` across live-session turns (verified on
+  `claude-agent-sdk` 0.2.126), reconnects the captured provider session id
+  after abnormal turns through `ClaudeAgentOptions(resume=<sid>,
+  fork_session=False)`, replays an undelivered prompt after a later successful
+  reconnect, and fails a rejected resume without silently starting fresh.
+  `claude_sdk` now advertises `continuity: true` and
+  `conversation: "persistent"` after hermetic lifecycle coverage plus a
+  credentialed two-turn provider-memory check; `resume`, `interrupt`, and
+  `tool_gate` stay false.
 - Add native **Codex SDK thread continuity** (#47, stage 4). One runner now
   holds an `AsyncCodex` client/thread across live-session turns, reconnects a
   captured thread id after abnormal turns through `thread_resume`, and fails a

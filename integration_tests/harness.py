@@ -65,7 +65,12 @@ async def _collect(runner: Any, prompt: str, workdir: Path) -> tuple[list, Any]:
     async def emit(event: Any) -> None:
         events.append(event)
 
-    outcome = await runner.run_turn(prompt, workdir, emit)
+    try:
+        outcome = await runner.run_turn(prompt, workdir, emit)
+    finally:
+        # Continuity runners hold a live provider client across turns; release
+        # it inside the loop instead of leaking the child to interpreter exit.
+        await runner.close()
     return events, outcome
 
 

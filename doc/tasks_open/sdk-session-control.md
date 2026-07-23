@@ -126,14 +126,36 @@ handle #20's `interrupt()` and restart-safe resume build on.
   queue's unfinished-task count is a clean "settled" signal (used by
   `wait_result`). #20's proposed `awaiting_approval` status can reuse that
   wait/settle mechanism.
-- **Claude SDK — `claude-agent-sdk` 0.2.114:** supports a persistent
-  `ClaudeSDKClient` (`connect` / `query` / `receive_response` / `interrupt` /
-  `disconnect`) and `ClaudeAgentOptions.resume` + `fork_session`. Its reader task
-  is loop-scoped (`spawn_detached` uses `loop.create_task`), so a client
-  connected during one turn's task survives into the next; an `atexit` child
-  killer reaps orphaned CLI subprocesses on ungraceful exit. This is the
+- **Claude SDK — implementation-time `claude-agent-sdk` 0.2.126 (bundled CLI
+  2.1.218):** one connected `ClaudeSDKClient` (`connect` / `query` /
+  `receive_response` / `interrupt` / `disconnect`) accepts sequential
+  `query()`/`receive_response()` turns on one provider session. A credentialed
+  haiku fixture completed two turns on one client: turn 2 received no codeword
+  in its prompt and recalled turn 1's codeword, and every message across both
+  turns carried the same `session_id`. After `disconnect()`,
+  `ClaudeAgentOptions(resume=<sid>, fork_session=False)` reconnected the exact
+  captured id with memory intact (a third fixture turn); resuming an unknown id
+  fails `connect()` with a `ProcessError` (CLI exit 1, "No conversation found
+  with session ID") — never a silent fresh session. A session is materialized
+  incrementally during its first turn: a fixture that abandoned turn 1 right
+  after the init `session_id` message (no `ResultMessage` ever observed) and
+  disconnected still resumed the exact id with the delivered prompt's context
+  intact — resumability begins at the first delivered user message, not at the
+  first terminal result. The client is
+  loop-scoped but usable across asyncio tasks within one loop: its reader task
+  is detached (`spawn_detached` -> `loop.create_task`), so a client connected in
+  one turn's task survives into the next; an `atexit` child killer reaps
+  orphaned CLI subprocesses on ungraceful exit. Cancelling the local consumer
+  does not stop provider work — the detached reader and CLI subprocess keep
+  running until `disconnect()` (whose subprocess close is internally bounded,
+  ~20 s worst-case terminate/kill escalation). A cancelled `connect()` unwinds
+  itself via the SDK's own failure-path `disconnect()`; `disconnect()` is
+  idempotent. `disconnect()` closes the receive stream side the consumer owns,
+  so it must not race an active `receive_response()` — the conversation adapter
+  serializes run/reset/close internally. The persistent client is the
   precondition for the `can_use_tool` callback — `tool_gate` cannot exist on a
-  one-shot `query()`.
+  one-shot `query()`. `claude_sdk.continuity` is true; `resume`, `interrupt`,
+  and `tool_gate` remain false.
 - **Codex SDK — implementation-time `openai-codex` 0.1.0b3 with
   `openai-codex-cli-bin` 0.137.0a4; configured local CLI 0.144.4:** one open
   `AsyncCodex` owns an `AsyncThread` whose public `run()` accepts repeated
@@ -206,7 +228,7 @@ an agent-collab tool gate.
 The SDKs are version-sensitive. Before implementing a provider, inspect the
 installed pinned version and capture a no-model or lowest-cost fixture for the
 exact API used. The Claude persistent-client facts above are verified on
-0.2.114; the continuity stages of #47 record each backend's verified thread
+0.2.126; the continuity stages of #47 record each backend's verified thread
 facts as they land.
 
 ### Claude SDK
