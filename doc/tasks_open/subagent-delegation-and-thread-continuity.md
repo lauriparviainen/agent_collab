@@ -29,10 +29,27 @@ re-evaluation keeps or moves preference to `wait_events`, its returned payload
 must first be optimized so streaming does not bloat the calling agent's
 context — today each batch carries full event objects (source/type/text/raw),
 and a long session streams far more tokens than the settled answer justifies.
-Candidate directions to weigh, not commitments: a compact event projection for
-watch loops (beyond `tool_output: "summary"`), a `timeout_ms=0` instant-peek
-form of `wait_result`, guidance recommending 30–45 s bounds for short-cap MCP
-clients, and eventually SSE push on `GET /mcp`.
+Candidate directions to weigh, not commitments — guidance/economics first:
+
+1. A compact event projection for watch loops (beyond `tool_output:
+   "summary"`), a `timeout_ms=0` instant-peek form of `wait_result`, and
+   guidance recommending 30–45 s bounds for short-cap MCP clients.
+2. **MCP channels**: Claude Code documents a `claude/channel` server
+   capability that pushes messages directly into the session so the agent can
+   react to external events (CI results, alerts). Exposing "session settled"
+   as a channel event is the purpose-built no-polling wake path; assess
+   protocol cost and cross-client support.
+3. **Client auto-backgrounding**: Claude Code v2.1.212+ moves MCP tool calls
+   running longer than ~2 minutes to background tasks, delivering the result
+   as a task notification while the agent stays responsive. Verify against
+   reality before designing for it: in the 2026-07-24 session this did not
+   trigger — the client killed the call near 60 s — so the interaction with
+   per-server timeouts and the VS Code extension needs testing.
+4. Raw SSE push on `GET /mcp` is demoted: the legacy SSE transport is
+   deprecated, and whether Claude Code opens the Streamable HTTP GET side for
+   unsolicited notifications (or ever wakes the model outside a tool call
+   from one) is undocumented. Do not build toward it without client-side
+   evidence.
 
 ## Context
 
