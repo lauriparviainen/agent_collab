@@ -14,6 +14,7 @@ from .api_schema import (
     HealthModel,
     PruneResultModel,
     SessionListModel,
+    SessionResultModel,
     SessionStateModel,
     TranscriptModel,
 )
@@ -96,6 +97,16 @@ class AgentCollabClient:
                 "GET",
                 f"/sessions/{session_id}/events/wait",
                 {"cursor": cursor, "timeout_ms": timeout_ms, "tool_output": tool_output},
+                timeout=max(self.timeout, (timeout_ms / 1000.0) + 5),
+            )
+        )
+
+    def wait_result(self, session_id: str, timeout_ms: int = 60000) -> SessionResultModel:
+        return SessionResultModel.from_dict(
+            self._request(
+                "GET",
+                f"/sessions/{session_id}/result",
+                {"timeout_ms": timeout_ms},
                 timeout=max(self.timeout, (timeout_ms / 1000.0) + 5),
             )
         )

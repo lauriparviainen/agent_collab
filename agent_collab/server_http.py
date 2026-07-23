@@ -21,6 +21,7 @@ from .api_schema import (
     Route,
     TranscriptRequestModel,
     WaitEventsRequestModel,
+    WaitResultRequestModel,
 )
 from .config import CollaborationConfig, SessionsConfig
 from .daemon import (
@@ -401,6 +402,12 @@ class AgentCollabHttpServer:
                 tool_output=request.tool_output,
             )
         ).to_dict()
+
+    async def _route_wait_result(
+        self, _route: Route, path: Dict[str, str], query: Dict[str, str], _body: bytes
+    ) -> Any:
+        request = _parse(WaitResultRequestModel.from_dict, query)
+        return (await self.manager.wait_result(path["session_id"], request.timeout_ms)).to_dict()
 
     async def _route_post_message(
         self, _route: Route, path: Dict[str, str], _query: Dict[str, str], body: bytes

@@ -1,6 +1,31 @@
 {
   "components": {
     "schemas": {
+      "AgentAnswerModel": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "event_id": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "text",
+          "event_id",
+          "timestamp"
+        ],
+        "type": "object"
+      },
       "ErrorModel": {
         "additionalProperties": false,
         "properties": {
@@ -434,6 +459,96 @@
         ],
         "type": "object"
       },
+      "SessionResultModel": {
+        "additionalProperties": false,
+        "properties": {
+          "answers": {
+            "items": {
+              "$ref": "#/components/schemas/AgentAnswerModel"
+            },
+            "type": "array"
+          },
+          "cursor": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "additionalProperties": {},
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "jsonl_path": {
+            "type": "string"
+          },
+          "markdown_path": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "settled": {
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "awaiting_input",
+              "done",
+              "failed",
+              "stopped",
+              "interrupted"
+            ],
+            "type": "string"
+          },
+          "terminal": {
+            "type": "boolean"
+          },
+          "turn_outcomes": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {},
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id",
+          "status",
+          "terminal",
+          "settled",
+          "cursor",
+          "error",
+          "failure",
+          "turn_outcomes",
+          "answers",
+          "markdown_path",
+          "jsonl_path"
+        ],
+        "type": "object"
+      },
       "SessionStateModel": {
         "additionalProperties": false,
         "properties": {
@@ -714,6 +829,18 @@
               "full"
             ],
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "WaitResultRequestModel": {
+        "additionalProperties": false,
+        "properties": {
+          "timeout_ms": {
+            "default": 60000,
+            "maximum": 600000,
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "type": "object"
@@ -1982,6 +2109,136 @@
           }
         ],
         "summary": "Post input to an interactive session"
+      }
+    },
+    "/sessions/{session_id}/result": {
+      "get": {
+        "operationId": "wait_result_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timeout_ms",
+            "required": false,
+            "schema": {
+              "default": 60000,
+              "maximum": 600000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResultModel"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Long-poll until a session settles and return its result"
       }
     },
     "/sessions/{session_id}/stop": {

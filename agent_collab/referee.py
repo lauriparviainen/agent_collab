@@ -125,7 +125,13 @@ class RefereeConfig:
     status_callback: Optional[Callable[[str], Awaitable[None]]] = None
     event_appender_callback: Optional[Callable[[Optional[EventAppender]], Awaitable[None]]] = None
     turn_active_callback: Optional[Callable[[bool], Awaitable[None]]] = None
+    # True while the interactive input loop is live and will consume a posted
+    # message; cleared before the loop unwinds on idle timeout, failure, or stop.
+    input_accepting_callback: Optional[Callable[[bool], Awaitable[None]]] = None
     outcome_commit_callback: Optional[OutcomeCommitter] = None
+    # Records one agent's answer for a completed turn: {agent_id, text,
+    # event_id, timestamp}. Never called for a non-completed turn.
+    answer_commit_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None
     stop_signal: Optional[RefereeStopSignal] = None
 
 
@@ -272,6 +278,47 @@ class Referee:
         if self.config.turn_active_callback is not None:
             await self.config.turn_active_callback(active)
 
+    async def _set_input_accepting(self, accepting: bool) -> None:
+        if self.config.input_accepting_callback is not None:
+            await self.config.input_accepting_callback(accepting)
+
+    async def _record_answer(self, answer: Dict[str, Any]) -> None:
+        if self.config.answer_commit_callback is not None:
+            await self.config.answer_commit_callback(answer)
+
+    def _find_turn_answer(
+        self, transcript: List[Event], span_start: int, agent_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """The answer for one completed turn: the agent's final-marked message
+        event when the backend marked one, else its last message event in the
+        turn's span. Filtering by ``agent_id`` isolates the turn even when a
+        parallel stage interleaves peers into the shared transcript. Returns None
+        when the turn emitted no usable message (contributes no answer)."""
+
+        answer_index: Optional[int] = None
+        final_index: Optional[int] = None
+        for index in range(span_start, len(transcript)):
+            event = transcript[index]
+            if (
+                event.agent_id == agent_id
+                and event.type == "message"
+                and event.source != "error"
+                and event.text.strip()
+            ):
+                answer_index = index
+                if isinstance(event.raw, dict) and event.raw.get("final"):
+                    final_index = index
+        chosen = final_index if final_index is not None else answer_index
+        if chosen is None:
+            return None
+        event = transcript[chosen]
+        return {
+            "agent_id": agent_id,
+            "text": event.text,
+            "event_id": chosen,
+            "timestamp": event.timestamp,
+        }
+
     def _allocate_occurrence(self) -> str:
         turn_id = f"turn-{self._next_turn_number}"
         self._next_turn_number += 1
@@ -289,6 +336,7 @@ class Referee:
         logger: SessionLogger,
         transcript: List[Event],
         record: TurnOutcomeRecord,
+        answer: Optional[Dict[str, Any]] = None,
     ) -> None:
         if record.turn_id in self._committed_turn_ids:
             raise RuntimeError(f"outcome already committed for {record.turn_id}")
@@ -313,6 +361,11 @@ class Referee:
             else:
                 self.printer(boundary)
             self._committed_turn_ids.add(record.turn_id)
+        # The answer is recorded inside the same shielded call as the outcome so
+        # a cancellation (stop) landing on the shield's awaiter never lets a
+        # completed outcome commit without its ledger entry.
+        if answer is not None:
+            await self._record_answer(answer)
 
     async def _cancel_runner_bounded(self, runner_task: asyncio.Task) -> None:
         runner_task.cancel()
@@ -347,6 +400,11 @@ class Referee:
         manage_turn_active: bool = True,
         event_observer: Optional[Callable[[Event], None]] = None,
     ) -> TurnOutcomeRecord:
+        # The event span for this turn's answer starts here, before the runner
+        # emits anything. transcript index == daemon event id (appended in
+        # lockstep), so a recorded answer event_id is a valid read_events cursor.
+        answer_span_start = len(transcript)
+
         async def emit(event: Event) -> None:
             # Workflow ownership is authoritative. Backends cannot attribute
             # their stream to another configured member.
@@ -411,7 +469,18 @@ class Referee:
                 backend=self._canonical_backend(agent_id),
                 outcome=outcome,
             )
-            await asyncio.shield(self._commit_outcome(logger, transcript, record))
+            # Compute the answer before committing (a sync, cancellation-free
+            # step): a failed/refused turn contributes nothing, and the boundary
+            # about to be appended is a status event the message filter ignores.
+            answer = (
+                self._find_turn_answer(transcript, answer_span_start, agent_id)
+                if record.outcome == "completed"
+                else None
+            )
+            # Commit the outcome and record its answer atomically under the shield
+            # so a stop cancellation never lands a completed outcome without its
+            # ledger entry.
+            await asyncio.shield(self._commit_outcome(logger, transcript, record, answer))
             # A provider result that was already complete at arbitration keeps
             # its truthful outcome, but a concurrent registered stop still
             # ends this workflow now instead of launching another turn.
@@ -586,6 +655,11 @@ class Referee:
             try:
                 item = await asyncio.wait_for(queue.get(), timeout=timeout)
             except asyncio.TimeoutError:
+                # Stop accepting BEFORE the closing emit: this branch has decided
+                # to leave the loop, and _emit awaits, so a post landing during
+                # that await would enqueue input no one will ever consume. The
+                # callback is await-free, so the flag drops with no suspension.
+                await self._set_input_accepting(False)
                 await self._emit(
                     logger,
                     transcript,
@@ -694,8 +768,17 @@ class Referee:
                         raise RequiredTurnFailed(record)
                 if self.config.interactive:
                     await self._process_pending_inputs(logger, transcript, runners, task)
+                    # Accept input before announcing awaiting_input, and clear it
+                    # before any unwinding: the finally runs the moment the loop
+                    # exits (idle timeout, a failed directed turn, or a stop
+                    # cancellation), so the awaiting_input -> terminal window is
+                    # never seen as settled and never accepts an unread post.
+                    await self._set_input_accepting(True)
                     await self._set_status("awaiting_input")
-                    await self._await_interactive_input(logger, transcript, runners, task)
+                    try:
+                        await self._await_interactive_input(logger, transcript, runners, task)
+                    finally:
+                        await self._set_input_accepting(False)
                     await self._emit_final_summary(logger, transcript, len(stages))
                     await self._set_status("done")
                 else:

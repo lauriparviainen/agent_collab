@@ -3,9 +3,26 @@ import io
 import unittest
 from unittest import mock
 
-from agent_collab.api_schema import PruneResultModel, PruneSessionDetailModel
+from agent_collab.api_schema import PruneResultModel, PruneSessionDetailModel, SessionResultModel
 from agent_collab.cli import main
 from agent_collab.client import ClientError
+
+
+def _session_result(settled, **overrides):
+    data = {
+        "session_id": "s1",
+        "status": "done" if settled else "running",
+        "terminal": settled,
+        "settled": settled,
+        "cursor": 5 if settled else 1,
+        "answers": (
+            [{"agent_id": "claude_cli", "text": "the answer", "event_id": 3, "timestamp": "t"}]
+            if settled
+            else []
+        ),
+    }
+    data.update(overrides)
+    return SessionResultModel.from_dict(data)
 
 
 def _result(**overrides):
@@ -144,6 +161,53 @@ class SessionsPruneCliTests(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("retention is disabled", err)
+
+
+class ResultCliTests(unittest.TestCase):
+    def test_loops_through_heartbeats_until_settled(self):
+        client = mock.Mock()
+        client.wait_result.side_effect = [_session_result(False), _session_result(True)]
+
+        code, out, _err = _run(["result", "s1"], client)
+
+        self.assertEqual(code, 0)
+        # The command absorbs the heartbeat internally and re-polls until settled.
+        self.assertEqual(client.wait_result.call_count, 2)
+        self.assertIn("status", out)
+        self.assertIn("done", out)
+        self.assertIn("the answer", out)
+
+    def test_timeout_ms_expiry_exits_with_distinct_code(self):
+        client = mock.Mock()
+        client.wait_result.return_value = _session_result(False)
+
+        code, out, _err = _run(["result", "s1", "--timeout-ms", "0"], client)
+
+        self.assertEqual(code, 124)
+        client.wait_result.assert_called_once_with("s1", 0)
+        self.assertIn("did not settle", out)
+
+    def test_json_emits_settled_result(self):
+        import json as json_module
+
+        client = mock.Mock()
+        client.wait_result.side_effect = [_session_result(True)]
+
+        code, out, _err = _run(["result", "s1", "--json"], client)
+
+        self.assertEqual(code, 0)
+        payload = json_module.loads(out)
+        self.assertTrue(payload["settled"])
+        self.assertEqual(payload["answers"][0]["agent_id"], "claude_cli")
+
+    def test_daemon_errors_surface_as_cli_errors(self):
+        client = mock.Mock()
+        client.wait_result.side_effect = ClientError("unknown session_id s1")
+
+        code, _out, err = _run(["result", "s1"], client)
+
+        self.assertEqual(code, 1)
+        self.assertIn("unknown session_id", err)
 
 
 if __name__ == "__main__":

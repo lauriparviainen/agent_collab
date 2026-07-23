@@ -24,6 +24,7 @@ from .api_schema import (
     API_VERSION,
     API_VERSION_HEADER,
     ROUTES,
+    AgentAnswerModel,
     ErrorModel,
     EventBatchModel,
     EventModel,
@@ -35,11 +36,13 @@ from .api_schema import (
     PruneSessionsRequestModel,
     ReadEventsRequestModel,
     SessionListModel,
+    SessionResultModel,
     SessionStateModel,
     StartSessionRequestModel,
     TranscriptModel,
     TranscriptRequestModel,
     WaitEventsRequestModel,
+    WaitResultRequestModel,
 )
 from .config import load_config
 
@@ -56,6 +59,8 @@ _MODELS = (
     EventModel,
     EventBatchModel,
     TranscriptModel,
+    AgentAnswerModel,
+    SessionResultModel,
     ErrorModel,
     PruneResultModel,
     PruneSessionDetailModel,
@@ -65,6 +70,7 @@ _MODELS = (
     PruneSessionsRequestModel,
     ReadEventsRequestModel,
     WaitEventsRequestModel,
+    WaitResultRequestModel,
     TranscriptRequestModel,
 )
 _REQUEST_MODELS = {
@@ -74,6 +80,7 @@ _REQUEST_MODELS = {
     PruneSessionsRequestModel,
     ReadEventsRequestModel,
     WaitEventsRequestModel,
+    WaitResultRequestModel,
     TranscriptRequestModel,
 }
 _UNION_ORIGINS = {Union}
@@ -86,6 +93,12 @@ _FIELD_SCHEMAS: Dict[Tuple[type, str], Dict[str, Any]] = {
     (SessionStateModel, "status"): {
         "enum": ["running", "awaiting_input", "done", "failed", "stopped", "interrupted"]
     },
+    (SessionResultModel, "status"): {
+        "enum": ["running", "awaiting_input", "done", "failed", "stopped", "interrupted"]
+    },
+    (SessionResultModel, "cursor"): {"minimum": 0},
+    (AgentAnswerModel, "event_id"): {"minimum": 0},
+    (WaitResultRequestModel, "timeout_ms"): {"minimum": 0, "maximum": 600000},
     (StartSessionRequestModel, "task"): {"minLength": 1, "pattern": r".*\S.*"},
     (StartSessionRequestModel, "workdir"): {"minLength": 1, "pattern": r".*\S.*"},
     (OptionsRequestModel, "workdir"): {"minLength": 1, "pattern": r".*\S.*"},
@@ -290,6 +303,7 @@ def _summary(route: Any) -> str:
         "get_session": "Read one session",
         "read_events": "Read session events from a cursor",
         "wait_events": "Long-poll session events from a cursor",
+        "wait_result": "Long-poll until a session settles and return its result",
         "post_message": "Post input to an interactive session",
         "read_transcript": "Read a session transcript",
         "stop_session": "Stop a live session",

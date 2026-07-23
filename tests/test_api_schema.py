@@ -24,6 +24,7 @@ from agent_collab.api_schema import (
     NON_USER_START_FIELDS,
     ROUTES,
     SERVER_ONLY_ROUTES,
+    AgentAnswerModel,
     EventBatchModel,
     ErrorModel,
     HealthModel,
@@ -33,11 +34,13 @@ from agent_collab.api_schema import (
     PruneSessionsRequestModel,
     ReadEventsRequestModel,
     SessionListModel,
+    SessionResultModel,
     SessionStateModel,
     StartSessionRequestModel,
     TranscriptModel,
     TranscriptRequestModel,
     WaitEventsRequestModel,
+    WaitResultRequestModel,
 )
 from agent_collab.api_schema import API_VERSION, API_VERSION_HEADER
 from agent_collab.client import AgentCollabClient, ClientError, _assert_compatible_api
@@ -291,6 +294,57 @@ class ModelRoundTripTests(unittest.TestCase):
         }
         self.assertEqual(EventBatchModel.from_dict(payload).to_dict(), payload)
 
+    def test_session_result_round_trips_with_answers(self):
+        payload = {
+            "session_id": "daemon-abc",
+            "status": "done",
+            "terminal": True,
+            "settled": True,
+            "cursor": 9,
+            "error": None,
+            "failure": None,
+            "turn_outcomes": [{"turn_id": "turn-1", "outcome": "completed"}],
+            "answers": [
+                {
+                    "agent_id": "claude_cli",
+                    "text": "the answer",
+                    "event_id": 4,
+                    "timestamp": "2026-07-23T00:00:00+00:00",
+                }
+            ],
+            "markdown_path": "/logs/daemon-abc.md",
+            "jsonl_path": "/logs/daemon-abc.jsonl",
+        }
+        decoded = SessionResultModel.from_dict(payload)
+        self.assertIsInstance(decoded.answers[0], AgentAnswerModel)
+        self.assertEqual(decoded.to_dict(), payload)
+
+    def test_session_result_round_trips_heartbeat(self):
+        payload = {
+            "session_id": "daemon-abc",
+            "status": "running",
+            "terminal": False,
+            "settled": False,
+            "cursor": 2,
+            "error": None,
+            "failure": None,
+            "turn_outcomes": [],
+            "answers": [],
+            "markdown_path": "",
+            "jsonl_path": "",
+        }
+        self.assertEqual(SessionResultModel.from_dict(payload).to_dict(), payload)
+
+    def test_wait_result_timeout_bounds(self):
+        self.assertEqual(WaitResultRequestModel.from_dict({}).timeout_ms, 60000)
+        self.assertEqual(WaitResultRequestModel.from_dict({"timeout_ms": 0}).timeout_ms, 0)
+        self.assertEqual(
+            WaitResultRequestModel.from_dict({"timeout_ms": 600000}).timeout_ms, 600000
+        )
+        for value in (-1, 600001, "soon"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                WaitResultRequestModel.from_dict({"timeout_ms": value})
+
     def test_request_models_are_idempotent(self):
         cases = [
             (StartSessionRequestModel, {"task": "t", "workdir": "/w"}),
@@ -399,6 +453,14 @@ class LiveWireFidelityTests(unittest.IsolatedAsyncioTestCase):
                     b"",
                 )
                 self.assertEqual(EventBatchModel.from_dict(waited).to_dict(), waited)
+
+                result = await server._dispatch(
+                    "GET",
+                    f"/sessions/{session_id}/result?timeout_ms=0",
+                    {},
+                    b"",
+                )
+                self.assertEqual(SessionResultModel.from_dict(result).to_dict(), result)
 
                 transcript = await server._dispatch(
                     "GET", f"/sessions/{session_id}/transcript", {}, b""

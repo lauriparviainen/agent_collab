@@ -370,6 +370,44 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(status["status"], {"running", "done"})
             self.assertEqual(listed["sessions"][0]["session_id"], session_id)
 
+    async def test_wait_result_route_returns_settled_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = AgentCollabHttpServer(manager=SessionManager())
+            body = json.dumps(
+                {
+                    "task": "http result task",
+                    "workdir": str(root),
+                    "mock": True,
+                    "max_turns": 1,
+                    "timeout": 5,
+                }
+            ).encode("utf-8")
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                started = await server._dispatch("POST", "/sessions", {}, body)
+                session_id = started["session_id"]
+                # The long-poll blocks server-side until the mock session settles.
+                result = await server._dispatch(
+                    "GET", f"/sessions/{session_id}/result?timeout_ms=2000", {}, b""
+                )
+
+            self.assertTrue(result["settled"])
+            self.assertTrue(result["terminal"])
+            self.assertEqual(result["status"], "done")
+            self.assertEqual(result["answers"][0]["agent_id"], "claude_cli")
+
+    async def test_wait_result_route_rejects_out_of_bounds_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = AgentCollabHttpServer(manager=SessionManager())
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with self.assertRaises(HttpError) as ctx:
+                    await server._dispatch(
+                        "GET", "/sessions/whatever/result?timeout_ms=600001", {}, b""
+                    )
+            self.assertEqual(ctx.exception.status, 400)
+
     async def test_mcp_initialize_dispatch(self):
         server = AgentCollabHttpServer(manager=SessionManager())
         body = _mcp_body(1, "initialize", {"protocolVersion": "2025-11-25"})

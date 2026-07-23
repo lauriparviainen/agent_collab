@@ -16,6 +16,7 @@ All operations except `GET /health` require the per-daemon Bearer token. `/optio
 | `GET` | `/sessions/{session_id}` | Bearer | — | SessionStateModel |
 | `GET` | `/sessions/{session_id}/events` | Bearer | ReadEventsRequestModel | EventBatchModel |
 | `GET` | `/sessions/{session_id}/events/wait` | Bearer | WaitEventsRequestModel | EventBatchModel |
+| `GET` | `/sessions/{session_id}/result` | Bearer | WaitResultRequestModel | SessionResultModel |
 | `POST` | `/sessions/{session_id}/messages` | Bearer | PostMessageRequestModel | EventBatchModel |
 | `GET` | `/sessions/{session_id}/transcript` | Bearer | TranscriptRequestModel | TranscriptModel |
 | `POST` | `/sessions/{session_id}/stop` | Bearer | — | SessionStateModel |
@@ -94,6 +95,15 @@ Long-poll session events from a cursor
 - Authentication: Bearer token
 - Request model: `WaitEventsRequestModel`
 - Response model: `EventBatchModel`
+
+### GET `/sessions/{session_id}/result`
+
+Long-poll until a session settles and return its result
+
+- Operation ID: `wait_result_get`
+- Authentication: Bearer token
+- Request model: `WaitResultRequestModel`
+- Response model: `SessionResultModel`
 
 ### POST `/sessions/{session_id}/messages`
 

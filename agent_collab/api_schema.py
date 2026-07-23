@@ -316,6 +316,95 @@ class TranscriptModel:
 
 
 @dataclass
+class AgentAnswerModel:
+    """One agent's latest completed-turn answer in a ``SessionResultModel``.
+
+    ``text`` is a preview: it is truncated to a byte bound with a notice, not a
+    hard payload cap. ``event_id`` is the absolute cursor of the source message
+    event, so a caller can re-fetch full fidelity with
+    ``read_events(cursor=event_id, limit=1, tool_output='full')``.
+    """
+
+    agent_id: str
+    text: str
+    event_id: int
+    timestamp: str
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AgentAnswerModel":
+        return cls(
+            agent_id=str(data["agent_id"]),
+            text=str(data.get("text", "")),
+            event_id=_integer(data, "event_id", 0),
+            timestamp=str(data.get("timestamp", "")),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "agent_id": self.agent_id,
+            "text": self.text,
+            "event_id": self.event_id,
+            "timestamp": self.timestamp,
+        }
+
+
+@dataclass
+class SessionResultModel:
+    """``GET /sessions/{id}/result`` — the settled outcome of ``wait_result``.
+
+    ``settled`` is true when the session is terminal, or ``awaiting_input`` while
+    the referee is actively accepting input with none pending or in flight (the
+    caller may then post a follow-up). On a long-poll timeout the server returns
+    a heartbeat with ``settled: false`` and no ``answers`` — callers re-poll
+    immediately; the >= 20s pacing rule does not apply because the block is
+    server-side. ``cursor`` is the current event count, a ``read_events`` offset.
+    """
+
+    session_id: str
+    status: str
+    terminal: bool
+    settled: bool
+    cursor: int
+    error: Optional[str] = None
+    failure: Optional[Dict[str, Any]] = None
+    turn_outcomes: Optional[List[Dict[str, Any]]] = None
+    answers: List[AgentAnswerModel] = field(default_factory=list)
+    markdown_path: str = ""
+    jsonl_path: str = ""
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SessionResultModel":
+        return cls(
+            session_id=str(data["session_id"]),
+            status=str(data["status"]),
+            terminal=bool(data.get("terminal", False)),
+            settled=bool(data.get("settled", False)),
+            cursor=_integer(data, "cursor", 0),
+            error=data.get("error"),
+            failure=data.get("failure"),
+            turn_outcomes=data.get("turn_outcomes"),
+            answers=[AgentAnswerModel.from_dict(item) for item in data.get("answers", [])],
+            markdown_path=str(data.get("markdown_path", "")),
+            jsonl_path=str(data.get("jsonl_path", "")),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "status": self.status,
+            "terminal": self.terminal,
+            "settled": self.settled,
+            "cursor": self.cursor,
+            "error": self.error,
+            "failure": self.failure,
+            "turn_outcomes": self.turn_outcomes,
+            "answers": [item.to_dict() for item in self.answers],
+            "markdown_path": self.markdown_path,
+            "jsonl_path": self.jsonl_path,
+        }
+
+
+@dataclass
 class ErrorModel:
     """The single REST error envelope: ``{"error": ..., "details"?: [...]}``.
 
@@ -707,6 +796,30 @@ class WaitEventsRequestModel:
 
 
 @dataclass
+class WaitResultRequestModel:
+    """Query for ``GET .../result``.
+
+    ``timeout_ms`` is the server-side block bound (default 60 s). It is capped at
+    600 s so one call cannot hold a connection open indefinitely; on expiry the
+    server returns a heartbeat and the caller re-polls.
+    """
+
+    timeout_ms: int = 60000
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "WaitResultRequestModel":
+        timeout_ms = _integer(data, "timeout_ms", 60000)
+        if timeout_ms < 0:
+            raise ValueError("timeout_ms must be >= 0")
+        if timeout_ms > 600000:
+            raise ValueError("timeout_ms must be <= 600000")
+        return cls(timeout_ms=timeout_ms)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"timeout_ms": self.timeout_ms}
+
+
+@dataclass
 class TranscriptRequestModel:
     """Query for ``GET .../transcript``."""
 
@@ -785,6 +898,14 @@ ROUTES: Tuple[Route, ...] = (
         EventBatchModel,
     ),
     Route(
+        "GET",
+        "/sessions/{session_id}/result",
+        "wait_result",
+        "wait_result",
+        WaitResultRequestModel,
+        SessionResultModel,
+    ),
+    Route(
         "POST",
         "/sessions/{session_id}/messages",
         "post_message",
@@ -834,6 +955,8 @@ __all__ = [
     "EventModel",
     "EventBatchModel",
     "TranscriptModel",
+    "AgentAnswerModel",
+    "SessionResultModel",
     "ErrorModel",
     "PruneResultModel",
     "PruneSessionDetailModel",
@@ -843,6 +966,7 @@ __all__ = [
     "PruneSessionsRequestModel",
     "ReadEventsRequestModel",
     "WaitEventsRequestModel",
+    "WaitResultRequestModel",
     "TranscriptRequestModel",
     "Route",
     "ROUTES",

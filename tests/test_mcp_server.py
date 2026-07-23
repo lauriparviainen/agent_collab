@@ -4,13 +4,33 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agent_collab.api_schema import EventBatchModel, SessionListModel, SessionStateModel
+from agent_collab.api_schema import (
+    EventBatchModel,
+    SessionListModel,
+    SessionResultModel,
+    SessionStateModel,
+)
 from agent_collab.client import ClientError
 from agent_collab.mcp_server import handle, handle_tool, serve
 
 
 def _payload(result):
     return json.loads(result["content"][0]["text"])
+
+
+def _result(**fields):
+    data = {
+        "session_id": "s1",
+        "status": "done",
+        "terminal": True,
+        "settled": True,
+        "cursor": 5,
+        "answers": [
+            {"agent_id": "claude_cli", "text": "the answer", "event_id": 3, "timestamp": "t"}
+        ],
+    }
+    data.update(fields)
+    return SessionResultModel.from_dict(data)
 
 
 def _state(**fields):
@@ -87,6 +107,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_status", names)
         self.assertIn("agent_collab_read_events", names)
         self.assertIn("agent_collab_wait_events", names)
+        self.assertIn("agent_collab_wait_result", names)
         self.assertIn("agent_collab_read_transcript", names)
         self.assertIn("agent_collab_post_message", names)
         self.assertIn("agent_collab_stop", names)
@@ -344,6 +365,34 @@ class McpServerTests(unittest.TestCase):
 
         client.wait_events.assert_called_once_with("s1", 2, 30000, tool_output="summary")
         _assert_tool_result(self, result, batch.to_dict())
+
+    def test_wait_result_maps_to_client_wait_result(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            result_model = _result()
+            client.wait_result.return_value = result_model
+
+            result = handle_tool(
+                "agent_collab_wait_result",
+                {"session_id": "s1", "timeout_ms": 120000},
+            )
+
+        client.wait_result.assert_called_once_with("s1", 120000)
+        _assert_tool_result(self, result, result_model.to_dict())
+
+    def test_wait_result_defaults_timeout_and_rejects_out_of_bounds(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            client.wait_result.return_value = _result()
+
+            handle_tool("agent_collab_wait_result", {"session_id": "s1"})
+            client.wait_result.assert_called_once_with("s1", 60000)
+
+            rejected = handle_tool(
+                "agent_collab_wait_result", {"session_id": "s1", "timeout_ms": 600001}
+            )
+        self.assertTrue(rejected["isError"])
+        self.assertIn("timeout_ms", _payload(rejected)["error"])
 
     def test_transcript_maps_to_client_read_transcript_as_direct_text(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:

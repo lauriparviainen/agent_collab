@@ -12,6 +12,14 @@ from .config import DEFAULT_WORKFLOW
 from .referee import RefereeConfig, run_sync
 
 
+# Per-poll server-side block for `agent-collab result`; the command loops over
+# these heartbeats internally, so it stays under the request model's 600s cap.
+_RESULT_POLL_MS = 30000
+# Distinct exit code when `agent-collab result --timeout-ms` expires unsettled
+# (GNU `timeout` convention), so scripts can tell a timeout from an error.
+_RESULT_TIMEOUT_EXIT = 124
+
+
 PUBLIC_COMMANDS = (
     ("tui", "Open the interactive session TUI."),
     ("daemon", "Manage the global daemon and login autostart."),
@@ -20,6 +28,7 @@ PUBLIC_COMMANDS = (
     ("list", "List daemon-owned sessions."),
     ("status", "Show one daemon-owned session."),
     ("events", "Read events for a daemon-owned session."),
+    ("result", "Wait for a daemon-owned session to settle and print its result."),
     ("watch", "Watch a live session or stored JSONL transcript."),
     ("stop", "Stop a daemon-owned session."),
     ("sessions", "Manage stored sessions, including pruning old terminal sessions."),
@@ -332,6 +341,27 @@ def build_client_parser(prog: str, description: str) -> argparse.ArgumentParser:
 def build_session_parser(prog: str, description: str) -> argparse.ArgumentParser:
     parser = build_client_parser(prog, description)
     parser.add_argument("session_id")
+    return parser
+
+
+def build_result_parser() -> argparse.ArgumentParser:
+    parser = build_session_parser(
+        "agent-collab result",
+        "Wait for a daemon session to settle and print its result. Loops through "
+        "server-side heartbeats and exits only when the session is settled "
+        "(terminal, or awaiting_input and ready for a follow-up). Ideal as a "
+        "background process: your harness wakes you when it exits with the result.",
+    )
+    parser.add_argument(
+        "--timeout-ms",
+        type=int,
+        help="Total wait bound in milliseconds. On expiry, print the current "
+        f"(unsettled) result and exit {_RESULT_TIMEOUT_EXIT}. Without it, wait "
+        "until the session settles (bounded by its own timeout/idle timeout).",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="Print the settled result as JSON on stdout."
+    )
     return parser
 
 
@@ -1086,6 +1116,74 @@ def _main_events(argv) -> int:
     return 0
 
 
+def _main_result(argv) -> int:
+    import time
+
+    parser = build_result_parser()
+    args = parser.parse_args(argv)
+    try:
+        client = _client(args.server_url)
+        deadline = None
+        if args.timeout_ms is not None:
+            if args.timeout_ms < 0:
+                raise ValueError("--timeout-ms must be >= 0")
+            deadline = time.monotonic() + args.timeout_ms / 1000.0
+        while True:
+            if deadline is not None:
+                remaining_ms = int((deadline - time.monotonic()) * 1000)
+                poll_ms = max(0, min(_RESULT_POLL_MS, remaining_ms))
+            else:
+                poll_ms = _RESULT_POLL_MS
+            # One server-side block absorbs heartbeats inside this process; the
+            # session's own timeout/idle timeout bounds the worst case.
+            result = client.wait_result(args.session_id, poll_ms)
+            if result.settled:
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                if args.json:
+                    print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+                else:
+                    warn(
+                        f"session {args.session_id} did not settle within {args.timeout_ms}ms "
+                        f"(status: {result.status})"
+                    )
+                    _print_result(result)
+                return _RESULT_TIMEOUT_EXIT
+        if args.json:
+            print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        else:
+            _print_result(result)
+    except KeyboardInterrupt:
+        print(file=sys.stderr)
+        error("interrupted")
+        return 130
+    except Exception as exc:
+        error(str(exc))
+        return 1
+    return 0
+
+
+def _print_result(result) -> None:
+    # ``result`` is a SessionResultModel from the typed client.
+    print_kv(
+        [
+            ("session_id", result.session_id),
+            ("status", result.status),
+            ("settled", str(result.settled).lower()),
+            ("terminal", str(result.terminal).lower()),
+            ("cursor", result.cursor),
+        ]
+    )
+    if result.failure:
+        failure = result.failure
+        turn = f" {failure.get('turn_id')}" if failure.get("turn_id") else ""
+        print(f"failure{turn}: {failure.get('code')} — {failure.get('message')}")
+    for answer in result.answers:
+        print(f"answer {answer.agent_id} (event {answer.event_id}):")
+        for line in answer.text.splitlines() or [""]:
+            print(f"  {line}")
+
+
 def _main_stop(argv) -> int:
     parser = build_session_parser("agent-collab stop", "Stop a daemon session.")
     args = parser.parse_args(argv)
@@ -1217,6 +1315,7 @@ def _command_handlers():
         "list": _main_list,
         "status": _main_status,
         "events": _main_events,
+        "result": _main_result,
         "stop": _main_stop,
         "sessions": _main_sessions,
         "config": _main_config,

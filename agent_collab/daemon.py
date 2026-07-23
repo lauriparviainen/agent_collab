@@ -39,6 +39,7 @@ from .referee import (
     RequiredTurnFailed,
 )
 from .retention import (
+    AWAITING_INPUT,
     DONE,
     FAILED,
     INTERRUPTED,
@@ -185,6 +186,30 @@ class EventBatch:
 
 
 @dataclass
+class SessionResult:
+    """The settled (or heartbeat) outcome returned by ``wait_result``.
+
+    Mirrors ``api_schema.SessionResultModel``. ``answers`` is a list of per-agent
+    answer dicts ({agent_id, text, event_id, timestamp}).
+    """
+
+    session_id: str
+    status: str
+    terminal: bool
+    settled: bool
+    cursor: int
+    error: Optional[str]
+    failure: Optional[Dict[str, Any]]
+    turn_outcomes: Optional[List[Dict[str, Any]]]
+    answers: List[Dict[str, Any]]
+    markdown_path: str
+    jsonl_path: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class PruneSessionDetail:
     """One session's outcome in a prune run.
 
@@ -229,6 +254,40 @@ class PruneResult:
         return asdict(self)
 
 
+class _TrackedInputQueue(asyncio.Queue):
+    """``asyncio.Queue`` with a public unfinished counter and a task_done hook.
+
+    ``unfinished`` mirrors the standard ``join()``/``task_done()`` accounting but
+    is public so ``wait_result`` can read the in-flight input count without
+    touching asyncio internals. ``task_done`` also fires an optional hook (wired
+    to the session's coalesced ``_schedule_notify``) so a waiter wakes the moment
+    the last in-flight input drains and the session settles.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._unfinished_public = 0
+        self._task_done_hook: Optional[Callable[[], None]] = None
+
+    def set_task_done_hook(self, hook: Optional[Callable[[], None]]) -> None:
+        self._task_done_hook = hook
+
+    def put_nowait(self, item: Any) -> None:
+        super().put_nowait(item)
+        self._unfinished_public += 1
+
+    def task_done(self) -> None:
+        super().task_done()
+        if self._unfinished_public > 0:
+            self._unfinished_public -= 1
+        if self._task_done_hook is not None:
+            self._task_done_hook()
+
+    @property
+    def unfinished(self) -> int:
+        return self._unfinished_public
+
+
 @dataclass
 class _ManagedSession:
     # request is None for sessions restored from the on-disk index.
@@ -236,11 +295,22 @@ class _ManagedSession:
     state: SessionState
     events: List[Dict[str, Any]]
     condition: asyncio.Condition
-    input_queue: asyncio.Queue[RefereeInput] = field(default_factory=asyncio.Queue)
+    input_queue: _TrackedInputQueue = field(default_factory=_TrackedInputQueue)
     appender_ready: asyncio.Event = field(default_factory=asyncio.Event)
     append_event: Optional[EventAppender] = None
     post_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     turn_active: bool = False
+    # True while the referee's interactive input loop is live and will consume a
+    # posted message; set by the referee around _await_interactive_input and
+    # cleared before it unwinds on idle timeout, failure, or stop. Guards both
+    # the settled signal and post_message so a caller never posts into, nor sees
+    # a false settle in, the awaiting_input -> terminal transition window.
+    input_accepting: bool = False
+    # Per-agent latest completed-turn answer pointer, keyed by agent id:
+    # {agent_id: {text, event_id, timestamp}}. Recorded by the referee when a
+    # completed outcome commits; failed/refused turns contribute nothing. In
+    # memory only — restored sessions derive answers from persisted events.
+    answer_ledger: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     task: Optional[asyncio.Task] = None
     referee: Optional[Referee] = None
     stop_signal: RefereeStopSignal = field(default_factory=RefereeStopSignal)
@@ -386,6 +456,9 @@ class SessionManager:
             events=[],
             condition=asyncio.Condition(),
         )
+        # Draining the last in-flight input settles an awaiting_input session, so
+        # a task_done must wake wait_result waiters via the coalesced notifier.
+        managed.input_queue.set_task_done_hook(lambda: self._schedule_notify(managed))
         self._sessions[session_id] = managed
         self._persist(state)
         managed.task = asyncio.create_task(
@@ -907,6 +980,128 @@ class SessionManager:
 
         return await self.read_events_async(session_id, cursor, tool_output=tool_output)
 
+    async def wait_result(self, session_id: str, timeout_ms: int = 60000) -> SessionResult:
+        """Block until the session is *settled*, then return its outcome.
+
+        Settled := terminal, or ``awaiting_input`` while the referee is actively
+        accepting input and none is pending or in flight. Same condition-wait
+        shape as ``wait_events``; on timeout the caller gets a heartbeat
+        (``settled: false``, no answers) and re-polls. Restored sessions have no
+        live runner, are already terminal, and settle immediately.
+        """
+
+        managed = self._get_managed(session_id)
+        await self._load_restored_events(managed)
+        timeout = max(0, int(timeout_ms)) / 1000.0
+
+        if not self._result_settled(managed) and timeout > 0:
+            async with managed.condition:
+                if not self._result_settled(managed):
+                    try:
+                        await asyncio.wait_for(
+                            managed.condition.wait_for(lambda: self._result_settled(managed)),
+                            timeout=timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        pass
+        return self._build_result(managed)
+
+    def _result_settled(self, managed: _ManagedSession) -> bool:
+        status = managed.state.status
+        if status in TERMINAL_STATUSES:
+            return True
+        # A live interactive session is settled only while it is genuinely parked
+        # for input: status alone is not enough, because the referee leaves its
+        # input loop (task_done already called) before the terminal transition.
+        return (
+            status == AWAITING_INPUT
+            and managed.input_accepting
+            and managed.input_queue.unfinished == 0
+        )
+
+    def _build_result(self, managed: _ManagedSession) -> SessionResult:
+        state = managed.state
+        settled = self._result_settled(managed)
+        outcome = _outcome_view(state)
+        return SessionResult(
+            session_id=state.session_id,
+            status=state.status,
+            terminal=outcome["terminal"],
+            settled=settled,
+            cursor=len(managed.events),
+            error=outcome["error"],
+            failure=outcome["failure"],
+            turn_outcomes=outcome["turn_outcomes"],
+            # A heartbeat (not settled) carries no answers: partial output from an
+            # in-flight or not-yet-parked turn must never masquerade as a result.
+            answers=self._session_answers(managed) if settled else [],
+            markdown_path=state.markdown_path,
+            jsonl_path=state.jsonl_path,
+        )
+
+    def _session_answers(self, managed: _ManagedSession) -> List[Dict[str, Any]]:
+        if managed.request is None:
+            # Restored session: the in-memory ledger is gone, so derive a
+            # best-effort answer per completed agent from the persisted events.
+            return self._derive_restored_answers(managed)
+        answers = []
+        for agent_id, entry in managed.answer_ledger.items():
+            answers.append(
+                {
+                    "agent_id": agent_id,
+                    "text": _truncate_text(str(entry.get("text", "")), MAX_FULL_TOOL_BYTES),
+                    "event_id": int(entry.get("event_id", 0)),
+                    "timestamp": str(entry.get("timestamp", "")),
+                }
+            )
+        return answers
+
+    def _derive_restored_answers(self, managed: _ManagedSession) -> List[Dict[str, Any]]:
+        # Reconstruct the per-agent completed-turn answer ledger from persisted
+        # events, mirroring the live referee path exactly: a message event
+        # becomes an agent's pending answer candidate; a turn-outcome boundary
+        # commits that candidate only when the turn completed, and discards it
+        # otherwise. Bounding each candidate to its turn span (delimited by the
+        # boundary events) keeps a failed or interrupted follow-up turn's partial
+        # output from overwriting the agent's last completed answer, so restored
+        # and live sessions agree.
+        ledger: Dict[str, Dict[str, Any]] = {}
+        # Per agent within its current turn span: the last message seen and the
+        # last final-marked message. Mirrors referee._find_turn_answer, which
+        # prefers a backend-marked final message over later non-final ones.
+        pending: Dict[str, Dict[str, Optional[Dict[str, Any]]]] = {}
+        for event_id, event in enumerate(managed.events):
+            raw = event.get("raw")
+            outcome = raw.get("turn_outcome") if isinstance(raw, dict) else None
+            if isinstance(outcome, dict):
+                agent_id = outcome.get("agent_id")
+                if isinstance(agent_id, str) and agent_id:
+                    slot = pending.pop(agent_id, None)
+                    if outcome.get("outcome") == "completed" and slot is not None:
+                        chosen = slot["final"] or slot["last"]
+                        if chosen is not None:
+                            ledger[agent_id] = chosen
+                continue
+            agent_id = event.get("agent_id")
+            if (
+                isinstance(agent_id, str)
+                and agent_id
+                and event.get("type") == "message"
+                and event.get("source") != "error"
+                and str(event.get("text", "")).strip()
+            ):
+                entry = {
+                    "agent_id": agent_id,
+                    "text": _truncate_text(str(event.get("text", "")), MAX_FULL_TOOL_BYTES),
+                    "event_id": event_id,
+                    "timestamp": str(event.get("timestamp", "")),
+                }
+                slot = pending.setdefault(agent_id, {"last": None, "final": None})
+                slot["last"] = entry
+                if isinstance(raw, dict) and raw.get("final"):
+                    slot["final"] = entry
+        return list(ledger.values())
+
     def read_transcript(self, session_id: str, *, tool_output: str = "summary") -> str:
         managed = self._get_managed(session_id)
         tool_output = self._normalize_tool_output(tool_output)
@@ -969,9 +1164,13 @@ class SessionManager:
             status_callback=lambda status: self._set_status(managed, status),
             event_appender_callback=lambda appender: self._set_event_appender(managed, appender),
             turn_active_callback=lambda active: self._set_turn_active(managed, active),
+            input_accepting_callback=lambda accepting: self._set_input_accepting(
+                managed, accepting
+            ),
             outcome_commit_callback=lambda record, event: self._record_turn_outcome(
                 managed, record, event
             ),
+            answer_commit_callback=lambda answer: self._record_session_answer(managed, answer),
             stop_signal=managed.stop_signal,
         )
 
@@ -1089,6 +1288,25 @@ class SessionManager:
         managed.turn_active = bool(active)
         async with managed.condition:
             managed.condition.notify_all()
+
+    async def _set_input_accepting(self, managed: _ManagedSession, accepting: bool) -> None:
+        # Deliberately no internal await: the referee clears this from a finally
+        # that can run under cancellation (stop), and an await-free coroutine has
+        # no cancellation checkpoint. The coalesced notifier wakes wait_result.
+        managed.input_accepting = bool(accepting)
+        self._schedule_notify(managed)
+
+    async def _record_session_answer(
+        self, managed: _ManagedSession, answer: Dict[str, Any]
+    ) -> None:
+        agent_id = answer.get("agent_id")
+        if not isinstance(agent_id, str) or not agent_id:
+            return
+        managed.answer_ledger[agent_id] = {
+            "text": str(answer.get("text", "")),
+            "event_id": int(answer.get("event_id", 0)),
+            "timestamp": str(answer.get("timestamp", "")),
+        }
 
     @staticmethod
     def _transition_state(state: SessionState, status: str) -> bool:
@@ -1230,6 +1448,13 @@ class SessionManager:
             raise SessionRequestError(f"session is not live: {state.status}")
         if not state.interactive or not managed.request.interactive:
             raise SessionRequestError("session was not started with interactive input enabled")
+        # Once the referee has left its input loop (idle timeout, a failed
+        # directed turn, or stop) but has not yet transitioned to terminal, the
+        # queue no longer has a consumer; reject rather than enqueue input that
+        # would never be read. Mid-turn posts during planned stages (status
+        # running) stay allowed — they are drained at the next turn boundary.
+        if state.status == AWAITING_INPUT and not managed.input_accepting:
+            raise SessionRequestError("session is no longer accepting input")
 
     async def _require_event_appender(self, managed: _ManagedSession) -> EventAppender:
         if managed.append_event is not None:

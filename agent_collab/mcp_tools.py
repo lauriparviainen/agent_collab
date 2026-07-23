@@ -5,7 +5,12 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol
 
-from .api_schema import ReadEventsRequestModel, TranscriptRequestModel, WaitEventsRequestModel
+from .api_schema import (
+    ReadEventsRequestModel,
+    TranscriptRequestModel,
+    WaitEventsRequestModel,
+    WaitResultRequestModel,
+)
 from .client import ClientError
 from .daemon import (
     SessionManager,
@@ -140,6 +145,27 @@ TOOLS = [
         },
     },
     {
+        "name": "agent_collab_wait_result",
+        "description": (
+            "Block until a session settles, then return its result. Settled = terminal, or "
+            "awaiting_input while accepting input (none pending) — then you may post_message a "
+            "follow-up. Result carries status, terminal, settled, answers (each agent's latest "
+            "completed-turn answer plus event_id to re-fetch full via read_events), failure, and "
+            "cursor. timeout_ms bounds one server-side block (default 60000, max 600000); on expiry "
+            "it returns a heartbeat (settled=false, no answers) — re-poll immediately, the 20s "
+            "pacing rule does not apply. Collapses delegation to describe_options -> start -> "
+            "wait_result."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "timeout_ms": {"type": "integer"},
+            },
+            "required": ["session_id"],
+        },
+    },
+    {
         "name": "agent_collab_read_transcript",
         "description": (
             "Read the Markdown transcript for a daemon-owned session. Tool payloads are summarized by "
@@ -209,6 +235,8 @@ class ToolBackend(Protocol):
         self, session_id: str, cursor: int, timeout_ms: int, tool_output: str
     ) -> Dict[str, Any]: ...
 
+    async def wait_result(self, session_id: str, timeout_ms: int) -> Dict[str, Any]: ...
+
     async def read_transcript(self, session_id: str, tool_output: str) -> str: ...
 
     async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]: ...
@@ -254,6 +282,9 @@ class SessionManagerToolBackend:
         return (
             await self.manager.wait_events(session_id, cursor, timeout_ms, tool_output=tool_output)
         ).to_dict()
+
+    async def wait_result(self, session_id: str, timeout_ms: int) -> Dict[str, Any]:
+        return (await self.manager.wait_result(session_id, timeout_ms)).to_dict()
 
     async def read_transcript(self, session_id: str, tool_output: str) -> str:
         return await self.manager.read_transcript_async(session_id, tool_output=tool_output)
@@ -314,6 +345,9 @@ class HttpClientToolBackend:
             .wait_events(session_id, cursor, timeout_ms, tool_output=tool_output)
             .to_dict()
         )
+
+    async def wait_result(self, session_id: str, timeout_ms: int) -> Dict[str, Any]:
+        return self.client_factory().wait_result(session_id, timeout_ms).to_dict()
 
     async def read_transcript(self, session_id: str, tool_output: str) -> str:
         return self.client_factory().read_transcript(session_id, tool_output=tool_output)
@@ -456,6 +490,12 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
                     request.tool_output,
                 )
             )
+        if name == "agent_collab_wait_result":
+            result_request = _parse_tool_request(
+                WaitResultRequestModel.from_dict,
+                {key: args[key] for key in ("timeout_ms",) if key in args},
+            )
+            return content(await backend.wait_result(session_id, result_request.timeout_ms))
         if name == "agent_collab_read_transcript":
             request = _parse_tool_request(
                 TranscriptRequestModel.from_dict,

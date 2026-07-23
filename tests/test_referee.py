@@ -746,5 +746,50 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event.agent_id for event in messages], ["claude", "codex"])
 
 
+class InteractiveAcceptingLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_idle_timeout_clears_accepting_before_closing_emit(self):
+        # The idle-timeout branch awaits an emit before returning; input_accepting
+        # must already be false by then, or a post landing during that await would
+        # enqueue input the closing loop never consumes.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            order = []
+
+            async def status_cb(status):
+                order.append(("status", status))
+
+            async def accepting_cb(value):
+                order.append(("accepting", value))
+
+            def printer(event):
+                order.append(("event", event.text))
+
+            config = RefereeConfig(
+                mock=True,
+                workdir=root,
+                max_turns=0,
+                timeout=5,
+                color=False,
+                interactive=True,
+                interactive_idle_timeout=0.05,
+                input_queue=asyncio.Queue(),
+                status_callback=status_cb,
+                input_accepting_callback=accepting_cb,
+            )
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                await Referee(config, printer=printer).run("idle task")
+
+        idle_index = next(
+            index
+            for index, item in enumerate(order)
+            if item[0] == "event" and "interactive idle timeout" in item[1]
+        )
+        self.assertIn(("accepting", True), order[:idle_index])
+        # accepting is cleared before the closing idle-timeout status is emitted.
+        self.assertIn(("accepting", False), order[:idle_index])
+        # awaiting_input is still the announced status at that point (not yet done).
+        self.assertNotIn(("status", "done"), order[:idle_index])
+
+
 if __name__ == "__main__":
     unittest.main()

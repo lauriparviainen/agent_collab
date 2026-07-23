@@ -1354,6 +1354,427 @@ sequence = ["claude_cli.a", "claude_cli.b"]
                 any(f"session {state.session_id} done" in message for message in messages)
             )
 
+    async def test_wait_result_on_done_returns_answers_from_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="delegate task", mock=True, max_turns=3, timeout=5, workdir=root
+                    )
+                )
+                await self._wait_for_terminal(manager, state.session_id)
+                result = await manager.wait_result(state.session_id, timeout_ms=1000)
+
+                self.assertTrue(result.settled)
+                self.assertTrue(result.terminal)
+                self.assertEqual(result.status, "done")
+                self.assertEqual(
+                    result.cursor, len(manager.read_events(state.session_id, 0).events)
+                )
+                answers = {answer["agent_id"]: answer for answer in result.answers}
+                # cross-review is claude_cli -> codex_cli -> claude_cli; each agent's
+                # ledger entry is its most recent completed turn.
+                self.assertEqual(set(answers), {"claude_cli", "codex_cli"})
+                self.assertTrue(
+                    answers["claude_cli"]["text"].startswith("Mock claude_cli response for:")
+                )
+                # event_id is a valid read_events cursor into the source message.
+                event_id = answers["claude_cli"]["event_id"]
+                batch = manager.read_events(state.session_id, event_id, limit=1)
+                self.assertEqual(batch.events[0]["type"], "message")
+                self.assertEqual(batch.events[0]["text"], answers["claude_cli"]["text"])
+
+    async def test_wait_result_timeout_returns_heartbeat(self):
+        release = asyncio.Event()
+
+        class BlockingRunner:
+            def __init__(self, source):
+                self.source = source
+
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create(self.source, "status", "working"))
+                await release.wait()
+                await emit(Event.create(self.source, "message", "done"))
+                return TurnOutcome("completed")
+
+        runners = {
+            "claude_cli": BlockingRunner("claude"),
+            "codex_cli": BlockingRunner("codex"),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="blocking task",
+                            mock=True,
+                            max_turns=1,
+                            timeout=5,
+                            workdir=root,
+                        )
+                    )
+                    heartbeat = await manager.wait_result(state.session_id, timeout_ms=50)
+                    release.set()
+                    await self._wait_for_terminal(manager, state.session_id)
+
+            self.assertFalse(heartbeat.settled)
+            self.assertFalse(heartbeat.terminal)
+            self.assertEqual(heartbeat.status, "running")
+            self.assertEqual(heartbeat.answers, [])
+
+    async def test_wait_result_settles_interactive_parked_session_with_answer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="interactive delegate",
+                        mock=True,
+                        max_turns=1,
+                        timeout=5,
+                        workdir=root,
+                        interactive=True,
+                        interactive_idle_timeout=5,
+                    )
+                )
+                await self._wait_for_status(manager, state.session_id, "awaiting_input")
+                result = await manager.wait_result(state.session_id, timeout_ms=1000)
+                await manager.stop_session(state.session_id)
+
+            self.assertTrue(result.settled)
+            self.assertFalse(result.terminal)
+            self.assertEqual(result.status, "awaiting_input")
+            # The planned turn 1 (claude_cli) completed, so its answer is the
+            # result-so-far while parked; the caller may post a follow-up.
+            self.assertEqual([answer["agent_id"] for answer in result.answers], ["claude_cli"])
+
+    async def test_wait_result_unsettled_during_directed_turn_then_settles(self):
+        release = asyncio.Event()
+        turn_started = asyncio.Event()
+
+        class PauseRunner:
+            def __init__(self, source):
+                self.source = source
+
+            async def run_turn(self, prompt, workdir, emit):
+                turn_started.set()
+                await release.wait()
+                await emit(Event.create(self.source, "message", f"{self.source} answered"))
+                return TurnOutcome("completed")
+
+        runners = {
+            "claude_cli": PauseRunner("claude"),
+            "codex_cli": PauseRunner("codex"),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="directed delegate",
+                            mock=True,
+                            max_turns=0,
+                            timeout=5,
+                            workdir=root,
+                            interactive=True,
+                            interactive_idle_timeout=5,
+                        )
+                    )
+                    await self._wait_for_status(manager, state.session_id, "awaiting_input")
+                    parked = await manager.wait_result(state.session_id, timeout_ms=200)
+                    await manager.post_message(state.session_id, "answer please", target="codex")
+                    await asyncio.wait_for(turn_started.wait(), timeout=1)
+                    during = await manager.wait_result(state.session_id, timeout_ms=100)
+                    release.set()
+                    settled = await manager.wait_result(state.session_id, timeout_ms=1000)
+                    await manager.stop_session(state.session_id)
+
+            self.assertTrue(parked.settled)
+            self.assertEqual(parked.answers, [])
+            # A directed turn keeps status awaiting_input but leaves the posted
+            # input in flight (unfinished > 0), so the session is not settled.
+            self.assertFalse(during.settled)
+            self.assertEqual(during.status, "awaiting_input")
+            # task_done after the directed turn drains the queue and re-settles.
+            self.assertTrue(settled.settled)
+            self.assertEqual(settled.status, "awaiting_input")
+            self.assertEqual([answer["agent_id"] for answer in settled.answers], ["codex_cli"])
+
+    async def test_wait_result_accepting_clear_blocks_settle_and_post_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="accepting lifecycle",
+                        mock=True,
+                        max_turns=0,
+                        timeout=5,
+                        workdir=root,
+                        interactive=True,
+                        interactive_idle_timeout=5,
+                    )
+                )
+                await self._wait_for_status(manager, state.session_id, "awaiting_input")
+                managed = manager._sessions[state.session_id]
+                # Parked and accepting: genuinely settled.
+                self.assertTrue(manager._result_settled(managed))
+                # Simulate the awaiting_input -> terminal unwind window, where the
+                # referee has left its input loop but the status has not flipped.
+                managed.input_accepting = False
+                self.assertFalse(manager._result_settled(managed))
+                heartbeat = await manager.wait_result(state.session_id, timeout_ms=50)
+                with self.assertRaises(SessionRequestError) as ctx:
+                    await manager.post_message(state.session_id, "too late")
+                await manager.stop_session(state.session_id)
+
+            self.assertFalse(heartbeat.settled)
+            self.assertEqual(heartbeat.status, "awaiting_input")
+            self.assertIn("no longer accepting input", str(ctx.exception))
+
+    async def test_wait_result_excludes_failed_turn_partial_output(self):
+        class FailRunner:
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "message", "partial before failure"))
+                return TurnOutcome("failed", "provider_transport_failed")
+
+        runners = {"claude_cli": FailRunner(), "codex_cli": FailRunner()}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="failing delegate",
+                            mock=True,
+                            max_turns=1,
+                            timeout=5,
+                            workdir=root,
+                        )
+                    )
+                    await self._wait_for_terminal(manager, state.session_id)
+                    result = await manager.wait_result(state.session_id, timeout_ms=1000)
+
+            self.assertTrue(result.settled)
+            self.assertTrue(result.terminal)
+            self.assertEqual(result.status, "failed")
+            self.assertIsNotNone(result.failure)
+            # The failed turn emitted a message, but only completed turns feed the
+            # answer ledger, so nothing masquerades as a result.
+            self.assertEqual(result.answers, [])
+
+    async def test_wait_result_on_restored_session_derives_answers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                first = SessionManager(index_path=index_path)
+                state = await first.start_session(
+                    StartSessionRequest(
+                        task="restore delegate", mock=True, max_turns=3, timeout=5, workdir=root
+                    )
+                )
+                await self._wait_for_terminal(first, state.session_id)
+
+                # A fresh manager restores the persisted record from the index.
+                second = SessionManager(index_path=index_path)
+                result = await second.wait_result(state.session_id, timeout_ms=100)
+
+            self.assertTrue(result.settled)
+            self.assertTrue(result.terminal)
+            self.assertEqual(result.status, "done")
+            agents = {answer["agent_id"] for answer in result.answers}
+            self.assertEqual(agents, {"claude_cli", "codex_cli"})
+            for answer in result.answers:
+                self.assertTrue(
+                    answer["text"].startswith(f"Mock {answer['agent_id']} response for:")
+                )
+
+    async def test_wait_result_restored_excludes_failed_followup_answer(self):
+        # A completed turn 1 followed by a failed directed turn 2 for the same
+        # agent: the restored derivation must return the completed answer, not
+        # the failed turn's partial output (parity with the live ledger).
+        class SwitchRunner:
+            def __init__(self, source):
+                self.source = source
+                self.calls = 0
+
+            async def run_turn(self, prompt, workdir, emit):
+                self.calls += 1
+                if self.calls == 1:
+                    await emit(Event.create(self.source, "message", "completed answer"))
+                    return TurnOutcome("completed")
+                await emit(Event.create(self.source, "message", "partial failed output"))
+                return TurnOutcome("failed", "provider_transport_failed")
+
+        runners = {"claude_cli": SwitchRunner("claude"), "codex_cli": SwitchRunner("codex")}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    first = SessionManager(index_path=index_path)
+                    state = await first.start_session(
+                        StartSessionRequest(
+                            task="restored failed follow-up",
+                            mock=True,
+                            max_turns=1,
+                            timeout=5,
+                            workdir=root,
+                            interactive=True,
+                            interactive_idle_timeout=5,
+                        )
+                    )
+                    await self._wait_for_status(first, state.session_id, "awaiting_input")
+                    # Live answer after the completed turn 1.
+                    live = await first.wait_result(state.session_id, timeout_ms=200)
+                    await first.post_message(state.session_id, "again please", target="claude")
+                    failed = await self._wait_for_terminal(first, state.session_id)
+
+                    second = SessionManager(index_path=index_path)
+                    restored = await second.wait_result(state.session_id, timeout_ms=100)
+
+            self.assertEqual(failed.status, "failed")
+            live_answers = {a["agent_id"]: a["text"] for a in live.answers}
+            self.assertEqual(live_answers, {"claude_cli": "completed answer"})
+            # Restored derivation agrees with the live ledger: the failed turn's
+            # partial output never overwrites the completed-turn answer.
+            restored_answers = {a["agent_id"]: a["text"] for a in restored.answers}
+            self.assertEqual(restored_answers, {"claude_cli": "completed answer"})
+
+    async def test_wait_result_records_answer_when_stop_cancels_during_commit(self):
+        # A stop cancellation landing while the shielded outcome commit is in
+        # flight must still record the completed turn's answer: the commit and
+        # the answer land together inside the shield.
+        reached_commit = asyncio.Event()
+        release_commit = asyncio.Event()
+
+        class AnswerRunner:
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "message", "the committed answer"))
+                return TurnOutcome("completed")
+
+        runners = {"claude_cli": AnswerRunner()}
+        original_record = SessionManager._record_turn_outcome
+
+        async def blocking_record(self, managed, record, boundary_event):
+            await original_record(self, managed, record, boundary_event)
+            reached_commit.set()
+            await release_commit.wait()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    with mock.patch.object(SessionManager, "_record_turn_outcome", blocking_record):
+                        state = await manager.start_session(
+                            StartSessionRequest(
+                                task="cancel during commit",
+                                workflow="solo",
+                                mock=True,
+                                max_turns=1,
+                                timeout=5,
+                                workdir=root,
+                            )
+                        )
+                        await asyncio.wait_for(reached_commit.wait(), timeout=2)
+                        # Cancel the session task while the shielded commit is
+                        # parked, then release it so the shield can finish.
+                        stop_task = asyncio.create_task(manager.stop_session(state.session_id))
+                        await asyncio.sleep(0)
+                        release_commit.set()
+                        stopped = await stop_task
+                        managed = manager._sessions[state.session_id]
+                        for _ in range(100):
+                            if managed.answer_ledger:
+                                break
+                            await asyncio.sleep(0.01)
+                        result = await manager.wait_result(state.session_id, timeout_ms=100)
+
+            self.assertEqual(stopped.status, "stopped")
+            self.assertTrue(result.terminal)
+            # The completed turn's answer survived the concurrent stop.
+            self.assertEqual([a["agent_id"] for a in result.answers], ["claude_cli"])
+            self.assertEqual(result.answers[0]["text"], "the committed answer")
+
+    async def test_wait_result_restored_honors_final_marker_like_live(self):
+        # A completed turn emits a final-marked message followed by trailing
+        # chatter. Both the live ledger and the restored derivation must return
+        # the final-marked message, not the last one.
+        class FinalMarkerRunner:
+            def __init__(self, source):
+                self.source = source
+
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create(self.source, "message", "final answer", {"final": True}))
+                await emit(Event.create(self.source, "message", "trailing chatter"))
+                return TurnOutcome("completed")
+
+        runners = {"claude_cli": FinalMarkerRunner("claude")}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    first = SessionManager(index_path=index_path)
+                    state = await first.start_session(
+                        StartSessionRequest(
+                            task="final marker",
+                            workflow="solo",
+                            mock=True,
+                            max_turns=1,
+                            timeout=5,
+                            workdir=root,
+                        )
+                    )
+                    await self._wait_for_terminal(first, state.session_id)
+                    live = await first.wait_result(state.session_id, timeout_ms=1000)
+
+                    second = SessionManager(index_path=index_path)
+                    restored = await second.wait_result(state.session_id, timeout_ms=100)
+
+            live_answers = {a["agent_id"]: a["text"] for a in live.answers}
+            restored_answers = {a["agent_id"]: a["text"] for a in restored.answers}
+            self.assertEqual(live_answers, {"claude_cli": "final answer"})
+            self.assertEqual(restored_answers, live_answers)
+
+    async def test_wait_result_parallel_per_agent_attribution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="parallel delegate",
+                        workflow="dual-review",
+                        mock=True,
+                        max_turns=1,
+                        timeout=5,
+                        workdir=root,
+                    )
+                )
+                await self._wait_for_terminal(manager, state.session_id)
+                result = await manager.wait_result(state.session_id, timeout_ms=1000)
+
+            self.assertTrue(result.settled)
+            agents = {answer["agent_id"]: answer for answer in result.answers}
+            self.assertEqual(set(agents), {"claude_cli", "codex_cli"})
+            # Filtering by agent id isolates each member's answer even though the
+            # parallel stage interleaves both members into one shared transcript.
+            for agent_id, answer in agents.items():
+                self.assertTrue(answer["text"].startswith(f"Mock {agent_id} response for:"))
+
 
 class SessionManagerPruneTests(unittest.IsolatedAsyncioTestCase):
     NOW = datetime(2026, 7, 12, 12, 0, 0, tzinfo=timezone.utc)

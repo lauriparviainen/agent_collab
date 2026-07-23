@@ -13,7 +13,19 @@ into a detailed work log.
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-07-23 - Dynamic model discovery
+- Add `wait_result`, the delegation primitive, so collecting a session's outcome
+  is one blocking call instead of a `read_events`/`wait_events` polling loop
+  (#47, stage 1). New `GET /sessions/{id}/result`, MCP tool
+  `agent_collab_wait_result`, and CLI `agent-collab result SESSION_ID
+  [--timeout-ms N] [--json]`. It blocks until the session is *settled* — terminal,
+  or `awaiting_input` while the referee is actively accepting input with none
+  pending or in flight — and returns the status, failure, cursor, and each
+  agent's latest completed-turn `answer` (a 64 KiB preview plus an `event_id`
+  for full re-fetch via `read_events`). `timeout_ms` (default 60000, max 600000)
+  bounds one server-side block; on expiry it returns a heartbeat and the caller
+  re-polls immediately (no pacing delay). Answers come only from completed turns,
+  so a failed turn's partial output never masquerades as a result. The REST API
+  major stays 2 (additive route and DTOs).
 
 - Serve dynamically discovered model catalogs (#45).
   `agent_collab_describe_options` and `POST /options` accept
