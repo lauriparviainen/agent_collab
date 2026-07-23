@@ -708,6 +708,9 @@ class ClaudeProductionFactoryTests(unittest.TestCase):
                 self.is_open = False
                 state["open"] -= 1
                 state["disconnects"] += 1
+                error = state.get("disconnect_error")
+                if error is not None:
+                    raise error
 
         module.ClaudeSDKClient = FakeClient
         module.ClaudeAgentOptions = FakeOptions
@@ -1088,6 +1091,42 @@ class ClaudeProductionFactoryTests(unittest.TestCase):
         self.assertEqual(outcome.outcome, "completed")
         self.assertEqual(state["disconnects"], 1)
         self.assertEqual(state["open"], 0)
+
+    def test_failing_disconnect_never_alters_outcome_and_recovery_still_resumes(self):
+        # A raising disconnect() during reset is best-effort teardown (the SDK
+        # atexit reaper backstops a leaked child): it must not alter the
+        # committed outcome, must keep the captured id, and the next turn must
+        # still reconnect through resume. close() stays quiet afterwards.
+        state = {}
+        module = self._fake_module(
+            state,
+            [
+                [_result(session_id="sess-live", is_error=True, subtype="error")],
+                [_assistant([TextBlock("two")]), _result(session_id="sess-live")],
+            ],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                state["disconnect_error"] = RuntimeError("transport close failed")
+                failed = await self._collect(runner, "one")
+                self.assertTrue(runner.conversation_active())
+                del state["disconnect_error"]
+                second = await self._collect(runner, "two")
+                await runner.close()
+                return failed, second
+
+            failed, second = asyncio.run(scenario())
+
+        self.assertEqual(
+            (failed[1].outcome, failed[1].code), ("failed", "provider_terminal_failure")
+        )
+        self.assertEqual(second[1].outcome, "completed")
+        self.assertEqual(len(state["clients"]), 2)
+        self.assertEqual(state["clients"][1]["resume"], "sess-live")
+        self.assertIs(state["clients"][1]["fork_session"], False)
 
     def test_close_serializes_behind_a_cancelled_turn(self):
         state = {}
