@@ -45,11 +45,37 @@ Candidate directions to weigh, not commitments — guidance/economics first:
    reality before designing for it: in the 2026-07-24 session this did not
    trigger — the client killed the call near 60 s — so the interaction with
    per-server timeouts and the VS Code extension needs testing.
-4. Raw SSE push on `GET /mcp` is demoted: the legacy SSE transport is
-   deprecated, and whether Claude Code opens the Streamable HTTP GET side for
-   unsolicited notifications (or ever wakes the model outside a tool call
-   from one) is undocumented. Do not build toward it without client-side
-   evidence.
+4. **Streamable HTTP + SSE, with the legacy distinction kept precise.** What
+   MCP deprecated is the 2024-11-05 two-endpoint **HTTP+SSE transport** (the
+   client opens an SSE endpoint, receives an `endpoint` event naming a separate
+   POST target, then uses those split channels). SSE framing itself remains
+   part of modern Streamable HTTP:
+   - every client message is a `POST` to one MCP endpoint; a request response
+     may be either one `application/json` object or a `text/event-stream`
+     stream, and a conforming Streamable HTTP client must accept both;
+   - a client may additionally open `GET` on that same endpoint for
+     server-initiated requests/notifications; the server may return `405` when
+     it does not offer that optional stream; and
+   - SSE event ids plus `Last-Event-ID` can provide resumability/redelivery.
+   Therefore today's `POST /mcp` JSON path plus `GET /mcp -> 405` is already
+   valid Streamable HTTP, not an obsolete transport.
+
+   Codex's VS Code extension and desktop app use the shared Codex MCP host and
+   configuration. Its documented remote transport is Streamable HTTP (plus
+   local stdio), not a separately configured legacy SSE transport. That means
+   POST-scoped SSE is part of the advertised protocol; it does **not** prove
+   that either Codex surface opens the optional GET stream, exposes
+   unsolicited notifications to the active thread, or wakes the model outside
+   an in-flight tool call. Claude Code has the same unresolved product-level
+   questions. Before choosing SSE as the collection primitive, test separately
+   on Claude Code, the Codex VS Code extension, and the Codex desktop app:
+   (a) JSON versus SSE responses to a long-running POST tool call, (b) whether
+   the client opens/reconnects `GET /mcp`, (c) whether a settlement
+   notification becomes model-visible, and (d) whether the UI stays responsive
+   while waiting. POST-scoped SSE may reduce polling and carry progress, but it
+   still occupies one tool call unless that client backgrounds it; GET push is
+   useful only if the client consumes it and has a real model-wake path. Do not
+   build toward either behavior from protocol possibility alone.
 
 ## Context
 
