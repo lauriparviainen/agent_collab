@@ -1,10 +1,17 @@
 # Subagent-style delegation and SDK thread continuity
 
-**Status:** Open — plan approved, implementation not started.
+**Status:** Open — Stage 1 (`wait_result`) shipped; Stages 2–7 open.
 
 **Created:** 2026-07-23.
 
 **Issue:** [#47](https://github.com/lauriparviainen/agent_collab/issues/47)
+
+**Branch:** the entire task — all stages — is developed on the single branch
+`stage-1-wait-result`. Do not merge to `main` until every stage is complete;
+land the whole task in one merge at the end, not per stage. Each stage still
+commits (and its cross-model review runs) on this branch as it lands, so CI and
+the review loop cover work incrementally, but the branch stays unmerged until
+the task closes.
 
 ## Context
 
