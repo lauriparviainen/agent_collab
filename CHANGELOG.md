@@ -13,6 +13,18 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add the backend-neutral **thread-continuity groundwork** (#47, stage 3), with
+  zero behavior change this stage. New `AgentRunner.conversation_active()` /
+  `close()` defaults (a stateless no-op for every CLI and mock runner), a
+  bounded, shielded runner-close step in the referee's session teardown, and
+  per-agent prompt-snapshot watermarks so that once a backend holds a live
+  provider thread, its follow-up turns send only a delta (`NEW EVENTS SINCE YOUR
+  LAST TURN:`) instead of re-sending guardrails, task, and window. Adds a fourth
+  capability `continuity` to `BackendCapabilities` (per-agent in
+  `settings.agents.<id>.capabilities`; session-level `continuity` true only when
+  every selected agent's backend has it) — false for every backend until the
+  per-backend stages flip it with proof. No REST or config schema change; the
+  API major stays 2.
 - Session `settings` now default to a **compact** view on `agent_collab_start`,
   `agent_collab_status`, and `GET /sessions/{id}` — the same efficient-by-default
   posture as `tool_output: "summary"` (#47, stage 2). The compact view keeps

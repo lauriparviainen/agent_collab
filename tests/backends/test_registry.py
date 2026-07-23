@@ -70,7 +70,7 @@ class CapabilityReducerTests(unittest.TestCase):
             "codex": BackendCapabilities(),
         }
         summary = backends.summarize_session_capabilities(per_agent)
-        self.assertEqual(summary, {"resumable": False, "interruptible": False})
+        self.assertEqual(summary, {"resumable": False, "interruptible": False, "continuity": False})
 
     def test_reducer_ands_inputs_and_requires_captured_id_for_resumable(self):
         # A future stage flips inputs true; the reducer must compute, not hardcode.
@@ -81,31 +81,54 @@ class CapabilityReducerTests(unittest.TestCase):
         # resume=true everywhere but no captured ids -> not resumable
         self.assertEqual(
             backends.summarize_session_capabilities(per_agent),
-            {"resumable": False, "interruptible": True},
+            {"resumable": False, "interruptible": True, "continuity": False},
         )
         # captured ids for every agent -> resumable
         self.assertEqual(
             backends.summarize_session_capabilities(per_agent, frozenset({"a", "b"})),
-            {"resumable": True, "interruptible": True},
+            {"resumable": True, "interruptible": True, "continuity": False},
         )
         # one agent lacks interrupt -> not interruptible
         mixed = {"a": BackendCapabilities(interrupt=True), "b": BackendCapabilities()}
         self.assertEqual(
             backends.summarize_session_capabilities(mixed),
-            {"resumable": False, "interruptible": False},
+            {"resumable": False, "interruptible": False, "continuity": False},
         )
+
+    def test_continuity_is_session_true_only_when_every_agent_has_it(self):
+        # continuity needs no captured id (it is an in-session fact), unlike
+        # resumable; session-true requires every selected agent's backend.
+        both = {
+            "a": BackendCapabilities(continuity=True),
+            "b": BackendCapabilities(continuity=True),
+        }
+        self.assertTrue(backends.summarize_session_capabilities(both)["continuity"])
+        # a mixed workflow with one agent lacking continuity -> session false,
+        # even though the per-agent flag stays visible to the caller.
+        mixed = {
+            "a": BackendCapabilities(continuity=True),
+            "b": BackendCapabilities(continuity=False),
+        }
+        self.assertFalse(backends.summarize_session_capabilities(mixed)["continuity"])
+        self.assertTrue(mixed["a"].to_dict()["continuity"])
 
     def test_empty_agent_set_is_not_resumable(self):
         self.assertEqual(
             backends.summarize_session_capabilities({}),
-            {"resumable": False, "interruptible": False},
+            {"resumable": False, "interruptible": False, "continuity": False},
         )
 
     def test_builtin_backend_capabilities_are_all_false(self):
         for agent_type in ("claude", "codex", "antigravity", "xai"):
             caps = backends.capabilities_for(agent_type, "cli")
             self.assertEqual(
-                caps.to_dict(), {"resume": False, "interrupt": False, "tool_gate": False}
+                caps.to_dict(),
+                {
+                    "resume": False,
+                    "interrupt": False,
+                    "tool_gate": False,
+                    "continuity": False,
+                },
             )
 
 

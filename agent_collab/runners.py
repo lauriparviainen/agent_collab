@@ -29,6 +29,21 @@ class AgentRunner:
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         raise NotImplementedError
 
+    def conversation_active(self) -> bool:
+        """True when the runner holds provider-side context the next ``run_turn``
+        will continue, so the referee sends a delta continuation prompt instead of
+        re-sending guardrails, task, and window. Default False: stateless runners
+        (every CLI and mock runner) rebuild context from the prompt each turn."""
+
+        return False
+
+    async def close(self) -> None:
+        """Release any client or subprocess held across turns. Default no-op;
+        must be idempotent and concurrency-safe against an in-flight or adopted
+        ``run_turn`` (a backend that keeps state serializes the two internally)."""
+
+        return None
+
 
 class DryRunRunner(AgentRunner):
     def __init__(

@@ -50,9 +50,11 @@ Run another agent as a subagent and collect its result over MCP alone:
    `agent_collab_read_transcript`.
 5. Follow up (interactive only): `agent_collab_post_message` with `text`, then
    `wait_result` again. `target` picks one agent; in a solo session an
-   untargeted post routes to the sole agent. Each follow-up turn currently
-   re-sends the task and a recent transcript window, so it costs like a fresh
-   turn.
+   untargeted post routes to the sole agent. Follow-up cost depends on the
+   agent's `settings.agents.<id>.capabilities.continuity`: when true, the turn
+   continues the provider thread natively (only new events sent); when false
+   (every backend today), it re-sends the task and a recent window, costing like
+   a fresh turn.
 6. End with `agent_collab_stop`, or let the session close on its
    `interactive_idle_timeout` (raise it for long conversations).
 

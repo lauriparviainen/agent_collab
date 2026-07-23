@@ -109,9 +109,19 @@ fabricating history. Event read/wait batches carry the same status, terminal,
 error, failure, and outcome view as session detail without changing transcript
 cursor semantics. Session terminal transitions are monotonic.
 
-Backend capabilities (`resume`, `interrupt`, `tool_gate`) are honest runtime
-facts and are not inferred from provider brand. Live backend health gates starts
-on certainty and is reported by `describe_options`, not by daemon status.
+Runners are created once per session and reused across turns, so a backend may
+hold provider-side context between them: `conversation_active()` tells the
+referee to send a delta continuation prompt (only new events since that agent's
+prompt-snapshot watermark) instead of re-sending guardrails, task, and window,
+and the referee closes every runner in a bounded, shielded teardown step. Both
+default to a stateless no-op, so CLI and mock runners are unchanged.
+
+Backend capabilities (`resume`, `interrupt`, `tool_gate`, `continuity`) are
+honest runtime facts and are not inferred from provider brand. `continuity` is
+the in-session provider-thread continuation fact; the session reducer reports it
+true only when every selected backend has it (false for every backend until the
+per-backend #47 stages flip it with proof). Live backend health gates starts on
+certainty and is reported by `describe_options`, not by daemon status.
 
 The original Stage 5.1 A1 spike resolved all SDKs together under Python
 3.12.13:

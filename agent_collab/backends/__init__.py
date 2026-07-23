@@ -182,9 +182,13 @@ def summarize_session_capabilities(
 
     ``resumable`` is true only if *every* agent's backend has ``resume`` **and**
     that agent actually captured a provider session id; ``interruptible`` only if
-    every agent's backend has ``interrupt``. Built and tested against the
-    all-``false`` reality this stage; a later stage flips inputs without touching
-    this reducer. An empty agent set is not resumable/interruptible.
+    every agent's backend has ``interrupt``; ``continuity`` only if every agent's
+    backend has ``continuity`` (an in-session fact — no captured id required,
+    unlike restart-safe resume). The per-agent flag stays visible in
+    ``settings.agents.<id>.capabilities`` so a caller can target follow-ups at the
+    agents that hold provider context in a mixed workflow. Built and tested
+    against the all-``false`` reality this stage; a later stage flips inputs
+    without touching this reducer. An empty agent set has every summary false.
     """
 
     agents = list(per_agent.items())
@@ -192,7 +196,8 @@ def summarize_session_capabilities(
         cap.resume and agent_id in captured_session_ids for agent_id, cap in agents
     )
     interruptible = bool(agents) and all(cap.interrupt for _agent_id, cap in agents)
-    return {"resumable": resumable, "interruptible": interruptible}
+    continuity = bool(agents) and all(cap.continuity for _agent_id, cap in agents)
+    return {"resumable": resumable, "interruptible": interruptible, "continuity": continuity}
 
 
 def health(backend: AgentBackend, *, fresh: bool = False) -> BackendHealth:

@@ -52,17 +52,24 @@ class BackendCapabilities:
     Every capability defaults to ``False`` and stays ``False`` for every backend
     in this stage: the flags exist so later stages can turn a running code path
     ``True`` without a schema change, never so a provider brand can imply one.
+
+    ``continuity`` is the in-session fact — the runner continues its provider
+    thread on the next turn (delta prompt, no task re-send) — and is deliberately
+    narrower than #20's restart-safe ``resume``; a backend flips it only with
+    hermetic plus credentialed proof.
     """
 
-    resume: bool = False  # provider-side session/thread continuation
+    resume: bool = False  # restart-safe provider session/thread resume (#20)
     interrupt: bool = False  # mid-turn stop
     tool_gate: bool = False  # programmatic tool approve/deny
+    continuity: bool = False  # provider-thread continuation within one live session
 
     def to_dict(self) -> Dict[str, bool]:
         return {
             "resume": self.resume,
             "interrupt": self.interrupt,
             "tool_gate": self.tool_gate,
+            "continuity": self.continuity,
         }
 
 

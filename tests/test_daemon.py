@@ -18,6 +18,7 @@ from agent_collab.outcomes import TurnOutcome
 from agent_collab.options import StartOptionsError
 from agent_collab.paths import GlobalDataPaths
 from agent_collab.referee import Referee
+from agent_collab.runners import AgentRunner
 from agent_collab.session_index import SessionIndex
 
 
@@ -175,7 +176,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(terminal.turn_outcomes, consumed.turn_outcomes)
 
     async def test_required_failure_is_structured_and_preserves_earlier_outcome(self):
-        class SequenceRunner:
+        class SequenceRunner(AgentRunner):
             def __init__(self, name, outcome):
                 self.name = name
                 self.outcome = outcome
@@ -214,7 +215,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.error, "The provider reported a terminal failure")
 
     async def test_parallel_stage_failure_uses_canonical_stage_level_record(self):
-        class EmptyRunner:
+        class EmptyRunner(AgentRunner):
             async def run_turn(self, prompt, workdir, emit):
                 return TurnOutcome("completed")
 
@@ -291,7 +292,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         started = set()
         all_started = asyncio.Event()
 
-        class Runner:
+        class Runner(AgentRunner):
             def __init__(self, agent_id, source):
                 self.agent_id = agent_id
                 self.source = source
@@ -394,7 +395,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_member_selection_runs_substituted_parallel_group(self):
         ran = set()
 
-        class Runner:
+        class Runner(AgentRunner):
             def __init__(self, agent_id, source):
                 self.agent_id = agent_id
                 self.source = source
@@ -593,7 +594,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         cleaned = {"claude_cli": asyncio.Event(), "codex_cli": asyncio.Event()}
         release = asyncio.Event()
 
-        class BlockingRunner:
+        class BlockingRunner(AgentRunner):
             def __init__(self, agent_id):
                 self.agent_id = agent_id
 
@@ -653,7 +654,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         started = asyncio.Event()
         cleaned = asyncio.Event()
 
-        class BlockingRunner:
+        class BlockingRunner(AgentRunner):
             name = "claude_cli"
 
             async def run_turn(self, prompt, workdir, emit):
@@ -1088,7 +1089,7 @@ sequence = ["antigravity_sdk"]
             release_first_turn = asyncio.Event()
             second_turn_started = asyncio.Event()
 
-            class CaptureRunner:
+            class CaptureRunner(AgentRunner):
                 def __init__(self, name, source, pause=False):
                     self.name = name
                     self.source = source
@@ -1488,7 +1489,7 @@ sequence = ["claude_cli.a", "claude_cli.b"]
     async def test_wait_result_timeout_returns_heartbeat(self):
         release = asyncio.Event()
 
-        class BlockingRunner:
+        class BlockingRunner(AgentRunner):
             def __init__(self, source):
                 self.source = source
 
@@ -1556,7 +1557,7 @@ sequence = ["claude_cli.a", "claude_cli.b"]
         release = asyncio.Event()
         turn_started = asyncio.Event()
 
-        class PauseRunner:
+        class PauseRunner(AgentRunner):
             def __init__(self, source):
                 self.source = source
 
@@ -1640,7 +1641,7 @@ sequence = ["claude_cli.a", "claude_cli.b"]
             self.assertIn("no longer accepting input", str(ctx.exception))
 
     async def test_wait_result_excludes_failed_turn_partial_output(self):
-        class FailRunner:
+        class FailRunner(AgentRunner):
             async def run_turn(self, prompt, workdir, emit):
                 await emit(Event.create("claude", "message", "partial before failure"))
                 return TurnOutcome("failed", "provider_transport_failed")
@@ -1702,7 +1703,7 @@ sequence = ["claude_cli.a", "claude_cli.b"]
         # A completed turn 1 followed by a failed directed turn 2 for the same
         # agent: the restored derivation must return the completed answer, not
         # the failed turn's partial output (parity with the live ledger).
-        class SwitchRunner:
+        class SwitchRunner(AgentRunner):
             def __init__(self, source):
                 self.source = source
                 self.calls = 0
@@ -1757,7 +1758,7 @@ sequence = ["claude_cli.a", "claude_cli.b"]
         reached_commit = asyncio.Event()
         release_commit = asyncio.Event()
 
-        class AnswerRunner:
+        class AnswerRunner(AgentRunner):
             async def run_turn(self, prompt, workdir, emit):
                 await emit(Event.create("claude", "message", "the committed answer"))
                 return TurnOutcome("completed")
@@ -1810,7 +1811,7 @@ sequence = ["claude_cli.a", "claude_cli.b"]
         # A completed turn emits a final-marked message followed by trailing
         # chatter. Both the live ledger and the restored derivation must return
         # the final-marked message, not the last one.
-        class FinalMarkerRunner:
+        class FinalMarkerRunner(AgentRunner):
             def __init__(self, source):
                 self.source = source
 

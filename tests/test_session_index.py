@@ -122,12 +122,18 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
                 manager = SessionManager(index_path=index_path)
                 final = await self._run_session_to_done(manager, root)
                 # Every session this stage honestly reports all-false capabilities.
-                self.assertEqual(final.capabilities, {"resumable": False, "interruptible": False})
+                self.assertEqual(
+                    final.capabilities,
+                    {"resumable": False, "interruptible": False, "continuity": False},
+                )
 
                 restarted = SessionManager(index_path=index_path)
 
             restored = restarted.get_session(final.session_id)
-            self.assertEqual(restored.capabilities, {"resumable": False, "interruptible": False})
+            self.assertEqual(
+                restored.capabilities,
+                {"resumable": False, "interruptible": False, "continuity": False},
+            )
 
     async def test_running_sessions_marked_interrupted_on_restart(self):
         with tempfile.TemporaryDirectory() as tmp:

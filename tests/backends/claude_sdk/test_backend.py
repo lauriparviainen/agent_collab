@@ -484,7 +484,10 @@ class ClaudeBackendSurfaceTests(unittest.TestCase):
     def test_registered_pair_and_honest_capabilities(self):
         self.assertTrue(backends.is_registered("claude", "sdk"))
         caps = backends.capabilities_for("claude", "sdk")
-        self.assertEqual(caps.to_dict(), {"resume": False, "interrupt": False, "tool_gate": False})
+        self.assertEqual(
+            caps.to_dict(),
+            {"resume": False, "interrupt": False, "tool_gate": False, "continuity": False},
+        )
 
     def test_probe_reports_unavailable_with_install_hint(self):
         with mock.patch("importlib.util.find_spec", return_value=None):

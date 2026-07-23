@@ -150,6 +150,11 @@ class Referee:
         self._next_turn_number = 1
         self._committed_turn_ids: set[str] = set()
         self._reaper_tasks: set[asyncio.Task] = set()
+        # Per-agent prompt-snapshot watermark: the transcript length captured when
+        # the agent's last prompt was *built*. The next continuation delta is
+        # transcript[watermark:] minus the agent's own events. Never advanced to
+        # completion-time length, so peer events emitted mid-turn stay in the delta.
+        self._agent_watermarks: Dict[str, int] = {}
 
     def request_stop(self) -> None:
         self.stop_signal.request()
@@ -233,18 +238,26 @@ class Referee:
         visible = [event for event in transcript if not _is_provider_session_event(event)]
         return "\n".join(f"{event.source.upper()}: {event.text}" for event in visible[-12:])
 
-    def _prompt_for(self, task: str, agent: str, turn: int, transcript: List[Event]) -> str:
-        prior = self._recent_transcript(transcript)
-        guardrails = self._guardrails()
+    def _stage_role(self, turn: int) -> str:
         if turn == 1:
-            role = (
+            return (
                 "Lead agent: analyze the task and propose or perform the smallest useful next step."
             )
-        elif turn == 2:
-            role = "Reviewer agent: critique, identify gaps, and improve the previous response."
-        else:
-            role = "Lead/reviser: produce a concise revision that accounts for the review."
-        return f"{guardrails}\n{role}\n\nTASK:\n{task}\n\nRECENT TRANSCRIPT:\n{prior}\n"
+        if turn == 2:
+            return "Reviewer agent: critique, identify gaps, and improve the previous response."
+        return "Lead/reviser: produce a concise revision that accounts for the review."
+
+    _DIRECTED_ROLE = (
+        "Directed agent: answer the referee's latest question using the current transcript. "
+        "Keep the response scoped to that question."
+    )
+
+    def _prompt_for(self, task: str, agent: str, turn: int, transcript: List[Event]) -> str:
+        prior = self._recent_transcript(transcript)
+        return (
+            f"{self._guardrails()}\n{self._stage_role(turn)}\n\n"
+            f"TASK:\n{task}\n\nRECENT TRANSCRIPT:\n{prior}\n"
+        )
 
     def _parallel_prompt_for(self, task: str, transcript: List[Event]) -> str:
         prior = self._recent_transcript(transcript)
@@ -255,16 +268,58 @@ class Referee:
         self, task: str, agent: str, question: str, transcript: List[Event]
     ) -> str:
         prior = self._recent_transcript(transcript)
-        role = (
-            "Directed agent: answer the referee's latest question using the current transcript. "
-            "Keep the response scoped to that question."
-        )
         return (
-            f"{self._guardrails()}\n{role}\n\n"
+            f"{self._guardrails()}\n{self._DIRECTED_ROLE}\n\n"
             f"TASK:\n{task}\n\n"
             f"RECENT TRANSCRIPT:\n{prior}\n\n"
             f"DIRECTED QUESTION:\n{question}\n"
         )
+
+    def _continuation_delta(self, transcript: List[Event], watermark: int, agent_id: str) -> str:
+        # Events the provider has not seen since this agent's last prompt was
+        # built: transcript[watermark:] minus the agent's own output (already in
+        # its provider context) and the provider-session bookkeeping id. No size
+        # cap — the watermark advances only over the full snapshot, so nothing is
+        # silently dropped.
+        visible = [
+            event
+            for event in transcript[watermark:]
+            if event.agent_id != agent_id and not _is_provider_session_event(event)
+        ]
+        return "\n".join(f"{event.source.upper()}: {event.text}" for event in visible)
+
+    def _continuation_prompt(self, role: str, delta: str, question: Optional[str] = None) -> str:
+        # A continuation turn: the provider thread already holds guardrails, task,
+        # and prior context, so send only the role note, the new-events delta, and
+        # the directed question when present. No guardrails/task/window re-send.
+        prompt = f"{role}\n\nNEW EVENTS SINCE YOUR LAST TURN:\n{delta}\n"
+        if question is not None:
+            prompt += f"\nDIRECTED QUESTION:\n{question}\n"
+        return prompt
+
+    def _build_turn_prompt(
+        self,
+        runner: AgentRunner,
+        transcript: List[Event],
+        agent_id: str,
+        role: str,
+        stateless_prompt: Callable[[], str],
+        *,
+        question: Optional[str] = None,
+    ) -> str:
+        # Prompt-snapshot semantics: capture the transcript length at build time
+        # and advance this agent's watermark to it, whether or not continuity is
+        # active this turn, so the delta stays correct once continuity engages.
+        snapshot = len(transcript)
+        if runner.conversation_active():
+            delta = self._continuation_delta(
+                transcript, self._agent_watermarks.get(agent_id, 0), agent_id
+            )
+            prompt = self._continuation_prompt(role, delta, question)
+        else:
+            prompt = stateless_prompt()
+        self._agent_watermarks[agent_id] = snapshot
+        return prompt
 
     async def _emit(self, logger: SessionLogger, transcript: List[Event], event: Event) -> int:
         if self._emit_lock is None:
@@ -396,6 +451,35 @@ class Referee:
         runner_task.add_done_callback(self._reaper_tasks.discard)
         runner_task.add_done_callback(_consume_task_result)
 
+    async def _close_runners_bounded(self, runners: Dict[str, AgentRunner]) -> None:
+        """Close every runner within a bound, shielded from teardown.
+
+        A runner's ``close()`` releases any client/subprocess held across turns;
+        it must be idempotent and concurrency-safe against an in-flight or adopted
+        ``run_turn``. A close that hangs or raises must never hang teardown or
+        alter an already-committed outcome, so uncooperative closes are adopted as
+        background reapers exactly like a non-cooperative ``run_turn`` task. Called
+        from ``run()``'s finally under ``asyncio.shield`` so it completes on normal
+        exit, failure, and stop cancellation alike.
+        """
+
+        close_tasks = [
+            asyncio.create_task(runner.close(), name=f"agent-collab-close-{agent_id}")
+            for agent_id, runner in runners.items()
+        ]
+        if not close_tasks:
+            return
+        try:
+            done, pending = await asyncio.wait(close_tasks, timeout=RUNNER_CLEANUP_GRACE_SECONDS)
+        except asyncio.CancelledError:
+            for task in close_tasks:
+                self._adopt_runner_reaper(task)
+            raise
+        for task in done:
+            _consume_task_result(task)
+        for task in pending:
+            self._adopt_runner_reaper(task)
+
     async def _run_agent_turn(
         self,
         logger: SessionLogger,
@@ -517,6 +601,15 @@ class Referee:
     ) -> None:
         snapshot = list(transcript)
         prompt = self._parallel_prompt_for(task, snapshot)
+        # Every member shares this one prompt built from the snapshot; advance
+        # each watermark to the snapshot length so the prompt-snapshot invariant
+        # (watermark == build-time transcript length) holds for every prompt
+        # build, not only the two sequential sites. A parallel workflow is a
+        # single non-interactive stage today, so nothing reads these yet; keeping
+        # the invariant total is what stays correct if a member ever continues
+        # its provider thread on a later turn.
+        for agent_id in members:
+            self._agent_watermarks[agent_id] = len(snapshot)
         produced_messages: set[str] = set()
 
         def observe(agent_id: str, event: Event) -> None:
@@ -618,7 +711,14 @@ class Referee:
                 agent_id=target,
             ),
         )
-        prompt = self._directed_prompt_for(task, target, item.event.text, transcript)
+        prompt = self._build_turn_prompt(
+            runners[target],
+            transcript,
+            target,
+            self._DIRECTED_ROLE,
+            lambda: self._directed_prompt_for(task, target, item.event.text, transcript),
+            question=item.event.text,
+        )
         turn_id = self._allocate_occurrence()
         record = await self._run_agent_turn(
             logger,
@@ -715,6 +815,30 @@ class Referee:
         runners = self._runners()
         stages = self._stages()[: max(0, self.config.max_turns)]
 
+        try:
+            return await self._run_stages(task, transcript, runners, stages)
+        finally:
+            # Close every runner within a bound, shielded so it runs on normal
+            # exit, failure, and stop cancellation alike; a hanging/failing close
+            # never hangs teardown. A cancel that lands purely during this
+            # cleanup (the stages already finished and committed their outcomes)
+            # must not retroactively convert the run into a cancellation: swallow
+            # it so the body's own result or exception is what the daemon sees.
+            # The shielded close keeps running/adopted in the background. A
+            # genuine mid-stage stop still propagates — that CancelledError comes
+            # from the body, not from this await.
+            try:
+                await asyncio.shield(self._close_runners_bounded(runners))
+            except asyncio.CancelledError:
+                pass
+
+    async def _run_stages(
+        self,
+        task: str,
+        transcript: List[Event],
+        runners: Dict[str, AgentRunner],
+        stages: List[List[str]],
+    ) -> Dict[str, str]:
         with SessionLogger(self.log_dir, task, self.config.session_id) as logger:
             await self._emit(
                 logger, transcript, Event.create("human", "message", task, {"task": task})
@@ -766,7 +890,15 @@ class Referee:
                             agent_id=agent_name,
                         ),
                     )
-                    prompt = self._prompt_for(task, agent_name, turn, transcript)
+                    prompt = self._build_turn_prompt(
+                        runners[agent_name],
+                        transcript,
+                        agent_name,
+                        self._stage_role(turn),
+                        lambda name=agent_name, turn=turn: self._prompt_for(
+                            task, name, turn, transcript
+                        ),
+                    )
                     turn_id = self._allocate_occurrence()
                     record = await self._run_agent_turn(
                         logger,

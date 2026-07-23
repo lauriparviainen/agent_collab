@@ -182,6 +182,8 @@ class McpServerTests(unittest.TestCase):
         self.assertTrue(text.startswith("## Delegate"))
         for required in ("agent_collab_describe_options", "agent_collab_wait_result", "answer"):
             self.assertIn(required, text)
+        # The follow-up-cost note names the continuity capability (Stage 3).
+        self.assertIn("continuity", text)
         self.assertNotIn("## Start", text)
 
     def test_start_and_status_schemas_expose_detail(self):

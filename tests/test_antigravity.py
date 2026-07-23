@@ -186,7 +186,8 @@ sequence = ["antigravity_cli"]
             entry = settings["agents"]["antigravity_cli"]
             self.assertEqual(entry["backend"], "cli")
             self.assertEqual(
-                entry["capabilities"], {"resume": False, "interrupt": False, "tool_gate": False}
+                entry["capabilities"],
+                {"resume": False, "interrupt": False, "tool_gate": False, "continuity": False},
             )
             self.assertEqual(entry["command_preview"][0], "agy")
             self.assertIn("--add-dir", entry["command_preview"])

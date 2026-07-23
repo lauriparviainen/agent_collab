@@ -97,7 +97,7 @@ class XaiSdkBackendTests(unittest.TestCase):
         self.assertIsNone(model.allowed)
         self.assertEqual(
             backend.capabilities.to_dict(),
-            {"resume": False, "interrupt": False, "tool_gate": False},
+            {"resume": False, "interrupt": False, "tool_gate": False, "continuity": False},
         )
         self.assertEqual(backend.event_fidelity, "message_only")
         self.assertEqual(backend.provider_session_id_kind, "response")

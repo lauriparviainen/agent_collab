@@ -7,7 +7,7 @@ from unittest import mock
 
 from agent_collab.referee import ParallelStageFailed, Referee, RefereeConfig, RefereeInput
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
-from agent_collab.runners import BackendDryRunRunner
+from agent_collab.runners import AgentRunner, BackendDryRunRunner
 from agent_collab.events import Event
 from agent_collab.logging import SessionLogger
 from agent_collab.outcomes import TurnOutcome
@@ -176,7 +176,7 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
     async def test_later_failure_preserves_completed_record_and_stops_sequence(self):
         calls = []
 
-        class Runner:
+        class Runner(AgentRunner):
             def __init__(self, name, outcome):
                 self.name = name
                 self.outcome = outcome
@@ -208,7 +208,7 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
         started = asyncio.Event()
         cleaned = asyncio.Event()
 
-        class SlowRunner:
+        class SlowRunner(AgentRunner):
             name = "claude"
 
             async def run_turn(self, prompt, workdir, emit):
@@ -233,7 +233,7 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_completed_runner_wins_when_already_done_at_arbitration(self):
-        class ImmediateRunner:
+        class ImmediateRunner(AgentRunner):
             name = "claude"
 
             async def run_turn(self, prompt, workdir, emit):
@@ -250,7 +250,7 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
         calls = []
         holder = {}
 
-        class FirstRunner:
+        class FirstRunner(AgentRunner):
             name = "claude"
 
             async def run_turn(self, prompt, workdir, emit):
@@ -258,7 +258,7 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
                 holder["referee"].request_stop()
                 return TurnOutcome("completed")
 
-        class SecondRunner:
+        class SecondRunner(AgentRunner):
             name = "codex"
 
             async def run_turn(self, prompt, workdir, emit):
@@ -283,7 +283,7 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
             started = asyncio.Event()
             cleaned = asyncio.Event()
 
-            class BlockingRunner:
+            class BlockingRunner(AgentRunner):
                 name = "claude"
 
                 async def run_turn(self, prompt, workdir, emit):
@@ -325,7 +325,7 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
         release = asyncio.Event()
         finished = asyncio.Event()
 
-        class UncooperativeRunner:
+        class UncooperativeRunner(AgentRunner):
             name = "claude"
 
             async def run_turn(self, prompt, workdir, emit):
@@ -444,7 +444,7 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         release = asyncio.Event()
         prompts = {}
 
-        class Runner:
+        class Runner(AgentRunner):
             def __init__(self, agent_id, source):
                 self.agent_id = agent_id
                 self.source = source
@@ -513,12 +513,12 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
     async def test_member_timeout_degrades_when_another_review_is_accepted(self):
         started = asyncio.Event()
 
-        class FastRunner:
+        class FastRunner(AgentRunner):
             async def run_turn(self, prompt, workdir, emit):
                 await emit(Event.create("claude", "message", "fast review"))
                 return TurnOutcome("completed")
 
-        class SlowRunner:
+        class SlowRunner(AgentRunner):
             async def run_turn(self, prompt, workdir, emit):
                 started.set()
                 await asyncio.Event().wait()
@@ -544,7 +544,7 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.raw["accepted_members"], ["claude"])
 
     async def test_all_member_timeouts_fail_with_committed_stage_outcomes(self):
-        class SlowRunner:
+        class SlowRunner(AgentRunner):
             async def run_turn(self, prompt, workdir, emit):
                 await asyncio.Event().wait()
 
@@ -570,7 +570,7 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.raw["accepted_members"], [])
 
     async def test_completed_turns_without_review_output_fail_the_stage(self):
-        class EmptyRunner:
+        class EmptyRunner(AgentRunner):
             async def run_turn(self, prompt, workdir, emit):
                 await emit(Event.create("error", "error", "no review"))
                 return TurnOutcome("completed")
@@ -599,7 +599,7 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.raw["accepted_members"], [])
 
     async def test_whitespace_only_message_is_not_accepted(self):
-        class Runner:
+        class Runner(AgentRunner):
             def __init__(self, source, text):
                 self.source = source
                 self.text = text
@@ -628,7 +628,7 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.raw["accepted_members"], ["codex"])
 
     async def test_failed_partial_message_is_not_accepted(self):
-        class Runner:
+        class Runner(AgentRunner):
             def __init__(self, source, outcome):
                 self.source = source
                 self.outcome = outcome
@@ -659,7 +659,7 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         started = {"claude": asyncio.Event(), "codex": asyncio.Event()}
         cleaned = {"claude": asyncio.Event(), "codex": asyncio.Event()}
 
-        class BlockingRunner:
+        class BlockingRunner(AgentRunner):
             def __init__(self, agent_id):
                 self.agent_id = agent_id
 
@@ -696,7 +696,7 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         prompts = []
         emitted = []
 
-        class Runner:
+        class Runner(AgentRunner):
             def __init__(self, source):
                 self.source = source
 
@@ -745,6 +745,34 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Reviewer agent:", prompts[1])
         messages = [event for event in emitted if event.source in {"claude", "codex"}]
         self.assertEqual([event.agent_id for event in messages], ["claude", "codex"])
+
+    async def test_parallel_stage_advances_member_watermarks_to_snapshot(self):
+        # The prompt-snapshot invariant must hold for parallel builds too: each
+        # member's watermark advances to the build-time snapshot length (not 0,
+        # not the post-stage length), so a later continuation turn for that
+        # member would start its delta after the shared parallel prompt rather
+        # than re-sending pre-stage events like the task.
+        class Runner(AgentRunner):
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "message", "review"))
+                return TurnOutcome("completed")
+
+        members = ["claude", "codex"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            referee, *_ = self._referee(root, members, {m: Runner() for m in members})
+            transcript = [
+                Event.create("human", "message", "task"),
+                Event.create("referee", "status", "workflow=..."),
+            ]
+            with SessionLogger(root, "task") as logger:
+                await referee._run_parallel_stage(
+                    logger, transcript, {m: Runner() for m in members}, "task", members, 1
+                )
+            for member in members:
+                # == len(snapshot) captured at stage start (two pre-seeded events).
+                self.assertEqual(referee._agent_watermarks[member], 2)
+                self.assertLess(referee._agent_watermarks[member], len(transcript))
 
 
 class InteractiveAcceptingLifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -829,7 +857,7 @@ class UntargetedRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_untargeted_solo_runs_the_single_agent(self):
         calls = []
 
-        class Runner:
+        class Runner(AgentRunner):
             async def run_turn(self, prompt, workdir, emit):
                 calls.append(prompt)
                 await emit(Event.create("claude", "message", "answer"))
@@ -850,7 +878,7 @@ class UntargetedRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_untargeted_multi_agent_is_append_only(self):
         ran = []
 
-        class Runner:
+        class Runner(AgentRunner):
             async def run_turn(self, prompt, workdir, emit):
                 ran.append(prompt)
                 return TurnOutcome("completed")
@@ -864,6 +892,317 @@ class UntargetedRoutingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(record)
         self.assertEqual(ran, [])
+
+
+class _StubRunner(AgentRunner):
+    """A runner whose provider-context and close behavior a test controls."""
+
+    def __init__(self, *, active=False):
+        self._active = active
+
+    def conversation_active(self):
+        return self._active
+
+
+class ContinuationPromptTests(unittest.IsolatedAsyncioTestCase):
+    """Stage 3: prompt-snapshot watermarks + delta continuation prompts."""
+
+    def _referee(self):
+        return Referee(RefereeConfig(mock=True, workdir=Path("."), color=False))
+
+    def test_stateless_build_returns_the_stateless_prompt_verbatim(self):
+        # conversation_active() False (every CLI/mock runner) -> the stateless
+        # prompt is passed through byte-for-byte; the watermark still advances to
+        # the prompt-snapshot length so a later continuity turn has a correct base.
+        referee = self._referee()
+        transcript = [
+            Event.create("human", "message", "task"),
+            Event.create("referee", "status", "workflow=..."),
+        ]
+        sentinel = "GUARDRAILS\nLead agent: ...\n\nTASK:\nx\n\nRECENT TRANSCRIPT:\n...\n"
+        prompt = referee._build_turn_prompt(
+            _StubRunner(active=False), transcript, "claude", "ROLE", lambda: sentinel
+        )
+        self.assertEqual(prompt, sentinel)
+        self.assertEqual(referee._agent_watermarks["claude"], len(transcript))
+
+    def test_active_build_sends_only_the_post_watermark_delta(self):
+        from agent_collab.backends.common.sdk import provider_session_event
+
+        referee = self._referee()
+        transcript = [
+            Event.create("human", "message", "before watermark"),  # 0: pre-wm
+            Event.create("codex", "message", "peer after", agent_id="codex"),  # 1
+            Event.create("claude", "message", "own after", agent_id="claude"),  # 2
+            provider_session_event("claude", "claude", "sess-XYZ", "session"),  # 3
+        ]
+        referee._agent_watermarks["claude"] = 1
+        prompt = referee._build_turn_prompt(
+            _StubRunner(active=True),
+            transcript,
+            "claude",
+            "DIRECTED ROLE",
+            lambda: "STATELESS-SHOULD-NOT-BE-USED",
+            question="what now?",
+        )
+        # No guardrails/task re-send, and the stateless builder is never called.
+        self.assertNotIn("TASK:", prompt)
+        self.assertNotIn("STATELESS-SHOULD-NOT-BE-USED", prompt)
+        self.assertIn("NEW EVENTS SINCE YOUR LAST TURN:", prompt)
+        self.assertTrue(prompt.startswith("DIRECTED ROLE"))
+        # Only the post-watermark peer event; not pre-watermark, own, or the
+        # provider-session bookkeeping id.
+        self.assertIn("CODEX: peer after", prompt)
+        self.assertNotIn("before watermark", prompt)
+        self.assertNotIn("own after", prompt)
+        self.assertNotIn("sess-XYZ", prompt)
+        self.assertIn("DIRECTED QUESTION:\nwhat now?", prompt)
+        # Watermark advances to the prompt-snapshot length (no cap), so the next
+        # delta starts exactly where this one ended.
+        self.assertEqual(referee._agent_watermarks["claude"], len(transcript))
+
+    async def test_directed_continuation_turn_omits_task_and_window(self):
+        # End-to-end at the directed call site: a solo session whose runner holds
+        # provider context sends a continuation prompt, not a re-sent task.
+        prompts = []
+
+        class ContinuityRunner(AgentRunner):
+            def conversation_active(self):
+                return True
+
+            async def run_turn(self, prompt, workdir, emit):
+                prompts.append(prompt)
+                await emit(Event.create("claude", "message", "ack"))
+                return TurnOutcome("completed")
+
+        config = CollaborationConfig(
+            agents={"claude": AgentConfig(id="claude", type="claude", command="claude")},
+            workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            referee = Referee(
+                RefereeConfig(
+                    workflow="solo",
+                    collab_config=config,
+                    workdir=root,
+                    log_dir=root,
+                    timeout=5,
+                    color=False,
+                ),
+                printer=lambda event: None,
+            )
+            transcript = [Event.create("claude", "message", "turn 1 output", agent_id="claude")]
+            item = RefereeInput(
+                event=Event.create("human", "message", "recall the codeword"), target=None
+            )
+            with SessionLogger(root, "task") as logger:
+                await referee._process_input_item(
+                    logger, transcript, {"claude": ContinuityRunner()}, "task", item
+                )
+
+        self.assertEqual(len(prompts), 1)
+        self.assertNotIn("TASK:", prompts[0])
+        self.assertNotIn("RECENT TRANSCRIPT:", prompts[0])
+        self.assertIn("NEW EVENTS SINCE YOUR LAST TURN:", prompts[0])
+        self.assertIn("recall the codeword", prompts[0])
+
+
+class RunnerCloseLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    """Stage 3: the referee closes every runner on any exit, bounded/shielded."""
+
+    def _config(self, sequence):
+        agents = {
+            name: AgentConfig(id=name, type=name, command=name, backend="cli")
+            for name in {"claude", "codex"}
+        }
+        return CollaborationConfig(
+            agents=agents,
+            workflows={"test": WorkflowConfig(id="test", sequence=list(sequence))},
+        )
+
+    def _referee(self, root, sequence, runners, *, timeout=5):
+        referee = Referee(
+            RefereeConfig(
+                workflow="test",
+                collab_config=self._config(sequence),
+                workdir=root,
+                log_dir=root,
+                max_turns=len(sequence),
+                timeout=timeout,
+                color=False,
+            ),
+            printer=lambda event: None,
+        )
+        referee._runners = lambda: runners
+        return referee
+
+    async def test_runners_closed_on_completion(self):
+        class ClosingRunner(AgentRunner):
+            def __init__(self):
+                self.closed = 0
+
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "message", "done"))
+                return TurnOutcome("completed")
+
+            async def close(self):
+                self.closed += 1
+
+        runner = ClosingRunner()
+        with tempfile.TemporaryDirectory() as tmp:
+            referee = self._referee(Path(tmp), ["claude"], {"claude": runner})
+            await referee.run("task")
+        self.assertEqual(runner.closed, 1)
+
+    async def test_runners_closed_on_failure(self):
+        class FailingRunner(AgentRunner):
+            def __init__(self):
+                self.closed = 0
+
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "message", "partial"))
+                return TurnOutcome("failed", "provider_terminal_failure")
+
+            async def close(self):
+                self.closed += 1
+
+        runner = FailingRunner()
+        with tempfile.TemporaryDirectory() as tmp:
+            referee = self._referee(Path(tmp), ["claude"], {"claude": runner})
+            with self.assertRaises(RequiredTurnFailed):
+                await referee.run("task")
+        self.assertEqual(runner.closed, 1)
+
+    async def test_runners_closed_on_stop(self):
+        started = asyncio.Event()
+
+        class BlockingClosingRunner(AgentRunner):
+            def __init__(self):
+                self.closed = 0
+
+            async def run_turn(self, prompt, workdir, emit):
+                started.set()
+                await asyncio.Event().wait()
+
+            async def close(self):
+                self.closed += 1
+
+        runner = BlockingClosingRunner()
+        with tempfile.TemporaryDirectory() as tmp:
+            referee = self._referee(Path(tmp), ["claude"], {"claude": runner})
+            task = asyncio.create_task(referee.run("task"))
+            await started.wait()
+            referee.request_stop()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertEqual(runner.closed, 1)
+
+    async def test_hanging_close_does_not_hang_teardown(self):
+        close_started = asyncio.Event()
+
+        class HangingCloseRunner(AgentRunner):
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "message", "done"))
+                return TurnOutcome("completed")
+
+            async def close(self):
+                close_started.set()
+                await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee = self._referee(Path(tmp), ["claude"], {"claude": HangingCloseRunner()})
+            with mock.patch("agent_collab.referee.RUNNER_CLEANUP_GRACE_SECONDS", 0.02):
+                # wait_for proves teardown returned rather than hanging on close.
+                await asyncio.wait_for(referee.run("task"), timeout=1.0)
+        self.assertTrue(close_started.is_set())
+        # The uncooperative close was adopted as a background reaper, not awaited.
+        self.assertTrue(referee._reaper_tasks)
+        for reaper in list(referee._reaper_tasks):
+            reaper.cancel()
+        await asyncio.gather(*referee._reaper_tasks, return_exceptions=True)
+
+    async def test_close_serializes_behind_a_cancellation_ignoring_adopted_turn(self):
+        # Finding 6: the bounded cancel can adopt a non-cooperative run_turn that
+        # outlives the turn; close() must be concurrency-safe against it. A runner
+        # that serializes the two internally (one shared lock) must never run
+        # close's critical section while the adopted turn still holds the lock,
+        # and teardown must stay bounded rather than block on it.
+        lock = asyncio.Lock()
+        run_holding = asyncio.Event()
+        release_run = asyncio.Event()
+        order = []
+
+        class SerializingRunner(AgentRunner):
+            def __init__(self):
+                self.closed = False
+
+            async def run_turn(self, prompt, workdir, emit):
+                async with lock:
+                    run_holding.set()
+                    order.append("run-enter")
+                    try:
+                        await asyncio.Event().wait()
+                    except asyncio.CancelledError:
+                        await release_run.wait()  # uncooperative: keep the lock
+                    order.append("run-exit")
+                return TurnOutcome("completed")
+
+            async def close(self):
+                async with lock:  # serialized behind the live turn
+                    order.append("close-crit")
+                    self.closed = True
+
+        runner = SerializingRunner()
+        with tempfile.TemporaryDirectory() as tmp:
+            referee = self._referee(Path(tmp), ["claude"], {"claude": runner}, timeout=0)
+            with mock.patch("agent_collab.referee.RUNNER_CLEANUP_GRACE_SECONDS", 0.02):
+                task = asyncio.create_task(referee.run("task"))
+                await run_holding.wait()
+                # The deadline (timeout=0) cancels the turn; it ignores the cancel
+                # and is adopted. Teardown fires close(), which blocks on the lock.
+                with self.assertRaises(RequiredTurnFailed):
+                    await task
+                # close() has not entered its critical section: the turn holds it.
+                self.assertNotIn("close-crit", order)
+                self.assertFalse(runner.closed)
+                # Let the adopted turn finish; close then runs, strictly after it.
+                release_run.set()
+                for _ in range(200):
+                    if runner.closed:
+                        break
+                    await asyncio.sleep(0.01)
+        self.assertTrue(runner.closed)
+        self.assertEqual(order, ["run-enter", "run-exit", "close-crit"])
+
+    async def test_cancel_during_close_preserves_completed_run(self):
+        # A cancel landing purely during the close finally — the stages already
+        # completed and committed their outcomes — must not convert the run into
+        # a cancellation; run() returns its result so the daemon still reports
+        # `done`, honoring "close never alters an already-committed outcome".
+        close_started = asyncio.Event()
+        release_close = asyncio.Event()
+
+        class SlowCloseRunner(AgentRunner):
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "message", "done"))
+                return TurnOutcome("completed")
+
+            async def close(self):
+                close_started.set()
+                await release_close.wait()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee = self._referee(Path(tmp), ["claude"], {"claude": SlowCloseRunner()})
+            task = asyncio.create_task(referee.run("task"))
+            # Stages have finished and the close is now blocking.
+            await asyncio.wait_for(close_started.wait(), timeout=1.0)
+            task.cancel()  # cancel purely during cleanup
+            release_close.set()
+            result = await task  # returns the result rather than raising
+        self.assertIsInstance(result, dict)
+        self.assertIn("session_id", result)
 
 
 if __name__ == "__main__":
