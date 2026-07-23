@@ -14,6 +14,26 @@ commits (and its cross-model review runs) on this branch as it lands, so CI and
 the review loop cover work incrementally, but the branch stays unmerged until
 the task closes.
 
+## Post-implementation task — collection-primitive re-evaluation
+
+After all SDK continuity stages (4–7) have landed, re-evaluate whether
+`wait_result` is actually the collection primitive the guidance should
+recommend, or whether `wait_events` should stay preferred. This is a guidance
+decision, not a surface change. Evidence from live Stage 5 usage (2026-07-24,
+Claude Code as the MCP client): `wait_result` is a server-side long-poll, so
+the calling agent blocks inside the tool call and is completely unresponsive
+to its own user while waiting; worse, this client kills tool calls near 60 s
+(timeout_ms of 120000/600000 died client-side), forcing a chatty ~45 s
+heartbeat re-poll loop — many calls, still unresponsive between them. If the
+re-evaluation keeps or moves preference to `wait_events`, its returned payload
+must first be optimized so streaming does not bloat the calling agent's
+context — today each batch carries full event objects (source/type/text/raw),
+and a long session streams far more tokens than the settled answer justifies.
+Candidate directions to weigh, not commitments: a compact event projection for
+watch loops (beyond `tool_output: "summary"`), a `timeout_ms=0` instant-peek
+form of `wait_result`, guidance recommending 30–45 s bounds for short-cap MCP
+clients, and eventually SSE push on `GET /mcp`.
+
 ## Context
 
 Delegating a task through the MCP surface today costs an outer agent many
