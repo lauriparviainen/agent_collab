@@ -533,6 +533,9 @@ def _main_start(argv) -> int:
             "mock": args.mock,
             "dry_run": args.dry_run,
             "backend_options": backend_options,
+            # The CLI renders command_preview/backend_summary, so it asks for the
+            # full settings view that the wire now compacts by default.
+            "detail": "full",
         }
         if args.backend:
             payload["backend"] = args.backend
@@ -1076,7 +1079,7 @@ def _main_status(argv) -> int:
     parser = build_session_parser("agent-collab status", "Show daemon session status.")
     args = parser.parse_args(argv)
     try:
-        _print_session(_client(args.server_url).get_session(args.session_id))
+        _print_session(_client(args.server_url).get_session(args.session_id, detail="full"))
     except Exception as exc:
         error(str(exc))
         return 1

@@ -23,6 +23,7 @@ from .outcomes import CANONICAL_MESSAGES, SessionFailure, TurnOutcomeRecord
 from .options import (
     StartOptionsError,
     build_session_settings,
+    compact_session_settings,
     describe_options,
     normalize_start_options,
     resolve_workflow_members,
@@ -87,6 +88,10 @@ class StartSessionRequest:
     members: Optional[Dict[str, str]] = None
     interactive: bool = False
     interactive_idle_timeout: float = 600.0
+    # Response-view selector for the start response ("compact" default, "full"
+    # opt-in). A wire field that shapes only the returned SessionState settings,
+    # never execution.
+    detail: str = "compact"
     # Resolved {agent_id: backend_id}, computed once during start validation and
     # carried into execution; not a user input.
     resolved_backends: Optional[Dict[str, str]] = None
@@ -129,6 +134,7 @@ class StartSessionRequest:
             backend_options=model.backend_options,
             backend=model.backend,
             members=model.members,
+            detail=model.detail,
         )
 
 
@@ -468,7 +474,7 @@ class SessionManager:
             f"session {session_id} started workflow={state.workflow} max_turns={state.max_turns} "
             f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
         )
-        return self._copy_state(state)
+        return self._view_state(state, request.detail)
 
     def _prepare_session_start(self, request: StartSessionRequest) -> _PreparedSessionStart:
         """Load and validate start inputs outside the daemon event loop."""
@@ -880,11 +886,11 @@ class SessionManager:
                 **_outcome_view(managed.state),
             )
 
-    def list_sessions(self) -> List[SessionState]:
-        return [self._copy_state(managed.state) for managed in self._sessions.values()]
+    def list_sessions(self, detail: str = "compact") -> List[SessionState]:
+        return [self._view_state(managed.state, detail) for managed in self._sessions.values()]
 
-    def get_session(self, session_id: str) -> SessionState:
-        return self._copy_state(self._get_managed(session_id).state)
+    def get_session(self, session_id: str, detail: str = "compact") -> SessionState:
+        return self._view_state(self._get_managed(session_id).state, detail)
 
     def read_events(
         self,
@@ -1474,6 +1480,14 @@ class SessionManager:
         self, managed: _ManagedSession, target: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         if target is None:
+            # Untargeted post: in a single-agent (solo) session route to that
+            # sole agent so the recorded resolved_target reflects the directed
+            # turn the referee runs (agents here are the workflow members, the
+            # same set Referee._sole_workflow_agent derives). A multi-agent
+            # session stays append-only, resolved_target null and no turn.
+            agents = self._session_agent_refs(managed)
+            if len(agents) == 1:
+                return None, agents[0][0]
             return None, None
         if not isinstance(target, str):
             raise SessionRequestError("target must be a string")
@@ -1514,6 +1528,16 @@ class SessionManager:
 
     def _copy_state(self, state: SessionState) -> SessionState:
         return SessionState(**state.to_dict())
+
+    def _view_state(self, state: SessionState, detail: str) -> SessionState:
+        """A detached response view of ``state``. For ``detail != "full"`` the
+        copy's ``settings`` content is slimmed to the compact view; the stored
+        state is never touched (``_copy_state`` deep-copies via ``asdict``)."""
+
+        copied = self._copy_state(state)
+        if detail != "full" and copied.settings is not None:
+            copied.settings = compact_session_settings(copied.settings)
+        return copied
 
     def _log_lifecycle(self, message: str) -> None:
         if self._lifecycle_logger is not None:

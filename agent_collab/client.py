@@ -66,8 +66,10 @@ class AgentCollabClient:
     def list_sessions(self) -> SessionListModel:
         return SessionListModel.from_dict(self._request("GET", "/sessions"))
 
-    def get_session(self, session_id: str) -> SessionStateModel:
-        return SessionStateModel.from_dict(self._request("GET", f"/sessions/{session_id}"))
+    def get_session(self, session_id: str, *, detail: str = "compact") -> SessionStateModel:
+        return SessionStateModel.from_dict(
+            self._request("GET", f"/sessions/{session_id}", {"detail": detail})
+        )
 
     def read_events(
         self,

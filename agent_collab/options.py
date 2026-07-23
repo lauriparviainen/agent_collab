@@ -1258,6 +1258,41 @@ def build_session_settings(
     return settings
 
 
+# Per-agent keys dropped from the compact settings view. Both are retrievable
+# with detail="full": command_preview is the exact subprocess prefix, and
+# backend_summary duplicates the normalized options already spread into the
+# entry. Everything cost/permission relevant (model, permission/sandbox mode,
+# thinking, capabilities, backend) stays.
+COMPACT_DROPPED_AGENT_KEYS: Tuple[str, ...] = ("command_preview", "backend_summary")
+
+
+def compact_session_settings(settings: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return a response-view copy of ``settings`` slimmed for compact detail.
+
+    Keeps every top-level field (workflow shape, interactive flags, warnings)
+    and every per-agent field except :data:`COMPACT_DROPPED_AGENT_KEYS`. Purely
+    a response projection — the persisted ``SessionState.settings`` stays full
+    fidelity. The input is not mutated.
+    """
+
+    out: Dict[str, Any] = dict(settings)
+    agents = settings.get("agents")
+    if isinstance(agents, Mapping):
+        out["agents"] = {
+            agent_id: (
+                {
+                    key: value
+                    for key, value in agent.items()
+                    if key not in COMPACT_DROPPED_AGENT_KEYS
+                }
+                if isinstance(agent, Mapping)
+                else agent
+            )
+            for agent_id, agent in agents.items()
+        }
+    return out
+
+
 def _backend_settings_summary(
     agent: AgentConfig, backend_id: str, options: Mapping[str, Any]
 ) -> Optional[Dict[str, Any]]:

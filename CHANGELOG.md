@@ -13,6 +13,24 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Session `settings` now default to a **compact** view on `agent_collab_start`,
+  `agent_collab_status`, and `GET /sessions/{id}` — the same efficient-by-default
+  posture as `tool_output: "summary"` (#47, stage 2). The compact view keeps
+  every top-level field and each agent's `type`, `backend`, `capabilities`, and
+  full effective options, dropping only the per-agent `command_preview` and
+  `backend_summary`; pass the new additive `detail: "full"` to get them back.
+  `agent_collab_list_sessions` is always compact. Client-visible default change:
+  external readers of `command_preview`/`backend_summary` must pass
+  `detail: "full"`. Persisted state stays full fidelity; the REST API major
+  stays 2 (the typed response contract is untouched — only the opaque `settings`
+  content is slimmed).
+- In a **solo** interactive session an untargeted `agent_collab_post_message`
+  now runs a directed turn of the single agent, so a delegate loop needs no
+  `target` bookkeeping (#47, stage 2). This is a deliberate cost-bearing change:
+  an untargeted post to a solo interactive session previously ran no turn and
+  now triggers a provider turn. Multi-agent sessions keep the append-only
+  behavior. The shipped review skills never call `post_message`.
+
 - Add `wait_result`, the delegation primitive, so collecting a session's outcome
   is one blocking call instead of a `read_events`/`wait_events` polling loop
   (#47, stage 1). New `GET /sessions/{id}/result`, MCP tool

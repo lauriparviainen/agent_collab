@@ -173,7 +173,7 @@ class TuiApp:
 
     def activate_session(self, session_id: str) -> None:
         self._stop_poller()
-        session = self.client.get_session(session_id)
+        session = self.client.get_session(session_id, detail="full")
         cursor = reset_cursor_state(self.cursor_state, session_id)
         batch = self.client.read_events(session_id, 0)
         cursor, _ = advance_cursor_state(
@@ -360,7 +360,7 @@ class TuiApp:
             current = int(batch.cursor)
             if not batch.events:
                 try:
-                    session = self.client.get_session(session_id)
+                    session = self.client.get_session(session_id, detail="full")
                 except Exception as exc:
                     if stop.is_set():
                         return
@@ -463,7 +463,7 @@ class TuiApp:
         if not self.session_id:
             return
         try:
-            self.session = self.client.get_session(self.session_id)
+            self.session = self.client.get_session(self.session_id, detail="full")
         except Exception as exc:
             self.message = str(exc)
             return

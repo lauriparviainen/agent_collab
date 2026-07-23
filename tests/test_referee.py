@@ -5,10 +5,11 @@ import asyncio
 from pathlib import Path
 from unittest import mock
 
-from agent_collab.referee import ParallelStageFailed, Referee, RefereeConfig
+from agent_collab.referee import ParallelStageFailed, Referee, RefereeConfig, RefereeInput
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.runners import BackendDryRunRunner
 from agent_collab.events import Event
+from agent_collab.logging import SessionLogger
 from agent_collab.outcomes import TurnOutcome
 from agent_collab.referee import RequiredTurnFailed
 
@@ -789,6 +790,80 @@ class InteractiveAcceptingLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("accepting", False), order[:idle_index])
         # awaiting_input is still the announced status at that point (not yet done).
         self.assertNotIn(("status", "done"), order[:idle_index])
+
+
+class UntargetedRoutingTests(unittest.IsolatedAsyncioTestCase):
+    """Stage 2: an untargeted post runs a directed turn of the sole agent in a
+    solo session; multi-agent sessions keep the append-only behavior."""
+
+    def _config(self, sequence):
+        agents = {
+            name: AgentConfig(id=name, type=name, command=name, backend="cli")
+            for name in {"claude", "codex"}
+        }
+        return CollaborationConfig(
+            agents=agents,
+            workflows={"test": WorkflowConfig(id="test", sequence=list(sequence))},
+        )
+
+    def _referee(self, root, sequence):
+        return Referee(
+            RefereeConfig(
+                workflow="test",
+                collab_config=self._config(sequence),
+                workdir=root,
+                log_dir=root,
+                max_turns=len(sequence),
+                timeout=5,
+                color=False,
+            ),
+            printer=lambda event: None,
+        )
+
+    async def _process_untargeted(self, referee, root, runners):
+        transcript = []
+        item = RefereeInput(event=Event.create("referee", "message", "ping"), target=None)
+        with SessionLogger(root, "task") as logger:
+            return await referee._process_input_item(logger, transcript, runners, "task", item)
+
+    async def test_untargeted_solo_runs_the_single_agent(self):
+        calls = []
+
+        class Runner:
+            async def run_turn(self, prompt, workdir, emit):
+                calls.append(prompt)
+                await emit(Event.create("claude", "message", "answer"))
+                return TurnOutcome("completed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            referee = self._referee(root, ["claude"])
+            record = await self._process_untargeted(referee, root, {"claude": Runner()})
+
+        self.assertIsNotNone(record)
+        self.assertEqual(record.agent_id, "claude")
+        self.assertEqual(record.outcome, "completed")
+        self.assertEqual(len(calls), 1)
+        # The turn is directed: the prompt carries the posted text, not a TASK block.
+        self.assertIn("ping", calls[0])
+
+    async def test_untargeted_multi_agent_is_append_only(self):
+        ran = []
+
+        class Runner:
+            async def run_turn(self, prompt, workdir, emit):
+                ran.append(prompt)
+                return TurnOutcome("completed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            referee = self._referee(root, ["claude", "codex"])
+            record = await self._process_untargeted(
+                referee, root, {"claude": Runner(), "codex": Runner()}
+            )
+
+        self.assertIsNone(record)
+        self.assertEqual(ran, [])
 
 
 if __name__ == "__main__":

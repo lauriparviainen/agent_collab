@@ -13,7 +13,7 @@ All operations except `GET /health` require the per-daemon Bearer token. `/optio
 | `GET` | `/options` | Bearer | OptionsRequestModel | runtime object |
 | `POST` | `/sessions` | Bearer | StartSessionRequestModel | SessionStateModel |
 | `GET` | `/sessions` | Bearer | — | SessionListModel |
-| `GET` | `/sessions/{session_id}` | Bearer | — | SessionStateModel |
+| `GET` | `/sessions/{session_id}` | Bearer | GetSessionRequestModel | SessionStateModel |
 | `GET` | `/sessions/{session_id}/events` | Bearer | ReadEventsRequestModel | EventBatchModel |
 | `GET` | `/sessions/{session_id}/events/wait` | Bearer | WaitEventsRequestModel | EventBatchModel |
 | `GET` | `/sessions/{session_id}/result` | Bearer | WaitResultRequestModel | SessionResultModel |
@@ -75,7 +75,7 @@ Read one session
 
 - Operation ID: `get_session_get`
 - Authentication: Bearer token
-- Request model: none
+- Request model: `GetSessionRequestModel`
 - Response model: `SessionStateModel`
 
 ### GET `/sessions/{session_id}/events`

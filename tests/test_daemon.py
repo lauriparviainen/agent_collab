@@ -94,9 +94,65 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(state.interactive)
             self.assertFalse(state.settings["interactive"])
             self.assertEqual(final.settings, state.settings)
+            # Stage 2: start/status default to the compact settings view — the
+            # duplicative command_preview and backend_summary are dropped, but
+            # every cost/permission-relevant field stays.
             for agent in state.settings["agents"].values():
+                self.assertNotIn("command_preview", agent)
+                self.assertNotIn("backend_summary", agent)
+                self.assertIn("backend", agent)
+                self.assertIn("capabilities", agent)
+            # detail="full" restores the dropped fields; the command preview
+            # never carries the task prompt.
+            full = manager.get_session(state.session_id, detail="full")
+            self.assertEqual(full.settings["workflow"], state.settings["workflow"])
+            saw_preview = False
+            for agent in full.settings["agents"].values():
+                self.assertIn("command_preview", agent)
+                self.assertIn("backend_summary", agent)
                 for part in agent.get("command_preview", []):
+                    saw_preview = True
                     self.assertNotIn("daemon mock task", part)
+            self.assertTrue(saw_preview)
+
+    async def test_detail_view_selects_compact_or_full_without_mutating_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                # start with detail="full" returns the full settings up front.
+                full_start = await manager.start_session(
+                    StartSessionRequest(
+                        task="detail task",
+                        mock=True,
+                        max_turns=1,
+                        timeout=5,
+                        workdir=root,
+                        detail="full",
+                    )
+                )
+                session_id = full_start.session_id
+                await self._wait_for_terminal(manager, session_id)
+
+                full_agent = next(iter(full_start.settings["agents"].values()))
+                self.assertIn("command_preview", full_agent)
+
+                # Default get_session and list_sessions are compact...
+                compact = manager.get_session(session_id)
+                for agent in compact.settings["agents"].values():
+                    self.assertNotIn("command_preview", agent)
+                    self.assertNotIn("backend_summary", agent)
+                listed = manager.list_sessions()
+                self.assertEqual(len(listed), 1)
+                for agent in listed[0].settings["agents"].values():
+                    self.assertNotIn("command_preview", agent)
+
+                # ...but the compact projection is a view: the persisted state is
+                # untouched, so a later full fetch still carries the dropped keys.
+                refetched_full = manager.get_session(session_id, detail="full")
+                for agent in refetched_full.settings["agents"].values():
+                    self.assertIn("command_preview", agent)
+                    self.assertIn("backend_summary", agent)
 
     async def test_terminal_wait_returns_state_with_unchanged_cursor_and_no_events(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -980,6 +1036,48 @@ sequence = ["antigravity_sdk"]
             self.assertIn("directed turn: codex_cli", texts)
             self.assertEqual(texts.count("directed turn: codex_cli"), 1)
             self.assertEqual(sum("mock codex_cli received prompt" in text for text in texts), 1)
+
+    async def test_interactive_solo_untargeted_message_routes_to_sole_agent(self):
+        # Stage 2: an untargeted post to a solo session runs a directed turn of
+        # the sole agent, and resolved_target names it (not null) so the wire
+        # event honestly reflects the turn.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="interactive solo task",
+                        workflow="solo",
+                        mock=True,
+                        max_turns=0,
+                        timeout=5,
+                        workdir=root,
+                        interactive=True,
+                        interactive_idle_timeout=5,
+                    )
+                )
+                await self._wait_for_status(manager, state.session_id, "awaiting_input")
+                batch = await manager.post_message(state.session_id, "please continue")
+                directed_events = []
+                cursor = batch.cursor
+                for _ in range(5):
+                    directed = await manager.wait_events(state.session_id, cursor, timeout_ms=1000)
+                    directed_events.extend(directed.events)
+                    cursor = directed.cursor
+                    if any(
+                        (event.get("raw") or {}).get("turn_outcome") for event in directed_events
+                    ):
+                        break
+                await manager.stop_session(state.session_id)
+
+            # The user passed no target, but it resolves to the sole agent.
+            self.assertIsNone(batch.events[0]["raw"]["target"])
+            self.assertEqual(batch.events[0]["raw"]["resolved_target"], "claude_cli")
+            texts = [event["text"] for event in directed_events]
+            self.assertEqual(texts.count("directed turn: claude_cli"), 1)
+            self.assertEqual(sum("mock claude_cli received prompt" in text for text in texts), 1)
 
     async def test_mid_turn_referee_note_is_queued_and_visible_to_next_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:

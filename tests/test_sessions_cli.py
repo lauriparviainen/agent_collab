@@ -3,9 +3,42 @@ import io
 import unittest
 from unittest import mock
 
-from agent_collab.api_schema import PruneResultModel, PruneSessionDetailModel, SessionResultModel
+from agent_collab.api_schema import (
+    PruneResultModel,
+    PruneSessionDetailModel,
+    SessionResultModel,
+    SessionStateModel,
+)
 from agent_collab.cli import main
 from agent_collab.client import ClientError
+
+
+def _session_state():
+    # Settings carry command_preview, one of the fields the compact view drops;
+    # the CLI must request detail="full" to render it.
+    return SessionStateModel.from_dict(
+        {
+            "session_id": "s1",
+            "status": "running",
+            "task": "t",
+            "workflow": "solo",
+            "workdir": "/w",
+            "jsonl_path": "/l.jsonl",
+            "markdown_path": "/l.md",
+            "created_at": "t",
+            "updated_at": "t",
+            "settings": {
+                "workflow": {"sequence": ["claude_cli"]},
+                "agents": {
+                    "claude_cli": {
+                        "type": "claude",
+                        "model": "m",
+                        "command_preview": ["claude", "-p"],
+                    }
+                },
+            },
+        }
+    )
 
 
 def _session_result(settled, **overrides):
@@ -57,6 +90,35 @@ def _run(argv, client):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = main(argv)
     return code, stdout.getvalue(), stderr.getvalue()
+
+
+class StartStatusDetailCliTests(unittest.TestCase):
+    """Stage 2: the CLI renders command_preview/backend_summary, so it asks for
+    the full settings view that the wire now compacts by default."""
+
+    def test_start_requests_full_detail_and_renders_command_preview(self):
+        captured = {}
+        client = mock.MagicMock()
+
+        def start_session(payload):
+            captured["payload"] = payload
+            return _session_state()
+
+        client.start_session.side_effect = start_session
+        code, out, _ = _run(["start", "t", "--workdir", "/tmp", "--mock"], client)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(captured["payload"].get("detail"), "full")
+        self.assertIn("command_preview", out)
+
+    def test_status_requests_full_detail_and_renders_command_preview(self):
+        client = mock.MagicMock()
+        client.get_session.return_value = _session_state()
+        code, out, _ = _run(["status", "s1"], client)
+
+        self.assertEqual(code, 0)
+        client.get_session.assert_called_once_with("s1", detail="full")
+        self.assertIn("command_preview", out)
 
 
 class SessionsPruneCliTests(unittest.TestCase):

@@ -162,6 +162,36 @@ class McpServerTests(unittest.TestCase):
             self.assertIn(required, text)
         self.assertNotIn("## Errors", text)
 
+    def test_overview_topic_returns_only_its_section(self):
+        # No topic returns the whole document; "overview" now returns just the
+        # overview section.
+        whole = handle_tool("agent_collab_guidance", {})["content"][0]["text"]
+        self.assertIn("## Delegate", whole)
+        overview = handle_tool("agent_collab_guidance", {"topic": "overview"})["content"][0]["text"]
+        self.assertTrue(overview.startswith("## Overview"))
+        self.assertNotIn("## Delegate", overview)
+        self.assertNotIn("## Start", overview)
+
+    def test_delegate_topic_is_discoverable_and_describes_the_flow(self):
+        response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+        topics = tools["agent_collab_guidance"]["inputSchema"]["properties"]["topic"]["enum"]
+        self.assertIn("delegate", topics)
+
+        text = handle_tool("agent_collab_guidance", {"topic": "delegate"})["content"][0]["text"]
+        self.assertTrue(text.startswith("## Delegate"))
+        for required in ("agent_collab_describe_options", "agent_collab_wait_result", "answer"):
+            self.assertIn(required, text)
+        self.assertNotIn("## Start", text)
+
+    def test_start_and_status_schemas_expose_detail(self):
+        response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+        for name in ("agent_collab_start", "agent_collab_status"):
+            props = tools[name]["inputSchema"]["properties"]
+            self.assertIn("detail", props)
+            self.assertEqual(props["detail"]["enum"], ["compact", "full"])
+
     def test_guidance_document_ships_inside_the_package(self):
         """Installed daemons must find the guidance file under site-packages.
 
@@ -195,6 +225,10 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_describe_options", standalone)
         self.assertIn("returned cursor", standalone)
         self.assertIn("agent_collab_guidance", standalone)
+        # The full contract is the no-topic guidance call, never a single topic:
+        # a topic returns only its own section (see guidance_text).
+        self.assertIn("no topic is the full contract", instructions)
+        self.assertNotIn("'delegate') has the full contract", instructions)
 
     def test_start_maps_to_client_start_session(self):
         args = {
@@ -338,8 +372,18 @@ class McpServerTests(unittest.TestCase):
 
             result = handle_tool("agent_collab_status", {"session_id": "s1"})
 
-        client.get_session.assert_called_once_with("s1")
+        client.get_session.assert_called_once_with("s1", detail="compact")
         _assert_tool_result(self, result, state.to_dict())
+
+    def test_status_forwards_detail_full(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            state = _state(status="done")
+            client.get_session.return_value = state
+
+            handle_tool("agent_collab_status", {"session_id": "s1", "detail": "full"})
+
+        client.get_session.assert_called_once_with("s1", detail="full")
 
     def test_read_events_maps_to_client_read_events(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:

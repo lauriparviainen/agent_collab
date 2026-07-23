@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from .api_schema import (
     API_VERSION,
     API_VERSION_HEADER,
+    GetSessionRequestModel,
     HealthModel,
     OptionsRequestModel,
     PostMessageRequestModel,
@@ -373,9 +374,10 @@ class AgentCollabHttpServer:
         return {"sessions": [state.to_dict() for state in self.manager.list_sessions()]}
 
     async def _route_get_session(
-        self, _route: Route, path: Dict[str, str], _query: Dict[str, str], _body: bytes
+        self, _route: Route, path: Dict[str, str], query: Dict[str, str], _body: bytes
     ) -> Any:
-        return self.manager.get_session(path["session_id"]).to_dict()
+        request = _parse(GetSessionRequestModel.from_dict, query)
+        return self.manager.get_session(path["session_id"], detail=request.detail).to_dict()
 
     async def _route_read_events(
         self, _route: Route, path: Dict[str, str], query: Dict[str, str], _body: bytes

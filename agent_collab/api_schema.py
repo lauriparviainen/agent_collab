@@ -82,6 +82,15 @@ def _tool_output(data: Dict[str, Any]) -> str:
     return value
 
 
+def _detail(data: Dict[str, Any]) -> str:
+    # Response-view selector for session state, mirroring ``tool_output``:
+    # "compact" (default) slims the ``settings`` content, "full" keeps it whole.
+    value = data.get("detail", "compact")
+    if not isinstance(value, str) or value not in {"compact", "full"}:
+        raise ValueError("detail must be 'compact' or 'full'")
+    return value
+
+
 # --- Response DTOs ----------------------------------------------------------
 
 
@@ -564,6 +573,10 @@ class StartSessionRequestModel:
     # members — deep validation (slots, enablement, distinctness) is the
     # daemon's ``resolve_workflow_members``; only the shape is checked here.
     members: Dict[str, str] = field(default_factory=dict)
+    # Response-view selector for the start response only ("compact" default,
+    # "full" opt-in): it shapes the returned SessionState settings and never
+    # affects what the session runs.
+    detail: str = "compact"
 
     WIRE_FIELDS: ClassVar[Tuple[str, ...]] = (
         "task",
@@ -578,6 +591,7 @@ class StartSessionRequestModel:
         "backend_options",
         "backend",
         "members",
+        "detail",
     )
     REQUIRED_FIELDS: ClassVar[Tuple[str, ...]] = ("task", "workdir")
 
@@ -607,6 +621,7 @@ class StartSessionRequestModel:
             backend_options=_optional_object(data, "backend_options"),
             backend=str(backend) if backend is not None else None,
             members=dict(members),
+            detail=_detail(data),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -621,6 +636,7 @@ class StartSessionRequestModel:
             "interactive": self.interactive,
             "interactive_idle_timeout": self.interactive_idle_timeout,
             "backend_options": self.backend_options,
+            "detail": self.detail,
         }
         if self.backend is not None:
             out["backend"] = self.backend
@@ -736,6 +752,25 @@ class PruneSessionsRequestModel:
         if self.older_than is not None:
             out["older_than"] = self.older_than
         return out
+
+
+@dataclass
+class GetSessionRequestModel:
+    """Query for ``GET /sessions/{session_id}``.
+
+    ``detail`` selects the response view: ``"compact"`` (default) slims the
+    ``settings`` content, ``"full"`` returns it whole. Additive query param — an
+    older daemon ignores it and always returns full settings.
+    """
+
+    detail: str = "compact"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "GetSessionRequestModel":
+        return cls(detail=_detail(data))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"detail": self.detail}
 
 
 @dataclass
@@ -880,7 +915,14 @@ ROUTES: Tuple[Route, ...] = (
         SessionStateModel,
     ),
     Route("GET", "/sessions", "list_sessions", "list_sessions", None, SessionListModel),
-    Route("GET", "/sessions/{session_id}", "get_session", "get_session", None, SessionStateModel),
+    Route(
+        "GET",
+        "/sessions/{session_id}",
+        "get_session",
+        "get_session",
+        GetSessionRequestModel,
+        SessionStateModel,
+    ),
     Route(
         "GET",
         "/sessions/{session_id}/events",
@@ -962,6 +1004,7 @@ __all__ = [
     "PruneSessionDetailModel",
     "StartSessionRequestModel",
     "OptionsRequestModel",
+    "GetSessionRequestModel",
     "PostMessageRequestModel",
     "PruneSessionsRequestModel",
     "ReadEventsRequestModel",

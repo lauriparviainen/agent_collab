@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol
 
 from .api_schema import (
+    GetSessionRequestModel,
     ReadEventsRequestModel,
     TranscriptRequestModel,
     WaitEventsRequestModel,
@@ -35,6 +36,7 @@ TOOLS = [
                     "type": "string",
                     "enum": [
                         "overview",
+                        "delegate",
                         "start",
                         "watch",
                         "options",
@@ -73,7 +75,8 @@ TOOLS = [
             "workdir is required because it selects project config and subprocess cwd. "
             "Call agent_collab_describe_options first before passing non-default backend_options "
             "or members (per-workflow slot names and eligible agents are advertised under "
-            "workflows[].member_selection)."
+            "workflows[].member_selection). The response settings default to a compact view; "
+            "pass detail='full' for command_preview and backend_summary."
         ),
         "inputSchema": {
             "type": "object",
@@ -90,6 +93,7 @@ TOOLS = [
                 "backend_options": {"type": "object", "additionalProperties": {"type": "object"}},
                 "backend": {"type": "string"},
                 "members": {"type": "object", "additionalProperties": {"type": "string"}},
+                "detail": {"type": "string", "enum": ["compact", "full"]},
             },
             "required": ["task", "workdir"],
         },
@@ -101,10 +105,17 @@ TOOLS = [
     },
     {
         "name": "agent_collab_status",
-        "description": "Return status and log paths for a daemon-owned agent-collab session.",
+        "description": (
+            "Return status, settings, and log paths for a daemon-owned session. "
+            "settings default to a compact view (per-agent type, backend, capabilities, "
+            "options); pass detail='full' to add command_preview and backend_summary."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"session_id": {"type": "string"}},
+            "properties": {
+                "session_id": {"type": "string"},
+                "detail": {"type": "string", "enum": ["compact", "full"]},
+            },
             "required": ["session_id"],
         },
     },
@@ -182,7 +193,12 @@ TOOLS = [
     },
     {
         "name": "agent_collab_post_message",
-        "description": "Append referee input to an interactive live session, optionally targeting one agent for a directed turn.",
+        "description": (
+            "Post referee input to an interactive live session. With a target — or in a solo "
+            "session, where an untargeted post routes to the sole agent — it runs a directed turn; "
+            "an untargeted post to a multi-agent session is recorded only. Collect the reply with "
+            "agent_collab_wait_result."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -225,7 +241,7 @@ class ToolBackend(Protocol):
 
     async def list_sessions(self) -> Dict[str, Any]: ...
 
-    async def get_session(self, session_id: str) -> Dict[str, Any]: ...
+    async def get_session(self, session_id: str, detail: str) -> Dict[str, Any]: ...
 
     async def read_events(
         self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
@@ -264,8 +280,8 @@ class SessionManagerToolBackend:
     async def list_sessions(self) -> Dict[str, Any]:
         return {"sessions": [state.to_dict() for state in self.manager.list_sessions()]}
 
-    async def get_session(self, session_id: str) -> Dict[str, Any]:
-        return self.manager.get_session(session_id).to_dict()
+    async def get_session(self, session_id: str, detail: str) -> Dict[str, Any]:
+        return self.manager.get_session(session_id, detail).to_dict()
 
     async def read_events(
         self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
@@ -325,8 +341,8 @@ class HttpClientToolBackend:
     async def list_sessions(self) -> Dict[str, Any]:
         return self.client_factory().list_sessions().to_dict()
 
-    async def get_session(self, session_id: str) -> Dict[str, Any]:
-        return self.client_factory().get_session(session_id).to_dict()
+    async def get_session(self, session_id: str, detail: str) -> Dict[str, Any]:
+        return self.client_factory().get_session(session_id, detail=detail).to_dict()
 
     async def read_events(
         self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
@@ -391,6 +407,7 @@ def text_content(text: str, is_error: bool = False) -> Dict[str, Any]:
 
 GUIDANCE_TOPICS = (
     "overview",
+    "delegate",
     "start",
     "watch",
     "options",
@@ -402,6 +419,7 @@ GUIDANCE_TOPICS = (
 # it; a repo-relative ``doc/`` path would not exist under site-packages.
 _GUIDANCE_PATH = Path(__file__).with_name("mcp-guidance.md")
 _GUIDANCE_HEADINGS = {
+    "delegate": "## Delegate",
     "start": "## Start",
     "watch": "## Watch",
     "options": "## Options",
@@ -421,7 +439,7 @@ def guidance_text(topic: Optional[str] = None) -> str:
         text = _GUIDANCE_PATH.read_text(encoding="utf-8")
     except OSError as exc:
         raise RuntimeError("MCP guidance document is unavailable") from exc
-    if topic is None or topic == "overview":
+    if topic is None:
         return text
     return _guidance_section(text, _GUIDANCE_HEADINGS[topic], topic)
 
@@ -463,7 +481,11 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
 
         session_id = _required_str(args, "session_id")
         if name == "agent_collab_status":
-            return content(await backend.get_session(session_id))
+            status_request = _parse_tool_request(
+                GetSessionRequestModel.from_dict,
+                {key: args[key] for key in ("detail",) if key in args},
+            )
+            return content(await backend.get_session(session_id, status_request.detail))
         if name == "agent_collab_read_events":
             request = _parse_tool_request(
                 ReadEventsRequestModel.from_dict,
@@ -537,17 +559,18 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
                 "instructions": (
-                    "Resolve the intended project to an absolute workdir. Call "
-                    "agent_collab_describe_options before every start and use only enabled, "
-                    "start-eligible configured workflows and schema values. Watch with bounded "
-                    "agent_collab_wait_events calls, always advance the returned cursor, and stop "
-                    "only on terminal status, never an empty batch. Call agent_collab_guidance "
-                    "for the full contract and its review-recipe topic for diff-review workflow. "
-                    "Discovery is advisory; start revalidates freshly per backend policy. Before a "
-                    "paid review, confirm the selected models, backends, and effective "
-                    "options with the user. Use interactive=false for parallel review workflows, "
-                    "and wait at least 20 seconds between routine nonterminal observation calls. "
-                    "On validation errors, fix the named field paths instead of guessing."
+                    "Resolve the project to an absolute workdir, then call "
+                    "agent_collab_describe_options; agent_collab_guidance with no topic is the "
+                    "full contract, topic 'delegate' just this flow. To delegate: confirm "
+                    "models/backends/options with the user, agent_collab_start, then collect it "
+                    "with one bounded agent_collab_wait_result (re-poll on its heartbeat); for an "
+                    "interactive session post_message then wait_result again. To stream live "
+                    "events, loop agent_collab_wait_events, always advancing the returned cursor, "
+                    "stopping only on terminal status, never an empty batch; wait >=20s between "
+                    "routine nonterminal wait_events calls. Discovery is advisory; start "
+                    "revalidates per backend policy. Confirm models, backends, and options before "
+                    "a paid start. Use interactive=false for parallel review workflows. On "
+                    "validation errors, fix the named field paths."
                 ),
                 "serverInfo": {"name": "agent-collab", "version": "0.1"},
             },
@@ -606,6 +629,7 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
             "backend_options",
             "backend",
             "members",
+            "detail",
         )
         if key in args
     }

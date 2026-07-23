@@ -731,6 +731,10 @@
             "default": {},
             "type": "object"
           },
+          "detail": {
+            "default": "compact",
+            "type": "string"
+          },
           "dry_run": {
             "default": false,
             "type": "boolean"
@@ -1562,6 +1566,15 @@
             "required": true,
             "schema": {
               "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "detail",
+            "required": false,
+            "schema": {
+              "default": "compact",
               "type": "string"
             }
           }

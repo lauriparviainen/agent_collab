@@ -1,9 +1,12 @@
 # agent-collab MCP guidance
 
-Guidance for agents using the agent-collab MCP tools. Fetch a single topic
-with `agent_collab_guidance` and `topic` set to one of: `overview`, `start`,
-`watch`, `options`, `errors`, `workflows`, `review-recipe`. Calling it without
-a topic (or with `overview`) returns this whole document.
+Guidance for agents using the agent-collab MCP tools. Fetch one topic with
+`agent_collab_guidance` and `topic` set to one of: `overview`, `delegate`,
+`start`, `watch`, `options`, `errors`, `workflows`, `review-recipe`. No topic
+returns this whole document; `overview` returns only the overview section.
+
+Everything here is MCP-only: it describes MCP tool calls, never CLI commands
+or local filesystem paths. Read a transcript with `agent_collab_read_transcript`.
 
 ## Overview
 
@@ -26,6 +29,35 @@ built-in defaults, and agent subprocesses run with `workdir` as their working
 directory. Always pass an explicit absolute `workdir`; MCP start and
 describe-options calls require it. The daemon's own location and the caller's
 shell directory never affect a session's config.
+
+## Delegate
+
+Run another agent as a subagent and collect its result over MCP alone:
+
+1. `agent_collab_describe_options` for the absolute `workdir`; confirm the
+   models, backends, and effective options with the user before a paid start.
+2. `agent_collab_start` — `solo` with `members` picks the agent; add
+   `interactive: true` for a back-and-forth.
+3. Collect with `agent_collab_wait_result`: it blocks until the session
+   settles, then returns each agent's latest completed-turn `answer` with
+   `status`, `failure`, and `cursor`. Use one long bounded `timeout_ms`
+   (60000–120000), or short calls that re-poll immediately on a heartbeat
+   (`settled: false`); no pacing delay, the block is server-side. `settled`
+   with status `awaiting_input` means you may post a follow-up.
+4. Read `answers`. Each carries an `event_id`; re-fetch it at full fidelity
+   with `agent_collab_read_events` (`cursor: event_id`, `limit: 1`,
+   `tool_output: "full"`), or read the whole thread with
+   `agent_collab_read_transcript`.
+5. Follow up (interactive only): `agent_collab_post_message` with `text`, then
+   `wait_result` again. `target` picks one agent; in a solo session an
+   untargeted post routes to the sole agent. Each follow-up turn currently
+   re-sends the task and a recent transcript window, so it costs like a fresh
+   turn.
+6. End with `agent_collab_stop`, or let the session close on its
+   `interactive_idle_timeout` (raise it for long conversations).
+
+`wait_events` is only for streaming live events; for a delegated outcome use
+`wait_result`.
 
 ## Workflows
 
@@ -125,28 +157,36 @@ probes entirely. In every case the first real turn remains the authority for
 provider-side failures a side-effect-free probe cannot establish.
 
 The response confirms what the server is about to run; check it before
-watching:
+watching. `settings` defaults to a compact view:
 
 - `workflow` and `settings.workflow.sequence` — the effective ordered members,
 - `settings.workflow.parallel` — the concurrent group (null when sequential),
 - `settings.agents.<id>` — the effective typed options per agent (model,
-  thinking level, permission/sandbox settings where applicable),
-- `settings.agents.<id>.backend_summary` — the backend's own summary of the
-  exact normalized options passed to its runner,
-- `settings.agents.<id>.command_preview` — the exact subprocess command
-  prefix, without the task prompt,
+  thinking level, permission/sandbox settings where applicable) plus `backend`
+  and `capabilities`,
 - `jsonl_path` / `markdown_path` — where logs are written.
 
-A setting missing from the response was not configured; nothing is invented.
-`agent_collab_list_sessions` and `agent_collab_status` return the same
-`settings` block.
+Pass `detail: "full"` on start or status to also get
+`settings.agents.<id>.command_preview` (the exact subprocess command prefix,
+without the task prompt) and `.backend_summary` (the backend's own summary of
+the normalized options). A setting missing from the response was not
+configured; nothing is invented. `agent_collab_list_sessions` and
+`agent_collab_status` return the same `settings` block (list is always
+compact).
 
 Interactive sessions may move to `awaiting_input` after the planned workflow
-finishes. Use `agent_collab_post_message` with `text` and optional `target` to
-append referee input or ask one enabled session agent a directed question;
-messages are accepted only for live sessions started with `interactive: true`.
+finishes. `agent_collab_post_message` (`text`, optional `target`): a targeted
+post — or an untargeted post in a solo session — runs a directed turn you
+collect with `agent_collab_wait_result` (see Delegate); an untargeted post to a
+multi-agent session is recorded only, with no turn. Messages are accepted only
+for live sessions started with `interactive: true`.
 
 ## Watch
+
+This is the live-streaming path (progress, tool calls, messages). To collect
+only a session's outcome, use `agent_collab_wait_result` (see Delegate); the
+>= 20s pacing rule below applies to `wait_events` streaming, not to
+`wait_result`.
 
 Read events incrementally with a cursor:
 
@@ -264,6 +304,10 @@ pre-start confirmation.
 Pass `interactive: false` so a review cannot park in `awaiting_input`. For dual
 review, make one start call for a two-member `parallel` workflow; the daemon
 starts both reviewers over one frozen prompt and emits one attributed stream.
+
+This recipe streams with `wait_events` to triage findings as they arrive;
+`agent_collab_wait_result` returns only the settled outcome and is the simpler
+collector when you just need each reviewer's final answer.
 
 ```text
 session = agent_collab_start(..., interactive=false)

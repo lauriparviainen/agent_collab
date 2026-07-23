@@ -370,6 +370,27 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(status["status"], {"running", "done"})
             self.assertEqual(listed["sessions"][0]["session_id"], session_id)
 
+    async def test_get_session_detail_query_selects_compact_or_full(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = AgentCollabHttpServer(manager=SessionManager())
+            body = json.dumps(
+                {"task": "detail dispatch", "workdir": str(root), "mock": True, "max_turns": 1}
+            ).encode("utf-8")
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                started = await server._dispatch("POST", "/sessions", {}, body)
+                session_id = started["session_id"]
+                compact = await server._dispatch("GET", f"/sessions/{session_id}", {}, b"")
+                full = await server._dispatch("GET", f"/sessions/{session_id}?detail=full", {}, b"")
+                with self.assertRaises(HttpError):
+                    await server._dispatch("GET", f"/sessions/{session_id}?detail=x", {}, b"")
+
+            for agent in compact["settings"]["agents"].values():
+                self.assertNotIn("command_preview", agent)
+            self.assertTrue(
+                any("command_preview" in agent for agent in full["settings"]["agents"].values())
+            )
+
     async def test_wait_result_route_returns_settled_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

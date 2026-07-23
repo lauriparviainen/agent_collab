@@ -27,6 +27,7 @@ from agent_collab.api_schema import (
     AgentAnswerModel,
     EventBatchModel,
     ErrorModel,
+    GetSessionRequestModel,
     HealthModel,
     OptionsRequestModel,
     PostMessageRequestModel,
@@ -130,6 +131,7 @@ class StartPayloadSyncTests(unittest.TestCase):
             "backend_options": {},
             "backend": "cli",
             "members": {"claude_cli": "xai_cli"},
+            "detail": "full",
         }
         result = _start_payload(args)
         self.assertEqual(set(result), set(StartSessionRequestModel.WIRE_FIELDS))
@@ -345,6 +347,23 @@ class ModelRoundTripTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 WaitResultRequestModel.from_dict({"timeout_ms": value})
 
+    def test_get_session_detail_defaults_and_validates(self):
+        self.assertEqual(GetSessionRequestModel.from_dict({}).detail, "compact")
+        self.assertEqual(GetSessionRequestModel.from_dict({"detail": "full"}).detail, "full")
+        for value in ("summary", "", 3, True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                GetSessionRequestModel.from_dict({"detail": value})
+
+    def test_start_model_detail_defaults_and_validates(self):
+        base = {"task": "t", "workdir": "/w"}
+        self.assertEqual(StartSessionRequestModel.from_dict(base).detail, "compact")
+        self.assertEqual(
+            StartSessionRequestModel.from_dict({**base, "detail": "full"}).detail, "full"
+        )
+        self.assertEqual(StartSessionRequestModel.from_dict(base).to_dict()["detail"], "compact")
+        with self.assertRaisesRegex(ValueError, "detail"):
+            StartSessionRequestModel.from_dict({**base, "detail": "brief"})
+
     def test_request_models_are_idempotent(self):
         cases = [
             (StartSessionRequestModel, {"task": "t", "workdir": "/w"}),
@@ -352,6 +371,8 @@ class ModelRoundTripTests(unittest.TestCase):
                 StartSessionRequestModel,
                 {"task": "t", "workdir": "/w", "backend": "cli", "max_turns": 2},
             ),
+            (GetSessionRequestModel, {}),
+            (GetSessionRequestModel, {"detail": "full"}),
             (OptionsRequestModel, {"workdir": "/w"}),
             (OptionsRequestModel, {"workdir": "/w", "model_refresh": "none"}),
             (
@@ -473,6 +494,60 @@ class LiveWireFidelityTests(unittest.IsolatedAsyncioTestCase):
                 prune_body = json.dumps({"apply": False, "older_than": "1h"}).encode("utf-8")
                 pruned = await server._dispatch("POST", "/sessions/prune", {}, prune_body)
                 self.assertEqual(PruneResultModel.from_dict(pruned).to_dict(), pruned)
+
+    async def test_get_session_detail_compact_and_full_over_the_live_wire(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                server = AgentCollabHttpServer(manager=SessionManager(default_workdir=root))
+
+                # start defaults to compact...
+                compact_body = json.dumps(
+                    {"task": "detail", "workdir": str(root), "mock": True, "max_turns": 1}
+                ).encode("utf-8")
+                started = await server._dispatch("POST", "/sessions", {}, compact_body)
+                self.assertEqual(SessionStateModel.from_dict(started).to_dict(), started)
+                session_id = started["session_id"]
+                for agent in started["settings"]["agents"].values():
+                    self.assertNotIn("command_preview", agent)
+                    self.assertNotIn("backend_summary", agent)
+
+                # ...and detail="full" on start returns the dropped fields.
+                full_body = json.dumps(
+                    {
+                        "task": "detail",
+                        "workdir": str(root),
+                        "mock": True,
+                        "max_turns": 1,
+                        "detail": "full",
+                    }
+                ).encode("utf-8")
+                full_started = await server._dispatch("POST", "/sessions", {}, full_body)
+                self.assertEqual(SessionStateModel.from_dict(full_started).to_dict(), full_started)
+                for agent in full_started["settings"]["agents"].values():
+                    self.assertIn("command_preview", agent)
+
+                # GET compact (default) then full, both round-trip cleanly.
+                compact = await server._dispatch("GET", f"/sessions/{session_id}", {}, b"")
+                self.assertEqual(SessionStateModel.from_dict(compact).to_dict(), compact)
+                for agent in compact["settings"]["agents"].values():
+                    self.assertNotIn("command_preview", agent)
+
+                full = await server._dispatch("GET", f"/sessions/{session_id}?detail=full", {}, b"")
+                self.assertEqual(SessionStateModel.from_dict(full).to_dict(), full)
+                for agent in full["settings"]["agents"].values():
+                    self.assertIn("command_preview", agent)
+                    self.assertIn("backend_summary", agent)
+
+                # list is always compact.
+                listing = await server._dispatch("GET", "/sessions", {}, b"")
+                for state in listing["sessions"]:
+                    for agent in state["settings"]["agents"].values():
+                        self.assertNotIn("command_preview", agent)
+
+                # An invalid detail is a 400 (ValueError -> HttpError in the server).
+                with self.assertRaises(HttpError):
+                    await server._dispatch("GET", f"/sessions/{session_id}?detail=brief", {}, b"")
 
 
 class _CaptureWriter:

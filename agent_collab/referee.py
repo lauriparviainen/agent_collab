@@ -209,6 +209,15 @@ class Referee:
             return [workflow_members(workflow)]
         return [[agent_id] for agent_id in workflow_members(workflow)]
 
+    def _sole_workflow_agent(self) -> Optional[str]:
+        """The single agent participating in this workflow, or None when it has
+        more than one distinct member. A solo workflow has exactly one, so an
+        untargeted post routes to it like a direct message."""
+
+        members = workflow_members(self.collab_config.workflows[self.config.workflow])
+        distinct = list(dict.fromkeys(members))
+        return distinct[0] if len(distinct) == 1 else None
+
     def _guardrails(self) -> str:
         return (
             "You are participating in an agent-collab supervised coding session.\n"
@@ -593,7 +602,11 @@ class Referee:
         task: str,
         item: RefereeInput,
     ) -> Optional[TurnOutcomeRecord]:
-        if not item.target:
+        # An untargeted post runs a turn of the sole agent in a solo session
+        # (a cost-bearing behavior change); multi-agent sessions keep the
+        # append-only behavior (target=None is recorded but runs no turn).
+        target = item.target or self._sole_workflow_agent()
+        if not target:
             return None
         await self._emit(
             logger,
@@ -601,18 +614,18 @@ class Referee:
             Event.create(
                 "referee",
                 "status",
-                f"directed turn: {item.target}",
-                agent_id=item.target,
+                f"directed turn: {target}",
+                agent_id=target,
             ),
         )
-        prompt = self._directed_prompt_for(task, item.target, item.event.text, transcript)
+        prompt = self._directed_prompt_for(task, target, item.event.text, transcript)
         turn_id = self._allocate_occurrence()
         record = await self._run_agent_turn(
             logger,
             transcript,
-            runners[item.target],
+            runners[target],
             prompt,
-            agent_id=item.target,
+            agent_id=target,
             stage_index=self._next_turn_number - 1,
             turn_id=turn_id,
         )
