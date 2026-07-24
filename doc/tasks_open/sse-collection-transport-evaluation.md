@@ -1,6 +1,6 @@
-# Evaluate SSE as a collection mechanism
+# Evaluate a non-blocking wake path: SSE framing and MCP channels
 
-**Status:** Open — root cause identified and measured; transport fix not
+**Status:** Open — root cause identified and measured; no mechanism
 implemented.
 
 **Created:** 2026-07-24.
@@ -8,16 +8,32 @@ implemented.
 **Issue:** [#49](https://github.com/lauriparviainen/agent_collab/issues/49)
 
 Extracted from the collection-primitive re-evaluation in
-`subagent-delegation-and-thread-continuity` (#47).
+`subagent-delegation-and-thread-continuity` (#47), which retains only the
+`timeout_ms=0` instant peek.
 
 ## Question
 
-Can Server-Sent Events make outcome collection non-blocking — so the calling
-agent is never frozen inside a tool call while a delegated session runs?
+Can outcome collection be made non-blocking — so the calling agent is never
+frozen inside a tool call while a delegated session runs?
 
 The requirement is absolute, not a cost trade-off: an agent that is
 unresponsive to its own user for the length of a delegated session is not
 acceptable, whichever tool it calls.
+
+This document owns **every** candidate answer, because they are alternative
+means to one end and picking between them is a single decision:
+
+- **POST-scoped SSE framing** — defuse the client's first-byte timer so a long
+  call survives to the point where the client backgrounds it.
+- **The optional `GET /mcp` stream** — server-initiated notifications on the
+  transport MCP already defines.
+- **MCP channels** — Claude Code's purpose-built push path into a running
+  session, reaching the model with no in-flight tool call at all.
+- **Client auto-backgrounding** — not a mechanism we build but the payoff the
+  first two are chasing.
+
+Evaluating any one of these without the others in view is how a worse mechanism
+gets adopted.
 
 ## Root cause, measured
 
@@ -102,6 +118,45 @@ permanent.
 With either in place the call survives past two minutes, the client backgrounds
 it, and the calling agent is free while the delegated session runs — the
 requirement met without a poll loop at all.
+
+## The third mechanism: MCP channels
+
+Claude Code documents a channel as an MCP server that **pushes events into a
+running session**, so the model reacts to things that happen while nobody is at
+the terminal. Exposing "session settled" as a channel event would reach the
+model with no in-flight tool call at all — strictly better than any timer fix,
+if it were generally available. It is not, and the constraints are what decide
+this option (documentation read 2026-07-24; re-verify, this is a moving
+target):
+
+- It is a **research preview**. The `--channels` flag syntax and the protocol
+  contract may change, and the flag is not even listed in `claude --help`.
+- It requires Anthropic authentication through claude.ai or a Console API key,
+  and is unavailable on Amazon Bedrock, Google Cloud's Agent Platform, and
+  Microsoft Foundry.
+- A channel is installed as a **plugin** and opted in per session with
+  `claude --channels plugin:<name>`; being present in `.mcp.json` is explicitly
+  not enough to push messages.
+- During the preview, `--channels` accepts only plugins from an
+  Anthropic-maintained allowlist, or an organization's own list. Team and
+  Enterprise orgs must set `channelsEnabled` before any channel delivers.
+- It is Claude Code only. Codex has no equivalent.
+
+So the honest framing is not "channels versus SSE" but *what each one can be
+relied on for*. Channels is the only mechanism that removes the tool call
+entirely, and it is also the only one gated behind a preview flag, a plugin
+install, a vendor account, and an org policy toggle — for a tool whose premise
+is working across vendors. The evaluation must state plainly whether a wake
+path that exists for one client, under an admin-gated preview, is worth a
+protocol surface agent-collab has to maintain and document.
+
+Two questions decide it, and both are cheap to answer before any design work:
+whether a channel server can be a *plain MCP server* the user already has
+connected, or must be a separately installed plugin (the docs read as the
+latter); and whether the allowlist admits a third-party server like ours at
+all. If channels cannot carry an ordinary MCP server's events without a
+bespoke plugin on an Anthropic-controlled allowlist, it is not a mechanism
+agent-collab can offer — record that and move on.
 
 ## Codex is a first-class target, and it changes the design
 
@@ -197,7 +252,15 @@ Adopt the optional GET stream only if (f) shows a model-visible wake path. A
 stream a client opens but never surfaces costs reconnect and redelivery state
 for no behavioral gain.
 
-If neither holds, record the reasons and fall back to documenting the client
+Adopt channels only if the two gating questions above come back favourably —
+an ordinary connected MCP server can push, and a third-party server is
+admissible — and even then as an *additional* path for Claude Code users who
+opt in, never as the supported mechanism, because Codex and every non-Anthropic
+deployment would have nothing. Order of preference follows generality: a
+transport fix that works everywhere beats a push path that works for one client
+under a preview flag, however much better the push path is in isolation.
+
+If nothing holds, record the reasons and fall back to documenting the client
 configuration in option 1 as the supported setup — a valid, closable outcome.
 
 ## Scope notes

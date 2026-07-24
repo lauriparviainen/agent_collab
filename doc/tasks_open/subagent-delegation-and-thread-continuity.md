@@ -2,10 +2,12 @@
 
 **Status:** Open — Stages 1–7 shipped (`wait_result`; surface shape; continuity
 groundwork; `codex_sdk`, `claude_sdk`, `antigravity_sdk`, and `xai_sdk`
-continuity). The collection-primitive re-evaluation is decided (`wait_result`
-collects, `wait_events` observes; cost fixes tracked as #50, SSE extracted to
-#49); the remaining wake-path candidates — instant peek, MCP channels, client
-auto-backgrounding — stay open here.
+continuity). The collection-primitive re-evaluation is decided (watch with
+`wait_events`, harvest with `wait_result`) and its cost fixes shipped as #50.
+Every wake-path candidate — SSE framing, MCP channels, and the client
+auto-backgrounding they unlock — now belongs to #49, which owns that question
+end to end. What stays open here is the `timeout_ms=0` instant peek and the two
+open questions at the bottom of this document.
 
 **Created:** 2026-07-23.
 
@@ -178,29 +180,28 @@ Two concrete fixes follow, tracked as [#50](https://github.com/lauriparviainen/a
   boundary events), so any default change must plumb an explicit full view
   through them exactly as Stage 2 did for `detail: "full"`.
 
-Remaining candidates, unchanged and still open:
+What remains here:
 
 1. A `timeout_ms=0` instant-peek form of `wait_result` (the compact-projection
-   half of this candidate is now #50).
-2. **MCP channels**: Claude Code documents a `claude/channel` server
-   capability that pushes messages directly into the session so the agent can
-   react to external events (CI results, alerts). Exposing "session settled"
-   as a channel event is the purpose-built no-polling wake path; assess
-   protocol cost and cross-client support.
-3. **Client auto-backgrounding**: Claude Code v2.1.212+ moves MCP tool calls
-   running longer than ~2 minutes to background tasks, delivering the result
-   as a task notification while the agent stays responsive. Why it did not
-   trigger on 2026-07-24 is now known — the 60 s first-byte timer killed the
-   call before the two-minute threshold — so this is no longer an independent
-   candidate but the payoff of #49's transport fix. Its own controls
-   (`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`,
-   the subagent and non-interactive exclusions) are recorded there.
-4. **Streamable HTTP + SSE** — extracted to its own task document,
-   `sse-collection-transport-evaluation`
-   ([#49](https://github.com/lauriparviainen/agent_collab/issues/49)). It keeps
-   the legacy-transport distinction precise (the deprecated thing is the
-   2024-11-05 two-endpoint HTTP+SSE transport, not SSE framing inside
-   Streamable HTTP) and owns the per-client test matrix.
+   half of this candidate shipped as #50).
+
+Everything else about *not blocking the caller* moved to
+`sse-collection-transport-evaluation`
+([#49](https://github.com/lauriparviainen/agent_collab/issues/49)), which owns
+the wake-path question end to end. SSE framing, MCP channels, and client
+auto-backgrounding are not independent candidates — they are three mechanisms
+for the same outcome, and choosing between them is one decision, not three:
+
+- **SSE framing** defuses the documented 60 s first-byte timer, which is the
+  precondition for the client backgrounding that actually frees the caller.
+- **MCP channels** is the purpose-built push path for the same goal, reaching
+  the model without an in-flight tool call at all.
+- **Client auto-backgrounding** is the payoff both are chasing, and it did not
+  trigger on 2026-07-24 only because the first-byte timer killed the call
+  first.
+
+Splitting them across two documents would mean evaluating one mechanism without
+its alternatives in view, which is how a worse one gets adopted.
 
 ## Context
 
