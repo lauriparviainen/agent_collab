@@ -1007,7 +1007,7 @@ class SessionManager:
             session_id, cursor, tool_output=tool_output, view=view, types=types
         )
 
-    async def wait_result(self, session_id: str, timeout_ms: int = 60000) -> SessionResult:
+    async def wait_result(self, session_id: str, timeout_ms: int = 45000) -> SessionResult:
         """Block until the session is *settled*, then return its outcome.
 
         Settled := terminal, or ``awaiting_input`` while the referee is actively
@@ -1688,13 +1688,19 @@ def _event_batch_from_snapshot(
     # re-scan the same skipped events forever.
     end = len(events) if limit is None else min(len(events), cursor + limit)
     wanted = set(types) if types else None
-    projected = [
-        _digest_event(event, event_id)
-        if view == "digest"
-        else _project_event(event, event_id, tool_output)
-        for event_id, event in enumerate(events[cursor:end], start=cursor)
-        if wanted is None or str(event.get("type", "status")) in wanted
-    ]
+    projected = []
+    for event_id, event in enumerate(events[cursor:end], start=cursor):
+        if wanted is not None and str(event.get("type", "status")) not in wanted:
+            continue
+        if view == "digest":
+            projected.append(_digest_event(event, event_id))
+            continue
+        item = _project_event(event, event_id, tool_output)
+        if wanted is not None:
+            # A filtered batch is non-contiguous, so position no longer implies
+            # the absolute id. Stamp it, or a caller cannot re-fetch what it saw.
+            item["event_id"] = event_id
+        projected.append(item)
     return EventBatch(session_id=session_id, cursor=end, events=projected, **outcome_view)
 
 

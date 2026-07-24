@@ -12,6 +12,7 @@ from agent_collab.api_schema import (
 )
 from agent_collab.client import ClientError
 from agent_collab.mcp_server import handle, handle_tool, serve
+from agent_collab.events import VALID_TYPES
 from agent_collab.mcp_tools import TOOLS
 
 
@@ -239,10 +240,8 @@ class McpServerTests(unittest.TestCase):
             with self.subTest(tool=name):
                 props = tools[name]["inputSchema"]["properties"]
                 self.assertEqual(props["view"]["enum"], ["events", "digest"])
-                self.assertEqual(
-                    props["types"]["items"]["enum"],
-                    ["message", "tool_call", "command", "file_change", "status", "error"],
-                )
+                # Compare against the source of truth, not a third copy of it.
+                self.assertEqual(set(props["types"]["items"]["enum"]), VALID_TYPES)
         # The watch loop is the advertised default collection path, and
         # wait_result is advertised as the harvest that follows it rather than
         # a competitor to it.

@@ -945,6 +945,50 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             scanned = manager.read_events(state.session_id, 0, limit=3, types=["message"])
             self.assertEqual(scanned.cursor, 3)
 
+            # A filtered batch is non-contiguous, so position no longer implies
+            # the absolute id; without a stamp a caller could not re-fetch.
+            for item in messages.events:
+                self.assertIn("event_id", item)
+                refetched = manager.read_events(state.session_id, item["event_id"], limit=1)
+                self.assertEqual(refetched.events[0]["text"], item["text"])
+            # Unfiltered default batches stay byte-identical to before.
+            self.assertNotIn("event_id", everything.events[0])
+
+    async def test_interactive_session_parks_without_ever_going_terminal(self):
+        # The trap behind the guidance stop condition: an interactive session
+        # parks in awaiting_input, which is a LIVE wait status, so a watch loop
+        # that waits for `terminal` polls until the idle timeout kills a session
+        # that was already done. wait_result settles on the parked session.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="parked task",
+                        mock=True,
+                        max_turns=1,
+                        timeout=5,
+                        workdir=root,
+                        interactive=True,
+                        interactive_idle_timeout=30,
+                    )
+                )
+                await self._wait_for_status(manager, state.session_id, "awaiting_input")
+
+                batch = await manager.wait_events(
+                    state.session_id, 999, 50, view="digest", types=["message"]
+                )
+                self.assertEqual(batch.status, "awaiting_input")
+                self.assertFalse(batch.terminal)
+
+                result = await manager.wait_result(state.session_id, 1000)
+                self.assertTrue(result.settled)
+                self.assertFalse(result.terminal)
+                self.assertTrue(result.answers)
+
+                await manager.stop_session(state.session_id)
+
     async def test_projection_arguments_are_validated(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

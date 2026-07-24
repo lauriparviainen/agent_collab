@@ -407,9 +407,10 @@ class ModelRoundTripTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         model.from_dict({"view": value})
 
-    def test_event_types_accepts_both_wire_encodings(self):
-        # MCP sends a JSON array; the REST query string is flattened to one
-        # value per key, so the client sends CSV. Both must parse identically.
+    def test_event_types_accepts_all_three_wire_encodings(self):
+        # Three encodings occur in the wild: MCP sends a JSON array, the REST
+        # query string is flattened to one value per key so the client sends
+        # CSV, and some MCP clients stringify the array. All must agree.
         for model in (ReadEventsRequestModel, WaitEventsRequestModel):
             with self.subTest(model=model.__name__):
                 self.assertIsNone(model.from_dict({}).types)
@@ -419,6 +420,12 @@ class ModelRoundTripTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     model.from_dict({"types": " message , error "}).types, ("message", "error")
+                )
+                # Observed live: splitting a stringified array on commas
+                # reported an unknown event type named '"error"]'.
+                self.assertEqual(
+                    model.from_dict({"types": '["message", "error"]'}).types,
+                    ("message", "error"),
                 )
                 # Order-preserving dedup keeps the echoed request stable.
                 self.assertEqual(

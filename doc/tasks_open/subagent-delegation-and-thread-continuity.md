@@ -30,7 +30,38 @@ to its own user while waiting; worse, this client kills tool calls near 60 s
 (timeout_ms of 120000/600000 died client-side), forcing a chatty ~45 s
 heartbeat re-poll loop — many calls, still unresponsive between them.
 
-### Decision (2026-07-24): `wait_result` collects, `wait_events` observes
+### Decision (2026-07-24): watch with `wait_events`, harvest with `wait_result`
+
+The first version of this decision read "`wait_result` collects, `wait_events`
+observes" and treated the two as alternatives. Measuring the end-to-end
+workflow overturned that (all figures are shares of today's summary-projection
+stream bytes over the 12 largest stored sessions):
+
+| Workflow | Cost |
+| --- | --- |
+| stream the whole session, as today | 100% |
+| digest watch loop (`view: "digest"`, `types: ["message","error"]`) | 20% |
+| ...then rebuild the answer by re-reading message events | +55% (76% total) |
+| ...then harvest with `wait_result` on the settled session | +7% (**28% total**) |
+| `wait_result` alone, no watching | ~7% plus heartbeats, but blind |
+
+`wait_result` on a terminal *or parked* session settles immediately, so the
+harvest costs no block and returns each agent's full answer. The two therefore
+compose: `wait_events` for steering, `wait_result` for the outcome. Only a
+caller that needs nothing but the outcome should skip the watch loop — and it
+genuinely should, because caller-side turn count is a real cost these byte
+figures do not capture (a 20–30 s watch loop burns roughly twice the LLM turns
+of 45 s `wait_result` heartbeats, each turn growing the caller's context).
+
+One trap this exposed, now pinned by `mcp-guidance.md` and a daemon test:
+`awaiting_input` is a live wait status, so an interactive session never goes
+terminal on its own. A watch loop that stops only on `terminal` polls a parked
+session until its `interactive_idle_timeout` closes it. Interactive watch loops
+stop on `awaiting_input` too, and follow-up turns are collected with
+`wait_result` (status stays `awaiting_input` for the whole directed turn, so a
+watch loop has no stop condition there at all).
+
+### Why the two-tool split exists
 
 The guidance preference stands: `wait_result` stays the collection primitive
 for delegation and for review skills that only need each reviewer's final
@@ -99,10 +130,13 @@ right answers, and guidance must present both:
   Client backgrounding is actively wrong here — a backgrounded call is no longer
   watching.
 
-The steerable-watch mode is the one that must get cheaper, which promotes #50's
+The steerable-watch mode is the one that must get cheaper, which promoted #50's
 projection work from a cleanup to the priority deliverable: it is what makes a
 minutes-long watch loop affordable, it needs no transport work or client
-configuration, and it works on every client today.
+configuration, and it works on every client today. **Shipped** — `view:
+"digest"` and the `types` filter, with the measured costs in the decision
+above; the modes are not alternatives, the watch mode ends in a `wait_result`
+harvest.
 
 **Triage-as-it-arrives is worth less than it looks.** The shipped review recipe
 already instructs reconciling only after terminal status, so for the review

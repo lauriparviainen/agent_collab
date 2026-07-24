@@ -42,12 +42,18 @@ Run another agent as a subagent and collect its result over MCP alone:
    polls, `view: "digest"`, `types: ["message", "error"]`. You block inside
    whichever call you make and your user reaches you only when it returns, so
    this bound is your steering latency — you see progress, you can intervene,
-   and your user can redirect you between polls. Stop when `terminal` is true.
-4. **Harvest** with `agent_collab_wait_result`. On an already-terminal session
+   and your user can redirect you between polls. Stop when `terminal` is true
+   **or** `status` is `awaiting_input`: an interactive session parks there
+   instead of going terminal, so a loop that waits for `terminal` alone would
+   poll until the idle timeout closes a session that was already done talking.
+4. **Harvest** with `agent_collab_wait_result`. On a terminal or parked session
    it settles immediately — no block, no waiting — and its `answers` carry each
-   agent's latest completed-turn answer in full, so you never reconstruct the
-   result from digest text. Do not re-fetch every message event to rebuild it:
-   that costs more than the whole watch loop did.
+   agent's latest completed-turn answer, so you never reconstruct the result
+   from digest text. Do not re-fetch every message event to rebuild it: that
+   costs more than the whole watch loop did. Answer `text` is preview-bounded
+   (large answers carry a truncation notice and an `event_id` to re-fetch), and
+   an agent whose turns all failed contributes no answer at all — read
+   `turn_outcomes` and `failure` for those.
 
    Use `wait_result` *instead of* the watch loop only when you want nothing but
    the outcome and need not stay responsive: it then blocks until the session
@@ -61,8 +67,12 @@ Run another agent as a subagent and collect its result over MCP alone:
    `limit: 1`, `tool_output: "full"`), or read the whole thread with
    `agent_collab_read_transcript`.
 5. Follow up (interactive only): `agent_collab_post_message` with `text`, then
-   collect again. `target` picks one agent; in a solo session an untargeted
-   post routes to the sole agent. Follow-up cost depends on the agent's
+   collect with `agent_collab_wait_result` — not a watch loop. Status stays
+   `awaiting_input` for the whole directed turn, so a watch loop has no stop
+   condition there, while `wait_result` settles only once the turn is done and
+   the referee is accepting input again. `target` picks one agent; in a solo
+   session an untargeted post routes to the sole agent. Follow-up cost depends
+   on the agent's
    `settings.agents.<id>.capabilities.continuity`: when true, the turn
    continues the provider thread natively (only new events sent); when false,
    it re-sends the task and a recent window, costing like a fresh turn.
@@ -211,8 +221,11 @@ Read events incrementally with a cursor:
    when the user asks or an actionable event needs immediate follow-up,
 4. inspect `status`, `terminal`, `error`, `failure`, and `turn_outcomes` on
    every response, including ones with `events: []`; stop when `terminal` is
-   true. `awaiting_input` is live, not terminal. If the daemon predates this
-   additive view, fall back to `agent_collab_status`.
+   true. `awaiting_input` is live, not terminal — a non-interactive session
+   never parks there, but an interactive one does and will never go terminal on
+   its own, so a watch loop over an interactive session must stop on
+   `awaiting_input` too and hand over to `agent_collab_wait_result`. If the
+   daemon predates this additive view, fall back to `agent_collab_status`.
 
 Never make one unbounded blocking call. Always pass the cursor from the
 previous response, not a guess.
@@ -231,8 +244,8 @@ Cheap watching, two independent controls:
 Digest `text` is a scent, not the content: enough to see what arrived and
 decide whether to intervene. Do not rebuild a result from it, and do not page
 back over every message event to recover the full text — once the session is
-terminal, `agent_collab_wait_result` returns immediately with each agent's
-answer in full, and that is the cheapest complete result there is.
+terminal or parked, `agent_collab_wait_result` returns immediately with each
+agent's answer, and that is the cheapest complete result there is.
 
 Both views report absolute event ids, so any single event is re-fetchable whole
 with `cursor: EVENT_ID`, `limit: 1`, `tool_output: "full"` (do not pass `types`
