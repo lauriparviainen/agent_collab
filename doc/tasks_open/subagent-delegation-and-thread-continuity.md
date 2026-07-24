@@ -50,13 +50,34 @@ backends duplicate the message text into `raw["text"]` (`claude_sdk`,
 their message events cost roughly twice their text on the wire — a code-read
 fact, not measured here.
 
-**The unresponsiveness complaint does not discriminate between the two.**
-`wait_events` is also a server-side long-poll, and its >= 20s pacing rule adds
-forced idle on top. The difference is block length per call, not the existence
-of the block. Swapping tools cannot fix unresponsiveness; only a wake path
-outside an in-flight tool call can (candidates 2 and 3 below, plus the SSE
-question now tracked separately), or the background `agent-collab result` CLI
-pattern for harnesses that have shell access.
+**Responsiveness is a transport problem, not a tool choice.** `wait_events` is
+also a server-side long-poll, and its >= 20s pacing rule adds forced idle on
+top; both tools block the caller for whatever `timeout_ms` it passes. Swapping
+tools cannot fix unresponsiveness — and neither can shortening the bound, which
+only trades dead time for round trips. The real finding came out of the
+transport research on 2026-07-24 (Claude Code 2.1.219, agent-collab as an
+`http` MCP server with no per-server `timeout` configured):
+
+- A `wait_events(timeout_ms=120000)` call on a parked session died client-side
+  with "The operation timed out" after ~60–70 s; the same call at 45000 ms
+  returned a normal heartbeat. That is the documented 60 s **per-request
+  first-byte timer** that applies to HTTP/SSE/connector MCP servers, and it
+  hits `wait_result` identically — `wait_events` only looks safe because its
+  30 s default sits under it.
+- Claude Code v2.1.212+ already implements the wanted behavior: a
+  main-conversation MCP call still running after two minutes moves to a
+  background task, the model gets the task id immediately and keeps working,
+  and the result arrives as a task notification. It never fired here because
+  the 60 s first-byte timer kills the call first. **Defusing that timer is the
+  precondition for non-blocking collection**, either by configuring the
+  per-server `timeout` or by answering with an SSE stream whose first byte
+  arrives immediately.
+
+That makes the SSE candidate the primary path rather than a speculative one; it
+is tracked with the measured evidence, the interlocking client limits, and the
+Codex design constraints in `sse-collection-transport-evaluation` (#49). Until
+it lands, the background `agent-collab result` CLI pattern remains the only
+fully non-blocking collection path, and only for harnesses with shell access.
 
 **Triage-as-it-arrives is worth less than it looks.** The shipped review recipe
 already instructs reconciling only after terminal status, so for the review
@@ -106,10 +127,12 @@ Remaining candidates, unchanged and still open:
    protocol cost and cross-client support.
 3. **Client auto-backgrounding**: Claude Code v2.1.212+ moves MCP tool calls
    running longer than ~2 minutes to background tasks, delivering the result
-   as a task notification while the agent stays responsive. Verify against
-   reality before designing for it: in the 2026-07-24 session this did not
-   trigger — the client killed the call near 60 s — so the interaction with
-   per-server timeouts and the VS Code extension needs testing.
+   as a task notification while the agent stays responsive. Why it did not
+   trigger on 2026-07-24 is now known — the 60 s first-byte timer killed the
+   call before the two-minute threshold — so this is no longer an independent
+   candidate but the payoff of #49's transport fix. Its own controls
+   (`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`,
+   the subagent and non-interactive exclusions) are recorded there.
 4. **Streamable HTTP + SSE** — extracted to its own task document,
    `sse-collection-transport-evaluation`
    ([#49](https://github.com/lauriparviainen/agent_collab/issues/49)). It keeps
