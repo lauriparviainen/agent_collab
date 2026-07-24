@@ -197,10 +197,39 @@ Probe (e) below is therefore a design input, not a validation step: whether
 Codex's client resets `tool_timeout_sec` on stream activity or treats it as a
 hard wall clock decides whether streaming is worth anything there at all.
 
-## What must be verified, not assumed
+## Live observations from the #47 close-out session (2026-07-24)
 
-The mechanism above is read from client documentation plus one measured
-failure. Each of these is a separate empirical question:
+Three facts from running the shipped watch-then-harvest pattern live (Claude
+Code 2.1.219 as the VSCode native extension, agent-collab as an `http` MCP
+server, two dual-review sessions), recorded here because each changes what the
+mechanisms above are actually worth:
+
+1. **Steering-in works as designed.** A user message sent mid-turn was
+   delivered to the calling model attached to the next tool result, three
+   times, each within one 30 s poll bound. The guidance claim "the block bound
+   is your steering latency" is now empirically confirmed, not just designed.
+2. **Narrating-out does not render mid-turn — at least on the VSCode
+   extension surface.** Text the calling model emitted *between* tool calls
+   (acknowledgments, progress narration) was silently dropped by the UI; the
+   user saw only their own message followed by an unbroken run of tool-call
+   frames, and concluded the agent was unresponsive even though it had
+   answered within one poll. Only a turn's final text reliably renders.
+   Consequence: the watch loop delivers steerability and progress *to the
+   model*, but on such a surface the model cannot surface progress *to its
+   user* until the whole delegation turn ends. This cuts both ways for the
+   candidates: SSE's "visible progress" only reaches the user where the client
+   renders mid-turn output, while backgrounding fixes visibility as a side
+   effect — each task-notification wake starts a fresh turn whose final text
+   always renders. Probe (g) below.
+3. **For a `message_first` backend the digest watch degenerates to pure
+   heartbeating.** In the first review round, `xai_cli` (grok-4.5) emitted no
+   message or error events for ~12.5 minutes and then its entire answer at
+   once; the watch loop ran ~25 bounded polls whose only information was
+   "still running". Each empty poll is a full LLM turn for the caller, growing
+   its context — the caller-side turn cost #47 measured is at its worst
+   exactly where a long-blocking non-poll path would shine. `dual-review`
+   with CLI reviewers is the shipped skill's common case, so this is the
+   normal shape, not an edge case.
 
 | # | Probe | Why it matters |
 | --- | --- | --- |
@@ -210,6 +239,7 @@ failure. Each of these is a separate empirical question:
 | d | Does lowering `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS` background the call sooner, and how low is usable? | Decides how quickly the agent gets free |
 | e | Same questions on the Codex CLI, its VS Code extension, and the Codex desktop app: does it accept a `text/event-stream` response to a POST tool call, does stream activity reset `tool_timeout_sec` or is that a hard wall clock, and does any Codex surface background a long call? | Design input, not validation — see the Codex section above |
 | f | Does the optional `GET /mcp` stream get opened by any target client, and is a server-initiated notification model-visible? | Only worth building if a client both consumes it and wakes the model |
+| g | Per client surface (Claude Code terminal, VSCode extension, web; Codex surfaces): does assistant text emitted between tool calls render to the user mid-turn? | Decides whether a watch loop or SSE progress can be user-visible at all on that surface, or only model-visible (observed dropped on the VSCode extension, 2026-07-24) |
 
 Instrument at the HTTP boundary and record client versions with every result;
 these are product behaviors that change between releases.
