@@ -2,7 +2,10 @@
 
 **Status:** Open — Stages 1–7 shipped (`wait_result`; surface shape; continuity
 groundwork; `codex_sdk`, `claude_sdk`, `antigravity_sdk`, and `xai_sdk`
-continuity); post-implementation collection-primitive re-evaluation open.
+continuity). The collection-primitive re-evaluation is decided (`wait_result`
+collects, `wait_events` observes; cost fixes tracked as #50, SSE extracted to
+#49); the remaining wake-path candidates — instant peek, MCP channels, client
+auto-backgrounding — stay open here.
 
 **Created:** 2026-07-23.
 
@@ -25,16 +28,77 @@ Claude Code as the MCP client): `wait_result` is a server-side long-poll, so
 the calling agent blocks inside the tool call and is completely unresponsive
 to its own user while waiting; worse, this client kills tool calls near 60 s
 (timeout_ms of 120000/600000 died client-side), forcing a chatty ~45 s
-heartbeat re-poll loop — many calls, still unresponsive between them. If the
-re-evaluation keeps or moves preference to `wait_events`, its returned payload
-must first be optimized so streaming does not bloat the calling agent's
-context — today each batch carries full event objects (source/type/text/raw),
-and a long session streams far more tokens than the settled answer justifies.
-Candidate directions to weigh, not commitments — guidance/economics first:
+heartbeat re-poll loop — many calls, still unresponsive between them.
 
-1. A compact event projection for watch loops (beyond `tool_output:
-   "summary"`), a `timeout_ms=0` instant-peek form of `wait_result`, and
-   guidance recommending 30–45 s bounds for short-cap MCP clients.
+### Decision (2026-07-24): `wait_result` collects, `wait_events` observes
+
+The guidance preference stands: `wait_result` stays the collection primitive
+for delegation and for review skills that only need each reviewer's final
+answer; `wait_events` stays the observation primitive for cases where progress
+must be visible (a user asking what a long session is doing, debugging a stuck
+session, the TUI and CLI watch paths). Three findings drive it.
+
+**Cost.** Measured over the 12 largest stored daemon sessions using the
+shipped summary projection (`_project_event`, `tool_output: "summary"`): the
+event stream totals ~329 KB of JSON. Per session, streaming costs 3–9× the
+final answer event when the answer is substantial, and up to ~90× when the
+answer is short — a failed or terse turn still streams every tool and progress
+event. A `wait_result` collection costs one answer plus a small envelope, and
+each heartbeat is ~200 bytes. The sampled sessions all ran CLI backends; SDK
+backends duplicate the message text into `raw["text"]` (`claude_sdk`,
+`codex_sdk`, `xai_sdk`, `antigravity_sdk` all emit `raw={"text": text}`), so
+their message events cost roughly twice their text on the wire — a code-read
+fact, not measured here.
+
+**The unresponsiveness complaint does not discriminate between the two.**
+`wait_events` is also a server-side long-poll, and its >= 20s pacing rule adds
+forced idle on top. The difference is block length per call, not the existence
+of the block. Swapping tools cannot fix unresponsiveness; only a wake path
+outside an in-flight tool call can (candidates 2 and 3 below, plus the SSE
+question now tracked separately), or the background `agent-collab result` CLI
+pattern for harnesses that have shell access.
+
+**Triage-as-it-arrives is worth less than it looks.** The shipped review recipe
+already instructs reconciling only after terminal status, so for the review
+skills streaming buys visibility, not earlier action.
+
+Two concrete fixes follow, tracked as [#50](https://github.com/lauriparviainen/agent_collab/issues/50):
+
+- `wait_result`'s recommended bound is wrong for short-cap clients. The
+  `WaitResultRequestModel` default is 60000 and the `delegate` topic recommends
+  60000–120000 — at or above the observed ~60 s client kill. Recommend and
+  default to ~45000, and say why in the guidance.
+- `wait_events` must be cheap when it genuinely is the right tool. Options,
+  measured against the same 12 sessions (percentages are stream bytes vs
+  today's summary projection):
+
+  | Option | Change | Bytes |
+  | --- | --- | --- |
+  | today | tool events collapsed; `raw` dropped for tool events only | 100% |
+  | A | drop `raw` on every event | 54% |
+  | B | A plus a type filter (`message`, `error`) | 33% |
+  | C | digest lines — one string per event, text capped (200 chars), `raw` dropped | 25% |
+  | D | C plus the type filter | 12% |
+
+  Preferred shape: a new optional `view` argument (`"events"` default,
+  `"digest"`) on `read_events` / `wait_events`, orthogonal to `tool_output`
+  which keeps owning the tool-payload axis, plus an optional `types` filter
+  composable with either view. Digest lines keep the absolute event id, so any
+  event stays re-fetchable at full fidelity — the same escape hatch
+  `tool_output: "summary"` already relies on. Extending `tool_output` with a
+  `"digest"` value is rejected: it names the tool-payload axis and would be
+  ambiguous for non-tool events. Envelope-level waste is separate and additive:
+  `_outcome_view` re-sends the whole `turn_outcomes` list on every response
+  including empty batches, so per-poll overhead grows with turn count.
+  Constraint: `raw` on non-tool events has in-tree consumers (`tui.py` reads
+  `raw["queued"]` on posted messages, `cli.py` reads `raw["turn_outcome"]` on
+  boundary events), so any default change must plumb an explicit full view
+  through them exactly as Stage 2 did for `detail: "full"`.
+
+Remaining candidates, unchanged and still open:
+
+1. A `timeout_ms=0` instant-peek form of `wait_result` (the compact-projection
+   half of this candidate is now #50).
 2. **MCP channels**: Claude Code documents a `claude/channel` server
    capability that pushes messages directly into the session so the agent can
    react to external events (CI results, alerts). Exposing "session settled"
@@ -46,37 +110,12 @@ Candidate directions to weigh, not commitments — guidance/economics first:
    reality before designing for it: in the 2026-07-24 session this did not
    trigger — the client killed the call near 60 s — so the interaction with
    per-server timeouts and the VS Code extension needs testing.
-4. **Streamable HTTP + SSE, with the legacy distinction kept precise.** What
-   MCP deprecated is the 2024-11-05 two-endpoint **HTTP+SSE transport** (the
-   client opens an SSE endpoint, receives an `endpoint` event naming a separate
-   POST target, then uses those split channels). SSE framing itself remains
-   part of modern Streamable HTTP:
-   - every client message is a `POST` to one MCP endpoint; a request response
-     may be either one `application/json` object or a `text/event-stream`
-     stream, and a conforming Streamable HTTP client must accept both;
-   - a client may additionally open `GET` on that same endpoint for
-     server-initiated requests/notifications; the server may return `405` when
-     it does not offer that optional stream; and
-   - SSE event ids plus `Last-Event-ID` can provide resumability/redelivery.
-   Therefore today's `POST /mcp` JSON path plus `GET /mcp -> 405` is already
-   valid Streamable HTTP, not an obsolete transport.
-
-   Codex's VS Code extension and desktop app use the shared Codex MCP host and
-   configuration. Its documented remote transport is Streamable HTTP (plus
-   local stdio), not a separately configured legacy SSE transport. That means
-   POST-scoped SSE is part of the advertised protocol; it does **not** prove
-   that either Codex surface opens the optional GET stream, exposes
-   unsolicited notifications to the active thread, or wakes the model outside
-   an in-flight tool call. Claude Code has the same unresolved product-level
-   questions. Before choosing SSE as the collection primitive, test separately
-   on Claude Code, the Codex VS Code extension, and the Codex desktop app:
-   (a) JSON versus SSE responses to a long-running POST tool call, (b) whether
-   the client opens/reconnects `GET /mcp`, (c) whether a settlement
-   notification becomes model-visible, and (d) whether the UI stays responsive
-   while waiting. POST-scoped SSE may reduce polling and carry progress, but it
-   still occupies one tool call unless that client backgrounds it; GET push is
-   useful only if the client consumes it and has a real model-wake path. Do not
-   build toward either behavior from protocol possibility alone.
+4. **Streamable HTTP + SSE** — extracted to its own task document,
+   `sse-collection-transport-evaluation`
+   ([#49](https://github.com/lauriparviainen/agent_collab/issues/49)). It keeps
+   the legacy-transport distinction precise (the deprecated thing is the
+   2024-11-05 two-endpoint HTTP+SSE transport, not SSE framing inside
+   Streamable HTTP) and owns the per-client test matrix.
 
 ## Context
 
