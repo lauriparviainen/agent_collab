@@ -1724,6 +1724,9 @@ sequence = ["claude_cli.a", "claude_cli.b"]
             # The planned turn 1 (claude_cli) completed, so its answer is the
             # result-so-far while parked; the caller may post a follow-up.
             self.assertEqual([answer["agent_id"] for answer in result.answers], ["claude_cli"])
+            # A parked interactive settle is not a failure: answers-so-far serve
+            # and no events_tail rides along.
+            self.assertEqual(result.events_tail, [])
 
     async def test_wait_result_unsettled_during_directed_turn_then_settles(self):
         release = asyncio.Event()
@@ -1974,6 +1977,45 @@ sequence = ["claude_cli.a", "claude_cli.b"]
             # Restored and live sessions agree on the tail, like they do on answers.
             self.assertEqual(restored.events_tail, live.events_tail)
             self.assertGreater(len(restored.events_tail), 0)
+
+    async def test_wait_result_stopped_session_carries_events_tail(self):
+        # ``failed`` is not special: every settled non-``done`` terminal status
+        # takes the tail branch, so a stopped session ships one too.
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class HangingRunner(AgentRunner):
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "status", "working"))
+                started.set()
+                await release.wait()
+                return TurnOutcome("completed")
+
+        runners = {"claude_cli": HangingRunner(), "codex_cli": HangingRunner()}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="stopped delegate",
+                            mock=True,
+                            max_turns=1,
+                            timeout=5,
+                            workdir=root,
+                        )
+                    )
+                    await asyncio.wait_for(started.wait(), timeout=2)
+                    await manager.stop_session(state.session_id)
+                    await self._wait_for_terminal(manager, state.session_id)
+                    result = await manager.wait_result(state.session_id, timeout_ms=1000)
+
+            self.assertEqual(result.status, "stopped")
+            self.assertTrue(result.settled)
+            self.assertGreater(len(result.events_tail), 0)
+            for event in result.events_tail:
+                self.assertIsNone(event["raw"])
 
     async def test_wait_result_on_restored_session_derives_answers(self):
         with tempfile.TemporaryDirectory() as tmp:
