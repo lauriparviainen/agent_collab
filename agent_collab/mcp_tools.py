@@ -204,8 +204,10 @@ TOOLS = [
             "cursor. timeout_ms bounds one server-side block (default 45000, max 600000; above "
             "~45000 clients kill the call near 60 s); on expiry it returns a heartbeat "
             "(settled=false, no answers) — re-poll immediately, the 20s pacing rule does not apply. "
-            "You are unresponsive to your own user for the whole block, so prefer wait_events when "
-            "you need to stay steerable; use this when you only want the outcome."
+            "On an already-terminal session it returns immediately, so this is also the cheap "
+            "harvest after a wait_events watch loop: never rebuild a result by re-reading message "
+            "events. You are unresponsive for the whole block, so as a collector use it only when "
+            "you want nothing but the outcome; otherwise watch with wait_events, then call this."
         ),
         "inputSchema": {
             "type": "object",
@@ -656,17 +658,18 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                     "Resolve the project to an absolute workdir, then call "
                     "agent_collab_describe_options; agent_collab_guidance with no topic is the "
                     "full contract, topic 'delegate' just this flow. To delegate: "
-                    "agent_collab_start, then follow it "
-                    "with agent_collab_wait_events (timeout_ms 20000-30000, view='digest', "
-                    "types=['message','error']), always advancing the returned cursor, stopping "
-                    "only on terminal status, never an empty batch. Bounded polls keep you "
-                    "steerable: your user reaches you only when a call returns, and clients kill "
-                    "calls near 60 s. Pace ~20s only after an early return with routine events; a "
-                    "full block already paced it. Use agent_collab_wait_result only when you want "
-                    "the outcome and need not stay responsive. Interactive: post_message, then "
-                    "collect again. Discovery is advisory; start revalidates per backend policy. "
-                    "Confirm models, backends, options before a paid start. interactive=false for "
-                    "parallel review workflows. On validation errors, fix the named field paths."
+                    "agent_collab_start, then watch with agent_collab_wait_events (timeout_ms "
+                    "20000-30000, view='digest', types=['message','error']), always advancing the "
+                    "returned cursor, stopping only on terminal status, never an empty batch. "
+                    "Bounded polls keep you steerable (your user is heard when a call returns; "
+                    "clients kill calls near 60 s). Pace ~20s only after an early routine return; "
+                    "a full block already paced it. At terminal, harvest with "
+                    "agent_collab_wait_result - it answers immediately with each agent's full "
+                    "answer; never rebuild one from message events. Interactive: post_message, "
+                    "then repeat. Discovery is advisory; "
+                    "start revalidates per backend policy. Confirm models, backends, options "
+                    "before a paid start. interactive=false for parallel review workflows. On "
+                    "validation errors, fix the named field paths."
                 ),
                 "serverInfo": {"name": "agent-collab", "version": "0.1"},
             },

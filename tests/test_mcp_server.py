@@ -243,9 +243,13 @@ class McpServerTests(unittest.TestCase):
                     props["types"]["items"]["enum"],
                     ["message", "tool_call", "command", "file_change", "status", "error"],
                 )
-        # The watch loop is the advertised default collection path.
+        # The watch loop is the advertised default collection path, and
+        # wait_result is advertised as the harvest that follows it rather than
+        # a competitor to it.
         self.assertIn("Preferred way to follow", tools["agent_collab_wait_events"]["description"])
-        self.assertIn("steerable", tools["agent_collab_wait_result"]["description"])
+        result_description = tools["agent_collab_wait_result"]["description"]
+        self.assertIn("harvest", result_description)
+        self.assertIn("unresponsive", result_description)
 
     def test_start_maps_to_client_start_session(self):
         args = {

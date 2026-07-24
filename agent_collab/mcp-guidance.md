@@ -38,24 +38,28 @@ Run another agent as a subagent and collect its result over MCP alone:
    models, backends, and effective options with the user before a paid start.
 2. `agent_collab_start` — `solo` with `members` picks the agent; add
    `interactive: true` for a back-and-forth.
-3. Collect. You block inside whichever call you make, and your user reaches you
-   only when it returns — so the bound you pass is your steering latency. Pick
-   by whether you must stay steerable:
-   - **Default — `agent_collab_wait_events`** (see Watch): bounded 20000–30000
-     polls with `view: "digest"`. You see progress, you can intervene, and your
-     user can redirect you between polls.
-   - **`agent_collab_wait_result`** when you only want the outcome and do not
-     need to stay responsive: it blocks until the session *settles*, then
-     returns each agent's latest completed-turn `answer` with `status`,
-     `failure`, and `cursor`. `timeout_ms` defaults to 45000; do not exceed it
-     — clients kill tool calls near 60 s. On a heartbeat (`settled: false`)
-     re-poll immediately; no pacing delay, the block is server-side. `settled`
-     with status `awaiting_input` means you may post a follow-up.
-4. Read the answer. From `wait_result`, `answers` carries it directly; from a
-   watch loop, the agent's last `message` event is it. Either way an
-   `event_id` re-fetches the full text with `agent_collab_read_events`
-   (`cursor: event_id`, `limit: 1`, `tool_output: "full"`), or read the whole
-   thread with `agent_collab_read_transcript`.
+3. **Watch** with `agent_collab_wait_events` (see Watch): bounded 20000–30000
+   polls, `view: "digest"`, `types: ["message", "error"]`. You block inside
+   whichever call you make and your user reaches you only when it returns, so
+   this bound is your steering latency — you see progress, you can intervene,
+   and your user can redirect you between polls. Stop when `terminal` is true.
+4. **Harvest** with `agent_collab_wait_result`. On an already-terminal session
+   it settles immediately — no block, no waiting — and its `answers` carry each
+   agent's latest completed-turn answer in full, so you never reconstruct the
+   result from digest text. Do not re-fetch every message event to rebuild it:
+   that costs more than the whole watch loop did.
+
+   Use `wait_result` *instead of* the watch loop only when you want nothing but
+   the outcome and need not stay responsive: it then blocks until the session
+   settles. `timeout_ms` defaults to 45000; do not exceed it — clients kill tool
+   calls near 60 s. On a heartbeat (`settled: false`) re-poll immediately; no
+   pacing delay, the block is server-side. `settled` with status
+   `awaiting_input` means you may post a follow-up.
+
+   For one specific event rather than the answers — a finding whose digest text
+   was cut — re-fetch it with `agent_collab_read_events` (`cursor: event_id`,
+   `limit: 1`, `tool_output: "full"`), or read the whole thread with
+   `agent_collab_read_transcript`.
 5. Follow up (interactive only): `agent_collab_post_message` with `text`, then
    collect again. `target` picks one agent; in a solo session an untargeted
    post routes to the sole agent. Follow-up cost depends on the agent's
@@ -224,9 +228,15 @@ Cheap watching, two independent controls:
   event or status change. So an empty batch can mean everything new was
   filtered out, not that the session is idle — read `status`, not `events`.
 
-Both views report absolute event ids, so any event is re-fetchable whole with
-`cursor: EVENT_ID`, `limit: 1`, `tool_output: "full"` (do not pass `types` on
-such a re-fetch: `limit` counts scanned events, not returned ones).
+Digest `text` is a scent, not the content: enough to see what arrived and
+decide whether to intervene. Do not rebuild a result from it, and do not page
+back over every message event to recover the full text — once the session is
+terminal, `agent_collab_wait_result` returns immediately with each agent's
+answer in full, and that is the cheapest complete result there is.
+
+Both views report absolute event ids, so any single event is re-fetchable whole
+with `cursor: EVENT_ID`, `limit: 1`, `tool_output: "full"` (do not pass `types`
+on such a re-fetch: `limit` counts scanned events, not returned ones).
 `agent_collab_read_transcript` likewise summarizes tool payloads unless
 `tool_output: "full"` is passed.
 
@@ -350,8 +360,11 @@ while not batch.terminal:
         wait ~20 seconds before the next call
 ```
 
-Read a finding whole with `read_events(cursor=event_id, limit=1,
-tool_output="full")` when the capped digest text is not enough to triage it.
+Then harvest: `agent_collab_wait_result` on the now-terminal session returns
+immediately with each reviewer's full answer under `answers`, keyed by
+`agent_id`. Read a single finding whole with `read_events(cursor=event_id,
+limit=1, tool_output="full")` when a capped digest line is not enough to triage
+it mid-run.
 
 Terminate only when `terminal` is true, never because `events` is empty. For a
 parallel workflow, key member events and outcomes by `agent_id`, reconcile
