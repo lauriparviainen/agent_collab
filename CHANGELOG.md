@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-24 - Subagent delegation and SDK thread continuity
+
 - Close out the `wait_result` surface (#47). `timeout_ms: 0` is now a pinned,
   documented instant peek: it never blocks and returns the current
   settled-or-heartbeat state — the cheap sweep across several delegated
@@ -118,7 +120,6 @@ into a detailed work log.
   an untargeted post to a solo interactive session previously ran no turn and
   now triggers a provider turn. Multi-agent sessions keep the append-only
   behavior. The shipped review skills never call `post_message`.
-
 - Add `wait_result`, the delegation primitive, so collecting a session's outcome
   is one blocking call instead of a `read_events`/`wait_events` polling loop
   (#47, stage 1). New `GET /sessions/{id}/result`, MCP tool
@@ -132,6 +133,8 @@ into a detailed work log.
   re-polls immediately (no pacing delay). Answers come only from completed turns,
   so a failed turn's partial output never masquerades as a result. The REST API
   major stays 2 (additive route and DTOs).
+
+## [0.11.0] - 2026-07-23 - Dynamic model discovery
 
 - Serve dynamically discovered model catalogs (#45).
   `agent_collab_describe_options` and `POST /options` accept
