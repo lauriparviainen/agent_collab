@@ -38,28 +38,32 @@ Run another agent as a subagent and collect its result over MCP alone:
    models, backends, and effective options with the user before a paid start.
 2. `agent_collab_start` — `solo` with `members` picks the agent; add
    `interactive: true` for a back-and-forth.
-3. Collect with `agent_collab_wait_result`: it blocks until the session
-   settles, then returns each agent's latest completed-turn `answer` with
-   `status`, `failure`, and `cursor`. Use one long bounded `timeout_ms`
-   (60000–120000), or short calls that re-poll immediately on a heartbeat
-   (`settled: false`); no pacing delay, the block is server-side. `settled`
-   with status `awaiting_input` means you may post a follow-up.
-4. Read `answers`. Each carries an `event_id`; re-fetch it at full fidelity
-   with `agent_collab_read_events` (`cursor: event_id`, `limit: 1`,
-   `tool_output: "full"`), or read the whole thread with
-   `agent_collab_read_transcript`.
+3. Collect. You block inside whichever call you make, and your user reaches you
+   only when it returns — so the bound you pass is your steering latency. Pick
+   by whether you must stay steerable:
+   - **Default — `agent_collab_wait_events`** (see Watch): bounded 20000–30000
+     polls with `view: "digest"`. You see progress, you can intervene, and your
+     user can redirect you between polls.
+   - **`agent_collab_wait_result`** when you only want the outcome and do not
+     need to stay responsive: it blocks until the session *settles*, then
+     returns each agent's latest completed-turn `answer` with `status`,
+     `failure`, and `cursor`. `timeout_ms` defaults to 45000; do not exceed it
+     — clients kill tool calls near 60 s. On a heartbeat (`settled: false`)
+     re-poll immediately; no pacing delay, the block is server-side. `settled`
+     with status `awaiting_input` means you may post a follow-up.
+4. Read the answer. From `wait_result`, `answers` carries it directly; from a
+   watch loop, the agent's last `message` event is it. Either way an
+   `event_id` re-fetches the full text with `agent_collab_read_events`
+   (`cursor: event_id`, `limit: 1`, `tool_output: "full"`), or read the whole
+   thread with `agent_collab_read_transcript`.
 5. Follow up (interactive only): `agent_collab_post_message` with `text`, then
-   `wait_result` again. `target` picks one agent; in a solo session an
-   untargeted post routes to the sole agent. Follow-up cost depends on the
-   agent's `settings.agents.<id>.capabilities.continuity`: when true, the turn
-   continues the provider thread natively (only new events sent); when false
-   (every backend today), it re-sends the task and a recent window, costing like
-   a fresh turn.
+   collect again. `target` picks one agent; in a solo session an untargeted
+   post routes to the sole agent. Follow-up cost depends on the agent's
+   `settings.agents.<id>.capabilities.continuity`: when true, the turn
+   continues the provider thread natively (only new events sent); when false,
+   it re-sends the task and a recent window, costing like a fresh turn.
 6. End with `agent_collab_stop`, or let the session close on its
    `interactive_idle_timeout` (raise it for long conversations).
-
-`wait_events` is only for streaming live events; for a delegated outcome use
-`wait_result`.
 
 ## Workflows
 
@@ -179,37 +183,50 @@ compact).
 Interactive sessions may move to `awaiting_input` after the planned workflow
 finishes. `agent_collab_post_message` (`text`, optional `target`): a targeted
 post — or an untargeted post in a solo session — runs a directed turn you
-collect with `agent_collab_wait_result` (see Delegate); an untargeted post to a
-multi-agent session is recorded only, with no turn. Messages are accepted only
-for live sessions started with `interactive: true`.
+collect the same way you collected the first one (see Delegate); an untargeted
+post to a multi-agent session is recorded only, with no turn. Messages are
+accepted only for live sessions started with `interactive: true`.
 
 ## Watch
 
-This is the live-streaming path (progress, tool calls, messages). To collect
-only a session's outcome, use `agent_collab_wait_result` (see Delegate); the
->= 20s pacing rule below applies to `wait_events` streaming, not to
-`wait_result`.
+The default way to follow a session: you see progress, and short bounded polls
+keep you steerable, since your user's message reaches you when the call
+returns.
 
 Read events incrementally with a cursor:
 
-1. call `agent_collab_read_events` with `cursor: 0` for existing events and
-   the next cursor,
-2. loop `agent_collab_wait_events` with the last returned `cursor` and a
-   bounded `timeout_ms` (for example 20000); it returns as soon as new events
-   exist or the timeout elapses,
-3. after a nonterminal response with only routine progress or tool events,
-   wait at least 20 seconds before the next observation call, even when the
-   long-poll returned early; poll tighter only when the user asks for it or
-   an actionable event needs an immediate follow-up,
+1. call `agent_collab_read_events` with `cursor: 0`, `view: "digest"` for
+   existing events and the next cursor,
+2. loop `agent_collab_wait_events` with the last returned `cursor`,
+   `timeout_ms` of 20000–30000 (never above 45000; clients kill tool calls
+   near 60 s), and `view: "digest"`; it returns as soon as new events exist or
+   the timeout elapses,
+3. pace only after an *early* return carrying just routine progress or tool
+   events — then wait ~20 s before the next call. A full-duration block has
+   already paced the loop; do not add a pause on top of it. Poll tighter only
+   when the user asks or an actionable event needs immediate follow-up,
 4. inspect `status`, `terminal`, `error`, `failure`, and `turn_outcomes` on
    every response, including ones with `events: []`; stop when `terminal` is
    true. `awaiting_input` is live, not terminal. If the daemon predates this
    additive view, fall back to `agent_collab_status`.
 
 Never make one unbounded blocking call. Always pass the cursor from the
-previous response, not a guess. Tool events default to compact summaries with
-an absolute event id; if a payload is genuinely needed, fetch that one event
-with `cursor: EVENT_ID`, `limit: 1`, and `tool_output: "full"`.
+previous response, not a guess.
+
+Cheap watching, two independent controls:
+
+- `view: "digest"` drops `raw`, collapses and caps `text`, and stamps each
+  event with its absolute `event_id`. `tool_output` has no effect here — a
+  digest never carries a tool payload.
+- `types` keeps only the listed event types, for example
+  `["message", "error"]`. It filters the returned batch only: the `cursor`
+  still advances over every scanned event, and the wait still wakes on any
+  event or status change. So an empty batch can mean everything new was
+  filtered out, not that the session is idle — read `status`, not `events`.
+
+Both views report absolute event ids, so any event is re-fetchable whole with
+`cursor: EVENT_ID`, `limit: 1`, `tool_output: "full"` (do not pass `types` on
+such a re-fetch: `limit` counts scanned events, not returned ones).
 `agent_collab_read_transcript` likewise summarizes tool payloads unless
 `tool_output: "full"` is passed.
 
@@ -307,13 +324,14 @@ Pass `interactive: false` so a review cannot park in `awaiting_input`. For dual
 review, make one start call for a two-member `parallel` workflow; the daemon
 starts both reviewers over one frozen prompt and emits one attributed stream.
 
-This recipe streams with `wait_events` to triage findings as they arrive;
-`agent_collab_wait_result` returns only the settled outcome and is the simpler
-collector when you just need each reviewer's final answer.
+This recipe watches with `wait_events` so findings can be triaged as they
+arrive and the loop stays steerable; `agent_collab_wait_result` returns only
+the settled outcome and is the simpler collector when you do not need either.
 
 ```text
 session = agent_collab_start(..., interactive=false)
-batch = agent_collab_read_events(session_id=session.session_id, cursor=0)
+batch = agent_collab_read_events(
+    session_id=session.session_id, cursor=0, view="digest")
 cursor = batch.cursor
 consume(batch.events)
 
@@ -322,13 +340,18 @@ while not batch.terminal:
         session_id=session.session_id,
         cursor=cursor,
         timeout_ms=20000,
+        view="digest",                    # raw dropped, text capped, event_id kept
+        types=["message", "error"],       # filters the batch, not the cursor
     )
     cursor = batch.cursor                 # always advance to returned cursor
     consume(batch.events)
     inspect(batch.status, batch.failure, batch.turn_outcomes)
-    if batch is routine and nonterminal:
-        wait at least 20 seconds before the next observation call
+    if batch returned early with only routine events:
+        wait ~20 seconds before the next call
 ```
+
+Read a finding whole with `read_events(cursor=event_id, limit=1,
+tool_output="full")` when the capped digest text is not enough to triage it.
 
 Terminate only when `terminal` is true, never because `events` is empty. For a
 parallel workflow, key member events and outcomes by `agent_id`, reconcile

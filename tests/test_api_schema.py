@@ -26,6 +26,7 @@ from agent_collab.api_schema import (
     SERVER_ONLY_ROUTES,
     AgentAnswerModel,
     EventBatchModel,
+    EventModel,
     ErrorModel,
     GetSessionRequestModel,
     HealthModel,
@@ -338,7 +339,9 @@ class ModelRoundTripTests(unittest.TestCase):
         self.assertEqual(SessionResultModel.from_dict(payload).to_dict(), payload)
 
     def test_wait_result_timeout_bounds(self):
-        self.assertEqual(WaitResultRequestModel.from_dict({}).timeout_ms, 60000)
+        # 45 s clears the 60 s per-tool-call limit MCP clients default to; a
+        # longer block is killed client-side before the daemon ever answers.
+        self.assertEqual(WaitResultRequestModel.from_dict({}).timeout_ms, 45000)
         self.assertEqual(WaitResultRequestModel.from_dict({"timeout_ms": 0}).timeout_ms, 0)
         self.assertEqual(
             WaitResultRequestModel.from_dict({"timeout_ms": 600000}).timeout_ms, 600000
@@ -382,7 +385,9 @@ class ModelRoundTripTests(unittest.TestCase):
             (PostMessageRequestModel, {"text": "go"}),
             (PostMessageRequestModel, {"text": "go", "source": "human", "target": "codex"}),
             (ReadEventsRequestModel, {"cursor": 4, "limit": 1, "tool_output": "full"}),
+            (ReadEventsRequestModel, {"cursor": 4, "view": "digest", "types": "message,error"}),
             (WaitEventsRequestModel, {"cursor": 4, "timeout_ms": 10}),
+            (WaitEventsRequestModel, {"cursor": 4, "view": "digest", "types": ["message"]}),
             (TranscriptRequestModel, {"tool_output": "full"}),
             (PruneSessionsRequestModel, {}),
             (PruneSessionsRequestModel, {"apply": True, "older_than": "7d", "keep": 3}),
@@ -392,6 +397,54 @@ class ModelRoundTripTests(unittest.TestCase):
                 once = model.from_dict(payload).to_dict()
                 twice = model.from_dict(once).to_dict()
                 self.assertEqual(once, twice)
+
+    def test_event_view_defaults_and_validates(self):
+        for model in (ReadEventsRequestModel, WaitEventsRequestModel):
+            with self.subTest(model=model.__name__):
+                self.assertEqual(model.from_dict({}).view, "events")
+                self.assertEqual(model.from_dict({"view": "digest"}).view, "digest")
+                for value in ("summary", "compact", "", 3, True):
+                    with self.assertRaises(ValueError):
+                        model.from_dict({"view": value})
+
+    def test_event_types_accepts_both_wire_encodings(self):
+        # MCP sends a JSON array; the REST query string is flattened to one
+        # value per key, so the client sends CSV. Both must parse identically.
+        for model in (ReadEventsRequestModel, WaitEventsRequestModel):
+            with self.subTest(model=model.__name__):
+                self.assertIsNone(model.from_dict({}).types)
+                self.assertEqual(
+                    model.from_dict({"types": ["message", "error"]}).types,
+                    model.from_dict({"types": "message,error"}).types,
+                )
+                self.assertEqual(
+                    model.from_dict({"types": " message , error "}).types, ("message", "error")
+                )
+                # Order-preserving dedup keeps the echoed request stable.
+                self.assertEqual(
+                    model.from_dict({"types": ["error", "message", "error"]}).types,
+                    ("error", "message"),
+                )
+                # A type filter travels back out as CSV, never as a list.
+                self.assertEqual(
+                    model.from_dict({"types": ["message"]}).to_dict()["types"], "message"
+                )
+                for value in ([], "", "messages", ["message", "nope"], 5, "[oops", "[1, 2]"):
+                    with self.assertRaises(ValueError):
+                        model.from_dict({"types": value})
+
+    def test_event_model_omits_event_id_unless_projected(self):
+        payload = {
+            "timestamp": "t",
+            "source": "codex",
+            "type": "message",
+            "text": "hi",
+            "raw": None,
+            "agent_id": None,
+        }
+        self.assertEqual(EventModel.from_dict(payload).to_dict(), payload)
+        stamped = dict(payload, event_id=7)
+        self.assertEqual(EventModel.from_dict(stamped).to_dict(), stamped)
 
     def test_options_request_requires_workdir(self):
         with self.assertRaises(ValueError):

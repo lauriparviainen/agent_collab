@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 import uuid
 
 from .config import (
@@ -18,7 +18,7 @@ from .config import (
     load_config,
     resolve_existing_workdir,
 )
-from .events import Event, compact_json, utc_timestamp
+from .events import VALID_TYPES, Event, compact_json, utc_timestamp
 from .outcomes import CANONICAL_MESSAGES, SessionFailure, TurnOutcomeRecord
 from .options import (
     StartOptionsError,
@@ -57,6 +57,9 @@ from .session_index import SessionIndex
 
 MAX_FULL_TOOL_BYTES = 64 * 1024
 MAX_FULL_TRANSCRIPT_BYTES = 1024 * 1024
+# Digest text is a scent, not content: enough to tell what arrived and whether
+# to intervene, with ``event_id`` as the handle for the full-fidelity re-fetch.
+MAX_DIGEST_TEXT_CHARS = 200
 CANONICAL_SAFE_ERRORS = frozenset(CANONICAL_MESSAGES.values())
 
 
@@ -899,6 +902,8 @@ class SessionManager:
         *,
         limit: Optional[int] = None,
         tool_output: str = "summary",
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> EventBatch:
         managed = self._get_managed(session_id)
         if managed.request is None and not managed.events:
@@ -908,8 +913,10 @@ class SessionManager:
         cursor = min(self._normalize_cursor(cursor), len(events))
         limit = self._normalize_limit(limit)
         tool_output = self._normalize_tool_output(tool_output)
+        view = self._normalize_view(view)
+        types = self._normalize_types(types)
         return _event_batch_from_snapshot(
-            session_id, events, cursor, limit, tool_output, outcome_view
+            session_id, events, cursor, limit, tool_output, outcome_view, view, types
         )
 
     async def read_events_async(
@@ -919,6 +926,8 @@ class SessionManager:
         *,
         limit: Optional[int] = None,
         tool_output: str = "summary",
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> EventBatch:
         managed = self._get_managed(session_id)
         await self._load_restored_events(managed)
@@ -930,6 +939,8 @@ class SessionManager:
         cursor = min(self._normalize_cursor(cursor), len(events))
         limit = self._normalize_limit(limit)
         tool_output = self._normalize_tool_output(tool_output)
+        view = self._normalize_view(view)
+        types = self._normalize_types(types)
         return await asyncio.to_thread(
             _event_batch_from_snapshot,
             session_id,
@@ -938,6 +949,8 @@ class SessionManager:
             limit,
             tool_output,
             outcome_view,
+            view,
+            types,
         )
 
     async def _load_restored_events(self, managed: _ManagedSession) -> None:
@@ -957,12 +970,18 @@ class SessionManager:
         timeout_ms: int = 30000,
         *,
         tool_output: str = "summary",
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> EventBatch:
         managed = self._get_managed(session_id)
         await self._load_restored_events(managed)
         cursor = min(self._normalize_cursor(cursor), len(managed.events))
         timeout = max(0, int(timeout_ms)) / 1000.0
         tool_output = self._normalize_tool_output(tool_output)
+        # Projection is validated before the block so a malformed request fails
+        # immediately instead of after the caller's whole timeout.
+        view = self._normalize_view(view)
+        types = self._normalize_types(types)
 
         if (
             len(managed.events) <= cursor
@@ -984,7 +1003,9 @@ class SessionManager:
                     except asyncio.TimeoutError:
                         pass
 
-        return await self.read_events_async(session_id, cursor, tool_output=tool_output)
+        return await self.read_events_async(
+            session_id, cursor, tool_output=tool_output, view=view, types=types
+        )
 
     async def wait_result(self, session_id: str, timeout_ms: int = 60000) -> SessionResult:
         """Block until the session is *settled*, then return its outcome.
@@ -1423,6 +1444,25 @@ class SessionManager:
             raise SessionRequestError("tool_output must be 'summary' or 'full'")
         return str(tool_output)
 
+    def _normalize_view(self, view: Any) -> str:
+        if view not in {"events", "digest"}:
+            raise SessionRequestError("view must be 'events' or 'digest'")
+        return str(view)
+
+    def _normalize_types(self, types: Any) -> Optional[Tuple[str, ...]]:
+        if types is None:
+            return None
+        if isinstance(types, str) or not isinstance(types, Sequence):
+            raise SessionRequestError("types must be a sequence of event types")
+        values = tuple(str(item) for item in types)
+        if not values:
+            raise SessionRequestError("types must name at least one event type")
+        unknown = sorted(set(values) - VALID_TYPES)
+        if unknown:
+            allowed = ", ".join(sorted(VALID_TYPES))
+            raise SessionRequestError(f"unknown event type {unknown[0]!r}; allowed: {allowed}")
+        return values
+
     def _normalize_idle_timeout(self, value: Any) -> float:
         try:
             timeout = float(value)
@@ -1639,11 +1679,21 @@ def _event_batch_from_snapshot(
     limit: Optional[int],
     tool_output: str,
     outcome_view: Dict[str, Any],
+    view: str = "events",
+    types: Optional[Tuple[str, ...]] = None,
 ) -> EventBatch:
+    # ``limit`` bounds how many events are *scanned*, and the returned cursor
+    # advances over every scanned event whether or not ``types`` kept it. A
+    # filter that moved the cursor only over matches would make a caller
+    # re-scan the same skipped events forever.
     end = len(events) if limit is None else min(len(events), cursor + limit)
+    wanted = set(types) if types else None
     projected = [
-        _project_event(event, event_id, tool_output)
+        _digest_event(event, event_id)
+        if view == "digest"
+        else _project_event(event, event_id, tool_output)
         for event_id, event in enumerate(events[cursor:end], start=cursor)
+        if wanted is None or str(event.get("type", "status")) in wanted
     ]
     return EventBatch(session_id=session_id, cursor=end, events=projected, **outcome_view)
 
@@ -1703,6 +1753,34 @@ def _project_event(event: Dict[str, Any], event_id: int, tool_output: str) -> Di
             "message": f"+{omitted} bytes truncated, see transcript file",
         }
     return projected
+
+
+def _digest_event(event: Dict[str, Any], event_id: int) -> Dict[str, Any]:
+    """Project one event for a watch loop: no ``raw``, capped ``text``, an id.
+
+    ``tool_output`` has no meaning here — a tool payload is never carried, so a
+    tool event's text is always the one-line summary the summary projection
+    already produces (which keeps its own ``[event N]`` prefix, so the shared
+    transcript renderer stays byte-stable).
+    """
+
+    digest = {
+        "timestamp": event.get("timestamp"),
+        "source": event.get("source"),
+        "type": event.get("type"),
+        "agent_id": event.get("agent_id"),
+        "event_id": event_id,
+        "raw": None,
+    }
+    if event.get("source") == "tool":
+        digest["text"] = _tool_event_summary(event, event_id)
+        return digest
+    text = " ".join(str(event.get("text", "")).split())
+    if len(text) > MAX_DIGEST_TEXT_CHARS:
+        omitted = len(text) - MAX_DIGEST_TEXT_CHARS
+        text = f"{text[:MAX_DIGEST_TEXT_CHARS]} +{omitted}c"
+    digest["text"] = text
+    return digest
 
 
 def _tool_event_summary(event: Dict[str, Any], event_id: int) -> str:

@@ -143,6 +143,16 @@
               }
             ]
           },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "raw": {},
           "source": {
             "type": "string"
@@ -163,7 +173,8 @@
           "type",
           "text",
           "raw",
-          "agent_id"
+          "agent_id",
+          "event_id"
         ],
         "type": "object"
       },
@@ -439,6 +450,24 @@
               "summary",
               "full"
             ],
+            "type": "string"
+          },
+          "types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "view": {
+            "default": "events",
             "type": "string"
           }
         },
@@ -833,6 +862,24 @@
               "full"
             ],
             "type": "string"
+          },
+          "types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "view": {
+            "default": "events",
+            "type": "string"
           }
         },
         "type": "object"
@@ -841,7 +888,7 @@
         "additionalProperties": false,
         "properties": {
           "timeout_ms": {
-            "default": 60000,
+            "default": 45000,
             "maximum": 600000,
             "minimum": 0,
             "type": "integer"
@@ -1736,6 +1783,34 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "events",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
           }
         ],
         "responses": {
@@ -1887,6 +1962,34 @@
                 "full"
               ],
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "events",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           }
         ],
@@ -2142,7 +2245,7 @@
             "name": "timeout_ms",
             "required": false,
             "schema": {
-              "default": 60000,
+              "default": 45000,
               "maximum": 600000,
               "minimum": 0,
               "type": "integer"

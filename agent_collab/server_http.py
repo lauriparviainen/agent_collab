@@ -389,6 +389,8 @@ class AgentCollabHttpServer:
                 request.cursor,
                 limit=request.limit,
                 tool_output=request.tool_output,
+                view=request.view,
+                types=request.types,
             )
         ).to_dict()
 
@@ -402,6 +404,8 @@ class AgentCollabHttpServer:
                 request.cursor,
                 request.timeout_ms,
                 tool_output=request.tool_output,
+                view=request.view,
+                types=request.types,
             )
         ).to_dict()
 

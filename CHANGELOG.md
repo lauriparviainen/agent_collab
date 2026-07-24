@@ -13,6 +13,24 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Make watching a session affordable and prefer it for collection (#50).
+  `agent_collab_read_events` / `agent_collab_wait_events` accept `view`
+  (`"events"` default, `"digest"`) and an optional `types` filter. The digest
+  projection drops `raw`, collapses and caps `text`, and stamps each event with
+  its absolute `event_id` for a full-fidelity re-fetch; measured over the 12
+  largest stored sessions it costs 42% of today's stream bytes, or 20% with
+  `types: ["message", "error"]`. `types` filters the returned batch only — the
+  cursor still advances over every scanned event and the wait still wakes on
+  any event or status change. Guidance now leads with the bounded `wait_events`
+  watch loop, because the caller blocks inside whichever call it makes and its
+  own user is heard only when that call returns; `wait_result` is for callers
+  that want the outcome and need not stay responsive. Its `timeout_ms` default
+  drops 60000 -> 45000: MCP clients default to a 60 s per-tool-call limit
+  (verified on Claude Code and documented for Codex), so the old default sat on
+  the boundary. The >= 20s pacing rule now applies only after an early return;
+  a full-duration block already paced the loop. Client-visible: the REST
+  `timeout_ms` default and the new query parameters; the default event view is
+  unchanged.
 - Add native **xAI SDK stored-response continuity** (#47, stage 7), verified on
   `xai-sdk` 1.17.0 with a credentialed two-turn `grok-4.5` memory check. One
   runner now sends each new prompt as a single message and chains provider-held

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -78,10 +78,16 @@ class AgentCollabClient:
         *,
         limit: Optional[int] = None,
         tool_output: str = "summary",
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> EventBatchModel:
-        query: Dict[str, Any] = {"cursor": cursor, "tool_output": tool_output}
+        query: Dict[str, Any] = {"cursor": cursor, "tool_output": tool_output, "view": view}
         if limit is not None:
             query["limit"] = limit
+        # The query string carries one value per key, so a type filter travels
+        # as CSV; the request DTO accepts both encodings.
+        if types is not None:
+            query["types"] = ",".join(types)
         return EventBatchModel.from_dict(
             self._request("GET", f"/sessions/{session_id}/events", query)
         )
@@ -93,17 +99,27 @@ class AgentCollabClient:
         timeout_ms: int = 30000,
         *,
         tool_output: str = "summary",
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> EventBatchModel:
+        query: Dict[str, Any] = {
+            "cursor": cursor,
+            "timeout_ms": timeout_ms,
+            "tool_output": tool_output,
+            "view": view,
+        }
+        if types is not None:
+            query["types"] = ",".join(types)
         return EventBatchModel.from_dict(
             self._request(
                 "GET",
                 f"/sessions/{session_id}/events/wait",
-                {"cursor": cursor, "timeout_ms": timeout_ms, "tool_output": tool_output},
+                query,
                 timeout=max(self.timeout, (timeout_ms / 1000.0) + 5),
             )
         )
 
-    def wait_result(self, session_id: str, timeout_ms: int = 60000) -> SessionResultModel:
+    def wait_result(self, session_id: str, timeout_ms: int = 45000) -> SessionResultModel:
         return SessionResultModel.from_dict(
             self._request(
                 "GET",

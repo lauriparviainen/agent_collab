@@ -12,6 +12,7 @@ from agent_collab.api_schema import (
 )
 from agent_collab.client import ClientError
 from agent_collab.mcp_server import handle, handle_tool, serve
+from agent_collab.mcp_tools import TOOLS
 
 
 def _payload(result):
@@ -232,6 +233,20 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("no topic is the full contract", instructions)
         self.assertNotIn("'delegate') has the full contract", instructions)
 
+    def test_event_tools_advertise_projection_arguments(self):
+        tools = {tool["name"]: tool for tool in TOOLS}
+        for name in ("agent_collab_read_events", "agent_collab_wait_events"):
+            with self.subTest(tool=name):
+                props = tools[name]["inputSchema"]["properties"]
+                self.assertEqual(props["view"]["enum"], ["events", "digest"])
+                self.assertEqual(
+                    props["types"]["items"]["enum"],
+                    ["message", "tool_call", "command", "file_change", "status", "error"],
+                )
+        # The watch loop is the advertised default collection path.
+        self.assertIn("Preferred way to follow", tools["agent_collab_wait_events"]["description"])
+        self.assertIn("steerable", tools["agent_collab_wait_result"]["description"])
+
     def test_start_maps_to_client_start_session(self):
         args = {
             "task": "mcp test",
@@ -395,7 +410,9 @@ class McpServerTests(unittest.TestCase):
 
             result = handle_tool("agent_collab_read_events", {"session_id": "s1", "cursor": 2})
 
-        client.read_events.assert_called_once_with("s1", 2, limit=None, tool_output="summary")
+        client.read_events.assert_called_once_with(
+            "s1", 2, limit=None, tool_output="summary", view="events", types=None
+        )
         _assert_tool_result(self, result, batch.to_dict())
 
     def test_wait_events_maps_to_client_wait_events(self):
@@ -409,7 +426,9 @@ class McpServerTests(unittest.TestCase):
                 {"session_id": "s1", "cursor": 2, "timeout_ms": 30000},
             )
 
-        client.wait_events.assert_called_once_with("s1", 2, 30000, tool_output="summary")
+        client.wait_events.assert_called_once_with(
+            "s1", 2, 30000, tool_output="summary", view="events", types=None
+        )
         _assert_tool_result(self, result, batch.to_dict())
 
     def test_wait_result_maps_to_client_wait_result(self):
@@ -432,7 +451,7 @@ class McpServerTests(unittest.TestCase):
             client.wait_result.return_value = _result()
 
             handle_tool("agent_collab_wait_result", {"session_id": "s1"})
-            client.wait_result.assert_called_once_with("s1", 60000)
+            client.wait_result.assert_called_once_with("s1", 45000)
 
             rejected = handle_tool(
                 "agent_collab_wait_result", {"session_id": "s1", "timeout_ms": 600001}
@@ -452,6 +471,49 @@ class McpServerTests(unittest.TestCase):
             result,
             {"content": [{"type": "text", "text": "# transcript\n\nhello\n"}], "isError": False},
         )
+
+    def test_event_view_and_types_map_to_client(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            client.read_events.return_value = _batch(cursor=8)
+            client.wait_events.return_value = _batch(cursor=8)
+
+            handle_tool(
+                "agent_collab_read_events",
+                {"session_id": "s1", "cursor": 0, "view": "digest", "types": ["message", "error"]},
+            )
+            handle_tool(
+                "agent_collab_wait_events",
+                {
+                    "session_id": "s1",
+                    "cursor": 8,
+                    "timeout_ms": 20000,
+                    "view": "digest",
+                    "types": ["message"],
+                },
+            )
+
+        client.read_events.assert_called_once_with(
+            "s1", 0, limit=None, tool_output="summary", view="digest", types=("message", "error")
+        )
+        client.wait_events.assert_called_once_with(
+            "s1", 8, 20000, tool_output="summary", view="digest", types=("message",)
+        )
+
+    def test_event_projection_arguments_are_validated(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            client.wait_events.return_value = _batch(cursor=1)
+
+            for args in (
+                {"session_id": "s1", "view": "brief"},
+                {"session_id": "s1", "types": ["messages"]},
+                {"session_id": "s1", "types": []},
+            ):
+                with self.subTest(args=args):
+                    result = handle_tool("agent_collab_wait_events", args)
+                    self.assertTrue(result["isError"])
+            client.wait_events.assert_not_called()
 
     def test_read_projection_options_map_to_client(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
@@ -473,8 +535,12 @@ class McpServerTests(unittest.TestCase):
                 {"session_id": "s1", "tool_output": "full"},
             )
 
-        client.read_events.assert_called_once_with("s1", 7, limit=1, tool_output="full")
-        client.wait_events.assert_called_once_with("s1", 7, 5, tool_output="full")
+        client.read_events.assert_called_once_with(
+            "s1", 7, limit=1, tool_output="full", view="events", types=None
+        )
+        client.wait_events.assert_called_once_with(
+            "s1", 7, 5, tool_output="full", view="events", types=None
+        )
         client.read_transcript.assert_called_once_with("s1", tool_output="full")
 
     def test_read_projection_uses_shared_query_validation(self):

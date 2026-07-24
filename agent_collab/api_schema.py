@@ -91,6 +91,61 @@ def _detail(data: Dict[str, Any]) -> str:
     return value
 
 
+def _view(data: Dict[str, Any]) -> str:
+    # Event projection selector. "events" (default) is the historical shape;
+    # "digest" drops ``raw``, caps ``text``, and stamps ``event_id`` so a watch
+    # loop costs a fraction of the same events at full fidelity.
+    value = data.get("view", "events")
+    if not isinstance(value, str) or value not in {"events", "digest"}:
+        raise ValueError("view must be 'events' or 'digest'")
+    return value
+
+
+def _types(data: Dict[str, Any]) -> Optional[Tuple[str, ...]]:
+    """Optional event-type filter, accepted as a list or a comma-separated string.
+
+    Both encodings are required: MCP passes a JSON array, while the REST query
+    string is flattened to one value per key, so the client sends CSV there. A
+    JSON array that arrived stringified is accepted too — some MCP clients
+    serialize array arguments that way, and splitting one on commas would
+    otherwise fail with a baffling message about a type named '"error"]'.
+    """
+
+    import json as _json
+
+    from .events import VALID_TYPES
+
+    value = data.get("types")
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().startswith("["):
+        try:
+            value = _json.loads(value)
+        except _json.JSONDecodeError as exc:
+            raise ValueError(f"types is not a valid JSON array: {exc.msg}") from exc
+        if not isinstance(value, list):
+            raise ValueError("types must be a list of event types")
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",")]
+    elif isinstance(value, (list, tuple)):
+        items = [str(item).strip() for item in value]
+    else:
+        raise ValueError("types must be a list of event types or a comma-separated string")
+    items = [item for item in items if item]
+    if not items:
+        raise ValueError("types must name at least one event type")
+    unknown = sorted(set(items) - VALID_TYPES)
+    if unknown:
+        allowed = ", ".join(sorted(VALID_TYPES))
+        raise ValueError(f"unknown event type {unknown[0]!r}; allowed: {allowed}")
+    # Order-preserving dedup keeps the echoed request stable for a caller that
+    # repeats a type.
+    seen: Dict[str, None] = {}
+    for item in items:
+        seen.setdefault(item, None)
+    return tuple(seen)
+
+
 # --- Response DTOs ----------------------------------------------------------
 
 
@@ -234,6 +289,11 @@ class EventModel:
 
     ``agent_id`` is an additive optional attribution field. Older persisted
     events may omit it or carry null, and both forms decode as ``None``.
+
+    ``event_id`` is the event's absolute cursor position. It is emitted only by
+    the ``view='digest'`` projection, whose capped text needs a machine-readable
+    handle for the full-fidelity re-fetch; the default view stays byte-identical
+    to what it has always returned, so the key is omitted when unset.
     """
 
     timestamp: str
@@ -242,9 +302,11 @@ class EventModel:
     text: str
     raw: Any = None
     agent_id: Optional[str] = None
+    event_id: Optional[int] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EventModel":
+        event_id = data.get("event_id")
         return cls(
             timestamp=str(data["timestamp"]),
             source=str(data["source"]),
@@ -252,10 +314,11 @@ class EventModel:
             text=str(data["text"]),
             raw=data.get("raw"),
             agent_id=data.get("agent_id"),
+            event_id=int(event_id) if event_id is not None else None,
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out: Dict[str, Any] = {
             "timestamp": self.timestamp,
             "source": self.source,
             "type": self.type,
@@ -263,6 +326,9 @@ class EventModel:
             "raw": self.raw,
             "agent_id": self.agent_id,
         }
+        if self.event_id is not None:
+            out["event_id"] = self.event_id
+        return out
 
 
 @dataclass
@@ -778,12 +844,16 @@ class ReadEventsRequestModel:
     """Query for ``GET .../events``.
 
     ``limit`` makes a one-event full-fidelity re-fetch possible after a summary
-    reports an absolute event id.
+    or digest reports an absolute event id. ``types`` filters which events are
+    returned; it never affects how far the response ``cursor`` advances, so a
+    filtered batch can be legitimately empty while the cursor moved.
     """
 
     cursor: int = 0
     limit: Optional[int] = None
     tool_output: str = "summary"
+    view: str = "events"
+    types: Optional[Tuple[str, ...]] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ReadEventsRequestModel":
@@ -795,22 +865,42 @@ class ReadEventsRequestModel:
             limit = _integer(data, "limit", 0)
             if limit < 1:
                 raise ValueError("limit must be >= 1")
-        return cls(cursor=cursor, limit=limit, tool_output=_tool_output(data))
+        return cls(
+            cursor=cursor,
+            limit=limit,
+            tool_output=_tool_output(data),
+            view=_view(data),
+            types=_types(data),
+        )
 
     def to_dict(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {"cursor": self.cursor, "tool_output": self.tool_output}
+        out: Dict[str, Any] = {
+            "cursor": self.cursor,
+            "tool_output": self.tool_output,
+            "view": self.view,
+        }
         if self.limit is not None:
             out["limit"] = self.limit
+        if self.types is not None:
+            out["types"] = ",".join(self.types)
         return out
 
 
 @dataclass
 class WaitEventsRequestModel:
-    """Query for ``GET .../events/wait``."""
+    """Query for ``GET .../events/wait``.
+
+    ``view`` and ``types`` project and filter the returned batch only. The wait
+    itself still wakes on any new event or status change: making the filter a
+    wait predicate would delay noticing status transitions, and an empty
+    filtered batch still carries ``status``, ``terminal``, and ``failure``.
+    """
 
     cursor: int = 0
     timeout_ms: int = 30000
     tool_output: str = "summary"
+    view: str = "events"
+    types: Optional[Tuple[str, ...]] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WaitEventsRequestModel":
@@ -820,30 +910,43 @@ class WaitEventsRequestModel:
             raise ValueError("cursor must be >= 0")
         if timeout_ms < 0:
             raise ValueError("timeout_ms must be >= 0")
-        return cls(cursor=cursor, timeout_ms=timeout_ms, tool_output=_tool_output(data))
+        return cls(
+            cursor=cursor,
+            timeout_ms=timeout_ms,
+            tool_output=_tool_output(data),
+            view=_view(data),
+            types=_types(data),
+        )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out: Dict[str, Any] = {
             "cursor": self.cursor,
             "timeout_ms": self.timeout_ms,
             "tool_output": self.tool_output,
+            "view": self.view,
         }
+        if self.types is not None:
+            out["types"] = ",".join(self.types)
+        return out
 
 
 @dataclass
 class WaitResultRequestModel:
     """Query for ``GET .../result``.
 
-    ``timeout_ms`` is the server-side block bound (default 60 s). It is capped at
-    600 s so one call cannot hold a connection open indefinitely; on expiry the
-    server returns a heartbeat and the caller re-polls.
+    ``timeout_ms`` is the server-side block bound. The 45 s default is chosen to
+    clear the per-tool-call limit that MCP clients default to (60 s in both
+    Claude Code and Codex), which a longer block hits before the daemon ever
+    answers. It is capped at 600 s so one call cannot hold a connection open
+    indefinitely; on expiry the server returns a heartbeat and the caller
+    re-polls.
     """
 
-    timeout_ms: int = 60000
+    timeout_ms: int = 45000
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WaitResultRequestModel":
-        timeout_ms = _integer(data, "timeout_ms", 60000)
+        timeout_ms = _integer(data, "timeout_ms", 45000)
         if timeout_ms < 0:
             raise ValueError("timeout_ms must be >= 0")
         if timeout_ms > 600000:

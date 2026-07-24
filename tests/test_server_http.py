@@ -370,6 +370,53 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(status["status"], {"running", "done"})
             self.assertEqual(listed["sessions"][0]["session_id"], session_id)
 
+    async def test_event_view_and_csv_types_survive_the_query_string(self):
+        # The query string is flattened to one value per key, so a type filter
+        # can only travel as CSV; this pins that end of the contract.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server = AgentCollabHttpServer(manager=SessionManager())
+            body = json.dumps(
+                {
+                    "task": "http projection task",
+                    "workdir": str(root),
+                    "mock": True,
+                    "max_turns": 1,
+                    "timeout": 5,
+                }
+            ).encode("utf-8")
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                started = await server._dispatch("POST", "/sessions", {}, body)
+                session_id = started["session_id"]
+                await server._dispatch(
+                    "GET", f"/sessions/{session_id}/events/wait?cursor=0&timeout_ms=1000", {}, b""
+                )
+                everything = await server._dispatch(
+                    "GET", f"/sessions/{session_id}/events?cursor=0", {}, b""
+                )
+                digested = await server._dispatch(
+                    "GET",
+                    f"/sessions/{session_id}/events?cursor=0&view=digest&types=message,error",
+                    {},
+                    b"",
+                )
+
+            self.assertEqual(digested["cursor"], everything["cursor"])
+            self.assertTrue(digested["events"])
+            for event in digested["events"]:
+                self.assertIn(event["type"], {"message", "error"})
+                self.assertIsNone(event["raw"])
+                self.assertIn("event_id", event)
+            self.assertNotIn("event_id", everything["events"][0])
+
+            with self.assertRaises(HttpError) as caught:
+                await server._dispatch(
+                    "GET", f"/sessions/{session_id}/events?types=messages", {}, b""
+                )
+            self.assertEqual(caught.exception.status, 400)
+            self.assertIn("unknown event type", str(caught.exception))
+
     async def test_get_session_detail_query_selects_compact_or_full(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

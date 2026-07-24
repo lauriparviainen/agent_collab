@@ -8,10 +8,12 @@ from unittest import mock
 
 from agent_collab.config import AgentConfig, CollaborationConfig, ConfigError, WorkflowConfig
 from agent_collab.daemon import (
+    MAX_DIGEST_TEXT_CHARS,
     SessionManager,
     SessionRequestError,
     StartSessionRequest,
     _ManagedSession,
+    _digest_event,
 )
 from agent_collab.events import Event
 from agent_collab.outcomes import TurnOutcome
@@ -857,6 +859,113 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(f"[event {tool_id}]", summary_transcript)
             self.assertNotIn("[event", full_transcript)
             self.assertIn("inspects repository state", full_transcript)
+
+    async def test_digest_view_slims_events_and_keeps_a_refetch_handle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="digest task", mock=True, max_turns=1, timeout=5, workdir=root
+                    )
+                )
+                await self._wait_for_terminal(manager, state.session_id)
+
+            events = manager.read_events(state.session_id, 0).events
+            digest = manager.read_events(state.session_id, 0, view="digest").events
+            self.assertEqual(len(digest), len(events))
+
+            for index, item in enumerate(digest):
+                self.assertIsNone(item["raw"])
+                self.assertEqual(item["event_id"], index)
+                self.assertLessEqual(len(item["text"]), MAX_DIGEST_TEXT_CHARS + 16)
+
+            # The default view is untouched: no event_id key, raw preserved.
+            self.assertNotIn("event_id", events[0])
+
+            # A tool line is the same one the summary projection already emits,
+            # so the shared transcript renderer keeps its format.
+            tool_id = next(index for index, event in enumerate(events) if event["source"] == "tool")
+            self.assertEqual(digest[tool_id]["text"], events[tool_id]["text"])
+
+            # event_id is the handle back to full fidelity.
+            refetched = manager.read_events(
+                state.session_id, digest[tool_id]["event_id"], limit=1, tool_output="full"
+            )
+            self.assertEqual(refetched.events[0]["source"], "tool")
+
+    async def test_digest_caps_long_text_and_collapses_whitespace(self):
+        long_text = ("alpha   beta\n" * 200).strip()
+        digested = _digest_event(
+            {"timestamp": "t", "source": "codex", "type": "message", "text": long_text, "raw": {}},
+            4,
+        )
+        self.assertEqual(digested["event_id"], 4)
+        self.assertIsNone(digested["raw"])
+        self.assertNotIn("\n", digested["text"])
+        self.assertTrue(digested["text"].endswith("c"))
+        self.assertIn("+", digested["text"])
+        self.assertLess(len(digested["text"]), len(long_text))
+
+    async def test_types_filter_projects_the_batch_without_holding_back_the_cursor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="filter task", mock=True, max_turns=1, timeout=5, workdir=root
+                    )
+                )
+                await self._wait_for_terminal(manager, state.session_id)
+
+            everything = manager.read_events(state.session_id, 0)
+            messages = manager.read_events(state.session_id, 0, types=["message"])
+
+            # The cursor advances over every scanned event, so a caller that
+            # keeps paging never re-reads or skips the filtered-out ones.
+            self.assertEqual(messages.cursor, everything.cursor)
+            self.assertLess(len(messages.events), len(everything.events))
+            self.assertTrue(all(item["type"] == "message" for item in messages.events))
+
+            # The outcome view survives a batch the filter emptied.
+            first_is_message = everything.events[0]["type"] == "message"
+            empty = manager.read_events(
+                state.session_id,
+                0,
+                limit=1,
+                types=["file_change"] if first_is_message else ["message"],
+            )
+            self.assertEqual(empty.cursor, 1)
+            self.assertEqual(empty.events, [])
+            self.assertEqual(empty.status, everything.status)
+
+            # limit counts scanned events, not returned ones.
+            scanned = manager.read_events(state.session_id, 0, limit=3, types=["message"])
+            self.assertEqual(scanned.cursor, 3)
+
+    async def test_projection_arguments_are_validated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="validation task", mock=True, max_turns=1, timeout=5, workdir=root
+                    )
+                )
+                await self._wait_for_terminal(manager, state.session_id)
+
+            with self.assertRaises(SessionRequestError):
+                manager.read_events(state.session_id, 0, view="brief")
+            with self.assertRaises(SessionRequestError):
+                manager.read_events(state.session_id, 0, types=["messages"])
+            with self.assertRaises(SessionRequestError):
+                manager.read_events(state.session_id, 0, types=[])
+            # A malformed projection fails before wait_events blocks.
+            with self.assertRaises(SessionRequestError):
+                await manager.wait_events(state.session_id, 0, 60000, view="brief")
 
     async def test_config_is_loaded_once_and_snapshot_carried_into_execution(self):
         # Guards the start/run divergence: start_session validates a config

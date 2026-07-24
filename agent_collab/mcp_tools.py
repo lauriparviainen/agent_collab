@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Protocol
+from typing import Any, Callable, Dict, Optional, Protocol, Sequence
 
 from .api_schema import (
     GetSessionRequestModel,
@@ -123,7 +123,9 @@ TOOLS = [
         "name": "agent_collab_read_events",
         "description": (
             "Read daemon session events after a numeric cursor offset. Tool payloads default to one-line "
-            "summaries carrying absolute event ids; re-fetch one with cursor=<id>, limit=1, tool_output='full'."
+            "summaries carrying absolute event ids; re-fetch one with cursor=<id>, limit=1, tool_output='full' "
+            "(no types filter on a re-fetch: limit counts scanned events, not returned ones). "
+            "view='digest' drops raw, caps text, and stamps event_id — the cheap view for watching."
         ),
         "inputSchema": {
             "type": "object",
@@ -132,6 +134,21 @@ TOOLS = [
                 "cursor": {"type": "integer"},
                 "limit": {"type": "integer", "minimum": 1},
                 "tool_output": {"type": "string", "enum": ["summary", "full"]},
+                "view": {"type": "string", "enum": ["events", "digest"]},
+                "types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "message",
+                            "tool_call",
+                            "command",
+                            "file_change",
+                            "status",
+                            "error",
+                        ],
+                    },
+                },
             },
             "required": ["session_id"],
         },
@@ -139,10 +156,17 @@ TOOLS = [
     {
         "name": "agent_collab_wait_events",
         "description": (
-            "Long-poll daemon session events after a numeric cursor offset. Tool payloads default to "
-            "one-line summaries; pass tool_output='full' only when the payload is needed. After a "
-            "routine nonterminal response, wait at least 20 seconds before another observation call "
-            "unless the user requested tighter monitoring or an actionable event needs immediate follow-up."
+            "Long-poll session events after a numeric cursor. Preferred way to follow a session: "
+            "bounded polls keep you steerable, because your user's message reaches you only when a "
+            "tool call returns — timeout_ms 20000-30000, never above 45000 (clients kill tool calls "
+            "near 60 s). Cheap watch loop: view='digest' (drops raw, caps text, stamps event_id) plus "
+            "types=['message','error']; re-fetch any event whole via read_events(cursor=event_id, "
+            "limit=1, tool_output='full'). types filters the returned batch only — the cursor still "
+            "advances over every scanned event and the wait still wakes on any event or status change, "
+            "so an empty batch can mean filtered-out rather than idle. Always advance to the returned "
+            "cursor and inspect status/terminal/error/failure/turn_outcomes on every response, "
+            "including empty ones. Pacing: a full-duration block already paced the loop; wait ~20 s "
+            "only after an early return carrying just routine progress or tool events."
         ),
         "inputSchema": {
             "type": "object",
@@ -151,6 +175,21 @@ TOOLS = [
                 "cursor": {"type": "integer"},
                 "timeout_ms": {"type": "integer"},
                 "tool_output": {"type": "string", "enum": ["summary", "full"]},
+                "view": {"type": "string", "enum": ["events", "digest"]},
+                "types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "message",
+                            "tool_call",
+                            "command",
+                            "file_change",
+                            "status",
+                            "error",
+                        ],
+                    },
+                },
             },
             "required": ["session_id"],
         },
@@ -162,10 +201,11 @@ TOOLS = [
             "awaiting_input while accepting input (none pending) — then you may post_message a "
             "follow-up. Result carries status, terminal, settled, answers (each agent's latest "
             "completed-turn answer plus event_id to re-fetch full via read_events), failure, and "
-            "cursor. timeout_ms bounds one server-side block (default 60000, max 600000); on expiry "
-            "it returns a heartbeat (settled=false, no answers) — re-poll immediately, the 20s "
-            "pacing rule does not apply. Collapses delegation to describe_options -> start -> "
-            "wait_result."
+            "cursor. timeout_ms bounds one server-side block (default 45000, max 600000; above "
+            "~45000 clients kill the call near 60 s); on expiry it returns a heartbeat "
+            "(settled=false, no answers) — re-poll immediately, the 20s pacing rule does not apply. "
+            "You are unresponsive to your own user for the whole block, so prefer wait_events when "
+            "you need to stay steerable; use this when you only want the outcome."
         ),
         "inputSchema": {
             "type": "object",
@@ -244,11 +284,23 @@ class ToolBackend(Protocol):
     async def get_session(self, session_id: str, detail: str) -> Dict[str, Any]: ...
 
     async def read_events(
-        self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
+        self,
+        session_id: str,
+        cursor: int,
+        limit: Optional[int],
+        tool_output: str,
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]: ...
 
     async def wait_events(
-        self, session_id: str, cursor: int, timeout_ms: int, tool_output: str
+        self,
+        session_id: str,
+        cursor: int,
+        timeout_ms: int,
+        tool_output: str,
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]: ...
 
     async def wait_result(self, session_id: str, timeout_ms: int) -> Dict[str, Any]: ...
@@ -284,19 +336,33 @@ class SessionManagerToolBackend:
         return self.manager.get_session(session_id, detail).to_dict()
 
     async def read_events(
-        self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
+        self,
+        session_id: str,
+        cursor: int,
+        limit: Optional[int],
+        tool_output: str,
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
         return (
             await self.manager.read_events_async(
-                session_id, cursor, limit=limit, tool_output=tool_output
+                session_id, cursor, limit=limit, tool_output=tool_output, view=view, types=types
             )
         ).to_dict()
 
     async def wait_events(
-        self, session_id: str, cursor: int, timeout_ms: int, tool_output: str
+        self,
+        session_id: str,
+        cursor: int,
+        timeout_ms: int,
+        tool_output: str,
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
         return (
-            await self.manager.wait_events(session_id, cursor, timeout_ms, tool_output=tool_output)
+            await self.manager.wait_events(
+                session_id, cursor, timeout_ms, tool_output=tool_output, view=view, types=types
+            )
         ).to_dict()
 
     async def wait_result(self, session_id: str, timeout_ms: int) -> Dict[str, Any]:
@@ -345,20 +411,36 @@ class HttpClientToolBackend:
         return self.client_factory().get_session(session_id, detail=detail).to_dict()
 
     async def read_events(
-        self, session_id: str, cursor: int, limit: Optional[int], tool_output: str
+        self,
+        session_id: str,
+        cursor: int,
+        limit: Optional[int],
+        tool_output: str,
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
         return (
             self.client_factory()
-            .read_events(session_id, cursor, limit=limit, tool_output=tool_output)
+            .read_events(
+                session_id, cursor, limit=limit, tool_output=tool_output, view=view, types=types
+            )
             .to_dict()
         )
 
     async def wait_events(
-        self, session_id: str, cursor: int, timeout_ms: int, tool_output: str
+        self,
+        session_id: str,
+        cursor: int,
+        timeout_ms: int,
+        tool_output: str,
+        view: str = "events",
+        types: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
         return (
             self.client_factory()
-            .wait_events(session_id, cursor, timeout_ms, tool_output=tool_output)
+            .wait_events(
+                session_id, cursor, timeout_ms, tool_output=tool_output, view=view, types=types
+            )
             .to_dict()
         )
 
@@ -489,7 +571,11 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
         if name == "agent_collab_read_events":
             request = _parse_tool_request(
                 ReadEventsRequestModel.from_dict,
-                {key: args[key] for key in ("cursor", "limit", "tool_output") if key in args},
+                {
+                    key: args[key]
+                    for key in ("cursor", "limit", "tool_output", "view", "types")
+                    if key in args
+                },
             )
             return content(
                 await backend.read_events(
@@ -497,12 +583,18 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
                     request.cursor,
                     request.limit,
                     request.tool_output,
+                    request.view,
+                    request.types,
                 )
             )
         if name == "agent_collab_wait_events":
             request = _parse_tool_request(
                 WaitEventsRequestModel.from_dict,
-                {key: args[key] for key in ("cursor", "timeout_ms", "tool_output") if key in args},
+                {
+                    key: args[key]
+                    for key in ("cursor", "timeout_ms", "tool_output", "view", "types")
+                    if key in args
+                },
             )
             return content(
                 await backend.wait_events(
@@ -510,6 +602,8 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
                     request.cursor,
                     request.timeout_ms,
                     request.tool_output,
+                    request.view,
+                    request.types,
                 )
             )
         if name == "agent_collab_wait_result":
@@ -561,16 +655,18 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                 "instructions": (
                     "Resolve the project to an absolute workdir, then call "
                     "agent_collab_describe_options; agent_collab_guidance with no topic is the "
-                    "full contract, topic 'delegate' just this flow. To delegate: confirm "
-                    "models/backends/options with the user, agent_collab_start, then collect it "
-                    "with one bounded agent_collab_wait_result (re-poll on its heartbeat); for an "
-                    "interactive session post_message then wait_result again. To stream live "
-                    "events, loop agent_collab_wait_events, always advancing the returned cursor, "
-                    "stopping only on terminal status, never an empty batch; wait >=20s between "
-                    "routine nonterminal wait_events calls. Discovery is advisory; start "
-                    "revalidates per backend policy. Confirm models, backends, and options before "
-                    "a paid start. Use interactive=false for parallel review workflows. On "
-                    "validation errors, fix the named field paths."
+                    "full contract, topic 'delegate' just this flow. To delegate: "
+                    "agent_collab_start, then follow it "
+                    "with agent_collab_wait_events (timeout_ms 20000-30000, view='digest', "
+                    "types=['message','error']), always advancing the returned cursor, stopping "
+                    "only on terminal status, never an empty batch. Bounded polls keep you "
+                    "steerable: your user reaches you only when a call returns, and clients kill "
+                    "calls near 60 s. Pace ~20s only after an early return with routine events; a "
+                    "full block already paced it. Use agent_collab_wait_result only when you want "
+                    "the outcome and need not stay responsive. Interactive: post_message, then "
+                    "collect again. Discovery is advisory; start revalidates per backend policy. "
+                    "Confirm models, backends, options before a paid start. interactive=false for "
+                    "parallel review workflows. On validation errors, fix the named field paths."
                 ),
                 "serverInfo": {"name": "agent-collab", "version": "0.1"},
             },
