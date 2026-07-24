@@ -13,6 +13,23 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add the **Antigravity SDK persistent conversation adapter** (#47, stage 6).
+  One runner now keeps an entered `Agent` across sequential turns, captures its
+  conversation id, resets abnormal turns with bounded cleanup, and reconnects
+  only through strict `SessionContinuationMode.RESUME` using one retained
+  trajectory `save_dir`; rejected known-id reopen never starts fresh. An
+  abnormal connection with no id makes the next continuation fail once, after
+  which a later full-prompt user turn may explicitly start a new conversation.
+  Verified against `google-antigravity` 0.1.8, whose
+  native runtime now requires GLIBC_2.26. The backend health probe also exposes
+  the 0.1.8 protobuf-7.35 requirement and its conflict with xAI SDK 1.17's
+  protobuf `<7` constraint; the provider-specific extra pins the working
+  runtime while the shared `all` extra documents and health-gates the conflict.
+  Missing SDK distribution-version metadata also fails the compatibility gate.
+  `antigravity_sdk` now advertises `continuity: true`
+  and `conversation: "persistent"` after hermetic lifecycle coverage plus a
+  credentialed two-turn Vertex provider-memory check; `resume`, `interrupt`,
+  and `tool_gate` stay false.
 - Add native **Claude SDK session continuity** (#47, stage 5). One runner now
   holds a persistent `ClaudeSDKClient` across live-session turns (verified on
   `claude-agent-sdk` 0.2.126), reconnects the captured provider session id
@@ -95,7 +112,7 @@ into a detailed work log.
   `claude_sdk` and `antigravity_sdk` explicitly fall back to static suggestions
   because their SDKs expose no catalog API. Optional SDK floors are refreshed
   to Claude Agent SDK 0.2.126, OpenAI Codex SDK 0.144.4, and Antigravity SDK
-  0.1.7; xAI remains at 1.17. SDK discovery and turns now share the same
+  0.1.8; xAI remains at 1.17. SDK discovery and turns now share the same
   agent-scoped credentials, SDK cache fingerprints include a non-reversible
   digest of effective agent/process API keys, and a paginated Codex response
   remains incomplete and non-authoritative instead of producing false

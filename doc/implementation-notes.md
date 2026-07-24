@@ -132,11 +132,11 @@ The original Stage 5.1 A1 spike resolved all SDKs together under Python
 - `google-antigravity==0.1.5`.
 - `xai-sdk==1.17.0` (bounded by the project to `>=1.17,<2`).
 
-The 2026-07-23 Phase 4 refresh raised the active verified floors to:
+The 2026-07-24 Stage 6 refresh leaves the active verified floors at:
 
 - `claude-agent-sdk==0.2.126`,
 - `openai-codex==0.144.4`,
-- `google-antigravity==0.1.7`,
+- `google-antigravity==0.1.8`,
 - `xai-sdk==1.17.0`.
 
 Codex 0.144.4 exposes `AsyncCodex.models()` and xAI 1.17.0 exposes
@@ -164,7 +164,7 @@ back to the SDK-pinned runtime. The backend summary reports which runtime path
 is active.
 
 Antigravity is opt-in. Its `cli` path uses `agy` print mode as message-only
-plain text. Its `sdk` path targets the installed `google-antigravity` 0.1.7
+plain text. Its `sdk` path targets the installed `google-antigravity` 0.1.8
 shapes:
 
 - `Agent`
@@ -173,10 +173,22 @@ shapes:
 - `ToolCall.args`
 - `ToolResult`
 - `BuiltinTools`
+- strict `conversation_id` + `SessionContinuationMode.RESUME` reconnect
 
-Credentialed turns remain separate live-smoke evidence. The local environment
-currently has no `GEMINI_API_KEY`, so Antigravity's no-model API verification
-does not claim a successful chat.
+The 0.1.8 generated protobuf code requires protobuf 7.35+, which conflicts with
+xAI SDK 1.17's protobuf `<7` constraint in one shared environment; the backend
+probe reports that state unavailable and the credentialed Antigravity fixture
+uses an isolated provider environment. Missing SDK distribution-version
+metadata is unavailable too because the runtime compatibility cannot be
+verified. The `antigravity` extra pins protobuf 7.35+, while `all` deliberately
+omits that conflicting runtime constraint so the shared xAI environment
+remains installable and health-gated. The
+credentialed two-turn Vertex provider-memory fixture passed with
+`gemini-2.5-flash`, a stable native conversation id, and a Stage 3 delta prompt
+that omitted the original task and codeword. Strict reconnect also retains one
+runner-owned trajectory `save_dir` across resets and removes it on close.
+`antigravity_sdk.continuity` is therefore true; restart-safe `resume`,
+`interrupt`, and `tool_gate` remain false.
 
 xAI is opt-in. Grok Build 0.2.93 passed a real headless CLI turn and exposed
 `thought`, `text`, `end`, and explicit `error` records. A disposable shell-tool

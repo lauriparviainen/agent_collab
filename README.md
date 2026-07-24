@@ -109,19 +109,31 @@ agent-collab --help
 > deliberately has no `install` subcommand; if you type `agent-collab
 > install` it tells you where to go instead.
 
-The helper installs every provider SDK (the `all` extra) so the `sdk` backends
-work out of the box. A plain `pip install` of the package is SDK-free — the
-`cli` backends drive the provider command-line tools and need no vendor SDK —
-and enables `sdk` backends through per-provider extras, installed from the
-checkout:
+The helper installs every provider SDK (the `all` extra). A plain `pip install`
+of the package is SDK-free — the `cli` backends drive the provider command-line
+tools and need no vendor SDK — and enables `sdk` backends through per-provider
+extras, installed from the checkout:
 
 ```bash
 pip install '.[claude]'       # claude_sdk
 pip install '.[codex]'        # codex_sdk
-pip install '.[antigravity]'  # antigravity_sdk
+pip install '.[antigravity]'  # antigravity_sdk + its protobuf 7 runtime
 pip install '.[xai]'          # xai_sdk
 pip install '.[all]'          # everything
 ```
+
+> **Current Antigravity/xAI version conflict.** `google-antigravity` 0.1.8
+> generates code for protobuf 7.35+, while `xai-sdk` 1.17 requires protobuf
+> `<7`. The provider-specific `antigravity` extra pins its working protobuf
+> runtime, but the shared `all` extra intentionally omits that incompatible
+> floor so it remains installable with xAI; Antigravity then fails its
+> import-time protobuf check in that shared environment. Until their published
+> constraints become compatible, install those two SDK backends in separate
+> environments and verify each with `pip check` plus an SDK import. The backend
+> health check reports the incompatible Antigravity runtime unavailable.
+> Do not replace system libraries to work around this Python dependency
+> conflict. See the
+> [Antigravity SDK backend notes](agent_collab/backends/antigravity_sdk/README.md).
 
 > **This package is not on PyPI.** `pip install agent-collab` currently
 > installs an unrelated, same-named package by a different author. Until a

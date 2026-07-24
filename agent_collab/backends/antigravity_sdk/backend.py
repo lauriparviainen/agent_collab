@@ -6,12 +6,13 @@ So importing this module (which the registry does at startup) costs nothing, and
 a missing wheel degrades to an *unavailable* backend (a fast, hinted start
 rejection) rather than an import crash.
 
-**API shapes CONFIRMED live** against ``google-antigravity`` 0.1.7 (Python 3.12)
+**API shapes CONFIRMED** against the installed ``google-antigravity`` 0.1.8
+(Python 3.14.4)
 — see ``tests/fixtures/antigravity/sdk-introspection.json``:
 
 - ``from google.antigravity import Agent, LocalAgentConfig``; ``Agent`` is an
-  async context manager; ``response = await agent.chat(prompt)`` returns a
-  ``types.ChatResponse``.
+  async context manager reused for sequential ``chat()`` calls;
+  ``response = await agent.chat(prompt)`` returns a ``types.ChatResponse``.
 - ``await response.resolve()`` drains the response once into a typed list of
   ``Text``, ``Thought``, ``ToolCall``, and ``ToolResult`` values. ``text()`` is
   also async, while ``thoughts`` and ``tool_calls`` are independent async cursor
@@ -25,7 +26,13 @@ rejection) rather than an import crash.
 - ``LocalAgentConfig`` takes ``workspaces=[...]`` (the working dirs), ``model``,
   and the Vertex shorthands ``vertex``, ``project``, and ``location``; the
   working directory is a workspace, not a ``working_directory`` kwarg.
-- ``Agent.conversation_id`` exposes a stable, resume-capable id.
+- ``Agent.conversation_id`` is absent before start and becomes available after
+  message exchange. ``LocalAgentConfig(conversation_id=...,
+  session_continuation_mode=SessionContinuationMode.RESUME)`` is the strict
+  reopen API; its ``save_dir`` trajectory storage must remain stable across
+  Agent objects. ``CREATE_OR_RESUME`` is intentionally never used.
+- The bundled Linux ``localharness`` has ``GLIBC_2.26`` as its newest versioned
+  libc symbol.
 
 Live calls use either a Gemini API key (``GEMINI_API_KEY``) or Vertex AI with
 Google Application Default Credentials. Agent-collab never stores credential
@@ -35,11 +42,14 @@ confirmed shapes (``tests/backends/antigravity_sdk/test_backend.py``).
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass
 import enum
 import inspect
 import platform
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
+import tempfile
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Protocol
 
 from ...config import AgentConfig
 from ...events import Event, compact_json
@@ -56,6 +66,7 @@ from ..base import (
 )
 from ..common.health import gemini_api_key_credentials, probe_sdk_backend
 from ..common.sdk import (
+    SDK_CLOSE_GRACE_SECONDS,
     backend_unavailable_event,
     classify_tool_kind,
     close_async_stream,
@@ -68,14 +79,44 @@ from ..common.sdk import (
 MODULE_NAME = "google.antigravity"
 PACKAGE_NAME = "google-antigravity"
 INSTALL_HINT = "install the Antigravity SDK: pip install google-antigravity, or re-run ./agent_collab.sh install"
-REQUIRED_GLIBC = "2.36"
+# google-antigravity 0.1.8's bundled localharness has GLIBC_2.26 as its
+# newest versioned libc symbol (verified with objdump/readelf on the wheel).
+REQUIRED_GLIBC = "2.26"
+# The 0.1.8 wheel's generated localharness_pb2.py declares gencode 7.35.0.
+REQUIRED_PROTOBUF = "7.35"
 
 ANTIGRAVITY_SDK_OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 ANTIGRAVITY_SDK_CONFIG_SCHEMA = load_option_schema(Path(__file__).with_name("config.toml"))
 
-# A factory builds the SDK agent context manager for one turn. Injectable so
-# tests drive the runner with a fake without installing the SDK or calling a model.
-AgentFactory = Callable[[AgentConfig, Dict[str, Any], Path], Any]
+
+@dataclass(frozen=True)
+class AntigravityTurn:
+    """One resolved SDK turn while the runner-owned Agent stays connected."""
+
+    chunks: List[Any]
+    usage_metadata: Any
+    conversation_id: Optional[str]
+    response_clean_close: bool
+
+
+class AntigravityConversation(Protocol):
+    """One runner-owned provider conversation; fakeable without the real SDK."""
+
+    def active(self) -> bool: ...
+
+    async def run(self, prompt: str) -> AntigravityTurn: ...
+
+    def note_session_id(self, conversation_id: str) -> None: ...
+
+    async def reset(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+ConversationFactory = Callable[
+    [AgentConfig, Dict[str, Any], Path],
+    AntigravityConversation,
+]
 
 
 def assess_native_runtime(
@@ -120,7 +161,7 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 
 
 class AntigravitySdkBackend:
-    """Registered as ``(antigravity, "sdk")``. Capabilities are all false."""
+    """Registered as ``(antigravity, "sdk")`` with in-session continuity."""
 
     id = "sdk"
     agent_type = "antigravity"
@@ -130,18 +171,20 @@ class AntigravitySdkBackend:
 
     def __init__(
         self,
-        agent_factory: Optional[AgentFactory] = None,
+        conversation_factory: Optional[ConversationFactory] = None,
         *,
         dependency_probe: Optional[Callable[[], BackendHealth]] = None,
         libc_ver: Optional[Callable[[], tuple[str, str]]] = None,
+        protobuf_version: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
-        self.capabilities = BackendCapabilities()
+        self.capabilities = BackendCapabilities(continuity=True)
         self.checks_credentials = True
         # Opt-in backend: a missing extra / sign-out fails the start fast.
         self.block_on_unavailable = True
-        self._agent_factory = agent_factory
+        self._conversation_factory = conversation_factory
         self._dependency_probe = dependency_probe
         self._libc_ver = libc_ver or platform.libc_ver
+        self._protobuf_version = protobuf_version or (lambda: package_version("protobuf"))
 
     def probe(self) -> BackendHealth:
         # The SDK authenticates with a Gemini API key, not the ~/.gemini OAuth the
@@ -160,22 +203,78 @@ class AntigravitySdkBackend:
             return health
 
         checks = dict(health.checks)
-        # The native runtime is package-versioned evidence. A test/fake module
-        # without distribution metadata must not be turned into a false blocker.
+        # Both compatibility floors are facts about the verified package line.
+        # If distribution metadata is missing, do not green-light an import that
+        # may fail before the lazy factory can produce a structured error.
         if not health.version:
+            checks["protobuf_runtime"] = {
+                "status": "indeterminate",
+                "reason": "package version metadata is unavailable",
+                "observed": self._protobuf_version() or "missing",
+            }
             checks["native_runtime"] = {
                 "status": "indeterminate",
                 "reason": "package version metadata is unavailable",
             }
             return BackendHealth(
-                status=health.status,
-                reason=health.reason,
+                status="unavailable",
+                reason=(
+                    "google-antigravity distribution version metadata is unavailable; "
+                    "protobuf and native runtime compatibility cannot be verified"
+                ),
                 credentials=health.credentials,
                 version=health.version,
                 checked_at=health.checked_at,
                 checks=checks,
-                reason_codes=health.reason_codes,
-                remediation=health.remediation,
+                reason_codes=("dependency_version_unknown",),
+                remediation=(
+                    {
+                        "code": "reinstall_sdk_dependency",
+                        "message": (
+                            "Reinstall the verified Antigravity extra so "
+                            "google-antigravity distribution metadata is present."
+                        ),
+                    },
+                ),
+            )
+
+        protobuf_version = self._protobuf_version()
+        protobuf_status = (
+            "compatible"
+            if protobuf_version
+            and _version_tuple(protobuf_version) >= _version_tuple(REQUIRED_PROTOBUF)
+            else "incompatible"
+        )
+        checks["protobuf_runtime"] = {
+            "status": protobuf_status,
+            "required": f"protobuf >= {REQUIRED_PROTOBUF}",
+            "observed": protobuf_version or "missing",
+        }
+        if protobuf_status == "incompatible":
+            reason = (
+                "google-antigravity 0.1.8 generated protobuf code requires "
+                f"protobuf >= {REQUIRED_PROTOBUF}; observed "
+                f"{protobuf_version or 'missing'}"
+            )
+            return BackendHealth(
+                status="unavailable",
+                reason=reason,
+                credentials=health.credentials,
+                version=health.version,
+                checked_at=health.checked_at,
+                checks=checks,
+                reason_codes=("protobuf_runtime_incompatible",),
+                remediation=(
+                    {
+                        "code": "use_compatible_protobuf_runtime",
+                        "message": (
+                            f"Use an isolated Antigravity environment with protobuf "
+                            f">= {REQUIRED_PROTOBUF},<8. xai-sdk 1.17 requires "
+                            "protobuf <7, so the two SDKs cannot currently share "
+                            "one dependency environment."
+                        ),
+                    },
+                ),
             )
 
         native = assess_native_runtime(self._libc_ver(), required=REQUIRED_GLIBC)
@@ -247,8 +346,13 @@ class AntigravitySdkBackend:
     def create_runner(
         self, agent: AgentConfig, verbose: bool, options: Mapping[str, Any]
     ) -> AgentRunner:
-        factory = self._agent_factory or _default_agent_factory
-        return AntigravitySdkRunner(agent, verbose, dict(options or {}), agent_factory=factory)
+        factory = self._conversation_factory or _default_conversation
+        return AntigravitySdkRunner(
+            agent,
+            verbose,
+            dict(options or {}),
+            conversation_factory=factory,
+        )
 
     def command_preview(
         self, agent: AgentConfig, options: Mapping[str, Any], workdir: Optional[Path] = None
@@ -261,6 +365,7 @@ class AntigravitySdkBackend:
         config = self.normalize_config(agent)
         if config:
             summary["config"] = config
+        summary["conversation"] = "persistent"
         return summary
 
 
@@ -270,13 +375,22 @@ class AntigravitySdkRunner(AgentRunner):
         agent: AgentConfig,
         verbose: bool,
         options: Dict[str, Any],
-        agent_factory: AgentFactory,
+        conversation_factory: ConversationFactory,
     ) -> None:
         self.name = agent.id
         self.agent = agent
         self.verbose = verbose
         self.options = options
-        self._agent_factory = agent_factory
+        self._conversation_factory = conversation_factory
+        self._conversation: Optional[AntigravityConversation] = None
+        self._workdir: Optional[Path] = None
+
+    def conversation_active(self) -> bool:
+        return self._conversation is not None and self._conversation.active()
+
+    async def close(self) -> None:
+        if self._conversation is not None:
+            await self._conversation.close()
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         if self.verbose:
@@ -286,47 +400,35 @@ class AntigravitySdkRunner(AgentRunner):
         evidence = TerminalEvidenceAccumulator()
         exception_code: Optional[str] = None
         clean_close = True
+        conversation: Optional[AntigravityConversation] = None
         try:
-            agent_cm = self._agent_factory(self.agent, self.options, workdir)
-        except BackendUnavailable as exc:
-            await emit(backend_unavailable_event(exc))
-            return TurnOutcome("failed", "provider_transport_failed")
-        try:
-            async with agent_cm as sdk_agent:
-                response = None
-                try:
-                    response = await sdk_agent.chat(prompt)
-                    # Resolve the SDK's shared response stream exactly once. Its
-                    # thoughts/tool_calls properties are async cursors, not lists.
-                    chunks = await _resolve_chunks(response)
-                    usage_metadata = getattr(response, "usage_metadata", None)
-                    mapped = list(map_antigravity_turn(chunks, self.verbose, usage_metadata))
-                    for event in mapped:
-                        await emit(event)
-                    if any(
-                        event.type == "message"
-                        and event.source == "antigravity"
-                        and event.text.strip()
-                        for event in mapped
-                    ):
-                        evidence.add(TerminalEvidence("completed"))
-                    else:
-                        exception_code = "provider_empty_response"
-                    conversation_id = getattr(sdk_agent, "conversation_id", None)
-                    if conversation_id:
-                        # Uniform provider-session capture (kind="conversation"). The
-                        # daemon records it into central session state; nothing resumes
-                        # it this stage (capabilities stay false).
-                        await emit(
-                            provider_session_event(
-                                "antigravity", self.name, str(conversation_id), "conversation"
-                            )
-                        )
-                finally:
-                    # The installed ChatResponse is drained by resolve(), while
-                    # injected/future implementations may also own an explicit
-                    # async close hook. Honor it before leaving the agent context.
-                    clean_close = await close_async_stream(response)
+            conversation = self._conversation_for(workdir)
+            turn = await conversation.run(prompt)
+            clean_close = turn.response_clean_close
+            mapped = list(map_antigravity_turn(turn.chunks, self.verbose, turn.usage_metadata))
+            for event in mapped:
+                await emit(event)
+            if any(
+                event.type == "message" and event.source == "antigravity" and event.text.strip()
+                for event in mapped
+            ):
+                evidence.add(TerminalEvidence("completed"))
+            else:
+                exception_code = "provider_empty_response"
+            if turn.conversation_id:
+                conversation.note_session_id(turn.conversation_id)
+                await emit(
+                    provider_session_event(
+                        "antigravity",
+                        self.name,
+                        turn.conversation_id,
+                        "conversation",
+                    )
+                )
+        except asyncio.CancelledError:
+            if conversation is not None:
+                await _reset_conversation_bounded(conversation)
+            raise
         except BackendUnavailable as exc:
             await emit(backend_unavailable_event(exc))
             exception_code = "provider_transport_failed"
@@ -335,9 +437,25 @@ class AntigravitySdkRunner(AgentRunner):
             exception_code = "provider_transport_failed"
         if not clean_close and exception_code is None:
             exception_code = "provider_transport_failed"
+        result = evidence.resolve(exception_code=exception_code)
+        if result.outcome != "completed" and conversation is not None:
+            await _reset_conversation_bounded(conversation)
         if self.verbose:
             await emit(Event.create("antigravity", "status", "antigravity sdk turn complete"))
-        return evidence.resolve(exception_code=exception_code)
+        return result
+
+    def _conversation_for(self, workdir: Path) -> AntigravityConversation:
+        resolved = workdir.resolve()
+        if self._conversation is None:
+            self._conversation = self._conversation_factory(
+                self.agent,
+                self.options,
+                resolved,
+            )
+            self._workdir = resolved
+        elif self._workdir != resolved:
+            raise RuntimeError("antigravity sdk conversation workdir changed between turns")
+        return self._conversation
 
 
 def map_antigravity_turn(
@@ -528,21 +646,326 @@ def _map_sdk_config(agent: AgentConfig) -> Dict[str, Any]:
     return _normalize_sdk_config(agent)
 
 
-def _default_agent_factory(agent: AgentConfig, options: Dict[str, Any], workdir: Path) -> Any:
-    """Lazily import the real SDK and build its agent context manager.
+def _default_conversation(
+    agent: AgentConfig,
+    options: Dict[str, Any],
+    workdir: Path,
+) -> AntigravityConversation:
+    """Build one lazy-imported persistent Agent conversation for a runner."""
 
-    Names/kwargs confirmed against google-antigravity 0.1.7. The working dir is a
-    workspace. Authentication comes from GEMINI_API_KEY or Vertex Application
-    Default Credentials and is never managed here.
+    save_directory = tempfile.TemporaryDirectory(prefix="agent-collab-antigravity-")
+    return _PersistentAntigravityConversation(
+        lambda conversation_id: _default_agent_factory(
+            agent,
+            options,
+            workdir,
+            conversation_id=conversation_id,
+            save_dir=save_directory.name,
+        ),
+        close_cleanup=save_directory.cleanup,
+    )
+
+
+def _default_agent_factory(
+    agent: AgentConfig,
+    options: Dict[str, Any],
+    workdir: Path,
+    *,
+    conversation_id: Optional[str] = None,
+    save_dir: Optional[str] = None,
+) -> Any:
+    """Lazily import the verified 0.1.8 SDK and build one Agent context.
+
+    A captured id always uses explicit ``SessionContinuationMode.RESUME``.
+    ``CREATE_OR_RESUME`` is deliberately never used because an expired or
+    rejected id must not become a fresh provider conversation.
     """
 
     try:
         from google.antigravity import Agent, LocalAgentConfig  # type: ignore
+        from google.antigravity.types import SessionContinuationMode  # type: ignore
     except ImportError as exc:
         raise BackendUnavailable(
             "antigravity", "sdk", f"{MODULE_NAME} is not importable", INSTALL_HINT
         ) from exc
+
     config_kwargs: Dict[str, Any] = {"workspaces": [str(workdir)]}
     config_kwargs.update(_map_sdk_config(agent))
     config_kwargs.update(_map_sdk_options(options))
+    fields = getattr(LocalAgentConfig, "model_fields", {})
+    if save_dir is not None:
+        if "save_dir" not in fields:
+            raise BackendUnavailable(
+                "antigravity",
+                "sdk",
+                "google.antigravity has no compatible persistent trajectory storage API",
+                INSTALL_HINT,
+            )
+        config_kwargs["save_dir"] = save_dir
+    if conversation_id is not None:
+        resume = getattr(SessionContinuationMode, "RESUME", None)
+        if (
+            "conversation_id" not in fields
+            or "session_continuation_mode" not in fields
+            or resume is None
+        ):
+            raise BackendUnavailable(
+                "antigravity",
+                "sdk",
+                "google.antigravity has no compatible strict conversation resume API",
+                INSTALL_HINT,
+            )
+        config_kwargs["conversation_id"] = conversation_id
+        config_kwargs["session_continuation_mode"] = resume
     return Agent(LocalAgentConfig(**config_kwargs))
+
+
+class _PersistentAntigravityConversation:
+    """Serialize one live SDK Agent, response, and reconnect identity."""
+
+    def __init__(
+        self,
+        agent_factory: Callable[[Optional[str]], Any],
+        *,
+        close_cleanup: Optional[Callable[[], None]] = None,
+    ) -> None:
+        self._agent_factory = agent_factory
+        self._close_cleanup = close_cleanup
+        self._lock = asyncio.Lock()
+        self._agent_cm: Any = None
+        self._sdk_agent: Any = None
+        self._conversation_id: Optional[str] = None
+        self._pending_prompts: list[tuple[object, str]] = []
+        self._turn_handed_off = False
+        self._resume_missing_id = False
+        self._closed = False
+
+    def active(self) -> bool:
+        # A reset drops only the live Agent. A retained id still names
+        # provider-side context, so the referee must keep sending delta prompts.
+        # If a handed-off turn produced no id, strict native resume is
+        # impossible for the next continuation: do not let a later undelivered
+        # prompt make that fail-closed state look active to the referee.
+        return (
+            not self._closed
+            and not self._resume_missing_id
+            and (
+                self._sdk_agent is not None
+                or self._conversation_id is not None
+                or bool(self._pending_prompts)
+            )
+        )
+
+    def note_session_id(self, conversation_id: str) -> None:
+        if self._conversation_id is not None and self._conversation_id != conversation_id:
+            raise RuntimeError("Antigravity resumed a different provider conversation")
+        self._conversation_id = conversation_id
+
+    async def run(self, prompt: str) -> AntigravityTurn:
+        # Preserve a prompt whose connect failed before provider hand-off. Once
+        # chat() is called delivery is uncertain, so replay would risk a duplicate
+        # provider turn and the pending copy is cleared. Queue before the lock so
+        # cancellation while a slow reset/close holds it cannot orphan a referee
+        # delta whose watermark has already advanced.
+        if self._resume_missing_id:
+            async with self._lock:
+                if self._closed:
+                    raise RuntimeError("antigravity sdk conversation is closed")
+                if self._resume_missing_id:
+                    # Fail the required next continuation structurally, but do
+                    # not brick the runner forever. Since active() was false,
+                    # a later user turn receives a full stateless prompt and may
+                    # explicitly start a new native conversation.
+                    self._resume_missing_id = False
+                    raise RuntimeError(
+                        "antigravity sdk cannot continue: the abnormal turn produced "
+                        "no conversation id for strict native resume"
+                    )
+        prompt_token = object()
+        self._pending_prompts.append((prompt_token, prompt))
+        async with self._lock:
+            if self._closed:
+                self._pending_prompts.clear()
+                raise RuntimeError("antigravity sdk conversation is closed")
+            if self._sdk_agent is None and self._resume_missing_id:
+                # A concurrent reset may have made resume terminal after the
+                # optimistic pre-lock check. Do not retain an undeliverable prompt.
+                self._take_pending_prompts_through(prompt_token)
+                self._resume_missing_id = False
+                raise RuntimeError(
+                    "antigravity sdk cannot continue: the abnormal turn produced "
+                    "no conversation id for strict native resume"
+                )
+            if self._sdk_agent is None:
+                await self._connect_locked()
+            effective_prompt = self._take_pending_prompts_through(prompt_token)
+            chat = getattr(self._sdk_agent, "chat", None)
+            if not callable(chat):
+                raise BackendUnavailable(
+                    "antigravity",
+                    "sdk",
+                    "google.antigravity returned an incompatible Agent",
+                    INSTALL_HINT,
+                )
+            self._turn_handed_off = True
+            response = None
+            clean_close = True
+            try:
+                response = await chat(effective_prompt)
+                self._capture_agent_id_locked()
+                chunks = await _resolve_chunks(response)
+                self._capture_agent_id_locked()
+                usage_metadata = getattr(response, "usage_metadata", None)
+            except BaseException:
+                self._capture_agent_id_locked()
+                if response is not None:
+                    await _cancel_response_bounded(response)
+                raise
+            finally:
+                clean_close = await close_async_stream(response)
+            return AntigravityTurn(
+                chunks=chunks,
+                usage_metadata=usage_metadata,
+                conversation_id=self._conversation_id,
+                response_clean_close=clean_close,
+            )
+
+    async def reset(self) -> None:
+        async with self._lock:
+            agent_cm = self._drop_live_locked(keep_conversation_id=True)
+            if self._turn_handed_off and self._conversation_id is None:
+                # A prompt may have reached the provider, but no native identity
+                # exists to reopen it. Never substitute a fresh Agent.
+                self._resume_missing_id = True
+            self._turn_handed_off = False
+            if agent_cm is not None:
+                await _exit_agent_context(agent_cm)
+
+    async def close(self) -> None:
+        async with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            agent_cm = self._drop_live_locked(keep_conversation_id=False)
+            self._pending_prompts.clear()
+            self._turn_handed_off = False
+            self._resume_missing_id = False
+            cleanup = self._close_cleanup
+            self._close_cleanup = None
+            try:
+                if agent_cm is not None:
+                    await _exit_agent_context(agent_cm)
+            finally:
+                if cleanup is not None:
+                    cleanup()
+
+    async def _connect_locked(self) -> None:
+        resume_id = self._conversation_id
+        if resume_id is None and self._resume_missing_id:
+            raise RuntimeError(
+                "antigravity sdk cannot continue: the abnormal turn produced "
+                "no conversation id for strict native resume"
+            )
+        agent_cm = self._agent_factory(resume_id)
+        enter = getattr(agent_cm, "__aenter__", None)
+        exit_ = getattr(agent_cm, "__aexit__", None)
+        if not callable(enter) or not callable(exit_):
+            raise BackendUnavailable(
+                "antigravity",
+                "sdk",
+                "google.antigravity Agent is not an async context manager",
+                INSTALL_HINT,
+            )
+        try:
+            sdk_agent = await enter()
+            observed = _conversation_id(sdk_agent)
+            if resume_id is not None and observed is not None and observed != resume_id:
+                raise RuntimeError("Antigravity resumed a different provider conversation")
+        except BaseException:
+            try:
+                await exit_(None, None, None)
+            except BaseException:
+                pass
+            raise
+        self._agent_cm = agent_cm
+        self._sdk_agent = sdk_agent
+
+    def _capture_agent_id_locked(self) -> None:
+        conversation_id = _conversation_id(self._sdk_agent)
+        if conversation_id is not None:
+            self.note_session_id(conversation_id)
+
+    def _take_pending_prompts_through(self, prompt_token: object) -> str:
+        for index, (token, _prompt) in enumerate(self._pending_prompts):
+            if token is prompt_token:
+                claimed = self._pending_prompts[: index + 1]
+                del self._pending_prompts[: index + 1]
+                return "\n\n".join(prompt for _token, prompt in claimed)
+        raise RuntimeError("antigravity sdk pending prompt was lost")
+
+    def _drop_live_locked(self, *, keep_conversation_id: bool) -> Any:
+        agent_cm = self._agent_cm
+        self._agent_cm = None
+        self._sdk_agent = None
+        if not keep_conversation_id:
+            self._conversation_id = None
+        return agent_cm
+
+
+def _conversation_id(sdk_agent: Any) -> Optional[str]:
+    value = getattr(sdk_agent, "conversation_id", None)
+    return value if isinstance(value, str) and value else None
+
+
+async def _cancel_response_bounded(response: Any) -> bool:
+    """Best-effort abnormal-turn cleanup; not an advertised interrupt path."""
+
+    cancel = getattr(response, "cancel", None)
+    if not callable(cancel):
+        return True
+    task = asyncio.ensure_future(cancel())
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(task),
+            timeout=SDK_CLOSE_GRACE_SECONDS,
+        )
+        return True
+    except asyncio.TimeoutError:
+        task.add_done_callback(_consume_background_result)
+        return False
+    except BaseException:
+        task.add_done_callback(_consume_background_result)
+        return False
+
+
+async def _exit_agent_context(agent_cm: Any) -> None:
+    await agent_cm.__aexit__(None, None, None)
+
+
+async def _reset_conversation_bounded(
+    conversation: AntigravityConversation,
+) -> bool:
+    """Reset once; a slow Agent close continues as a background reaper."""
+
+    task = asyncio.create_task(conversation.reset())
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(task),
+            timeout=SDK_CLOSE_GRACE_SECONDS,
+        )
+        return True
+    except asyncio.TimeoutError:
+        task.add_done_callback(_consume_background_result)
+        return False
+    except asyncio.CancelledError:
+        task.add_done_callback(_consume_background_result)
+        raise
+    except Exception:
+        return False
+
+
+def _consume_background_result(task: asyncio.Future) -> None:
+    try:
+        task.result()
+    except BaseException:
+        pass

@@ -261,16 +261,98 @@ fails a rejected/expired `thread_resume` structurally and never falls back to
 
 ### Antigravity SDK
 
-Verify the installed `google-antigravity` API for:
+**Stage 6 implementation-time `google-antigravity` 0.1.8 facts (Python
+3.14.4):** PyPI metadata and `pip index versions` both reported 0.1.8 as the
+latest release on 2026-07-24. The exact installed wheel was inspected under an
+isolated Antigravity environment. Its bundled x86-64 `localharness` ELF has
+`GLIBC_2.26` as its newest versioned libc symbol (`file`, `ldd`, `objdump -T`,
+and `readelf -n`); the current host is glibc 2.43, so the earlier 2.36/host-2.34
+blocker no longer applies to this wheel.
 
-- reopening an `Agent` from `conversation_id` after a reload;
-- cancelling an unresolved `ChatResponse` and confirming termination;
-- intercepting local `BuiltinTools` or tool callbacks before execution.
+The wheel has a separate packaging conflict: generated
+`localharness_pb2.py` declares protobuf gencode 7.35.0, while the published
+dependency permits older protobuf. The shared agent-collab environment resolves
+protobuf 6.33.6 because `xai-sdk` 1.17 requires protobuf `<7`; pip reports that
+environment consistent, but importing Antigravity fails its protobuf runtime
+check. Raising the shared runtime to 7.35.1 makes Antigravity import but makes
+xAI inconsistent. The provider-specific `antigravity` extra therefore pins
+protobuf 7.35+, while `all` deliberately omits that conflicting runtime floor
+so the shared xAI environment remains installable and health-gated. Stage 6
+uses a separate durable Antigravity venv with protobuf 7.35.1 and makes the
+backend health probe report the incompatible shared environment unavailable.
+No system library was replaced.
 
-The presence of `Agent.conversation_id` is identity evidence, not proof that
-these controls exist. Known blocker: the bundled native runtime requires
-glibc >= 2.36; a host below that probes `unavailable`, so credentialed proof
-waits for a compatible host.
+Verified public API and source behavior:
+
+- One entered `Agent` owns one stateful `Conversation`/localharness connection.
+  `Conversation.chat()` sends on that same connection, accumulates step history,
+  and accepts sequential calls. Agent-collab's adapter now retains that one
+  `Agent` across turns; it does not replay local transcript history into a new
+  object. A credentialed two-turn Vertex test proved provider-held model memory:
+  the second Stage 3 delta prompt omitted both the original task and generated
+  codeword, yet the same live conversation recalled the codeword.
+- `Agent.conversation_id` is `None` before start and is documented as available
+  after the session starts and at least one message is exchanged. The SDK
+  returns the local connection's runtime-assigned main trajectory id. The
+  credentialed test observed the same non-empty id on both normal turns and in
+  central `agent_sessions` state.
+- The exact strict reopen API is
+  `LocalAgentConfig(conversation_id=<id>,
+  session_continuation_mode=SessionContinuationMode.RESUME)`, then
+  `async with Agent(config)`. `RESUME` is documented to fail when the session
+  does not exist. The distinct `CREATE_OR_RESUME` mode may create when missing;
+  agent-collab never uses it, checks any observed resumed id against the
+  requested id, and never falls back to a fresh `Agent`. `save_dir` maps to the
+  localharness trajectory `storage_directory`; letting each Agent synthesize a
+  new temporary directory breaks reopen. The adapter therefore owns one
+  temporary trajectory directory across fresh and resumed Agent objects,
+  retains it across reset, and removes it only on final close.
+- If an abnormal connection never exposes a conversation id, the immediately
+  following continuation attempt fails structurally once. A later full-prompt
+  user turn may explicitly create a new conversation; this preserves the
+  fail-closed continuation boundary without leaving the runner permanently
+  unusable. A rejected known id remains a hard failure and never starts fresh.
+- A no-model installed-object fixture constructed both fresh and strict-resume
+  `Agent` objects: fresh mode/id were unset, resume retained the supplied id and
+  exact `RESUME` enum, and `Agent.conversation_id` was `None` before entry.
+  Invalid short/malformed ids fail Pydantic validation distinctly. A
+  credentialed unknown/expired-id runtime rejection has not yet been exercised,
+  so the documented `RESUME` contract—not a live rejection—is the current
+  provider fact.
+- `Agent.chat()` awaits only `Conversation.send()` and returns a lazy
+  `ChatResponse`. `resolve()` drains its shared chunk cursor once. Cancelling a
+  local `resolve()` consumer stores/re-raises `CancelledError`; it does not
+  implicitly invoke provider cancellation. `ChatResponse.cancel()` explicitly
+  delegates to `Conversation.cancel()`, whose local connection sends a
+  `halt_request`; the receive path then raises
+  `AntigravityCancelledError`. The Stage 6 adapter calls `cancel()` only as
+  best-effort abnormal-turn cleanup and does not advertise issue #20's
+  interrupt capability.
+- A fully resolved `ChatResponse` has no additional close method. On abnormal
+  completion, response cancellation/optional injected `aclose()` happens before
+  the adapter releases its run lock and before reset exits the `Agent`.
+  `Agent.__aexit__()` disconnects the local connection: processor tasks and the
+  reader are cancelled, WebSocket close is bounded to 0.5 s, then stdin is
+  closed and the native process is waited up to 180 s before
+  terminate/kill escalation (1 s each). Although the SDK creates and does not
+  visibly remove a temporary `save_dir` when none is supplied, agent-collab
+  supplies its own runner-scoped directory and cleans it on final close.
+- Disconnect is not safe to race directly with active response iteration.
+  Agent-collab serializes run/reset/close with one adapter lock. The referee
+  still applies its outer bounded close and adopts a slow close as a reaper, so
+  a cancellation-ignoring turn or native shutdown cannot rewrite an already
+  committed turn outcome.
+
+Stage 6 hermetic lifecycle coverage passes. On 2026-07-24 the credentialed
+provider-memory test also passed under Python 3.14.4, glibc 2.43, the isolated
+`google-antigravity` 0.1.8/protobuf 7.35.1 environment, Google ADC, Vertex
+`us-central1`, and `gemini-2.5-flash`. An initial
+`gemini-3.5-flash-low` request was rejected before inference because that
+CLI-style target was not a Vertex publisher model for the project; the SDK
+integration default now uses the successful publisher model. With both proof
+gates satisfied, `continuity=true` and the settings summary reports
+`conversation="persistent"`; `resume`, `interrupt`, and `tool_gate` remain
+false.
 
 ## Runner / adapter contract
 

@@ -115,11 +115,13 @@ class CapabilityReducerTests(unittest.TestCase):
     def test_sdk_continuity_pins_and_mixed_session_reducer(self):
         codex = backends.capabilities_for("codex", "sdk")
         claude = backends.capabilities_for("claude", "sdk")
-        # Verified pins: codex_sdk (Stage 4) and claude_sdk (Stage 5) hold
-        # native provider context; the other #20 capabilities stay false.
+        antigravity = backends.capabilities_for("antigravity", "sdk")
+        # Verified pins: codex_sdk (Stage 4), claude_sdk (Stage 5), and
+        # antigravity_sdk (Stage 6) hold native provider context.
         self.assertTrue(codex.continuity)
         self.assertTrue(claude.continuity)
-        for caps in (codex, claude):
+        self.assertTrue(antigravity.continuity)
+        for caps in (codex, claude, antigravity):
             self.assertFalse(caps.resume)
             self.assertFalse(caps.interrupt)
             self.assertFalse(caps.tool_gate)
@@ -131,6 +133,17 @@ class CapabilityReducerTests(unittest.TestCase):
             backends.summarize_session_capabilities({"codex_sdk": codex, "claude_sdk": claude})[
                 "continuity"
             ]
+        )
+        self.assertTrue(
+            backends.summarize_session_capabilities(
+                {
+                    "claude_sdk": claude,
+                    "antigravity_sdk": antigravity,
+                }
+            )["continuity"]
+        )
+        self.assertTrue(
+            backends.summarize_session_capabilities({"antigravity_sdk": antigravity})["continuity"]
         )
         # A mixed session containing any backend without continuity stays false.
         claude_cli = backends.capabilities_for("claude", "cli")

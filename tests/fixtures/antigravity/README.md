@@ -20,15 +20,13 @@ emits one `antigravity` `message` event per non-empty stdout line (message-only,
 low fidelity). The referee still emits the `command` start and `status` exit
 events it emits for every subprocess runner.
 
-## SDK (`google-antigravity`) — API CONFIRMED live; only the call is blocked
+## SDK (`google-antigravity`) — 0.1.8 installed-wheel facts
 
-The earlier draft recorded the SDK as fully blocked because system Python is 3.9
-(< the SDK's required 3.10). That is now resolved: **Python 3.12 was installed
-(`dnf install python3.12`) and `google-antigravity` 0.1.5 installs from PyPI**,
-so the real API was introspected live. `sdk-introspection.json` is that
-authoritative dump.
+Stage 6 re-introspected PyPI's latest release, `google-antigravity` 0.1.8, on
+Python 3.14.4 and glibc 2.43. `sdk-introspection.json` is the refreshed dump.
+The bundled `localharness` ELF's newest versioned libc symbol is `GLIBC_2.26`.
 
-Confirmed shapes (used by `agent_collab/backends/antigravity_sdk.py`):
+Confirmed shapes (used by `agent_collab/backends/antigravity_sdk/backend.py`):
 
 - `from google.antigravity import Agent, LocalAgentConfig` — `Agent` is an async
   context manager; `response = await agent.chat(prompt)` returns a
@@ -47,8 +45,16 @@ Confirmed shapes (used by `agent_collab/backends/antigravity_sdk.py`):
   token counts after the response is resolved.
 - `LocalAgentConfig(workspaces=[<workdir>], model=...)` — the working directory
   is a workspace, **not** a `working_directory` kwarg.
-- **`Agent.conversation_id` exists** — a stable, resume-capable id (resolves the
-  plan's open question 3: yes).
+- `Agent.conversation_id` returns `None` before start and is documented as
+  available after message exchange.
+- Strict reopen is public:
+  `LocalAgentConfig(conversation_id=<id>,
+  session_continuation_mode=SessionContinuationMode.RESUME)`. The distinct
+  `CREATE_OR_RESUME` mode may create fresh and is not used by agent-collab.
+  `save_dir` becomes localharness trajectory storage and must remain stable
+  across reopened Agent objects.
+- `ChatResponse.cancel()` delegates to the active conversation cancel path;
+  cancelling only a local `resolve()` consumer does not call it automatically.
 - There is no `--mode` equivalent; execution posture is `CapabilitiesConfig` /
   `policies`, so `backend_options.antigravity_sdk.mode` remains unsupported.
 
@@ -56,12 +62,13 @@ Confirmed shapes (used by `agent_collab/backends/antigravity_sdk.py`):
 shape (illustrative values) that drives the fake-module tests in
 `tests/test_backend_sdk.py`.
 
-**Only the live *chat* is blocked:** the SDK requires a Gemini API key
-(`GEMINI_API_KEY` env or `LocalAgentConfig(api_key=...)`); it does **not** use the
-`~/.gemini` OAuth that `agy` uses. agent-collab never manages credentials, so it
-passes the environment through and the first turn's real error is the authority.
-Verified end to end against the installed SDK: the probe reports `ok`/0.1.5, the
-runner constructs the real `LocalAgentConfig`/`Agent` (no arg errors), and the
-missing-key error surfaces as an `error` event. To exercise a real turn, set
-`GEMINI_API_KEY` and re-run; replace `sdk-response-sample.json` values with a real
-capture if the turn produces different structure.
+The 0.1.8 generated protobuf files require runtime 7.35+, while the wheel
+metadata allows older protobuf. `xai-sdk` 1.17 requires protobuf `<7`, so the two
+SDKs cannot currently share one dependency environment. Stage 6 uses an
+isolated Antigravity environment with protobuf 7.35.1; its provider-specific
+extra pins that runtime, while `all` omits the conflicting floor and the backend
+health probe reports the incompatible shared environment unavailable.
+
+The source/config/runtime fixture is no-model. The separate credentialed
+integration test is the only evidence allowed to prove provider-held
+multi-turn memory and flip `continuity`.

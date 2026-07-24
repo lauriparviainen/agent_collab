@@ -1,7 +1,8 @@
 # Subagent-style delegation and SDK thread continuity
 
-**Status:** Open — Stages 1–5 shipped (`wait_result`; surface shape; continuity
-groundwork; `codex_sdk` continuity; `claude_sdk` continuity); Stages 6–7 open.
+**Status:** Open — Stages 1–6 shipped (`wait_result`; surface shape; continuity
+groundwork; `codex_sdk` continuity; `claude_sdk` continuity;
+`antigravity_sdk` continuity); Stage 7 open.
 
 **Created:** 2026-07-23.
 
@@ -477,14 +478,43 @@ follow-up turn used the Stage 3 delta prompt and a stable provider session id.
 
 ## Stage 6 — `antigravity_sdk` continuity
 
-Verify the installed `google-antigravity` API for reopening a conversation
-by `conversation_id` and for multi-turn use of one live agent context. Known
-blocker: the SDK's bundled native runtime requires glibc >= 2.36 and the
-current development host has 2.34, so the backend probes `unavailable`
-locally. The hermetic conversation-seam work can land against verified
-source facts, but `continuity` stays false until the credentialed
-provider-memory test passes on a compatible host — a skipped provider keeps
-the capability false.
+**Shipped.** The implementation was refreshed against
+`google-antigravity` 0.1.8. One live `Agent` is retained
+across sequential turns; abnormal reset retains its captured conversation id,
+and reconnect uses the strict public
+`LocalAgentConfig(conversation_id=...,
+session_continuation_mode=SessionContinuationMode.RESUME)` path with the same
+runner-owned trajectory `save_dir` retained across reset. A rejected reopen
+fails structurally without `CREATE_OR_RESUME` or fresh-session fallback; final
+close removes the temporary trajectory directory. If an abnormal connection
+never yields a conversation id, the next continuation fails structurally once;
+a later full-prompt user turn may explicitly start a new conversation rather
+than permanently bricking the runner.
+Hermetic coverage includes two-turn reuse, id feedback, reset/reconnect,
+rejected and unsupported reopen, cleanup order, cancellation-ignoring work,
+and idempotent close.
+
+The previously recorded native blocker was stale: the 0.1.8 wheel's bundled
+`localharness` requires `GLIBC_2.26`, and this host has glibc 2.43. The actual
+installed-version conflict is Python-level: Antigravity's generated protobuf
+requires 7.35+, while `xai-sdk` 1.17 requires protobuf `<7`. The shared
+environment was restored to its xAI-compatible protobuf 6.33.6 and a separate
+durable Antigravity environment was installed with protobuf 7.35.1; the
+backend health probe now explains this incompatibility instead of recommending
+system-library replacement. Missing SDK distribution-version metadata is also
+unavailable because compatibility cannot be verified. The provider-specific
+`antigravity` extra pins the working protobuf runtime, while `all`
+intentionally omits that incompatible floor so the shared xAI environment
+remains installable and health-gated.
+
+The credentialed provider-memory integration test passed on 2026-07-24 in the
+isolated 0.1.8/protobuf 7.35.1 environment with Google ADC, Vertex
+`us-central1`, and `gemini-2.5-flash`. Turn 2 recalled a generated codeword even
+though its Stage 3 delta prompt contained neither the codeword nor the original
+task; both turns emitted one stable provider conversation id, also captured in
+central session state. `antigravity_sdk` therefore flips `continuity=true` and
+reports `conversation="persistent"`. `resume`, `interrupt`, and `tool_gate`
+remain false.
 
 ## Stage 7 — `xai_sdk` continuity assessment
 

@@ -1,5 +1,5 @@
 {
-  "_note": "Illustrative values using the ChatResponse.resolve() list shapes confirmed from google-antigravity 0.1.5. No live chat was made; tests construct real-shape fakes from this buffer.",
+  "_note": "Illustrative values using the ChatResponse.resolve() list shapes re-verified from google-antigravity 0.1.8. Tests construct real-shape fakes from this buffer; provider-memory proof lives in the credentialed integration test.",
   "chat_response": {
     "chunks": [
       {

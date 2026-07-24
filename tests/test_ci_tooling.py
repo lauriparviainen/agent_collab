@@ -68,8 +68,8 @@ class StaticToolingContractTests(unittest.TestCase):
         self.assertRegex(formatter, r'(?m)^indent-style\s*=\s*"space"\s*$')
         self.assertRegex(formatter, r'(?m)^line-ending\s*=\s*"lf"\s*$')
 
-    def test_base_install_is_sdk_free_and_all_extra_matches_provider_extras(self):
-        """Vendor SDKs are opt-in extras; `all` must stay their exact union."""
+    def test_base_install_is_sdk_free_and_all_extra_matches_shared_sdk_pins(self):
+        """Provider extras are opt-in; `all` omits only the known protobuf conflict."""
         pyproject = PYPROJECT_PATH.read_text(encoding="utf-8")
 
         project = self._toml_table(pyproject, "project")
@@ -84,9 +84,19 @@ class StaticToolingContractTests(unittest.TestCase):
         provider_pins = set()
         for provider in ("claude", "codex", "antigravity", "xai"):
             pins = self._extra_requirements(extras, provider)
-            self.assertEqual(len(pins), 1, f"{provider} extra must hold exactly one SDK pin")
+            expected_count = 2 if provider == "antigravity" else 1
+            self.assertEqual(
+                len(pins),
+                expected_count,
+                f"{provider} extra has an unexpected dependency count",
+            )
             provider_pins.update(pins)
-        self.assertEqual(set(self._extra_requirements(extras, "all")), provider_pins)
+        antigravity_runtime = {"protobuf>=7.35,<8"}
+        self.assertTrue(antigravity_runtime.issubset(provider_pins))
+        self.assertEqual(
+            set(self._extra_requirements(extras, "all")),
+            provider_pins - antigravity_runtime,
+        )
 
     def test_ci_runs_every_required_gate_with_pinned_actions(self):
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
