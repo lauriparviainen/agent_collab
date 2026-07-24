@@ -198,10 +198,18 @@ Headless CLI runs default to permission-bypassed execution inside Grok's
 read-only sandbox, expose Grok's internal turn limit as `provider_max_turns`,
 and emit a terminal reason other than `EndTurn` as a fatal provider error
 instead of a successful empty response.
-The installed `xai-sdk` 1.17.0 confirmed async client context management,
-`chat.create`, `chat.append(user(...))`, `await chat.sample()`, and response
-`content`/`id`. `xai_sdk` is remote message-only chat and captures identity kind
-`response`; no SDK live call was made because this host has no `XAI_API_KEY`.
+The installed/latest `xai-sdk` 1.17.0 confirmed that ordinary multi-turn
+`Chat` usage replays its local message proto, but the public
+`store_messages=True` + `previous_response_id` path continues provider-stored
+history without local replay. A credentialed `grok-4.5`/low fixture closed the
+first client, opened a second client, sent exactly one new message at the
+request boundary, and recalled the first turn's generated codeword; an unknown
+continuation id failed with `NOT_FOUND`. One serialized adapter now retains the
+client and newest changing response id, resets abnormal turns without fresh
+fallback, deletes stored responses best-effort on final close, and reports
+`xai_sdk.continuity=true` plus `conversation="persistent"`. Identity kind
+remains `response`; restart-safe `resume`, `interrupt`, and `tool_gate` remain
+false.
 
 ## Agent Safety Notes
 

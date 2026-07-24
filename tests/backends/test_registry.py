@@ -116,12 +116,15 @@ class CapabilityReducerTests(unittest.TestCase):
         codex = backends.capabilities_for("codex", "sdk")
         claude = backends.capabilities_for("claude", "sdk")
         antigravity = backends.capabilities_for("antigravity", "sdk")
-        # Verified pins: codex_sdk (Stage 4), claude_sdk (Stage 5), and
-        # antigravity_sdk (Stage 6) hold native provider context.
+        xai = backends.capabilities_for("xai", "sdk")
+        # Verified pins: all four SDK continuity stages hold native provider
+        # context. xAI chains provider-stored responses rather than a stable
+        # thread id.
         self.assertTrue(codex.continuity)
         self.assertTrue(claude.continuity)
         self.assertTrue(antigravity.continuity)
-        for caps in (codex, claude, antigravity):
+        self.assertTrue(xai.continuity)
+        for caps in (codex, claude, antigravity, xai):
             self.assertFalse(caps.resume)
             self.assertFalse(caps.interrupt)
             self.assertFalse(caps.tool_gate)
@@ -144,6 +147,17 @@ class CapabilityReducerTests(unittest.TestCase):
         )
         self.assertTrue(
             backends.summarize_session_capabilities({"antigravity_sdk": antigravity})["continuity"]
+        )
+        self.assertTrue(backends.summarize_session_capabilities({"xai_sdk": xai})["continuity"])
+        self.assertTrue(
+            backends.summarize_session_capabilities(
+                {
+                    "codex_sdk": codex,
+                    "claude_sdk": claude,
+                    "antigravity_sdk": antigravity,
+                    "xai_sdk": xai,
+                }
+            )["continuity"]
         )
         # A mixed session containing any backend without continuity stays false.
         claude_cli = backends.capabilities_for("claude", "cli")

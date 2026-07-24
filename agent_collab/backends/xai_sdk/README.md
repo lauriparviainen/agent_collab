@@ -3,7 +3,7 @@
 Registered as `xai_sdk` (`type="xai"`, `backend="sdk"`). This is the remote xAI
 chat API, not the local Grok Build coding runtime. It requires `xai-sdk>=1.17,<2`
 and `XAI_API_KEY`; imports are lazy and the async client is closed
-deterministically after each collected turn.
+deterministically when the runner/session closes.
 
 Dynamic model discovery uses
 `AsyncClient.models.list_language_models()` and includes canonical names plus
@@ -26,12 +26,22 @@ one effective `none`, `low`, `medium`, or `high` value maps to
 `chat.create(reasoning_effort=...)`. CLI-only
 `permission_mode` and `sandbox` are rejected by the declarative schema.
 
-The runner appends `user(prompt)`, awaits `chat.sample()`, maps only non-empty
-`response.content` to an xAI message, and captures `response.id` as provider
-identity kind `response`. It enables no remote or client-side tools and emits no
-tool, command, or file-change events. Event fidelity is message-only; response
-IDs are correlation metadata, not resumable conversation state. Resume,
-interrupt, and tool-gate capabilities are all false. Credential values and SDK
+One runner retains a serialized `AsyncClient` conversation adapter. Each turn
+creates a fresh `Chat` with exactly one new `user(prompt)` message,
+`store_messages=True`, and — after turn 1 — the latest
+`previous_response_id`. xAI prepends the stored history server-side; no prior
+messages are appended locally or replayed in the request. The captured
+`response.id` changes per turn and becomes the next strict continuation point
+(identity kind `response`). An unknown id fails with `NOT_FOUND`; there is no
+fresh-chat fallback. Abnormal turns reset the client while retaining the id.
+Final close deletes captured stored completions best-effort, then closes the
+client.
+
+The runner maps only non-empty `response.content` to an xAI message. It enables
+no remote or client-side tools and emits no tool, command, or file-change
+events. Event fidelity is message-only. In-session continuity is true and the
+settings summary reports `conversation="persistent"`; restart-safe resume,
+interrupt, and tool-gate capabilities remain false. Credential values and SDK
 responses are never logged by health probes.
 
 For this no-tools backend, `finish_reason=STOP` with non-empty content is the

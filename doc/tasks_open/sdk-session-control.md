@@ -175,6 +175,41 @@ handle #20's `interrupt()` and restart-safe resume build on.
   after abnormal turns while retaining the captured id, and never treats local
   cancellation as provider interruption. `codex_sdk.continuity` is true;
   `resume`, `interrupt`, and `tool_gate` remain false.
+- **xAI SDK — implementation-time `xai-sdk` 1.17.0 (protobuf 6.33.6):**
+  PyPI metadata, installed distribution/module versions, runtime signatures,
+  and the installed wheel source were inspected on 2026-07-24; 1.17.0 was the
+  latest release, so the existing `>=1.17,<2` bound stayed unchanged.
+  A normal `Chat` owns only a mutable local `messages` collection:
+  `append()` adds to its request proto and every `sample()` copies the entire
+  proto into `GetCompletion`. Reusing that object with appended responses is
+  local history replay and does not establish provider-held continuity.
+  The separate public stored-response API does: `store_messages=True` persists
+  each completion under its `response.id`, while
+  `previous_response_id=<stored-id>` makes the server prepend history without
+  changing the new chat's local messages. `conversation_id` only labels
+  OpenTelemetry spans. Thus `response.id` is correlation metadata for ordinary
+  unstored responses, but a strict continuation identity when its response was
+  created with storage enabled.
+
+  A credentialed `grok-4.5`/low fixture generated a random codeword, closed the
+  first `AsyncClient`, and continued from its stored response on a new client.
+  Turn 2's intercepted `GetCompletionsRequest` contained one new user message,
+  `store_messages=true`, and `previous_response_id`, with neither the original
+  prompt nor codeword; the answer recalled the codeword. Response ids advanced
+  between turns. A generated unknown id failed with gRPC `NOT_FOUND` instead of
+  producing a fresh response, so continuation failure is structural.
+
+  `Chat` and collected `Response` have no close method. `sample()` is one async
+  unary gRPC call; `AsyncClient.close()` closes its API and optional management
+  channels but exposes no safe close-vs-request coordination contract. The
+  adapter therefore serializes run/reset/close, shields an in-flight sample and
+  retains ownership until it settles even after local cancellation, then closes
+  the channel. Abnormal reset retains the newest response id for strict reopen.
+  Final close calls `delete_stored_completion()` best-effort for captured ids in
+  reverse order before closing the client; the referee supplies the outer
+  bound, and cleanup failure cannot change a committed turn outcome.
+  `xai_sdk.continuity` is true; `resume`, `interrupt`, and `tool_gate` remain
+  false.
 
 ## Capability semantics
 

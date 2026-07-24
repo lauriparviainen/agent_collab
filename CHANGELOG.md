@@ -13,6 +13,15 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add native **xAI SDK stored-response continuity** (#47, stage 7), verified on
+  `xai-sdk` 1.17.0 with a credentialed two-turn `grok-4.5` memory check. One
+  runner now sends each new prompt as a single message and chains provider-held
+  history through strict `store_messages` / `previous_response_id`; unknown
+  ids fail without fresh fallback, abnormal turns reset with bounded cleanup,
+  and final close deletes captured stored responses best-effort.
+  `xai_sdk` now advertises `continuity: true` and
+  `conversation: "persistent"`; `resume`, `interrupt`, and `tool_gate` stay
+  false.
 - Add the **Antigravity SDK persistent conversation adapter** (#47, stage 6).
   One runner now keeps an entered `Agent` across sequential turns, captures its
   conversation id, resets abnormal turns with bounded cleanup, and reconnects

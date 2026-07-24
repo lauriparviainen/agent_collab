@@ -1,8 +1,8 @@
 # Subagent-style delegation and SDK thread continuity
 
-**Status:** Open — Stages 1–6 shipped (`wait_result`; surface shape; continuity
-groundwork; `codex_sdk` continuity; `claude_sdk` continuity;
-`antigravity_sdk` continuity); Stage 7 open.
+**Status:** Open — Stages 1–7 shipped (`wait_result`; surface shape; continuity
+groundwork; `codex_sdk`, `claude_sdk`, `antigravity_sdk`, and `xai_sdk`
+continuity); post-implementation collection-primitive re-evaluation open.
 
 **Created:** 2026-07-23.
 
@@ -518,13 +518,44 @@ remain false.
 
 ## Stage 7 — `xai_sdk` continuity assessment
 
-`xai_sdk` is remote message-only chat (`provider_session_id_kind:
-"response"`) and currently disabled in user config. Assess whether the
-installed `xai-sdk` offers provider-held conversation state at all —
-client-side history replay is transcript continuity, not native continuity,
-and does not qualify. Expected outcome: record the finding and keep
-`continuity` false unless real provider-side state is proven; the
-delta-prompt path then simply never activates for this backend.
+**Shipped.** The assessment was refreshed against `xai-sdk` 1.17.0, still the
+latest PyPI release on 2026-07-24; no dependency change was needed and issue
+#45's model/options discovery surface was untouched. The SDK's ordinary
+multi-turn `Chat` is client-side replay: `append()` mutates
+`chat.messages`, and `sample()` copies that complete local message collection
+into each request. That path does not qualify.
+
+The same public 1.17.0 API also exposes native stored-response continuation:
+`chat.create(store_messages=True)` persists a response under `response.id`,
+and a new `Chat` — including one on a newly opened `AsyncClient` — can pass
+`previous_response_id=<id>` so xAI prepends prior history server-side without
+adding it to `chat.messages`. A credentialed `grok-4.5`/low fixture closed the
+first client, opened a fresh client, and sent turn 2 with exactly one new user
+message plus `previous_response_id`; request-boundary inspection proved that
+neither the turn-1 prompt nor its generated codeword was present, while the
+model recalled the codeword. Response ids change per turn and the newest stored
+id becomes the next continuation point. A generated unknown id failed
+distinctly with gRPC `NOT_FOUND`; it did not silently start a fresh chat.
+`conversation_id` is telemetry grouping only, not continuation.
+
+One runner now owns a serialized conversation adapter. It retains one
+`AsyncClient`, creates a fresh one-message `Chat` per turn, enables stored
+messages, and feeds back only the latest response id. Abnormal completion
+performs one bounded reset while retaining that id; reconnect always supplies
+it through `previous_response_id` and never retries fresh. Local cancellation
+keeps ownership of the in-flight `sample()` until it settles, so reset/close
+cannot race the gRPC channel; final close deletes captured stored responses
+best-effort in reverse order and closes the client, bounded externally by the
+referee. `Chat` and collected `Response` expose no separate close operation.
+
+Hermetic coverage pins two-turn client reuse with no local history replay,
+changing identity capture, active-state transitions, reset/reconnect,
+rejected/unsupported reconnect, cancellation-insensitive serialization,
+stored-response cleanup, cleanup failure, and idempotent close. The integrated
+provider-memory test passed through the real referee delta-prompt path.
+`xai_sdk` therefore flips `continuity=true` and reports
+`conversation="persistent"`; `resume`, `interrupt`, and `tool_gate` remain
+false.
 
 ## Tracking and docs
 
@@ -592,9 +623,8 @@ incompatible host) keeps `continuity` false.
 2. Credential-free smoke: a `mock` backend session returns answers through
    `agent-collab result` and `agent_collab_wait_result`; an interactive mock
    session parks and settles correctly.
-3. Live per-backend check as each SDK stage lands (`codex_sdk` first, then
-   `claude_sdk`; `antigravity_sdk` when a compatible host exists; `xai_sdk`
-   only if continuity is proven), after installing the package so the daemon
+3. Live per-backend check as each SDK stage lands (`codex_sdk`, `claude_sdk`,
+   `antigravity_sdk`, then `xai_sdk`), after installing the package so the daemon
    runs the new code: interactive solo session via MCP with the backend
    substituted through `members` — start -> `wait_result` -> `post_message`
    follow-up -> `wait_result`; confirm the follow-up turn used a delta
@@ -609,10 +639,10 @@ incompatible host) keeps `continuity` false.
   bounded by `interactive_idle_timeout` and runner `close()`.
 - Resume-reconnect depends on provider-side or local session storage; when
   absent the turn fails structurally rather than silently starting fresh.
-- Two backends may legitimately never flip `continuity`: `antigravity_sdk`
-  is blocked on the dev host's glibc, and `xai_sdk` may have no provider-held
-  state at all. Closing those stages with the capability false and the
-  finding recorded is a valid outcome, not a failure of the task.
+- Provider state can have backend-specific retention and deletion semantics.
+  xAI continuity opts into stored responses for the live agent-collab session
+  and deletes captured response ids best-effort on final close; restart-safe
+  resume remains false.
 - SDK drift on upgrade: the loop-scoped reader-task behavior is verified on
   0.2.114; the fake-conversation cancellation test guards the contract, and
   the fact must be re-verified on SDK bumps.
