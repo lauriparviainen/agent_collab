@@ -221,11 +221,14 @@ Read events incrementally with a cursor:
    when the user asks or an actionable event needs immediate follow-up,
 4. inspect `status`, `terminal`, `error`, `failure`, and `turn_outcomes` on
    every response, including ones with `events: []`; stop when `terminal` is
-   true. `awaiting_input` is live, not terminal — a non-interactive session
-   never parks there, but an interactive one does and will never go terminal on
-   its own, so a watch loop over an interactive session must stop on
-   `awaiting_input` too and hand over to `agent_collab_wait_result`. If the
-   daemon predates this additive view, fall back to `agent_collab_status`.
+   true. `awaiting_input` is live, not terminal — an interactive session parks
+   there when it has finished and is waiting for you, and only reaches a
+   terminal status once `interactive_idle_timeout` expires or you stop it. So a
+   watch loop over an interactive session must stop on `awaiting_input` too and
+   hand over to `agent_collab_wait_result`: waiting for `terminal` means waiting
+   out the whole idle window, and by the time it arrives the session is closed
+   and `post_message` is rejected. If the daemon predates this additive view,
+   fall back to `agent_collab_status`.
 
 Never make one unbounded blocking call. Always pass the cursor from the
 previous response, not a guess.
@@ -247,9 +250,13 @@ back over every message event to recover the full text — once the session is
 terminal or parked, `agent_collab_wait_result` returns immediately with each
 agent's answer, and that is the cheapest complete result there is.
 
-Both views report absolute event ids, so any single event is re-fetchable whole
-with `cursor: EVENT_ID`, `limit: 1`, `tool_output: "full"` (do not pass `types`
-on such a re-fetch: `limit` counts scanned events, not returned ones).
+Any event is re-fetchable whole with `cursor: EVENT_ID`, `limit: 1`,
+`tool_output: "full"` (do not pass `types` on such a re-fetch: `limit` counts
+scanned events, not returned ones). A digest event carries its `event_id`, and
+so does an events-view event whenever `types` filtered the batch — the two
+cases where position no longer implies the id. An unfiltered events batch omits
+the field, exactly as it always has: there, the id is the request `cursor` plus
+the event's index.
 `agent_collab_read_transcript` likewise summarizes tool payloads unless
 `tool_output: "full"` is passed.
 

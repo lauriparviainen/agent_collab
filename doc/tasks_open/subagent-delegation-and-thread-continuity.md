@@ -54,9 +54,12 @@ figures do not capture (a 20–30 s watch loop burns roughly twice the LLM turns
 of 45 s `wait_result` heartbeats, each turn growing the caller's context).
 
 One trap this exposed, now pinned by `mcp-guidance.md` and a daemon test:
-`awaiting_input` is a live wait status, so an interactive session never goes
-terminal on its own. A watch loop that stops only on `terminal` polls a parked
-session until its `interactive_idle_timeout` closes it. Interactive watch loops
+`awaiting_input` is a live wait status, so an interactive session that has
+finished its work parks there rather than going terminal; it reaches a terminal
+status only when `interactive_idle_timeout` expires or a caller stops it. A
+watch loop that stops only on `terminal` therefore polls a parked session for
+the whole idle window and gets its terminal status only once the session is
+closed and `post_message` would be rejected. Interactive watch loops
 stop on `awaiting_input` too, and follow-up turns are collected with
 `wait_result` (status stays `awaiting_input` for the whole directed turn, so a
 watch loop has no stop condition there at all).

@@ -1770,23 +1770,28 @@ def _digest_event(event: Dict[str, Any], event_id: int) -> Dict[str, Any]:
     transcript renderer stays byte-stable).
     """
 
-    digest = {
+    if event.get("source") == "tool":
+        # The tool line is the summary projection's own, so the two views agree
+        # on tool events — but it is capped like every other digest line: its
+        # tool name comes from provider payload and is otherwise unbounded.
+        text = _tool_event_summary(event, event_id)
+    else:
+        text = " ".join(str(event.get("text", "")).split())
+    return {
         "timestamp": event.get("timestamp"),
         "source": event.get("source"),
         "type": event.get("type"),
         "agent_id": event.get("agent_id"),
         "event_id": event_id,
         "raw": None,
+        "text": _cap_digest_text(text),
     }
-    if event.get("source") == "tool":
-        digest["text"] = _tool_event_summary(event, event_id)
-        return digest
-    text = " ".join(str(event.get("text", "")).split())
-    if len(text) > MAX_DIGEST_TEXT_CHARS:
-        omitted = len(text) - MAX_DIGEST_TEXT_CHARS
-        text = f"{text[:MAX_DIGEST_TEXT_CHARS]} +{omitted}c"
-    digest["text"] = text
-    return digest
+
+
+def _cap_digest_text(text: str) -> str:
+    if len(text) <= MAX_DIGEST_TEXT_CHARS:
+        return text
+    return f"{text[:MAX_DIGEST_TEXT_CHARS]} +{len(text) - MAX_DIGEST_TEXT_CHARS}c"
 
 
 def _tool_event_summary(event: Dict[str, Any], event_id: int) -> str:

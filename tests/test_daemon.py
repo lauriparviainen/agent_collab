@@ -908,6 +908,24 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("+", digested["text"])
         self.assertLess(len(digested["text"]), len(long_text))
 
+    async def test_digest_caps_tool_lines_whose_provider_name_is_unbounded(self):
+        # A tool event's summary embeds a provider-supplied name with no bound
+        # of its own, so without an explicit cap the "cheap" view could return
+        # a single line larger than the whole batch it was meant to shrink.
+        digested = _digest_event(
+            {
+                "timestamp": "t",
+                "source": "tool",
+                "type": "tool_call",
+                "text": "short",
+                "raw": {"name": "N" * 10000, "input": {"path": "x"}},
+            },
+            3,
+        )
+        self.assertLessEqual(len(digested["text"]), MAX_DIGEST_TEXT_CHARS + 16)
+        self.assertTrue(digested["text"].endswith("c"))
+        self.assertEqual(digested["event_id"], 3)
+
     async def test_types_filter_projects_the_batch_without_holding_back_the_cursor(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
