@@ -75,9 +75,34 @@ transport research on 2026-07-24 (Claude Code 2.1.219, agent-collab as an
 
 That makes the SSE candidate the primary path rather than a speculative one; it
 is tracked with the measured evidence, the interlocking client limits, and the
-Codex design constraints in `sse-collection-transport-evaluation` (#49). Until
-it lands, the background `agent-collab result` CLI pattern remains the only
-fully non-blocking collection path, and only for harnesses with shell access.
+Codex design constraints in `sse-collection-transport-evaluation` (#49).
+
+The background `agent-collab result` CLI pattern is **not** an acceptable
+general answer, even as an interim: it requires the agent to be co-located with
+the daemon and to have shell access, so it does not exist for a remote or
+shell-less MCP client — exactly the deployment the MCP surface is for. It stays
+a local optimization, never the recommended path.
+
+### Two collection modes, not one
+
+The re-evaluation surfaced a second requirement that the original framing
+missed: the caller may want to **watch a session and stay steerable while it
+runs**, not only collect the outcome. These are different modes with different
+right answers, and guidance must present both:
+
+- **Delegate and be free** — one long `wait_result`, non-blocking only once the
+  client backgrounds it (#49). The agent sees nothing until settlement, which is
+  the point.
+- **Watch and stay steerable** — short bounded `wait_events` polls. The block
+  bound *is* the steering latency: a user message reaches the agent when the
+  in-flight call returns, so a 20–30 s bound means steering lands within 20–30 s.
+  Client backgrounding is actively wrong here — a backgrounded call is no longer
+  watching.
+
+The steerable-watch mode is the one that must get cheaper, which promotes #50's
+projection work from a cleanup to the priority deliverable: it is what makes a
+minutes-long watch loop affordable, it needs no transport work or client
+configuration, and it works on every client today.
 
 **Triage-as-it-arrives is worth less than it looks.** The shipped review recipe
 already instructs reconciling only after terminal status, so for the review
