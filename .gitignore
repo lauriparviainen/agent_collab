@@ -48,3 +48,7 @@ Thumbs.db
 .agent-collab/data/
 .agent-collab/mcp-review-workdir/
 .agent-collab/sessions/
+
+# Scratch space for throwaway investigation harnesses handed between agents.
+# Anything here is disposable; nothing in the product may depend on it.
+/tmp/
