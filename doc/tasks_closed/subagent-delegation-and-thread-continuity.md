@@ -1,8 +1,8 @@
 # Subagent-style delegation and SDK thread continuity
 
-**Status:** Complete — Stages 1–7 shipped (`wait_result`; surface shape;
-continuity groundwork; `codex_sdk`, `claude_sdk`, `antigravity_sdk`, and
-`xai_sdk` continuity). The collection-primitive re-evaluation is decided (watch
+**Status:** Closed 2026-07-24, released in 0.12.0 — Stages 1–7 shipped
+(`wait_result`; surface shape; continuity groundwork; `codex_sdk`,
+`claude_sdk`, `antigravity_sdk`, and `xai_sdk` continuity). The collection-primitive re-evaluation is decided (watch
 with `wait_events`, harvest with `wait_result`) and its cost fixes shipped as
 #50. Every wake-path candidate — SSE framing, MCP channels, and the client
 auto-backgrounding they unlock — belongs to #49, which owns that question end

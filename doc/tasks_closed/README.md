@@ -20,3 +20,4 @@ Completed task docs move here when their implementation is done and verified.
 - [Stage 5.2: Calm TUI cleanup](stage-5.2-calm-tui-cleanup/README.md)
 - [Stage 5.3: Daemon HTTP API contract and loopback auth](stage-5.3-daemon-api-contract.md)
 - [Backend discovery and recommendation protocol](backend-discovery-and-recommendation.md)
+- [Subagent-style delegation and SDK thread continuity](subagent-delegation-and-thread-continuity.md)

@@ -8,8 +8,8 @@ implemented.
 **Issue:** [#49](https://github.com/lauriparviainen/agent_collab/issues/49)
 
 Extracted from the collection-primitive re-evaluation in
-`subagent-delegation-and-thread-continuity` (#47), which retains only the
-`timeout_ms=0` instant peek.
+`subagent-delegation-and-thread-continuity` (#47), now closed — its
+`timeout_ms=0` instant peek shipped in 0.12.0.
 
 ## Question
 
