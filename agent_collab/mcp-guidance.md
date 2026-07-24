@@ -53,13 +53,18 @@ Run another agent as a subagent and collect its result over MCP alone:
    costs more than the whole watch loop did. Answer `text` is preview-bounded
    (large answers carry a truncation notice and an `event_id` to re-fetch), and
    an agent whose turns all failed contributes no answer at all — read
-   `turn_outcomes` and `failure` for those.
+   `turn_outcomes` and `failure` for those. A settled result whose terminal
+   status is not `done` also carries `events_tail`: the last ~20 events as
+   digest lines (capped text, `event_id` re-fetchable), usually enough to
+   debug the failure without `read_events`.
 
    Use `wait_result` *instead of* the watch loop only when you want nothing but
    the outcome and need not stay responsive: it then blocks until the session
    settles. `timeout_ms` defaults to 45000; do not exceed it — clients kill tool
    calls near 60 s. On a heartbeat (`settled: false`) re-poll immediately; no
-   pacing delay, the block is server-side. `settled` with status
+   pacing delay, the block is server-side. `timeout_ms: 0` never blocks — an
+   instant peek at the current state, the cheap way to sweep several delegated
+   sessions for the ones that have settled. `settled` with status
    `awaiting_input` means you may post a follow-up.
 
    For one specific event rather than the answers — a finding whose digest text

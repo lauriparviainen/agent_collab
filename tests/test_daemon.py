@@ -9,6 +9,7 @@ from unittest import mock
 from agent_collab.config import AgentConfig, CollaborationConfig, ConfigError, WorkflowConfig
 from agent_collab.daemon import (
     MAX_DIGEST_TEXT_CHARS,
+    RESULT_TAIL_EVENTS,
     SessionManager,
     SessionRequestError,
     StartSessionRequest,
@@ -1842,6 +1843,137 @@ sequence = ["claude_cli.a", "claude_cli.b"]
             # The failed turn emitted a message, but only completed turns feed the
             # answer ledger, so nothing masquerades as a result.
             self.assertEqual(result.answers, [])
+
+    async def test_wait_result_zero_timeout_is_instant_peek(self):
+        release = asyncio.Event()
+
+        class BlockingRunner(AgentRunner):
+            def __init__(self, source):
+                self.source = source
+
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create(self.source, "status", "working"))
+                await release.wait()
+                await emit(Event.create(self.source, "message", "done"))
+                return TurnOutcome("completed")
+
+        runners = {
+            "claude_cli": BlockingRunner("claude"),
+            "codex_cli": BlockingRunner("codex"),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="peeked task",
+                            mock=True,
+                            max_turns=1,
+                            timeout=5,
+                            workdir=root,
+                        )
+                    )
+                    # Unsettled: the peek returns the heartbeat with no block.
+                    peek = await manager.wait_result(state.session_id, timeout_ms=0)
+                    self.assertFalse(peek.settled)
+                    self.assertFalse(peek.terminal)
+                    self.assertEqual(peek.answers, [])
+                    self.assertEqual(peek.events_tail, [])
+
+                    release.set()
+                    await self._wait_for_terminal(manager, state.session_id)
+                    # Settled: the same zero-timeout call is a complete harvest.
+                    settled = await manager.wait_result(state.session_id, timeout_ms=0)
+
+            self.assertTrue(settled.settled)
+            self.assertTrue(settled.terminal)
+            self.assertEqual(settled.status, "done")
+            self.assertEqual([answer["agent_id"] for answer in settled.answers], ["claude_cli"])
+            # A ``done`` result carries no events_tail — answers are the result.
+            self.assertEqual(settled.events_tail, [])
+
+    async def test_wait_result_failed_session_carries_digest_events_tail(self):
+        class NoisyFailRunner(AgentRunner):
+            async def run_turn(self, prompt, workdir, emit):
+                for step in range(RESULT_TAIL_EVENTS + 5):
+                    await emit(Event.create("claude", "status", f"step {step}"))
+                await emit(Event.create("claude", "message", "x" * 500))
+                return TurnOutcome("failed", "provider_transport_failed")
+
+        runners = {"claude_cli": NoisyFailRunner(), "codex_cli": NoisyFailRunner()}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="failing delegate",
+                            mock=True,
+                            max_turns=1,
+                            timeout=5,
+                            workdir=root,
+                        )
+                    )
+                    await self._wait_for_terminal(manager, state.session_id)
+                    result = await manager.wait_result(state.session_id, timeout_ms=1000)
+                    long_refetch = None
+                    for event in result.events_tail:
+                        if event["type"] == "message":
+                            long_refetch = manager.read_events(
+                                state.session_id, event["event_id"], limit=1
+                            ).events[0]["text"]
+
+            self.assertEqual(result.status, "failed")
+            self.assertEqual(result.answers, [])
+            # The tail is exactly the last RESULT_TAIL_EVENTS events, digest
+            # projected: absolute event ids, no raw, capped text.
+            self.assertEqual(len(result.events_tail), RESULT_TAIL_EVENTS)
+            self.assertEqual(
+                [event["event_id"] for event in result.events_tail],
+                list(range(result.cursor - RESULT_TAIL_EVENTS, result.cursor)),
+            )
+            for event in result.events_tail:
+                self.assertIsNone(event["raw"])
+                self.assertLessEqual(len(event["text"]), MAX_DIGEST_TEXT_CHARS + 16)
+            # The long message was digest-capped in the tail, but its event_id
+            # re-fetches it whole — the same escape hatch the digest view has.
+            self.assertEqual(long_refetch, "x" * 500)
+
+    async def test_wait_result_restored_failed_session_carries_events_tail(self):
+        class FailRunner(AgentRunner):
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "message", "partial before failure"))
+                return TurnOutcome("failed", "provider_transport_failed")
+
+        runners = {"claude_cli": FailRunner(), "codex_cli": FailRunner()}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    first = SessionManager(index_path=index_path)
+                    state = await first.start_session(
+                        StartSessionRequest(
+                            task="failing restore",
+                            mock=True,
+                            max_turns=1,
+                            timeout=5,
+                            workdir=root,
+                        )
+                    )
+                    await self._wait_for_terminal(first, state.session_id)
+                    live = await first.wait_result(state.session_id, timeout_ms=100)
+
+                second = SessionManager(index_path=index_path)
+                restored = await second.wait_result(state.session_id, timeout_ms=100)
+
+            self.assertEqual(restored.status, "failed")
+            # Restored and live sessions agree on the tail, like they do on answers.
+            self.assertEqual(restored.events_tail, live.events_tail)
+            self.assertGreater(len(restored.events_tail), 0)
 
     async def test_wait_result_on_restored_session_derives_answers(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -432,7 +432,11 @@ class SessionResultModel:
     caller may then post a follow-up). On a long-poll timeout the server returns
     a heartbeat with ``settled: false`` and no ``answers`` — callers re-poll
     immediately; the >= 20s pacing rule does not apply because the block is
-    server-side. ``cursor`` is the current event count, a ``read_events`` offset.
+    server-side. ``timeout_ms: 0`` never blocks: it returns the current
+    settled-or-heartbeat state (an instant peek). ``cursor`` is the current event
+    count, a ``read_events`` offset. ``events_tail`` carries the last ~20 events
+    as digest projections (capped text, no ``raw``, absolute ``event_id``) only
+    on a settled result whose terminal status is not ``done``; empty otherwise.
     """
 
     session_id: str
@@ -446,6 +450,7 @@ class SessionResultModel:
     answers: List[AgentAnswerModel] = field(default_factory=list)
     markdown_path: str = ""
     jsonl_path: str = ""
+    events_tail: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionResultModel":
@@ -461,6 +466,7 @@ class SessionResultModel:
             answers=[AgentAnswerModel.from_dict(item) for item in data.get("answers", [])],
             markdown_path=str(data.get("markdown_path", "")),
             jsonl_path=str(data.get("jsonl_path", "")),
+            events_tail=[dict(item) for item in data.get("events_tail", [])],
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -476,6 +482,7 @@ class SessionResultModel:
             "answers": [item.to_dict() for item in self.answers],
             "markdown_path": self.markdown_path,
             "jsonl_path": self.jsonl_path,
+            "events_tail": self.events_tail,
         }
 
 
@@ -939,7 +946,8 @@ class WaitResultRequestModel:
     Claude Code and Codex), which a longer block hits before the daemon ever
     answers. It is capped at 600 s so one call cannot hold a connection open
     indefinitely; on expiry the server returns a heartbeat and the caller
-    re-polls.
+    re-polls. ``0`` never blocks: the instant peek returning the current
+    settled-or-heartbeat state.
     """
 
     timeout_ms: int = 45000

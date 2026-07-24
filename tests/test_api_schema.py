@@ -317,10 +317,42 @@ class ModelRoundTripTests(unittest.TestCase):
             ],
             "markdown_path": "/logs/daemon-abc.md",
             "jsonl_path": "/logs/daemon-abc.jsonl",
+            "events_tail": [],
         }
         decoded = SessionResultModel.from_dict(payload)
         self.assertIsInstance(decoded.answers[0], AgentAnswerModel)
         self.assertEqual(decoded.to_dict(), payload)
+
+    def test_session_result_round_trips_failure_events_tail(self):
+        payload = {
+            "session_id": "daemon-abc",
+            "status": "failed",
+            "terminal": True,
+            "settled": True,
+            "cursor": 6,
+            "error": "agent turn failed",
+            "failure": {"code": "provider_transport_failed"},
+            "turn_outcomes": [{"turn_id": "turn-1", "outcome": "failed"}],
+            "answers": [],
+            "markdown_path": "/logs/daemon-abc.md",
+            "jsonl_path": "/logs/daemon-abc.jsonl",
+            "events_tail": [
+                {
+                    "timestamp": "2026-07-24T00:00:00+00:00",
+                    "source": "error",
+                    "type": "error",
+                    "agent_id": "claude_cli",
+                    "event_id": 5,
+                    "raw": None,
+                    "text": "agent turn failed",
+                }
+            ],
+        }
+        self.assertEqual(SessionResultModel.from_dict(payload).to_dict(), payload)
+        # An older daemon without the field decodes to an empty tail.
+        legacy = dict(payload)
+        legacy.pop("events_tail")
+        self.assertEqual(SessionResultModel.from_dict(legacy).events_tail, [])
 
     def test_session_result_round_trips_heartbeat(self):
         payload = {
@@ -335,6 +367,7 @@ class ModelRoundTripTests(unittest.TestCase):
             "answers": [],
             "markdown_path": "",
             "jsonl_path": "",
+            "events_tail": [],
         }
         self.assertEqual(SessionResultModel.from_dict(payload).to_dict(), payload)
 

@@ -511,6 +511,13 @@
               }
             ]
           },
+          "events_tail": {
+            "items": {
+              "additionalProperties": {},
+              "type": "object"
+            },
+            "type": "array"
+          },
           "failure": {
             "anyOf": [
               {
@@ -574,7 +581,8 @@
           "turn_outcomes",
           "answers",
           "markdown_path",
-          "jsonl_path"
+          "jsonl_path",
+          "events_tail"
         ],
         "type": "object"
       },

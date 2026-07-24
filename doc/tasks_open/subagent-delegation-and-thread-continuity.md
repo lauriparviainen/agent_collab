@@ -1,13 +1,15 @@
 # Subagent-style delegation and SDK thread continuity
 
-**Status:** Open — Stages 1–7 shipped (`wait_result`; surface shape; continuity
-groundwork; `codex_sdk`, `claude_sdk`, `antigravity_sdk`, and `xai_sdk`
-continuity). The collection-primitive re-evaluation is decided (watch with
-`wait_events`, harvest with `wait_result`) and its cost fixes shipped as #50.
-Every wake-path candidate — SSE framing, MCP channels, and the client
-auto-backgrounding they unlock — now belongs to #49, which owns that question
-end to end. What stays open here is the `timeout_ms=0` instant peek and the two
-open questions at the bottom of this document.
+**Status:** Complete — Stages 1–7 shipped (`wait_result`; surface shape;
+continuity groundwork; `codex_sdk`, `claude_sdk`, `antigravity_sdk`, and
+`xai_sdk` continuity). The collection-primitive re-evaluation is decided (watch
+with `wait_events`, harvest with `wait_result`) and its cost fixes shipped as
+#50. Every wake-path candidate — SSE framing, MCP channels, and the client
+auto-backgrounding they unlock — belongs to #49, which owns that question end
+to end. The three remaining items are decided and closed (2026-07-24, below):
+the `timeout_ms=0` instant peek is pinned and documented, the failed-result
+`events_tail` shipped, and untargeted multi-agent `post_message` routing is
+declined. Nothing remains open in this task.
 
 **Created:** 2026-07-23.
 
@@ -180,10 +182,54 @@ Two concrete fixes follow, tracked as [#50](https://github.com/lauriparviainen/a
   boundary events), so any default change must plumb an explicit full view
   through them exactly as Stage 2 did for `detail: "full"`.
 
-What remains here:
+### Decision (2026-07-24): the three remaining items
 
-1. A `timeout_ms=0` instant-peek form of `wait_result` (the compact-projection
-   half of this candidate shipped as #50).
+**`timeout_ms=0` instant peek — shipped as pinning plus documentation.** The
+code already did the right thing: the DTO validates `timeout_ms >= 0`, and the
+daemon's wait loop only blocks when `timeout > 0`, so `0` fell through to an
+immediate `_build_result` — settled result or heartbeat, no block. What was
+missing was the guarantee: nothing tested it and nothing advertised it, so it
+was an implementation accident a refactor could silently break. It now has a
+daemon test (heartbeat while running, complete harvest once terminal), and the
+tool description, DTO docstrings, and `delegate` guidance state it. Why it
+earns its place next to watch-then-harvest: the peek returns `settled` and
+`answers`, which no read surface carries — `read_events` status alone cannot
+distinguish a parked-and-accepting `awaiting_input` session from one mid
+directed turn, because settledness also depends on the referee's
+input-accepting flag and the queue's in-flight count. The concrete use is
+sweeping several concurrently delegated sessions for the ones that are done
+without spending a 45 s block on each.
+
+**Untargeted `post_message` in multi-agent interactive sessions — declined.**
+Every candidate routing rule (round-robin, last-addressed) is implicit state
+the caller cannot inspect, and a misrouted post silently runs a paid provider
+turn from the wrong agent — a cost-bearing failure mode with no error signal.
+The solo-session exception shipped in Stage 2 was justified precisely because
+it is ambiguity-free: one enabled agent, one possible recipient. In a
+multi-agent session the caller always has the agent ids in
+`settings.agents.<id>`, so passing `target` costs nothing. The current
+append-only behavior is also genuinely useful rather than a gap: an untargeted
+post is a broadcast note that lands in the transcript and reaches every agent
+inside its next turn's context. No live usage since Stage 2 has wanted
+implicit routing. Behavior stays as shipped and remains pinned by
+`test_untargeted_multi_agent_is_append_only`.
+
+**Bounded event tail on failed results — shipped as `events_tail`.** A
+delegate-and-be-free caller that skipped the watch loop saw a failed session
+as `status: failed`, empty `answers`, and a `failure` code, and then had to go
+back to `read_events` with hand-rolled cursor arithmetic to learn anything
+more. A settled result whose terminal status is not `done` now carries the
+last `RESULT_TAIL_EVENTS` (20) events as digest projections — the #50 shape
+exactly: capped text, `raw` dropped, absolute `event_id` per line for the
+full-fidelity re-fetch. Restored sessions derive the same tail from persisted
+events. One deliberate deviation from the open question's "non-message"
+framing: the tail includes message events. On a failed session `answers` is
+empty, so there is nothing for a message line to duplicate; the failed turn's
+partial output is usually the single best debugging clue, and digest capping
+makes it cost a couple hundred bytes. Scope: `done` results carry no tail
+(answers are the result), heartbeats carry none (nothing has settled), and a
+parked `awaiting_input` result carries none (its answers-so-far serve). Worst
+case is ~20 capped lines, only ever on the failure path.
 
 Everything else about *not blocking the caller* moved to
 `sse-collection-transport-evaluation`
@@ -778,9 +824,7 @@ incompatible host) keeps `continuity` false.
 
 ## Open questions
 
-- Whether untargeted `post_message` routing should later extend to
-  multi-agent interactive sessions (e.g. round-robin or last-addressed) —
-  out of scope here; solo-only routing is unambiguous.
-- Whether `wait_result` should ever include a bounded tail of recent
-  non-message events for debugging failed sessions, or whether pointing at
-  `read_events` / the transcript stays sufficient.
+None. The two questions previously listed here — untargeted multi-agent
+`post_message` routing and a bounded debugging tail on `wait_result` — are
+decided in "Decision (2026-07-24): the three remaining items" above (declined
+and shipped as `events_tail`, respectively).

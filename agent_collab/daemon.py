@@ -60,6 +60,10 @@ MAX_FULL_TRANSCRIPT_BYTES = 1024 * 1024
 # Digest text is a scent, not content: enough to tell what arrived and whether
 # to intervene, with ``event_id`` as the handle for the full-fidelity re-fetch.
 MAX_DIGEST_TEXT_CHARS = 200
+# How many trailing events a non-``done`` settled result carries as digest
+# lines, so a caller that skipped the watch loop can debug a failure without a
+# read_events round trip. Digest lines are capped, so the worst case is small.
+RESULT_TAIL_EVENTS = 20
 CANONICAL_SAFE_ERRORS = frozenset(CANONICAL_MESSAGES.values())
 
 
@@ -199,7 +203,10 @@ class SessionResult:
     """The settled (or heartbeat) outcome returned by ``wait_result``.
 
     Mirrors ``api_schema.SessionResultModel``. ``answers`` is a list of per-agent
-    answer dicts ({agent_id, text, event_id, timestamp}).
+    answer dicts ({agent_id, text, event_id, timestamp}). ``events_tail`` is the
+    last ``RESULT_TAIL_EVENTS`` events as digest projections, carried only on a
+    settled result whose terminal status is not ``done`` — failure context for
+    callers that skipped the watch loop; empty everywhere else.
     """
 
     session_id: str
@@ -213,6 +220,7 @@ class SessionResult:
     answers: List[Dict[str, Any]]
     markdown_path: str
     jsonl_path: str
+    events_tail: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -1013,8 +1021,11 @@ class SessionManager:
         Settled := terminal, or ``awaiting_input`` while the referee is actively
         accepting input and none is pending or in flight. Same condition-wait
         shape as ``wait_events``; on timeout the caller gets a heartbeat
-        (``settled: false``, no answers) and re-polls. Restored sessions have no
-        live runner, are already terminal, and settle immediately.
+        (``settled: false``, no answers) and re-polls. ``timeout_ms=0`` is the
+        instant peek: no block ever, the current settled-or-heartbeat state —
+        the cheap way to sweep several delegated sessions for the ones that are
+        done. Restored sessions have no live runner, are already terminal, and
+        settle immediately.
         """
 
         managed = self._get_managed(session_id)
@@ -1050,6 +1061,17 @@ class SessionManager:
         state = managed.state
         settled = self._result_settled(managed)
         outcome = _outcome_view(state)
+        # A settled non-``done`` terminal result has empty or stale ``answers``,
+        # so it carries the recent events as digest lines instead: enough to see
+        # what went wrong without a read_events round trip, with each line's
+        # ``event_id`` as the full-fidelity re-fetch handle.
+        events_tail: List[Dict[str, Any]] = []
+        if settled and state.status in TERMINAL_STATUSES and state.status != DONE:
+            start = max(0, len(managed.events) - RESULT_TAIL_EVENTS)
+            events_tail = [
+                _digest_event(event, event_id)
+                for event_id, event in enumerate(managed.events[start:], start=start)
+            ]
         return SessionResult(
             session_id=state.session_id,
             status=state.status,
@@ -1064,6 +1086,7 @@ class SessionManager:
             answers=self._session_answers(managed) if settled else [],
             markdown_path=state.markdown_path,
             jsonl_path=state.jsonl_path,
+            events_tail=events_tail,
         )
 
     def _session_answers(self, managed: _ManagedSession) -> List[Dict[str, Any]]:

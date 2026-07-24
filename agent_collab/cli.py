@@ -1185,6 +1185,15 @@ def _print_result(result) -> None:
         print(f"answer {answer.agent_id} (event {answer.event_id}):")
         for line in answer.text.splitlines() or [""]:
             print(f"  {line}")
+    if result.events_tail:
+        # Digest lines the daemon attached to a non-``done`` settled result.
+        print("recent events:")
+        for event in result.events_tail:
+            agent = f" {event.get('agent_id')}" if event.get("agent_id") else ""
+            print(
+                f"  [{event.get('event_id')}] {event.get('source')}"
+                f"{agent} {event.get('type')}: {event.get('text')}"
+            )
 
 
 def _main_stop(argv) -> int:

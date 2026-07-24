@@ -13,6 +13,19 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Close out the `wait_result` surface (#47). `timeout_ms: 0` is now a pinned,
+  documented instant peek: it never blocks and returns the current
+  settled-or-heartbeat state — the cheap sweep across several delegated
+  sessions (the daemon already behaved this way; the contract now guarantees
+  it). A settled result whose terminal status is not `done` additionally
+  carries `events_tail`: the last 20 events as digest projections (capped
+  text, no `raw`, absolute `event_id` for full-fidelity re-fetch), so a
+  failed delegation can be debugged from the result alone instead of a
+  `read_events` round trip; `answers` is typically empty exactly there. The
+  CLI `result` command prints the tail; `--json` carries it verbatim.
+  Untargeted `post_message` in multi-agent interactive sessions deliberately
+  stays a recorded note with no turn — implicit routing was evaluated and
+  declined (see the task document).
 - Make watching a session affordable and prefer it for collection (#50).
   `agent_collab_read_events` / `agent_collab_wait_events` accept `view`
   (`"events"` default, `"digest"`) and an optional `types` filter. The digest

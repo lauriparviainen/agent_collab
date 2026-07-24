@@ -249,6 +249,9 @@ class McpServerTests(unittest.TestCase):
         result_description = tools["agent_collab_wait_result"]["description"]
         self.assertIn("harvest", result_description)
         self.assertIn("unresponsive", result_description)
+        # The instant peek and the failure tail are contract facts, not prose.
+        self.assertIn("timeout_ms=0", result_description)
+        self.assertIn("events_tail", result_description)
 
     def test_start_maps_to_client_start_session(self):
         args = {
