@@ -1,7 +1,7 @@
 # Enforce read-only Antigravity CLI reviews with an outer sandbox
 
-**Status:** Open — core policy decisions and Codex/Claude feasibility probes
-are recorded; Antigravity/Grok probes and implementation remain.
+**Status:** Open — core policy decisions and all four CLI feasibility probes
+are recorded; production implementation remains.
 
 **Created:** 2026-07-25.
 
@@ -129,33 +129,131 @@ turn, so it was not a required writable exception in this probe. Custom
 `CLAUDE_CONFIG_DIR`, managed settings, credential helpers, token refresh, and
 future Claude versions still require targeted compatibility coverage.
 
-## Remaining CLI feasibility probes
+## CLI feasibility probes (complete 2026-07-25)
 
-Before production implementation, add equivalent tracked probes for the
-Antigravity CLI (`agy`, backend `antigravity_cli`) and Grok CLI (backend
-`xai_cli`). Reuse the Codex/Claude security assertions and reporting shape, but
-discover and document each provider's own state root, authentication lookup,
-non-interactive permission mode, and native sandbox control rather than
-copying another provider's assumptions.
+Equivalent tracked probes now cover Antigravity CLI (`agy`, backend
+`antigravity_cli`) and the configured Grok Build command (backend `xai_cli`).
+Both provide writable/read-only credential-free structural controls,
+credentialed writable-state turns, whole-state-read-only comparisons, exact
+workspace/cwd identity, private scratch, guarded provider-specific real-state
+markers, and host-side action evidence.
 
-Each probe must provide:
+Together with the existing Claude and Codex probes, the evidence now covers
+all four initial subprocess-backed providers. All require their complete
+backend-declared state root writable for a usable real turn on the tested
+versions. Production implementation remains deliberately separate and must
+preserve the common-launcher/backend-adapter boundary settled below.
 
-- a credential-free structural control;
-- a credentialed turn with provider approvals bypassed and the provider-native
-  sandbox disabled or relaxed when the installed CLI supports it;
-- a read-only workspace and `.git`, read-only visible root and home, private
-  writable scratch, and one explicit writable provider-state root;
-- host-side markers for workspace, protected-host, home, provider-state, and
-  scratch writes, including cleanup of any provider-state marker;
-- the same real absolute workspace/cwd/prompt path containing spaces;
-- a whole-provider-state-read-only comparison to identify required mutable
-  paths; and
-- sanitized durable results in this document without credentials, account
-  details, raw provider output, or machine-specific paths.
+## Antigravity feasibility probe (2026-07-25)
 
-If a CLI cannot expose a documented non-interactive or native-sandbox control,
-the probe records that limitation rather than inventing a flag. A failed
-outer-sandbox setup must never launch a permissive inner provider command.
+The tracked `probes/bubblewrap_antigravity` harness tested Bubblewrap 0.6.3
+with Antigravity CLI 1.1.7. Antigravity's complete file-state root is
+`~/.gemini`: CLI-specific settings, logs, plugins, MCP cache, conversations,
+artifacts, and tool helpers live below its `antigravity-cli` subtree, while
+shared configuration and legacy sign-in hints also live elsewhere below
+`.gemini`.
+
+No provider-specific state-root relocation environment variable was exposed
+by the installed CLI or current official documentation. The probe's explicit
+state override therefore accepts another `.gemini` path and changes `HOME` to
+its parent, matching the CLI's actual tilde-based lookup contract.
+Authentication may be found in that tree or in the operating-system keyring;
+the latter is accessed through the inherited keyring service rather than a
+writable filesystem exception.
+
+The verified permissive native profile was:
+
+- `--dangerously-skip-permissions` for non-interactive approval bypass;
+- `--mode accept-edits` to avoid behavioral plan restrictions during the
+  enforcement test; and
+- documented `--sandbox=false` to disable the provider-native terminal
+  sandbox after Bubblewrap was selected as the outer boundary.
+
+Both structural modes passed. The real writable-state turn also passed:
+authentication succeeded, the ordinary shell action ran without an approval
+prompt, workspace/protected-host/general-home writes were blocked, private
+scratch and complete provider-state writes succeeded, and host-side marker
+checks plus cleanup passed.
+
+The whole-state-read-only turn authenticated and reached the model but failed
+before the action script. Log, crash-report, conversation, MCP-cache, and
+artifact writes first received `EROFS`; the decisive command-execution failure
+was inability to materialize the CLI's `antigravity-cli/bin/agentapi` helper
+below the selected state root. The provider process returned zero after
+reporting the tool failure, while the probe correctly returned nonzero because
+its host-side action evidence was missing.
+
+Complete writable `~/.gemini` is therefore required for Antigravity 1.1.7.
+The successful control needed no writable filesystem state outside that root
+and private scratch. Installation-directory update access remained read-only
+and was skipped without preventing the turn. Remaining limitations include OS
+keyring confidentiality/side effects, custom hooks and MCP servers, managed
+settings, alternative keyrings, token refresh, and future CLI state changes.
+
+## Grok feasibility probe (2026-07-25)
+
+The tracked `probes/bubblewrap_grok` harness tested Bubblewrap 0.6.3 with Grok
+Build 0.2.111, using the configured `grok` command shape with update checks
+disabled and streaming JSON output.
+
+Grok's complete provider-owned state root is `$GROK_HOME`, defaulting to
+`~/.grok`. It contains cached authentication, configuration, sessions, search
+indexes, skills, plugins, hooks, and custom sandbox profiles. Authentication
+may instead come from `XAI_API_KEY`, a model-specific configured environment
+key, or an external auth provider; the probe used path/environment presence
+checks only and did not inspect credential or configuration contents.
+
+The verified permissive native profile was:
+
+- `--permission-mode bypassPermissions`, matching the `xai_cli` headless
+  backend configuration; and
+- documented `--sandbox off`, which disables Grok's native Landlock sandbox
+  only after Bubblewrap was selected as the outer boundary.
+
+Both structural modes passed. The real writable-state turn also passed:
+cached authentication succeeded, Bash ran without an approval prompt,
+workspace/protected-host/general-home writes were blocked, private scratch and
+complete provider-state writes succeeded, and host-side marker checks plus
+cleanup passed.
+
+The whole-state-read-only turn failed before the model or action script.
+Startup attempted SQLite WAL/search-index maintenance and then failed to
+create the new local session with a read-only-filesystem error and nonzero
+exit. Complete writable `$GROK_HOME` is therefore required for Grok Build
+0.2.111.
+
+During the successful writable-state control, one warning-only attempt to
+create a legacy session folder below the shared system temporary directory was
+blocked; the turn and action still completed. No second persistent writable
+state root was required. Remaining limitations include managed and project
+configuration, custom hooks/MCP/plugins, external authentication providers,
+token refresh, managed sandbox-profile pins, the warning-only legacy path, and
+future CLI state changes.
+
+### Probe-change verification
+
+Both Python probes compiled successfully. All four structural modes were run
+again after formatting and passed. The credentialed writable-state turn passed
+for both providers; each whole-state-read-only comparison returned nonzero at
+the provider-specific failure stage documented above. No guarded marker or
+probe-generated bytecode remained. `git diff --check` passed, and the complete
+`./agent_collab_dev.sh test` gate passed 1,196 tests with one skip.
+
+Commands and outcomes:
+
+| Command | Outcome |
+| --- | --- |
+| `python3 -m py_compile probes/bubblewrap_antigravity/probe_bubblewrap_antigravity.py probes/bubblewrap_grok/probe_bubblewrap_grok.py` | Passed |
+| `python3 probes/bubblewrap_antigravity/probe_bubblewrap_antigravity.py --preflight-only --state-mode writable` | Passed all host assertions |
+| `python3 probes/bubblewrap_antigravity/probe_bubblewrap_antigravity.py --preflight-only --state-mode read-only` | Passed all host assertions, including blocked state write |
+| `python3 probes/bubblewrap_grok/probe_bubblewrap_grok.py --preflight-only --state-mode writable` | Passed all host assertions |
+| `python3 probes/bubblewrap_grok/probe_bubblewrap_grok.py --preflight-only --state-mode read-only` | Passed all host assertions, including blocked state write |
+| `python3 probes/bubblewrap_antigravity/probe_bubblewrap_antigravity.py --state-mode writable --model gemini-3.6-flash-low` | Passed the credentialed turn and all host assertions |
+| `python3 probes/bubblewrap_antigravity/probe_bubblewrap_antigravity.py --state-mode read-only --model gemini-3.6-flash-low` | Expected negative: authenticated and reached the model, then failed before the action because the provider could not create its command helper in read-only state |
+| `python3 probes/bubblewrap_grok/probe_bubblewrap_grok.py --state-mode writable --model grok-4.5` | Passed the credentialed turn and all host assertions |
+| `python3 probes/bubblewrap_grok/probe_bubblewrap_grok.py --state-mode read-only --model grok-4.5` | Expected negative: failed before the model/action while creating mutable local session state |
+| `git diff --check` | Passed |
+| `./agent_collab_dev.sh test` | Passed 1,196 tests with one skip |
 
 ## MVP boundary decision (2026-07-25)
 
@@ -650,10 +748,11 @@ remain green.
 
 ## Open questions
 
-- What is each backend's single state root, including environment-variable or
-  user-config relocation, and how is a missing root created safely?
-- Does Antigravity require writable state outside its primary state root, such
-  as an OS keyring or a separate Google configuration directory?
+- How should Antigravity's OS-keyring service access be reported and
+  compatibility-checked without treating it as part of the writable
+  filesystem state root?
+- How should a missing backend-declared state root be created safely before
+  Bubblewrap mount construction?
 - How are user-supplied extra `--add-dir` values discovered, normalized, and
   mounted?
 - What capability or health signal communicates hard read-only support to the

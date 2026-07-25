@@ -17,3 +17,10 @@ findings belong in the matching task document.
 - [`bubblewrap_claude/`](bubblewrap_claude/) — Linux Bubblewrap probe that runs
   Claude CLI without approval prompts or its native sandbox, keeps the
   workspace read-only, and mounts the complete Claude state root writable.
+- [`bubblewrap_antigravity/`](bubblewrap_antigravity/) — Linux Bubblewrap
+  probe that runs Antigravity CLI with approvals bypassed and its terminal
+  sandbox disabled, while comparing writable and read-only complete
+  `~/.gemini` state.
+- [`bubblewrap_grok/`](bubblewrap_grok/) — Linux Bubblewrap probe that runs the
+  configured Grok Build CLI with approval bypass and native sandbox profile
+  `off`, while comparing writable and read-only complete `$GROK_HOME` state.
