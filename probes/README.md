@@ -31,3 +31,11 @@ findings belong in the matching task document.
 - [`bubblewrap_xai_sdk/`](bubblewrap_xai_sdk/) — Linux structural probe showing
   that the current xAI SDK backend constructs a model-only request with no
   local tool-execution surface or writable provider-state root.
+- [`bubblewrap_claude_sdk/`](bubblewrap_claude_sdk/) — Linux
+  execution-ownership probe showing that a complete Claude SDK worker and its
+  Claude Code child can be contained, while the current in-daemon backend
+  remains unsandboxed.
+- [`bubblewrap_codex_sdk/`](bubblewrap_codex_sdk/) — Linux
+  execution-ownership probe showing that a complete Codex SDK worker and its
+  app-server child can be contained, while the current in-daemon backend
+  remains unsandboxed.

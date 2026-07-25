@@ -1,6 +1,6 @@
 # Enforce read-only Antigravity CLI reviews with an outer sandbox
 
-**Status:** Open — core policy decisions plus all four CLI and both SDK
+**Status:** Open — core policy decisions plus all four CLI and all four SDK
 feasibility probes are recorded; production implementation remains.
 
 **Created:** 2026-07-25.
@@ -257,11 +257,12 @@ Commands and outcomes:
 
 ## SDK feasibility research (2026-07-25)
 
-The tracked `probes/bubblewrap_antigravity_sdk` and
-`probes/bubblewrap_xai_sdk` harnesses extend the execution-ownership research
-to both SDK backends. They distinguish a complete SDK worker placed inside
-Bubblewrap from the current production architecture, where SDK runners live in
-the daemon.
+The tracked `probes/bubblewrap_antigravity_sdk`,
+`probes/bubblewrap_xai_sdk`, `probes/bubblewrap_claude_sdk`, and
+`probes/bubblewrap_codex_sdk` harnesses extend the execution-ownership
+research to all SDK backends. They distinguish a complete SDK worker placed
+inside Bubblewrap from the current production architecture, where SDK runners
+live in the daemon.
 
 The explicit support decisions are:
 
@@ -269,12 +270,14 @@ The explicit support decisions are:
 | --- | --- | --- |
 | `antigravity_sdk` | **feasible with out-of-process worker** | A complete standalone SDK worker, bundled runtime, local action, and action child were contained successfully. The current production runner and runtime instead share the unsandboxed host namespace. |
 | `xai_sdk` | **no local tool execution** | The current backend constructs a model-only request with no built-in or custom tools and performs no local provider-state writes or child launches. |
+| `claude_sdk` | **feasible with out-of-process worker** | A complete standalone SDK worker, Claude Code runtime, local action, and action child were contained successfully. The current production runner and runtime instead share the unsandboxed host namespace. |
+| `codex_sdk` | **feasible with out-of-process worker** | A complete standalone SDK worker, Codex app-server, local action, and action child were contained successfully. The current production runner and app-server instead share the unsandboxed host namespace. |
 
-Neither result implements production sandboxing. In particular,
-`antigravity_sdk` must not advertise outer `read-only` support until the whole
-runner is moved across a supervised worker boundary. The xAI decision must be
-revisited if that backend later enables provider built-ins or client-executed
-function tools.
+None of these results implements production sandboxing. In particular,
+`antigravity_sdk`, `claude_sdk`, and `codex_sdk` must not advertise outer
+`read-only` support until the whole runner is moved across a supervised worker
+boundary. The xAI decision must be revisited if that backend later enables
+provider built-ins or client-executed function tools.
 
 ## Antigravity SDK feasibility probe (2026-07-25)
 
@@ -492,18 +495,263 @@ Primary provider references:
 - <https://github.com/xai-org/xai-sdk-python>
 - <https://docs.x.ai/developers/tools/function-calling>
 
-### SDK probe-change verification
+## Claude SDK feasibility probe (2026-07-25)
 
-Both new probes compiled and passed Ruff lint/format checks. All meaningful
-structural modes passed after formatting. The authorized Antigravity
-comparisons passed their positive and deliberate current-architecture
-controls; the state and timeout negatives returned nonzero at the expected
-stages. The xAI credentialed comparison was not started because its API key
-was unavailable.
+### Tested versions and production path
+
+The source trace and probe used Bubblewrap 0.6.3,
+`claude-agent-sdk` 0.2.126, and its bundled Claude Code 2.1.218. The current
+call path is:
+
+```text
+Referee
+  -> ClaudeSdkBackend.create_runner
+  -> ClaudeSdkRunner / persistent ClaudeSdkConversation (daemon Python)
+  -> ClaudeSDKClient
+  -> bundled Claude Code subprocess (inherits configured cwd/environment)
+  -> local tool processes and remote Anthropic model service
+```
+
+The SDK transport launches Claude Code locally with the resolved workdir as
+cwd. The backend maps model, `permission_mode`, and optional
+effort/token settings. It supplies the Claude Code system/tool presets and
+`setting_sources=[]`; it does not configure hooks, SDK MCP handlers, plugins,
+or custom agents. The generated Claude Code command is not strict-MCP, so
+ambient MCP discovery remains relevant even though the backend supplies no
+explicit MCP configuration.
+
+The official Claude Agent SDK documentation distinguishes this local Agent
+SDK execution from provider-managed agents: Agent SDK built-in tools operate
+from the caller's environment and filesystem. Provider/server tools execute
+remotely and are outside the local filesystem claim.
+
+### Tool and side-effect ownership
+
+| Capability | Current production ownership |
+| --- | --- |
+| SDK client, event translation, policies, and optional callbacks | In the unsandboxed daemon. No custom callbacks or hooks are supplied today. |
+| Model transport | Local Claude Code runtime to the remote Anthropic service. |
+| Built-in file and shell tools | Executed locally by the Claude Code child against the configured workspace. |
+| Shell descendants | Children of Claude Code; they inherit its cwd, environment, and mount namespace. |
+| Built-in Agent/Skill selection | Owned by Claude Code. Local built-in tool effects retain runtime ownership. The backend supplies no custom agents or plugins. |
+| SDK `can_use_tool`, hook callbacks, and in-process SDK MCP handlers | Public extension points execute in the Python SDK caller. The backend supplies none. |
+| External stdio MCP | Would be started by Claude Code. The backend supplies no explicit server, so no unsupported path was fabricated for the probe. |
+| Server tools such as provider web tools | Provider-hosted. Their remote filesystem and side effects are outside the local Bubblewrap claim. |
+
+Wrapping Claude Code alone would not contain a future in-process SDK callback,
+hook, or SDK MCP handler. The complete runner must move into the supervised
+worker namespace.
+
+### Native controls, state, and authentication
+
+`permission_mode` controls approval behavior. Claude's native sandbox defaults
+to disabled in this backend. The standalone feasibility worker used
+`bypassPermissions` only after Bubblewrap established the outer boundary.
+Neither setting is treated as proof of OS containment.
+
+The tested runtime required the complete `CLAUDE_CONFIG_DIR` to be writable.
+It contains authentication plus mutable session/environment data. Filesystem
+setting sources are disabled by the production options, which prevents loading
+the ordinary filesystem settings surface through that SDK option, but this is
+not a minimized state contract and does not make the entire provider root
+immutable.
+
+The live probe inherited credentials from the selected state root or supported
+environment without reading or printing their contents. General `HOME`
+remained read-only; only the complete selected provider root and private
+scratch were writable.
+
+### Wrapped worker and current architecture results
+
+Both credential-free structural modes passed. They exercised the exact
+production option construction and confirmed:
+
+- the workdir was mapped exactly and the Claude Code system/tool preset was
+  retained;
+- filesystem setting sources were empty;
+- no SDK MCP server, hook, plugin, or custom agent was configured;
+- the current CLI command did not enable strict MCP;
+- the exact temporary workspace path containing spaces remained the cwd;
+- tracked input was readable;
+- workspace, protected-host, and general-home writes were blocked;
+- provider-state writes matched the writable/read-only mode;
+- private scratch was writable; and
+- the action child inherited the worker mount namespace and filesystem result.
+
+The credentialed writable-state standalone worker passed a real Bash turn.
+The action ran exactly once; the SDK caller, Claude Code runtime, action, and
+action child shared the Bubblewrap namespace and differed from the host.
+
+The deliberate current-architecture control used the exact production backend
+factory. The same action and child reached every controlled host marker,
+including workspace, protected-host, general-home, and provider-state markers,
+while Claude Code shared the caller's host mount namespace. The current
+in-daemon architecture is therefore not contained.
+
+The credentialed read-only-state comparison reached a Bash command event but
+failed before the action script ran. Sanitized runtime errors included
+read-only-filesystem/`EROFS` and session-environment categories. Workspace,
+protected-host, general-home, provider-state, and action markers all remained
+absent. This establishes that the tested Claude flow requires mutable private
+runtime state even though model/tool planning can begin before that failure is
+reported.
+
+### Cancellation and remaining work
+
+Production reset/close asks the SDK to close the active stream and disconnect.
+Its transport closes communication tasks and attempts graceful Claude Code
+termination followed by escalation. Raw cancellation and slow teardown still
+have edge cases; the referee bounds close and may retain a runner for
+background reaping.
+
+A forced one-second probe timeout killed the standalone worker process group
+and confirmed that the recorded Claude Code descendant was gone. Production
+support needs the common worker supervisor to own this forceful tree cleanup,
+because cancelling only the in-daemon conversation does not establish a
+fail-closed outer boundary.
+
+Remaining limitations include ambient MCP configuration, readable host files
+and credentials, inherited network access, remote provider effects, custom
+callbacks/hooks/SDK MCP servers, alternative authentication and token refresh,
+resource limits, future SDK/runtime changes, and non-Linux platforms.
+
+Primary provider references:
+
+- <https://platform.claude.com/docs/en/agent-sdk/overview>
+- <https://platform.claude.com/docs/en/managed-agents/migration>
+- <https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview>
+- <https://github.com/anthropics/claude-agent-sdk-python>
+
+## Codex SDK feasibility probe (2026-07-25)
+
+### Tested versions and production path
+
+The source trace and probe used Bubblewrap 0.6.3, `openai-codex` 0.144.4,
+`openai-codex-cli-bin` 0.144.4, and the selected Codex CLI 0.145.0. The SDK
+ships a pinned runtime, while the backend prefers its explicitly configured
+agent command. The current call path is:
+
+```text
+Referee
+  -> CodexSdkBackend.create_runner
+  -> CodexSdkRunner / persistent CodexSdkConversation (daemon Python)
+  -> openai_codex.AsyncCodex
+  -> codex app-server --listen stdio:// subprocess
+  -> local tool processes and remote OpenAI model service
+```
+
+The SDK launches app-server with `subprocess.Popen`; stdout and stderr are
+consumed by daemon threads. The backend maps the resolved workdir, model,
+provider-native sandbox preset, and optional reasoning effort. It does not
+supply per-thread runtime configuration, so app-server can still read ambient
+`CODEX_HOME` configuration.
+
+### Tool and side-effect ownership
+
+| Capability | Current production ownership |
+| --- | --- |
+| SDK client, event translation, and reader/drainer threads | In the unsandboxed daemon. |
+| Model transport | Local app-server to the remote OpenAI service. |
+| Built-in file and shell tools | Executed locally by app-server against the configured workspace. |
+| Shell descendants | Children of app-server; they inherit its cwd, environment, and mount namespace. |
+| MCP, hooks, skills, plugins, and subagents | Runtime-owned when enabled through ambient Codex configuration. The backend does not add or suppress them per thread. |
+| Caller-side custom tool execution | The high-level Python SDK has approval handling but no backend-configured client custom-tool executor. |
+| Provider web tools | Provider-hosted. Their remote filesystem and effects are outside the local Bubblewrap claim. |
+| Runtime threads and state | Reader/drainer threads are in daemon Python; app-server reads and mutates `CODEX_HOME` state including config, auth, sessions, skills/package metadata, and SQLite data. |
+
+Wrapping app-server alone would leave the SDK caller/threads in the daemon and
+would not create a reliable forced-cancellation boundary. The complete runner
+must move into the supervised worker namespace.
+
+### Native controls, state, and authentication
+
+Codex sandbox presets govern commands spawned by app-server, and descendants
+inherit those provider-native restrictions. Approval policy is separate. The
+standalone feasibility worker used `danger-full-access` only after Bubblewrap
+established the outer boundary; the SDK's default `auto_review` approval mode
+remained in effect. Neither provider-native setting is treated as proof of
+outer containment.
+
+The tested runtime required the complete `CODEX_HOME` to be writable. That
+root includes authentication, configuration, sessions, skills/package
+metadata, and SQLite state; a separately configured SQLite home would also
+need an explicit contract. The live probe inherited credentials from the
+selected state root or supported environment without reading or printing
+their contents. General `HOME` remained read-only; only the complete selected
+provider root and private scratch were writable.
+
+### Wrapped worker and current architecture results
+
+Both credential-free structural modes passed. They exercised the exact
+production factory/mapping and confirmed:
+
+- exact workspace cwd and configured runtime selection;
+- model, `danger-full-access`, and low reasoning-effort mapping;
+- no extra per-thread options beyond cwd/model/sandbox;
+- the SDK default `auto_review` approval mode;
+- the exact temporary workspace path containing spaces remained the cwd;
+- tracked input was readable;
+- workspace, protected-host, and general-home writes were blocked;
+- provider-state writes matched the writable/read-only mode;
+- private scratch was writable; and
+- the action child inherited the worker mount namespace and filesystem result.
+
+The credentialed writable-state standalone worker passed a real shell turn.
+The action ran exactly once; the SDK caller, app-server, action, and action
+child shared the Bubblewrap namespace and differed from the host.
+
+The deliberate current-architecture control used the exact production backend
+factory. The same action and child reached every controlled host marker,
+including workspace, protected-host, general-home, and provider-state markers,
+while app-server shared the caller's host mount namespace. The current
+in-daemon architecture is therefore not contained.
+
+The credentialed read-only-state comparison started app-server and then failed
+before shell dispatch with a sanitized read-only-filesystem category.
+Workspace, protected-host, general-home, provider-state, scratch-action, and
+action markers all remained absent. This establishes that the tested app-server
+startup/turn path requires mutable private runtime state.
+
+### Cancellation and remaining work
+
+Production turn cancellation shields the in-flight provider run until it
+settles and does not issue an app-server turn interrupt. The referee can adopt
+the still-running task for background reaping, while reset/close may remain
+blocked on the conversation lock. SDK client close terminates and waits for
+app-server, then escalates to kill, but does not perform a second wait after
+that kill.
+
+A forced one-second probe timeout killed the standalone worker process group
+and confirmed that the recorded app-server descendant was gone. Production
+support needs the common worker supervisor to own this forceful tree cleanup
+and preserve event streaming, continuation identity, bounded shutdown, and
+fail-closed startup.
+
+Remaining limitations include ambient MCP/hooks/skills/plugins, readable host
+files and credentials, inherited network access, remote provider effects,
+external helpers, alternative authentication and token refresh, resource
+limits, future SDK/runtime changes, and non-Linux platforms.
+
+Primary provider references:
+
+- <https://developers.openai.com/codex/sdk/>
+- <https://developers.openai.com/codex/app-server/>
+- <https://developers.openai.com/codex/security/>
+- <https://github.com/openai/codex>
+
+## SDK probe-change verification
+
+All four probes compiled and passed Ruff lint/format checks. All meaningful
+structural modes passed after formatting. The authorized Antigravity, Claude,
+and Codex comparisons passed their positive and deliberate
+current-architecture controls; the state and timeout negatives returned
+nonzero at the expected stages. The xAI credentialed comparison was not
+started because its API key was unavailable.
 
 | Command | Outcome |
 | --- | --- |
 | `python3 -m py_compile probes/bubblewrap_antigravity_sdk/probe_bubblewrap_antigravity_sdk.py probes/bubblewrap_xai_sdk/probe_bubblewrap_xai_sdk.py` | Passed |
+| `python3 -m py_compile probes/bubblewrap_claude_sdk/probe_bubblewrap_claude_sdk.py probes/bubblewrap_codex_sdk/probe_bubblewrap_codex_sdk.py` | Passed |
 | Antigravity SDK `--preflight-only --state-mode writable` | Passed all direct, child, state, and host assertions |
 | Antigravity SDK `--preflight-only --state-mode read-only` | Passed all assertions, including blocked provider-state writes |
 | Antigravity SDK wrapped worker, writable state, `gemini-2.5-flash` | Passed the credentialed tool turn; caller, harness, action, and child were contained |
@@ -512,6 +760,18 @@ was unavailable.
 | Antigravity SDK wrapped worker, one-second timeout | Expected nonzero: process group killed and recorded harness descendant reaped |
 | xAI SDK `--preflight-only` | Passed the model-only request, no-child, namespace, and host assertions |
 | xAI SDK credentialed comparison | Blocked before launch: `XAI_API_KEY` unavailable |
+| Claude SDK `--preflight-only --state-mode writable` | Passed all production-mapping, direct, child, state, namespace, and host assertions |
+| Claude SDK `--preflight-only --state-mode read-only` | Passed all assertions, including blocked provider-state writes |
+| Claude SDK wrapped worker, writable state, `sonnet` | Passed the credentialed Bash turn; caller, Claude Code, action, and child were contained |
+| Claude SDK current-architecture control, `sonnet` | Passed the deliberate negative proof: all controlled writes reached the host and Claude Code shared the host namespace |
+| Claude SDK wrapped worker, read-only state | Expected nonzero: Bash event observed, then session-state `EROFS` prevented the action |
+| Claude SDK wrapped worker, one-second timeout | Expected nonzero: process group killed and recorded Claude Code descendant reaped |
+| Codex SDK `--preflight-only --state-mode writable` | Passed all production-mapping, direct, child, state, namespace, and host assertions |
+| Codex SDK `--preflight-only --state-mode read-only` | Passed all assertions, including blocked provider-state writes |
+| Codex SDK wrapped worker, writable state, `gpt-5.6-luna` | Passed the credentialed shell turn; caller, app-server, action, and child were contained |
+| Codex SDK current-architecture control, `gpt-5.6-luna` | Passed the deliberate negative proof: all controlled writes reached the host and app-server shared the host namespace |
+| Codex SDK wrapped worker, read-only state | Expected nonzero: app-server started, then read-only runtime state prevented shell dispatch |
+| Codex SDK wrapped worker, one-second timeout | Expected nonzero: process group killed and recorded app-server descendant reaped |
 | Probe Ruff lint and format checks | Passed |
 | `git diff --check` | Passed |
 | `./agent_collab_dev.sh test` | Passed 1,196 tests with one skip |
@@ -913,7 +1173,7 @@ layer; provider differences belong in backend packages.
 
 ### Stage 1: Evidence and decision record
 
-- Completed for the four CLI backends and both SDK backends on the tested
+- Completed for the four CLI backends and all four SDK backends on the tested
   Linux host. The tracked probes record command shapes, state requirements,
   failure stages, and local execution ownership.
 - Keep the remaining engine-availability, fallback, extra-directory, worker
@@ -1023,8 +1283,8 @@ remain green.
 - What capability or health signal communicates hard read-only support to the
   daemon, MCP clients, CLI, and TUI without overloading provider `sandbox`?
 - What backend-neutral worker/event protocol preserves SDK streaming,
-  continuation identity, cancellation, and cleanup while placing the complete
-  `antigravity_sdk` runner outside the daemon?
+  continuation identity, cancellation, and cleanup while placing complete
+  `antigravity_sdk`, `claude_sdk`, and `codex_sdk` runners outside the daemon?
 - Should the model-only `xai_sdk` backend use the common worker boundary for
   policy consistency, or advertise a distinct no-local-effects capability
   until a local tool executor is added?
