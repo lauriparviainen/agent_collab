@@ -29,6 +29,12 @@ MCP access to the same live session state.
 For commands, test expectations, and live-agent cautions, use
 [doc/development.md](doc/development.md).
 
+The complete local gate (`./agent_collab_dev.sh test`) must run outside a
+nested agent-harness sandbox. The suite deliberately exercises subprocess,
+signal, and asyncio/thread interactions that an outer sandbox can deadlock or
+distort. Request narrowly scoped elevation for that command when the harness
+requires it; see the testing environment note in `doc/development.md`.
+
 Work tracking uses GitHub issues for discrete tasks and `doc/tasks_open/` task
 documents for larger design work. The conventions — including the
 public-content guardrail for issues — live in

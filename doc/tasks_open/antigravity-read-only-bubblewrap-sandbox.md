@@ -1,0 +1,689 @@
+# Enforce read-only Antigravity CLI reviews with an outer sandbox
+
+**Status:** Open — core policy decisions and Codex/Claude feasibility probes
+are recorded; Antigravity/Grok probes and implementation remain.
+
+**Created:** 2026-07-25.
+
+**Issue:** [#43](https://github.com/lauriparviainen/agent_collab/issues/43)
+
+## Purpose
+
+Make the default headless Antigravity review posture both usable and
+OS-enforced read-only. The model must be able to run ordinary inspection
+commands without an interactive permission prompt, while writes to the
+supplied repository fail independently of the prompt, model behavior, and
+Antigravity's own permission implementation.
+
+The first implementation target is Linux with Bubblewrap (`bwrap`). The design
+should leave a clean seam for other CLI backends and operating systems, but
+this task does not claim cross-platform isolation before those implementations
+exist.
+
+## Context
+
+Issue #29 made provider-level read-only controls explicit in the shipped
+configuration. In particular, `antigravity_cli` now defaults to `mode = "plan"`
+and exposes Antigravity's boolean `--sandbox` flag. Those controls are useful
+defense in depth, but neither is a proven filesystem boundary:
+
+- `mode = "plan"` is behavioral planning and permission policy. In headless
+  print mode it also denies unallowlisted shell commands because no approval UI
+  is available, including harmless commands such as `git status --short`.
+- The probe recorded in issue #43 found the workdir writable when `agy` ran
+  with both `--sandbox` and `--dangerously-skip-permissions`.
+- `--dangerously-skip-permissions` makes headless command use possible, but
+  makes unintended writes possible too unless a separate boundary blocks them.
+
+The current launch path has no outer sandbox abstraction:
+
+1. `Referee` resolves the session workdir and passes it to the selected runner.
+2. `AntigravityCliBackend.create_runner` uses the shared
+   `create_cli_runner`.
+3. `SubprocessRunner.run_turn` resolves the effective run directory, builds
+   the final provider argv, and calls `asyncio.create_subprocess_exec` with
+   that directory as `cwd`.
+4. The Antigravity command builder also passes the resolved run directory via
+   `--add-dir`.
+
+This makes the shared subprocess launch boundary the likely enforcement seam.
+Antigravity motivates the issue, but the default policy applies to every CLI
+backend that declares the state and capabilities needed to establish it.
+
+## Initial Codex feasibility probe (2026-07-25)
+
+The tracked `probes/bubblewrap_codex` harness now exercises the proposed launch
+shape with Bubblewrap 0.6.3 and Codex CLI 0.145.0. It first supports a free
+structural control, then a credentialed Codex turn with Codex's own approvals
+and sandbox explicitly bypassed.
+
+Observed in both the structural control and the real Codex turn:
+
+- one temporary workspace path containing spaces remained identical as the
+  host path, Bubblewrap `--chdir`, Codex `-C` value, filesystem-policy prompt
+  path, and shell-reported `pwd`;
+- tracked input was readable;
+- workspace writes and writes to a separate protected host directory failed;
+- writes to the private staged home and scratch directory succeeded; and
+- host-side marker checks confirmed the filesystem results independently of
+  the model's prose.
+
+For the credentialed turn, the probe copied only the existing Codex
+`auth.json` into a mode-0700 temporary home, invoked Codex with
+`--ignore-user-config --ephemeral`, and authenticated successfully. The real
+Codex home was never mounted writable, and the staged home was deleted when
+the probe exited.
+
+The follow-up whole-home read-only experiment produced a negative result on
+Codex CLI 0.145.0. The structural control still blocked workspace, protected
+host, and home writes while allowing scratch writes. A real Codex invocation,
+however, failed before the model turn:
+
+- failure to create PATH aliases was warning-only;
+- opening `state_5.sqlite` attempted a write and failed with SQLite read-only
+  error code 8; and
+- initialization then stopped because the in-process app-server client
+  encountered `EROFS`.
+
+This occurred despite `--ignore-user-config --ephemeral` and writable
+`TMPDIR`/XDG cache, config, data, and state paths. Codex therefore cannot use a
+completely read-only `CODEX_HOME` in this version. The MVP decision below
+therefore mounts the effective complete `CODEX_HOME` persistently writable.
+A writable ephemeral state root with a read-only bind of the real `auth.json`
+remains a possible later hardening experiment, not a prerequisite for the
+initial implementation.
+
+This is positive feasibility evidence, not the final Antigravity design. It
+does not yet establish Antigravity's required credential/config paths, token
+refresh behavior, safe persistent state, environment minimization, or fallback
+behavior when Bubblewrap/user namespaces are unavailable.
+
+## Initial Claude feasibility probe (2026-07-25)
+
+The tracked `probes/bubblewrap_claude` harness applies the same outer boundary
+to Claude CLI. It preserves the real workspace path, makes the visible root
+read-only, mounts the selected Claude state root writable, supplies private
+scratch, requests Claude's native sandbox disabled through transient settings,
+and uses `--dangerously-skip-permissions` for non-interactive Bash execution.
+
+The credentialed probe passed with Bubblewrap 0.6.3 and Claude Code 2.1.219:
+
+- Claude authenticated from its existing Linux state without copying
+  credentials;
+- Bash ran without an interactive approval prompt;
+- the cwd and prompt used the same real workspace path containing spaces;
+- workspace, protected-host, and general-home writes were blocked;
+- writes to private scratch and the selected `~/.claude` state root succeeded;
+  and
+- host-side marker checks independently confirmed the results and cleanup.
+
+The whole-state-read-only comparison authenticated but failed before the
+action script. Claude's Bash tool attempted to create
+`~/.claude/session-env/<session-id>` and received `EROFS`. The writable
+provider-state exception is therefore required for this tested Claude version,
+even with session persistence disabled.
+
+The default environment also has legacy `~/.claude.json` state outside the
+selected `~/.claude` directory. It remained read-only during the successful
+turn, so it was not a required writable exception in this probe. Custom
+`CLAUDE_CONFIG_DIR`, managed settings, credential helpers, token refresh, and
+future Claude versions still require targeted compatibility coverage.
+
+## Remaining CLI feasibility probes
+
+Before production implementation, add equivalent tracked probes for the
+Antigravity CLI (`agy`, backend `antigravity_cli`) and Grok CLI (backend
+`xai_cli`). Reuse the Codex/Claude security assertions and reporting shape, but
+discover and document each provider's own state root, authentication lookup,
+non-interactive permission mode, and native sandbox control rather than
+copying another provider's assumptions.
+
+Each probe must provide:
+
+- a credential-free structural control;
+- a credentialed turn with provider approvals bypassed and the provider-native
+  sandbox disabled or relaxed when the installed CLI supports it;
+- a read-only workspace and `.git`, read-only visible root and home, private
+  writable scratch, and one explicit writable provider-state root;
+- host-side markers for workspace, protected-host, home, provider-state, and
+  scratch writes, including cleanup of any provider-state marker;
+- the same real absolute workspace/cwd/prompt path containing spaces;
+- a whole-provider-state-read-only comparison to identify required mutable
+  paths; and
+- sanitized durable results in this document without credentials, account
+  details, raw provider output, or machine-specific paths.
+
+If a CLI cannot expose a documented non-interactive or native-sandbox control,
+the probe records that limitation rather than inventing a flag. A failed
+outer-sandbox setup must never launch a permissive inner provider command.
+
+## MVP boundary decision (2026-07-25)
+
+The first implementation should enforce a **read-only workspace**, not claim
+that the entire provider process is incapable of persistent host writes.
+
+To avoid provider-specific copies, overlays, and per-file knowledge, mount the
+selected backend's complete state root writable and persistent. For Codex this
+is the effective `CODEX_HOME` (normally `~/.codex`). Other CLI backends declare
+their equivalent top-level state root rather than teaching the launcher which
+individual databases, locks, caches, configuration files, or credential files
+need writes.
+
+The intended mount order is:
+
+1. visible host filesystem read-only;
+2. private writable scratch space;
+3. the selected backend state root writable at its real path; and
+4. the resolved workspace mounted read-only again as the final, more-specific
+   overlay.
+
+This is deliberately simpler than a synthetic provider home or copy-on-write
+overlay and accommodates provider upgrades that add new mutable state. Its
+cost is an explicitly weaker boundary: the model and every command it launches
+can modify the complete provider state root, including credentials,
+configuration, rules, plugins, histories, and databases. A workspace symlink
+whose target is inside that writable root can also modify the target. The
+boundary protects repository objects and `.git`; it does not protect declared
+provider state.
+
+Session settings, dry-run output, documentation, and the filesystem-policy
+prompt must report both facts separately:
+
+```text
+Workspace access: read-only (OS-enforced)
+Provider state: persistent writable (<backend-owned root>)
+Scratch: writable and ephemeral ($TMPDIR)
+```
+
+Do not label this posture “host read-only” or “no persistent writes.”
+Ephemeral provider homes, read-only credential binds, and copy-on-write
+provider state remain possible defense-in-depth follow-ups after the simpler
+workspace boundary ships.
+
+## Required security properties
+
+The design and tests must state exactly what is protected. For the initial
+read-only posture:
+
+- The supplied workdir, including `.git`, is recursively readable but not
+  writable. Creating, replacing, renaming, deleting, chmodding, or changing
+  timestamps must fail.
+- A child process or shell started by the provider inherits the same boundary.
+- Symlinks resolved within the workspace mount remain protected. A symlink
+  targeting a declared writable provider-state root can modify that external
+  target and is a documented limitation of the MVP.
+- Any host filesystem visible outside the workdir is read-only unless a path
+  is deliberately mounted writable as backend state or private scratch.
+- Writable scratch space is isolated from the repository and discarded after
+  the turn. Reusing the host's shared `/tmp` as an unrestricted writable mount
+  is not sufficient.
+- Provider credentials may be readable where required, but must not be copied
+  into the repository, transcript, event payloads, or a new persistent store.
+- The effective backend state root is writable and persistent. The path is
+  backend-declared, resolved explicitly, and reported in session settings; the
+  launcher does not infer a whole writable user home.
+- If the requested enforcement boundary cannot be established, the read-only
+  turn fails before launching the provider. It must not silently fall back to
+  prompt-only or provider-only controls.
+- Writable execution remains an explicit, visible opt-in in normalized session
+  settings and dry-run output.
+- Prompt augmentation is selected by the effective sandbox enum value, not by
+  the engine. `"read-only"` receives a short, mechanically generated
+  filesystem-policy preamble. `"none"` receives no sandbox text.
+
+This boundary is for filesystem write prevention. It is not, by itself, a
+complete untrusted-code container: network isolation, credential
+confidentiality, CPU and memory limits, syscall filtering, and protection from
+reading sensitive host files are separate concerns unless the final design
+explicitly adds them.
+
+## Sandbox-policy prompt augmentation
+
+The sandbox and the agent must receive one authoritative resolved workspace
+description. Each sandbox enum value owns its optional prompt augmentation:
+
+| Effective sandbox | Prompt augmentation |
+| --- | --- |
+| `"read-only"` | prepend the filesystem-policy block below |
+| `"none"` | none; preserve the provider prompt unchanged |
+
+Every future enum value must explicitly define its prompt augmentation, which
+may be empty. This keeps behavior tied to the policy's meaning rather than to
+Bubblewrap or another enforcement engine.
+
+For `"read-only"`, agent-collab should prepend a small block similar to:
+
+```text
+FILESYSTEM POLICY
+Workspace root: <resolved-session-workdir>
+Current directory: <resolved-agent-cwd>
+Access: OS-enforced read-only.
+Use $TMPDIR (<sandbox-temp-path>) for temporary files and command output.
+Do not attempt workspace edits; describe proposed changes in your response.
+```
+
+The exact text remains a design detail, but its facts do not:
+
+- the workspace root, effective cwd, mount destination, provider cwd, and
+  provider workspace flag must derive from the same resolved path object;
+- the sandbox should preserve the real absolute workspace path rather than
+  introducing an unexplained `/workspace` translation;
+- when an agent-specific `cwd` differs from the session root, both paths are
+  named explicitly;
+- the temporary path in the preamble is the same path supplied through
+  `TMPDIR` and mounted writable inside Bubblewrap;
+- the preamble is injected on every stateless CLI turn whose effective
+  `sandbox` value is `"read-only"`, regardless of user prompt wording;
+- `sandbox = "none"` adds no sandbox text;
+- a future policy cannot reuse the read-only text implicitly and must define
+  its own optional augmentation; and
+- tests assert the preamble from normalized launch facts instead of matching a
+  path recomputed separately in prompt construction.
+
+The preamble improves tool behavior and avoids confusing failed writes, but it
+is not part of the security proof. Bubblewrap must still reject a write when a
+model ignores the instruction.
+
+## Provider-native controls under the outer sandbox
+
+The outer `"read-only"` policy should remove provider-native approval friction
+when the backend supports doing so safely. A backend may select a verified
+headless profile that bypasses permission prompts and disables or relaxes its
+own filesystem sandbox, because the outer boundary—not the provider prompt
+gate—is responsible for workspace integrity.
+
+This is capability-gated, not a generic argv assumption:
+
+- A CLI backend qualifies when its complete provider process and descendants
+  run inside the outer sandbox and it exposes documented non-interactive
+  permission/sandbox controls.
+- An SDK backend qualifies only if all local tools it invokes are also inside
+  the outer sandbox. An SDK auto-approval option alone is insufficient if tool
+  execution remains in the unsandboxed daemon process or an unwrapped child.
+- A backend that exposes only some controls relaxes only those verified
+  controls. Missing controls are left unchanged.
+- A backend that cannot contain all local execution does not support
+  `sandbox = "read-only"` yet and fails closed before starting a turn.
+- `sandbox = "none"` does not itself relax provider-native controls. Provider
+  options retain their independently configured behavior.
+
+In the current architecture, SDK runners execute in the daemon process rather
+than through `SubprocessRunner`. The initial Bubblewrap subprocess seam
+therefore contains CLI backends only. An SDK needs a proven containment path,
+such as an out-of-process SDK worker launched inside the outer sandbox or a
+provider-supported tool-executor hook that wraps every local operation, before
+it can advertise outer `"read-only"` support.
+
+Each backend owns the mapping from the effective outer policy to its native
+profile. For example, one CLI may have a combined
+approval-and-sandbox-bypass flag while another has separate permission and
+sandbox options. The shared launcher must not infer provider flags or branch
+on backend ids.
+
+The permissive provider command must be the inner command of the already
+validated outer launch. If namespace setup fails, that command must never
+execute. Effective settings and dry-run output report both the outer policy
+and any provider-native controls changed by its backend mapping.
+
+This improves headless usability but does not expand the outer sandbox's
+security claim. With approvals bypassed, the model can still read visible host
+files, use inherited network access, and modify the declared writable provider
+state root. Those are explicit MVP limitations.
+
+## Design investigation
+
+Before changing production behavior, run and record a focused Bubblewrap spike
+on a supported Linux host.
+
+### 1. Establish the minimum namespace
+
+Prototype a launch that:
+
+- makes the visible host filesystem read-only by default;
+- provides the required `/proc`, `/dev`, executable, library, certificate, and
+  name-resolution views;
+- gives the child a private writable temporary directory;
+- overlays the selected backend's declared state root as writable;
+- preserves the resolved working directory and command lookup behavior; and
+- terminates the namespace with the supervised child.
+
+Do not settle on a broad writable home-directory bind. Record the one
+backend-owned state root, how custom environment/config values relocate it,
+and what sensitive persistent content it contains. Per-file mutability inside
+that root is intentionally outside the MVP contract.
+
+The spike must cover at least:
+
+- an ordinary read command;
+- writes, deletes, renames, metadata changes, and Git mutations in the workdir;
+- a write attempted through a symlink;
+- a child shell attempting the same writes;
+- provider startup with its normal authentication state;
+- a workdir below a configured relative or absolute agent `cwd`;
+- a path containing spaces;
+- cancellation and forced termination; and
+- failure when `bwrap` is absent or user namespaces are unavailable.
+
+### 2. Decide availability and platform policy
+
+Determine and document:
+
+- how `bwrap` is discovered and health-checked;
+- whether Linux installations require it, recommend it, or report the backend
+  unavailable until it is installed;
+- the exact fail-closed behavior when Bubblewrap exists but cannot create a
+  user namespace, including common container and distribution restrictions;
+- whether an explicit writable Antigravity session may run without Bubblewrap;
+- how macOS and Windows report the unavailable hard-boundary capability; and
+- whether running agent-collab inside an existing container or sandbox needs a
+  supported escape hatch or a distinct implementation.
+
+### 3. Configuration contract
+
+Provider controls and agent-collab's enforcement control must not be presented
+as equivalent. The caller-facing start option is a backend-neutral string enum:
+
+```json
+{
+  "sandbox": "read-only"
+}
+```
+
+`"read-only"` is the default. Normal callers omit `sandbox` entirely and
+receive the OS-enforced read-only workspace boundary. The only other initial
+value is:
+
+```json
+{
+  "sandbox": "none"
+}
+```
+
+`"none"` explicitly disables agent-collab's outer sandbox. It does not disable
+or reinterpret provider-native permission modes or sandboxes. The string enum
+leaves room for additional policies later without changing the field's shape;
+no additional modes are required for the first implementation.
+
+The sandbox engine is daemon configuration, not a start option and not
+caller-visible API. For the initial Linux implementation, configuration
+selects Bubblewrap and the daemon resolves `sandbox = "read-only"` into the
+Bubblewrap launch policy. Callers should not need to know which engine enforces
+the requested policy. Normalized session settings and diagnostics report the
+effective policy and whether it was established, but need not expose the
+engine as part of the stable start contract.
+
+Users do not need to add sandbox policy configuration. The shipped code-level
+configuration contains the required default:
+
+```toml
+[system]
+sandbox_default = "read-only"
+```
+
+Configuration merging therefore guarantees that the effective
+`sandbox_default` is always present. Global user configuration may override
+it, for example:
+
+```toml
+[system]
+sandbox_default = "none"
+```
+
+The separate `sandbox_override` remains optional. It accepts the same
+`"read-only"` and `"none"` values and can lock every omitted or matching start
+to read-only:
+
+```toml
+[system]
+sandbox_override = "read-only"
+```
+
+The effective `sandbox_default` supplies the value when the caller omits
+`sandbox`, but an explicit caller value still wins when no override is
+configured. `sandbox_override` is an installation constraint: it supplies the
+effective value when the caller omits `sandbox`, accepts a matching explicit
+value, and rejects a conflicting explicit value. Distinct names let operators
+distinguish default behavior from enforcement.
+
+Both fields are global-user/daemon policy. Project configuration cannot set or
+weaken them.
+
+Resolution is:
+
+| Effective default | Configured override | Start field | Result |
+| --- | --- | --- | --- |
+| required value | absent | omitted | effective default |
+| required value | absent | explicit valid value | requested value |
+| required value | set | omitted | configured override |
+| required value | set | same explicit value | configured override |
+| required value | set | different explicit value | start rejected |
+
+A configured override therefore does not silently replace a conflicting
+explicit request. Start validation rejects the mismatch before creating a
+session or launching any provider and identifies the requested value and the
+installation policy. This lets an operator lock an installation to
+`"read-only"` while callers that omit `sandbox` continue to work normally.
+When both configuration fields are present, the override necessarily controls
+omitted starts and the effective `sandbox_default` has no effect until the
+override is removed.
+
+Normalized settings report the effective value and whether it came from the
+request, effective configured default, or installation override.
+
+The outer option is resolved and reported independently of provider mode.
+Deriving the hard boundary solely from `mode = "plan"` would conflate two
+controls. After resolving the outer policy, however, a backend may derive its
+verified non-interactive native profile as described above. A provider mode
+that expects writes while `sandbox = "read-only"` remains constrained by the
+outer boundary; `sandbox = "none"` removes only the outer boundary and does
+not automatically weaken provider-native controls.
+
+The contract must also define how extra provider-visible directories are
+handled. Antigravity currently receives one resolved `--add-dir`, but user
+configured arguments could add others. Unknown or unvalidated extra paths must
+not silently become writable.
+
+## Proposed implementation shape
+
+The launch internals remain a direction to validate; the caller-facing
+`sandbox` contract above is settled.
+
+1. Add a backend-neutral `SandboxPolicy` value and `SandboxLauncher`. The
+   launcher owns Bubblewrap discovery/preflight, private scratch, mount order,
+   environment additions, prompt augmentation, fail-closed setup, and wrapping
+   the complete inner provider command.
+2. Define a small backend `SandboxAdapter` protocol or equivalent immutable
+   specification. Each CLI backend supplies one through its existing
+   `create_cli_runner` path. It owns:
+   - which outer sandbox modes the backend supports;
+   - resolution of the backend's persistent writable state root;
+   - mapping an effective outer mode to provider-native approval, permission,
+     and sandbox switches;
+   - sanitized reporting of those native controls; and
+   - any backend-specific compatibility validation.
+3. Keep both directions free of provider leakage. Common sandbox code never
+   checks a backend id or edits Claude/Codex/Antigravity/Grok arguments.
+   Backend code never constructs Bubblewrap mounts or implements generic
+   sandbox policy. The backend builds or transforms the inner provider command;
+   the common launcher wraps that result.
+4. Wire the adapter into the shared CLI runner/factory rather than duplicating
+   sandbox execution in every backend. Conceptually:
+
+   ```text
+   backend command builder + SandboxAdapter
+                       |
+                       v
+   shared SubprocessRunner / SandboxLauncher
+                       |
+                       v
+   Bubblewrap argv + inner provider command
+   ```
+
+   A backend without an adapter advertises no outer-sandbox support and fails
+   closed when a non-`"none"` policy is requested.
+5. Add the Linux Bubblewrap engine behind `SandboxLauncher`. Keep namespace
+   construction out of every provider argv builder so dry runs, timeout
+   handling, stdout/stderr parsing, cancellation, and terminal outcome logic
+   remain shared.
+6. Default an omitted start `sandbox` field to `"read-only"` and resolve the
+   installation override and effective policy during start validation, before
+   backend option normalization/runner construction. Do not inspect prompt
+   text. Let the resolved policy build its optional prompt augmentation from
+   the same normalized workspace and scratch facts used by the launcher.
+   Persist a sanitized summary in session settings so operators can
+   distinguish behavioral mode, provider sandbox, outer filesystem
+   enforcement, and the effective policy source.
+7. Make preflight failure a structured start or turn failure with targeted
+   remediation. Do not report it as a provider empty-response failure.
+8. Apply the default policy at the shared subprocess boundary. Each supported
+   CLI backend declares its persistent writable state root and receives the
+   same outer policy; provider-specific integration must not change the
+   caller-facing default. A backend that cannot establish the requested policy
+   fails closed rather than silently launching unsandboxed.
+
+The design should not put Bubblewrap-specific branching into the referee or
+provider-specific branching into common sandbox code. The referee owns
+orchestration; launch enforcement belongs at the runner-owned common launch
+layer; provider differences belong in backend packages.
+
+## Implementation stages
+
+### Stage 1: Evidence and decision record
+
+- Complete the Bubblewrap spike.
+- Record the tested command shape, kernel/distribution assumptions, required
+  writable paths, and failure modes in this document.
+- Resolve the engine configuration, fallback, extra-directory, and platform
+  questions.
+- Update issue #43 if the acceptance criteria or user-visible scope changes.
+
+### Stage 2: Launch boundary
+
+- Introduce the launch-policy seam with no behavior change for existing
+  runners.
+- Add contract tests proving the common launcher consumes backend adapters
+  without importing or branching on concrete backend packages.
+- Add hermetic tests for argv composition, cwd and environment preservation,
+  enum-specific prompt augmentation, dry-run/settings reporting, preflight
+  errors, and process termination.
+- Keep the provider prompt after any policy-owned prefix, and event parsing,
+  byte-for-byte unchanged.
+
+### Stage 3: Bubblewrap enforcement
+
+- Implement the Linux read-only policy with narrow writable overlays.
+- Add OS-level tests for the required security properties. Tests may skip only
+  when the platform cannot support Bubblewrap; the normal Linux CI path should
+  exercise the real boundary so a command-construction-only test cannot create
+  false confidence.
+- Verify that failed setup never starts the inner provider command.
+
+### Stage 4: Backend integration
+
+- Make omitted `sandbox` resolve to `"read-only"` for every supported
+  subprocess-backed session, including Claude, Codex, Antigravity, and Grok
+  CLI backends as their probes qualify them.
+- For each CLI backend, verify and apply the non-interactive provider-native
+  profile used under outer `"read-only"` so ordinary inspection commands do
+  not wait for approvals.
+- Mark an SDK backend as outer-sandbox capable only after proving that its
+  local tool execution is contained; otherwise reject `"read-only"` for that
+  backend rather than relaxing its native controls.
+- Implement `sandbox = "none"` as the explicit opt-out from the outer boundary
+  and reject unknown enum values.
+- Add global-user-only `[system].sandbox_override` validation and reject
+  explicitly requested values that conflict with it before session creation.
+- Add required `SystemConfig.sandbox_default`, populated as `"read-only"` by
+  the built-in config layer and overridable only by global user config, so the
+  merged effective configuration always contains it.
+- Require each supported CLI backend to declare and test its writable state
+  root. Update backend READMEs, agent configuration documentation, install
+  readiness/remediation output, and regression tests.
+
+### Stage 5: Credentialed verification
+
+- Run a normal headless Antigravity review that uses inspection commands
+  without an interactive prompt.
+- Verify in the same effective configuration that attempts to write the
+  repository and `.git` fail at the OS boundary.
+- Record only sanitized behavioral evidence; do not commit credentials,
+  provider payloads, or machine-specific paths.
+
+## Verification matrix
+
+Hermetic and Linux boundary coverage should include:
+
+| Case | Expected result |
+| --- | --- |
+| Read a tracked file and run `git status --short` | succeeds |
+| Create, overwrite, rename, or delete inside workdir | denied |
+| Write inside `.git` or run a mutating Git command | denied |
+| Write through a workdir symlink | denied |
+| Spawn a child that writes to workdir | denied |
+| Write to private scratch space | succeeds and is later discarded |
+| Write to an unapproved host path | denied |
+| Read credentials and update declared provider state | succeeds and persists |
+| Workspace symlink targets declared provider state | target is writable; limitation is reported |
+| `bwrap` missing or namespace creation denied | fails closed with remediation |
+| Omitted `sandbox` with shipped config | resolves to `"read-only"` |
+| Explicit `sandbox = "none"` | no outer boundary or read-only claim; choice visible in settings |
+| Unknown `sandbox` value | rejected during start validation |
+| Override set; start field omitted | override is effective |
+| Override set; explicit start value matches | accepted |
+| Override set; explicit start value conflicts | rejected before session creation |
+| User overrides default; no override or start value | effective default is used |
+| User overrides default; explicit start value | explicit value is used |
+| Project config sets a default or override | ignored as forbidden daemon-global policy |
+| Turn timeout, stop, and kill escalation | inner process and namespace are reaped |
+| Read-only prompt | exact workspace, cwd, and `$TMPDIR` policy is prepended |
+| `sandbox = "none"` prompt | no sandbox policy text is added |
+| Future sandbox enum value | its own optional prompt augmentation is defined and tested |
+| Capable CLI exposes bypass controls | relaxed only inside outer boundary |
+| Backend lacks one native bypass control | unsupported control remains unchanged |
+| SDK auto-approves but tool execution is not contained | read-only start fails closed |
+| Outer namespace setup fails | permissive inner provider command never executes |
+| `sandbox = "none"` | does not automatically relax provider-native controls |
+| Model ignores preamble and writes anyway | OS boundary still denies the write |
+
+The full hermetic suite, Ruff checks, and generated documentation checks must
+remain green.
+
+## Open questions
+
+- What is each backend's single state root, including environment-variable or
+  user-config relocation, and how is a missing root created safely?
+- Does Antigravity require writable state outside its primary state root, such
+  as an OS keyring or a separate Google configuration directory?
+- How are user-supplied extra `--add-dir` values discovered, normalized, and
+  mounted?
+- What capability or health signal communicates hard read-only support to the
+  daemon, MCP clients, CLI, and TUI without overloading provider `sandbox`?
+- What are the macOS and Windows equivalents, and until they exist should
+  read-only Antigravity be unavailable or run in a command-denied fail-closed
+  mode on those platforms?
+
+## Done when
+
+- The effective default Antigravity CLI review can execute ordinary inspection
+  commands headlessly without an approval prompt.
+- The workdir and `.git` are protected by an independently verified OS
+  boundary, including against child processes. Symlinks into declared
+  provider state follow the documented weaker MVP guarantee.
+- Provider-native mode/sandbox controls and agent-collab's outer enforcement
+  are represented separately and documented accurately.
+- Read-only-capable backends use verified non-interactive native profiles only
+  inside the established outer boundary; uncontained SDK execution fails
+  closed.
+- The selected backend's persistent writable state root is declared, resolved,
+  tested, and visibly distinguished from the read-only workspace.
+- Every outer-read-only turn receives an accurate filesystem-policy preamble
+  naming its workspace, effective cwd, and writable temporary location.
+- Prompt augmentation is defined and tested per sandbox enum value;
+  `sandbox = "none"` leaves the provider prompt unchanged.
+- Missing or unusable enforcement fails closed with actionable remediation.
+- Disabling the outer boundary requires explicit `sandbox = "none"` and is
+  auditable, either in the start request or as an installation override.
+- A global-user `[system].sandbox_override = "read-only"` prevents callers and
+  project configuration from starting an unsandboxed session.
+- Focused hermetic, real Bubblewrap boundary, and credentialed Antigravity tests
+  cover the intended behavior.

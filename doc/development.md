@@ -9,6 +9,30 @@ hermetic unit suite):
 ./agent_collab_dev.sh test
 ```
 
+### Test execution environment
+
+Run the complete local gate outside any nested agent-harness sandbox. Request
+user-approved, narrowly scoped elevation for `./agent_collab_dev.sh test` when
+the harness normally sandboxes shell commands. Do not request a broad shell or
+Python approval.
+
+The suite is credential-free and network-free, but it intentionally tests
+subprocess lifecycle, signals, localhost services, filesystem behavior, and
+asyncio/thread coordination. An outer sandbox can change those semantics. In
+particular, a nested Codex sandbox has been observed to leave
+`asyncio.to_thread(subprocess.run, ...)` waiting after the child and worker
+thread have finished. The full suite then appears to hang in
+`LiveWireFidelityTests.test_response_dtos_match_the_live_server` during
+`POST /options`, whose cached backend-health path runs CLI version probes.
+The same test completes normally outside the nested sandbox.
+
+Targeted tests that do not exercise subprocess, signal, socket, or filesystem
+boundaries may run inside the harness sandbox for quick iteration. Before
+handoff, however, the complete outside-sandbox gate is authoritative. If
+elevation is unavailable, rerun with `-v` to identify the last test, report
+that the full gate could not be validly completed, and do not describe an
+environment-induced pause as a product test failure.
+
 A green local gate is necessary but not sufficient: CI also runs the suite on
 Python 3.10 and 3.11 and on an SDK-free base install, so version- and
 dependency-specific failures pass locally. After every push, confirm the CI
