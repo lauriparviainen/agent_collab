@@ -617,6 +617,7 @@ class LiveWireFidelityTests(unittest.IsolatedAsyncioTestCase):
                 ).encode("utf-8")
                 full_started = await server._dispatch("POST", "/sessions", {}, full_body)
                 self.assertEqual(SessionStateModel.from_dict(full_started).to_dict(), full_started)
+                full_session_id = full_started["session_id"]
                 for agent in full_started["settings"]["agents"].values():
                     self.assertIn("command_preview", agent)
 
@@ -641,6 +642,9 @@ class LiveWireFidelityTests(unittest.IsolatedAsyncioTestCase):
                 # An invalid detail is a 400 (ValueError -> HttpError in the server).
                 with self.assertRaises(HttpError):
                     await server._dispatch("GET", f"/sessions/{session_id}?detail=brief", {}, b"")
+
+                await server._dispatch("POST", f"/sessions/{full_session_id}/stop", {}, b"")
+                await server._dispatch("POST", f"/sessions/{session_id}/stop", {}, b"")
 
 
 class _CaptureWriter:

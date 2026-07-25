@@ -4,9 +4,11 @@
 (`wait_result`; surface shape; continuity groundwork; `codex_sdk`,
 `claude_sdk`, `antigravity_sdk`, and `xai_sdk` continuity). The collection-primitive re-evaluation is decided (watch
 with `wait_events`, harvest with `wait_result`) and its cost fixes shipped as
-#50. Every wake-path candidate — SSE framing, MCP channels, and the client
-auto-backgrounding they unlock — belongs to #49, which owns that question end
-to end. The three remaining items are decided and closed (2026-07-24, below):
+#50. Every wake-path candidate — SSE framing, MCP channels, and client
+auto-backgrounding — was evaluated under #49. That follow-up was cancelled on
+2026-07-25 because none provides cross-client non-blocking collection: Codex
+accepts streamed calls but never backgrounds them. The three remaining items
+are decided and closed (2026-07-24, below):
 the `timeout_ms=0` instant peek is pinned and documented, the failed-result
 `events_tail` shipped, and untargeted multi-agent `post_message` routing is
 declined. Nothing remains open in this task.
@@ -111,9 +113,10 @@ transport research on 2026-07-24 (Claude Code 2.1.219, agent-collab as an
   per-server `timeout` or by answering with an SSE stream whose first byte
   arrives immediately.
 
-That makes the SSE candidate the primary path rather than a speculative one; it
-is tracked with the measured evidence, the interlocking client limits, and the
-Codex design constraints in `sse-collection-transport-evaluation` (#49).
+That made SSE the primary candidate rather than a speculative one. The later
+evaluation in `sse-collection-transport-evaluation` (#49) measured the complete
+path and cancelled it: Claude Code backgrounded the streamed call, while Codex
+remained blocked, so it did not satisfy the cross-client requirement.
 
 The background `agent-collab result` CLI pattern is **not** an acceptable
 general answer, even as an interim: it requires the agent to be co-located with
@@ -128,9 +131,9 @@ missed: the caller may want to **watch a session and stay steerable while it
 runs**, not only collect the outcome. These are different modes with different
 right answers, and guidance must present both:
 
-- **Delegate and be free** — one long `wait_result`, non-blocking only once the
-  client backgrounds it (#49). The agent sees nothing until settlement, which is
-  the point.
+- **Delegate and be free** — one long `wait_result` works only where the client
+  independently backgrounds it. #49 confirmed this on Claude Code but not
+  Codex, so it is not the cross-client supported path.
 - **Watch and stay steerable** — short bounded `wait_events` polls. The block
   bound *is* the steering latency: a user message reaches the agent when the
   in-flight call returns, so a 20–30 s bound means steering lands within 20–30 s.
@@ -231,12 +234,11 @@ makes it cost a couple hundred bytes. Scope: `done` results carry no tail
 parked `awaiting_input` result carries none (its answers-so-far serve). Worst
 case is ~20 capped lines, only ever on the failure path.
 
-Everything else about *not blocking the caller* moved to
-`sse-collection-transport-evaluation`
-([#49](https://github.com/lauriparviainen/agent_collab/issues/49)), which owns
-the wake-path question end to end. SSE framing, MCP channels, and client
-auto-backgrounding are not independent candidates — they are three mechanisms
-for the same outcome, and choosing between them is one decision, not three:
+Everything else about *not blocking the caller* was evaluated in the now
+cancelled `sse-collection-transport-evaluation`
+([#49](https://github.com/lauriparviainen/agent_collab/issues/49)). SSE
+framing, MCP channels, and client auto-backgrounding were treated as three
+mechanisms for the same outcome rather than independent features:
 
 - **SSE framing** defuses the documented 60 s first-byte timer, which is the
   precondition for the client backgrounding that actually frees the caller.

@@ -13,6 +13,16 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-07-25 - SSE evaluation and MCP Tasks probe
+
+- Close the non-blocking wake-path evaluation without implementation (#49).
+  POST-scoped SSE successfully unlocks Claude Code's client-specific
+  auto-backgrounding, but Codex accepts the same stream while remaining
+  blocked for the full call; the optional GET stream and MCP channels also
+  fail the cross-client requirement. Preserve a tracked manual MCP Tasks probe
+  and an open compatibility task (#53) for future protocol-native
+  reevaluation.
+
 ## [0.12.0] - 2026-07-24 - Subagent delegation and SDK thread continuity
 
 - Close out the `wait_result` surface (#47). `timeout_ms: 0` is now a pinned,

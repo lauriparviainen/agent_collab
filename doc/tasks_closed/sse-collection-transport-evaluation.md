@@ -1,10 +1,12 @@
 # Evaluate a non-blocking wake path: SSE framing and MCP channels
 
-**Status:** Open — root cause measured, and every probe below now answered
-against both target clients with an instrumented MCP server. POST-scoped SSE
-is confirmed to work; nothing implemented yet. **The measurements are
-single-agent, single-run and must be independently re-verified before any
-implementation starts — see "Verify before implementing" below.**
+**Status:** Cancelled 2026-07-25 — no implementation. POST-scoped SSE was
+confirmed as valid Streamable HTTP framing and it unlocks Claude Code's
+client-specific auto-backgrounding, but Codex never backgrounds the call.
+Because the requirement is that the calling agent remain responsive on every
+supported client, SSE provides survivability rather than a cross-client
+non-blocking collection primitive. The optional GET stream and MCP channels
+also fail the cross-client requirement.
 
 **Created:** 2026-07-24. **Probes run:** 2026-07-25.
 
@@ -339,145 +341,66 @@ part of the advertised protocol there too — it does not prove that any Codex
 surface opens the optional GET stream or surfaces unsolicited notifications to
 the model.
 
-## Verify before implementing
+## Evidence limits
 
-Everything above is one agent's single run, on one machine, driving
-`claude -p` and `codex exec` — the two surfaces that automate cleanly, and
-neither of which is what users actually sit in front of. Every claim is a
-statement about third-party client behaviour at one version, which is exactly
-the kind of thing that is both easy to mis-measure and liable to change. **A
-second agent must reproduce the probes before any of this becomes code.**
+The transport probes were one agent's single run on one machine, driving
+`claude -p` and `codex exec`. They establish the wire behavior recorded above,
+but not every interactive client surface. In particular, Claude Code's
+auto-backgrounding was measured in print mode with
+`CLAUDE_AUTO_BACKGROUND_TASKS=1`; the terminal and VS Code interactive paths
+were not independently repeated. That uncertainty does not change the
+cross-client decision because Codex's negative result is decisive.
 
-The harness is checked in to `tmp/wake-path-probe/` (untracked scratch space,
-so rebuild it from the description above if it is gone): the instrumented MCP
-server, one runner per client, and a README mapping each probe letter to its
-command and to what was observed. Re-running the whole set costs about twenty
-minutes of wall clock and a handful of cheap model turns.
+Two method notes remain useful for any future transport evaluation:
 
-Ranked by what the design breaks on if the finding is wrong:
+- Trust the HTTP log rather than model narration.
+- Prevent delegation during the probe because Claude Code does not background
+  a subagent's MCP call.
 
-1. **The keep-alive contract — (a) and (c).** That stream headers alone defuse
-   the first-byte timer, and that *only* `notifications/progress` resets the
-   idle window, together fix the shape of the streaming response. If comments
-   turn out to be sufficient, or progress notifications insufficient on some
-   surface, the keep-alive is a different mechanism.
-2. **Backgrounding on the real Claude Code surfaces — (b) and (d).** The
-   measurement was taken in `-p` with `CLAUDE_AUTO_BACKGROUND_TASKS=1`, which
-   the documentation describes as a separate opt-in path from interactive
-   backgrounding. The VSCode extension and the terminal UI were **not**
-   tested, and they are where the requirement actually has to hold. If
-   interactive sessions do not background an MCP call, the entire Claude Code
-   payoff evaporates and only survivability remains.
-3. **The Codex ceiling — (e).** 300 s was read from the 0.145.0 source and
-   confirmed on the wire, but it is an undocumented constant that upstream has
-   already moved once. Re-check it against whichever Codex version is actually
-   pinned, and on the Codex VS Code extension and desktop app, neither of
-   which was exercised here.
-4. **The untested surfaces — (f) and (g).** (f) was answered for Claude Code
-   only, and (g) not at all.
+## Decision — cancelled
 
-Two method notes for whoever repeats this, both learned the hard way:
+Do not implement POST-scoped SSE, the optional `GET /mcp` stream, or MCP
+channels for this problem.
 
-- **Trust the HTTP log, not the model's narration.** The probe server logs
-  every request with headers and timestamps precisely so the client's account
-  of what happened can be checked against what crossed the wire.
-- **Stop the model from delegating.** A subagent's MCP calls are never
-  backgrounded, so a model that quietly hands the call to a subagent makes
-  probe (b) look negative. The runners disable delegation for this reason.
+SSE framing itself worked correctly:
 
-Finally, the probe server is not agent-collab: it is a threaded stdlib server
-using chunked framing, while `server_http.py` writes raw HTTP over asyncio
-streams. Once the streaming path exists, re-run the same probes against the
-real daemon — byte-level framing differences are exactly what clients trip
-over, and a long-lived stream must not block other requests on the server.
+- Claude Code accepted the stream, treated flushed response headers as the
+  first byte, stayed alive on `notifications/progress`, and eventually moved
+  the call into its own background-task mechanism.
+- Codex accepted the same streamed response and progress notifications, but
+  remained blocked for the entire call. Stream activity did not extend its
+  hard tool timeout and progress was not model-visible.
 
-## Decision
+That asymmetry is why a technically successful transport probe is still a
+product-level rejection. The requirement is not merely that a long request
+survive; the calling agent must remain available to its user. SSE delegates
+that property to undocumented, client-specific backgrounding behavior that
+does not exist in Codex. Implementing and maintaining a streaming response
+path would therefore add HTTP framing, keep-alive, disconnect, and timeout
+complexity while leaving one first-class client with the original problem.
 
-The criteria are met. (a) and (b) both hold on Claude Code, and Codex accepts
-the same response, so **adopt POST-scoped SSE for `wait_result` and
-`wait_events`**, content-negotiated, with the JSON path untouched. The
-optional GET stream and channels are both declined, for measured reasons.
+The other candidates do not close the gap:
 
-### What to build
+- The optional GET stream is consumed by Claude Code without waking the model,
+  and Codex does not open it.
+- MCP channels are a Claude-only, plugin- and policy-gated preview.
+- Raising client timeouts makes calls survive longer but leaves the caller
+  blocked.
 
-1. **Negotiate on `Accept`.** Both clients advertise `text/event-stream` on
-   every POST (Claude Code as `application/json, text/event-stream`, Codex the
-   other way round). Stream only when the header asks for it; anything else
-   gets today's single JSON object, byte for byte.
-2. **Stream only `tools/call` responses.** Keep `initialize` and `tools/list`
-   on the JSON path: [openai/codex#26983][codex-26983] is open against Codex's
-   Streamable HTTP client failing to parse an SSE `initialize` response, and
-   there is no reason to take that risk for a response that is instant anyway.
-3. **Frame it as:** `200` with `Content-Type: text/event-stream` and
-   `Transfer-Encoding: chunked`, headers flushed immediately — that alone
-   defuses the first-byte timer — then the settled JSON-RPC response as a
-   single `event: message` frame, then end the stream. Chunked framing was the
-   configuration verified against both clients.
-4. **Keep-alive must be `notifications/progress`,** carrying the
-   `params._meta.progressToken` the client sent with the call; both clients
-   send one. SSE comments are tolerated by both but do not hold Claude Code's
-   idle window open, so they are decoration, not a keep-alive. Cadence ~15–20 s:
-   the default HTTP idle window is 5 minutes, but a per-server `timeout` floors
-   it and `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` can lower it (a 20 s setting was
-   enforced as 30 s in testing), so a cheap sub-30 s tick keeps every
-   configuration safe. Where no `progressToken` is supplied, fall back to
-   comments and treat the idle window as the binding limit.
-5. **No per-client branching.** The server cannot know whether the caller will
-   background the call, and does not need to: the identical response is correct
-   for a client that backgrounds at 120 s and for one that blocks for 300 s.
-6. **Handle the hang-up.** Both clients abandon a call by dropping the
-   connection — Codex sends no `notifications/cancelled` — so the streaming
-   path must treat a write failure as "the caller gave up", leave the session
-   running, and leave the answer in the ledger for a later `wait_result`.
+The supported cross-client behavior remains the bounded
+`agent_collab_wait_events` watch loop for callers that must stay steerable,
+followed by `agent_collab_wait_result` to harvest. A caller that does not need
+to remain responsive may use `wait_result` directly.
 
-### What each client actually gets
+Protocol-level MCP Tasks are a more appropriate future candidate because they
+make deferred execution explicit instead of relying on transport timing.
+Current client support is insufficient and is tracked separately in the open
+task document `mcp-tasks-client-compatibility`
+([#53](https://github.com/lauriparviainen/agent_collab/issues/53)).
 
-- **Claude Code** gets the whole requirement: the call survives, the client
-  backgrounds it at 120 s (or as low as 5 s with
-  `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`), the model is free while the delegated
-  session runs, and the result arrives as a task notification. Once this ships,
-  the ~45 s poll bound stops being the recommended shape for Claude Code —
-  a long single wait is strictly better, and the caller-side turn cost the #47
-  close-out measured (~25 empty polls against a `message_first` backend) goes
-  to zero. Caveat to document: a backgrounded task does not survive exiting the
-  session.
-- **Codex** gets survivability and nothing else: the turn still blocks for the
-  full call, and progress never reaches the model or the user. The useful
-  bound there is the 300 s default wall clock — keep the server-side wait
-  under it, and document `tool_timeout_sec` for anyone who wants longer. Codex
-  users keep the bounded watch loop as the way to stay steerable.
+## Cancellation outcome
 
-Guidance must say this plainly per client rather than promising responsiveness
-uniformly.
-
-### What not to build
-
-- **The optional `GET /mcp` stream.** Probe (f) split: Claude Code opens it and
-  genuinely consumes it, but neither a logging notification nor
-  `tools/list_changed` woke an idle model, and Codex never opens it at all. A
-  stream one client consumes but never surfaces costs reconnect and redelivery
-  state for no behavioural gain. Keep answering `405`.
-- **Channels.** The verdict in the section above is unchanged, and the ground
-  has shifted under it: backgrounding now supplies, for the one client channels
-  would have served, the wake path channels were wanted for — without a preview
-  flag, a plugin install, a vendor account or an org policy toggle. Revisit
-  only if the gating questions turn favourable *and* something remains that
-  backgrounding cannot do.
-- **Option 1 as the supported answer.** Per-server `timeout` configuration
-  stays worth documenting for users on clients we cannot detect, but it is no
-  longer the fallback plan: the transport fix needs nothing from the user.
-
-[codex-26983]: https://github.com/openai/codex/issues/26983
-
-## Scope notes
-
-- Transport work touches `agent_collab/server_http.py` and the MCP adapters
-  only; session semantics, `wait_result` settlement, and the answer ledger do
-  not change.
-- The JSON path must keep working unchanged: content negotiation, never a flag
-  day.
-- Resumability (`Last-Event-ID`) is an observation in (f), not a goal;
-  redelivery matters only once a stream is proven useful.
-- The static-token remote deployment is why this matters most: a shell-less
-  client connected over Streamable HTTP has no CLI fallback, so MCP calls are
-  its only collection mechanism.
+- No production files were changed and no SSE transport path was implemented.
+- The measurements remain recorded here as evidence for future client or
+  protocol changes.
+- Issue #49 is closed as not planned for the measured client versions.
