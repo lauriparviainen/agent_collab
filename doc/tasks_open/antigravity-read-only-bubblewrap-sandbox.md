@@ -1,7 +1,7 @@
 # Enforce read-only Antigravity CLI reviews with an outer sandbox
 
-**Status:** Open — core policy decisions and all four CLI feasibility probes
-are recorded; production implementation remains.
+**Status:** Open — core policy decisions plus all four CLI and both SDK
+feasibility probes are recorded; production implementation remains.
 
 **Created:** 2026-07-25.
 
@@ -254,6 +254,271 @@ Commands and outcomes:
 | `python3 probes/bubblewrap_grok/probe_bubblewrap_grok.py --state-mode read-only --model grok-4.5` | Expected negative: failed before the model/action while creating mutable local session state |
 | `git diff --check` | Passed |
 | `./agent_collab_dev.sh test` | Passed 1,196 tests with one skip |
+
+## SDK feasibility research (2026-07-25)
+
+The tracked `probes/bubblewrap_antigravity_sdk` and
+`probes/bubblewrap_xai_sdk` harnesses extend the execution-ownership research
+to both SDK backends. They distinguish a complete SDK worker placed inside
+Bubblewrap from the current production architecture, where SDK runners live in
+the daemon.
+
+The explicit support decisions are:
+
+| Backend | Decision | Reason |
+| --- | --- | --- |
+| `antigravity_sdk` | **feasible with out-of-process worker** | A complete standalone SDK worker, bundled runtime, local action, and action child were contained successfully. The current production runner and runtime instead share the unsandboxed host namespace. |
+| `xai_sdk` | **no local tool execution** | The current backend constructs a model-only request with no built-in or custom tools and performs no local provider-state writes or child launches. |
+
+Neither result implements production sandboxing. In particular,
+`antigravity_sdk` must not advertise outer `read-only` support until the whole
+runner is moved across a supervised worker boundary. The xAI decision must be
+revisited if that backend later enables provider built-ins or client-executed
+function tools.
+
+## Antigravity SDK feasibility probe (2026-07-25)
+
+### Tested versions and production path
+
+The source trace and probe used Bubblewrap 0.6.3 and
+`google-antigravity` 0.1.8 in an isolated Python environment with protobuf
+7.35.1. The shared all-provider environment was deliberately not modified:
+`xai-sdk` 1.17.0 requires protobuf below 7, while the generated Antigravity
+0.1.8 code requires protobuf 7.35 or newer despite looser published base
+metadata.
+
+The current call path is:
+
+```text
+Referee
+  -> AntigravitySdkBackend.create_runner
+  -> AntigravitySdkRunner / persistent conversation (daemon Python process)
+  -> google.antigravity.Agent(LocalAgentConfig)
+  -> bundled localharness child (inherits daemon cwd, environment, namespace)
+  -> remote Vertex model service
+```
+
+The backend passes only the resolved workspace, model, Vertex configuration,
+strict continuation fields, and a runner-owned temporary trajectory
+`save_dir`. It does not configure custom tools, hooks, triggers, MCP servers,
+skills, plugins, or custom subagents. The installed SDK's default
+`CapabilitiesConfig` enables its built-in tools and subagents. Its default
+policy permits file tools but denies `run_command` in the non-interactive
+current backend.
+
+### Tool and side-effect ownership
+
+| Capability | Current production ownership |
+| --- | --- |
+| Agent construction, SDK policies, and callback dispatch | In the unsandboxed daemon. No custom callbacks are configured today. |
+| Model transport | Initiated by the daemon SDK through `localharness`, then executed remotely by Vertex. |
+| Built-in file read/write | Executed locally by `localharness` against the configured workspace. |
+| Built-in shell/terminal | Owned by `localharness`, but denied by the backend's effective default SDK policy. |
+| Shell descendants | Would inherit the harness cwd, environment, and namespace; this production path was not fabricated by weakening the backend policy. |
+| Built-in subagent | Enabled in the harness. Any local built-in tools it selects retain harness ownership. |
+| Search-web/read-URL/generate-image | Routed through the harness to provider services. Remote effects are outside the local Bubblewrap filesystem claim. |
+| Custom Python tools | The public SDK tool runner invokes them in the SDK caller process, using a thread for synchronous callables. The backend exposes none. |
+| Hooks, policies, and triggers | The public SDK invokes them in the SDK caller process. The backend supplies no custom hooks or triggers. |
+| MCP stdio | Public SDK configuration is serialized to `localharness`, which would start the local MCP process. The backend supplies no MCP configuration, so no unsupported server was invented for the probe. |
+| MCP HTTP | The harness would contact the configured remote endpoint. The backend supplies none; a remote endpoint's filesystem is not local. |
+| Skills and custom subagents | Public SDK configuration exists, but the backend exposes neither. |
+
+This distinction matters for future changes. Wrapping only the SDK-managed
+`localharness` child cannot contain Python tool callbacks or hooks running in
+the daemon. Outer support requires the complete SDK runner and all of its
+extension points to live in the worker namespace.
+
+### Native controls, state, and authentication
+
+The public SDK exposes capability selection and Python policies rather than a
+provider-native OS sandbox. `policy.allow_all()` was used only in the wrapped
+standalone feasibility worker, after Bubblewrap was the outer boundary. It is
+approval behavior, not containment.
+
+The production backend creates one temporary trajectory `save_dir`, keeps it
+across resets for strict continuation, and removes it on final close. The SDK
+also supports an `app_data_dir` and otherwise resolves provider app data under
+the user's Gemini/Antigravity state. Vertex authentication reads Application
+Default Credentials. The probe mounted the ADC file read-only and never read
+or printed its contents.
+
+For the standalone control, both trajectory and app data lived below one
+private provider-state root. That root alone was mounted writable; general
+home remained read-only. This is feasibility evidence for the tested flow,
+not a claim that alternative authentication, token refresh, callbacks, MCP,
+or future SDK versions require no additional state.
+
+### Wrapped worker and current architecture results
+
+Both credential-free structural modes passed. Their direct action and child
+confirmed:
+
+- the exact temporary workspace path containing spaces remained the cwd;
+- tracked input was readable;
+- workspace, protected-host, and general-home writes were blocked;
+- private scratch was writable;
+- private provider-state writes matched the selected writable/read-only mode;
+- the child inherited the same mount namespace and filesystem result; and
+- host-side evidence showed the action ran exactly once.
+
+The real writable-state standalone worker also passed. A permissive public-SDK
+policy allowed one `run_command` action. The SDK caller, `localharness`, action,
+and action child all shared the Bubblewrap mount namespace and differed from
+the host namespace. No writable path outside private provider state and
+scratch was needed.
+
+The deliberate current-architecture negative control used the exact
+production backend factory. A real built-in `create_file` tool completed, its
+marker reached the temporary host workspace, and the harness shared the
+caller's host mount namespace. The current in-daemon architecture is therefore
+not contained.
+
+The real `--state-mode read-only` standalone comparison failed during
+conversation initialization, before the model request or tool action. The
+harness could not create its trajectory database below the read-only
+`save_dir`. This establishes that mutable private trajectory state is required
+for this tested worker shape.
+
+### Cancellation and remaining work
+
+Production cancellation closes the active response before the agent context
+exits. SDK disconnect closes its communication tasks and streams, then waits
+for, terminates, or kills `localharness`. The referee bounds reset/close and
+can retain a slow runner for background reaping. A forced one-second probe
+timeout killed the standalone worker process group; the recorded
+`localharness` process was confirmed gone. An allowed production shell
+descendant was not exercised because the current policy denies shell.
+
+The production design needs a backend-neutral supervised SDK-worker launch
+path. An Antigravity adapter must declare:
+
+- outer modes supported by that worker;
+- the required private/persistent state-root contract;
+- the capability/policy mapping used only after the outer boundary exists;
+- sanitized reporting of those controls; and
+- compatibility checks for the SDK, bundled runtime, credentials, and
+  namespace setup.
+
+Common code must launch and supervise the complete worker without inspecting
+the backend id. Antigravity code must not construct generic Bubblewrap mounts.
+The worker protocol must preserve event streaming, strict identity, bounded
+cancellation, cleanup, and fail-closed startup.
+
+Remaining limitations include readable host files and credentials, inherited
+network access, remote provider effects, resource limits, unsupported SDK
+extension points, alternative auth/keyrings, token refresh, future runtime
+changes, and non-Linux platforms.
+
+Primary provider references:
+
+- <https://github.com/google-antigravity/antigravity-sdk-python>
+- <https://antigravity.google/docs/mcp>
+
+## xAI SDK feasibility probe (2026-07-25)
+
+### Tested version and production path
+
+The structural probe used Bubblewrap 0.6.3 and `xai-sdk` 1.17.0. The current
+call path is:
+
+```text
+Referee
+  -> XaiSdkBackend.create_runner
+  -> XaiSdkRunner / persistent conversation (daemon Python process)
+  -> xai_sdk.AsyncClient gRPC request
+  -> remote xAI model service
+```
+
+Every turn creates a fresh chat containing one new user prompt,
+`store_messages=True`, and the latest remote `previous_response_id` after the
+first turn. The backend maps only `model` and `reasoning_effort`. It passes no
+tools, discards the workdir for SDK request purposes, maps only assistant
+message content, and fails conservatively if an unexpected tool call appears.
+
+### Tool and side-effect ownership
+
+| Capability | Current production ownership |
+| --- | --- |
+| SDK request and gRPC client | In the unsandboxed daemon process. |
+| Model execution and stored continuation | Remote xAI service. |
+| File read/write, shell, and child processes | Not exposed. |
+| Client custom-function callbacks/tool runner | Not exposed. No caller-side executor runs. |
+| Provider built-in web/code tools | Not enabled. If enabled later, they would run in xAI's remote environment and remain outside the local filesystem claim. |
+| MCP, hooks, plugins, and subagents | Not exposed. |
+| Local state | No provider state root. The API key comes from backend environment; the gRPC runtime uses threads but launches no provider process. |
+
+Official xAI function-calling documentation distinguishes provider-hosted
+built-ins from custom functions that the caller must execute. The absence of
+both kinds in the current request is therefore an important backend limitation,
+not a general claim about the SDK.
+
+### Structural evidence, blocker, and cancellation
+
+The structural probe ran the complete Python worker inside Bubblewrap with
+read-only root, workspace, and general home plus private writable scratch. It
+constructed the production-mapped SDK request against a non-network fixture
+endpoint and passed all assertions:
+
+- worker mount namespace differed from the host;
+- cwd matched the exact temporary workspace containing spaces;
+- tracked input was readable;
+- production mapping contained only `model` and `reasoning_effort`;
+- the request contained zero tools;
+- Python audit instrumentation observed no subprocess launch; and
+- workspace, protected-host, and general-home markers remained absent.
+
+No writable provider-state exception was required. A credentialed model-only
+comparison was blocked because `XAI_API_KEY` was unavailable. The probe reports
+that exact sanitized blocker without inspecting configuration contents.
+Source tracing, exact request construction, and the hermetic backend suite
+still establish that there is no configured local tool path to exercise.
+
+On cancellation, the conversation shields an in-flight SDK sample until it
+settles so response identity is not lost, then reset/close deletes stored
+remote completions best-effort and closes the gRPC client. The referee can
+bound and later reap a slow runner. There is no local SDK or tool subprocess
+tree to terminate. Bubblewrap would constrain the Python client but neither
+contains nor needs to contain xAI's remote model or future provider-hosted
+tool filesystem.
+
+The current decision is **no local tool execution**. If the backend later
+enables client custom functions, those callbacks require a contained executor
+before outer `read-only` can be advertised. Provider built-ins must be
+reported as remote, and any new local caches, credential helpers, processes,
+hooks, or MCP integrations require a fresh state and ownership audit.
+
+Primary provider references:
+
+- <https://github.com/xai-org/xai-sdk-python>
+- <https://docs.x.ai/developers/tools/function-calling>
+
+### SDK probe-change verification
+
+Both new probes compiled and passed Ruff lint/format checks. All meaningful
+structural modes passed after formatting. The authorized Antigravity
+comparisons passed their positive and deliberate current-architecture
+controls; the state and timeout negatives returned nonzero at the expected
+stages. The xAI credentialed comparison was not started because its API key
+was unavailable.
+
+| Command | Outcome |
+| --- | --- |
+| `python3 -m py_compile probes/bubblewrap_antigravity_sdk/probe_bubblewrap_antigravity_sdk.py probes/bubblewrap_xai_sdk/probe_bubblewrap_xai_sdk.py` | Passed |
+| Antigravity SDK `--preflight-only --state-mode writable` | Passed all direct, child, state, and host assertions |
+| Antigravity SDK `--preflight-only --state-mode read-only` | Passed all assertions, including blocked provider-state writes |
+| Antigravity SDK wrapped worker, writable state, `gemini-2.5-flash` | Passed the credentialed tool turn; caller, harness, action, and child were contained |
+| Antigravity SDK current-architecture control, `gemini-2.5-flash` | Passed the deliberate negative proof: the file write reached the host and the harness shared the host namespace |
+| Antigravity SDK wrapped worker, read-only state | Expected nonzero: trajectory database creation failed before model/tool dispatch |
+| Antigravity SDK wrapped worker, one-second timeout | Expected nonzero: process group killed and recorded harness descendant reaped |
+| xAI SDK `--preflight-only` | Passed the model-only request, no-child, namespace, and host assertions |
+| xAI SDK credentialed comparison | Blocked before launch: `XAI_API_KEY` unavailable |
+| Probe Ruff lint and format checks | Passed |
+| `git diff --check` | Passed |
+| `./agent_collab_dev.sh test` | Passed 1,196 tests with one skip |
+
+No probe marker, generated bytecode, credential data, provider transcript,
+session identifier, machine-specific path, or raw namespace identifier was
+retained.
 
 ## MVP boundary decision (2026-07-25)
 
@@ -648,11 +913,11 @@ layer; provider differences belong in backend packages.
 
 ### Stage 1: Evidence and decision record
 
-- Complete the Bubblewrap spike.
-- Record the tested command shape, kernel/distribution assumptions, required
-  writable paths, and failure modes in this document.
-- Resolve the engine configuration, fallback, extra-directory, and platform
-  questions.
+- Completed for the four CLI backends and both SDK backends on the tested
+  Linux host. The tracked probes record command shapes, state requirements,
+  failure stages, and local execution ownership.
+- Keep the remaining engine-availability, fallback, extra-directory, worker
+  protocol, and cross-platform decisions explicit before implementation.
 - Update issue #43 if the acceptance criteria or user-visible scope changes.
 
 ### Stage 2: Launch boundary
@@ -757,6 +1022,12 @@ remain green.
   mounted?
 - What capability or health signal communicates hard read-only support to the
   daemon, MCP clients, CLI, and TUI without overloading provider `sandbox`?
+- What backend-neutral worker/event protocol preserves SDK streaming,
+  continuation identity, cancellation, and cleanup while placing the complete
+  `antigravity_sdk` runner outside the daemon?
+- Should the model-only `xai_sdk` backend use the common worker boundary for
+  policy consistency, or advertise a distinct no-local-effects capability
+  until a local tool executor is added?
 - What are the macOS and Windows equivalents, and until they exist should
   read-only Antigravity be unavailable or run in a command-denied fail-closed
   mode on those platforms?

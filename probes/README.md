@@ -24,3 +24,10 @@ findings belong in the matching task document.
 - [`bubblewrap_grok/`](bubblewrap_grok/) — Linux Bubblewrap probe that runs the
   configured Grok Build CLI with approval bypass and native sandbox profile
   `off`, while comparing writable and read-only complete `$GROK_HOME` state.
+- [`bubblewrap_antigravity_sdk/`](bubblewrap_antigravity_sdk/) — Linux
+  execution-ownership probe showing that a complete Antigravity SDK worker and
+  its `localharness` child can be contained, while the current in-daemon
+  backend remains unsandboxed.
+- [`bubblewrap_xai_sdk/`](bubblewrap_xai_sdk/) — Linux structural probe showing
+  that the current xAI SDK backend constructs a model-only request with no
+  local tool-execution surface or writable provider-state root.
