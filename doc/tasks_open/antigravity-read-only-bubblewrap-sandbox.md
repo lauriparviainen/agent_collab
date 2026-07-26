@@ -1,17 +1,60 @@
 # Design the common Bubblewrap workspace sandbox
 
-> **Continuation required (2026-07-26):** Before changing or implementing this
-> design, retrieve the complete Round 11 XAI feedback from agent-collab session
-> `daemon-06219f667ad44f0e` and reconcile it. The session ended with one
-> unresolved Medium finding about normalizing the session-root Git mount set;
-> no revision or later review round followed.
+> **Continuation status (2026-07-26):** Complete Round 11 feedback was
+> retrieved from agent-collab session `daemon-06219f667ad44f0e`. Its one
+> unresolved Medium finding is reconciled below by the normative Git protection
+> record, coverage-mount normalization, ordering, and establishment-proof
+> contract. Four additional dual-review loops converged in session
+> `daemon-0173bb7e678046d9`: both independent reviewers reported no confirmed
+> High/Medium findings. No production code has been implemented.
 
-**Status:** Final review reconciliation pending; production implementation
-pending.
+**Status:** Design review converged; production implementation pending.
 
 **Created:** 2026-07-25.
 
 **Issue:** [#43](https://github.com/lauriparviainen/agent_collab/issues/43)
+
+## Final review reconciliation (2026-07-26)
+
+Round 11 session `daemon-06219f667ad44f0e` used the configured parallel
+`grok-gemini-review` workflow. Gemini reported no High/Medium findings. Grok
+reported one Medium: the document required every logical session-root Git path
+to receive a specific post-writable bind while the argv and proof described
+only external binds, leaving ordinary worktrees, duplicates, and bare
+workspace-equal roots without one deterministic mount plan. That finding was
+confirmed and is resolved by the logical-record/coverage-operation contract in
+the authoritative path rules.
+
+Before selecting the resolution, independent consultation session
+`daemon-12e09317356e4015` used `claude_cli`, model `fable`, high effort, in the
+`solo` workflow. It recommended retaining every logical Git role/provenance
+while mapping roots onto the smallest effective coverage set, rather than
+emitting mounts that workspace-last would shadow. Its requested writable-child
+rejection, effective-topmost proof, in-namespace logical-root identity check,
+external-above-workspace decision, and recursive-read-only compatibility
+fixture were adopted.
+
+All four additional loops used one `interactive=false` parallel session so
+both members inspected the same frozen diff independently:
+
+- `xai_cli`: Grok 4.5, high reasoning, `permission_mode=bypassPermissions`,
+  provider sandbox `read-only`;
+- `antigravity_cli`: Gemini 3.1 Pro High, mode `plan`; and
+- workflow: `grok-gemini-review`.
+
+| Loop | Session and frozen diff | Findings and adjudication |
+| --- | --- | --- |
+| 1 | `daemon-299dd23842564385`; `51e4101aa53c76e8a493da9081a1c49d3cda3e0e489bc886fe5c2eac88bdf504` | Gemini: none. Grok: High, logical descendant Git roots still formed separate alias-containment pairs and could false-reject an allowed anchor below writable state. Confirmed; containment authority changed to workspace/external coverage sides while logical roots retain identity/inode participation. |
+| 2 | `daemon-1d1cc98674c54aa6`; `7bf564f746c7ffb4f6447f6f7f08a33327ab20ca435854ca2a12eb88b087476e` | Gemini: none. Grok: High, workspace absorption said “below” without requiring a component boundary, risking sibling `workspace.git` misclassification. Confirmed; every normalization and overlap relation now states component-boundary semantics and lexical-prefix siblings are tested. |
+| 3 | `daemon-c3940dd8532a4f4b`; `0b7c1e6282ff1c6f98d674939f184606eb19e088b0c6b4190d61758d2de2b799` | Gemini: none. Grok: three Medium findings: per-anchor pruning false-rejected hardlinks between regions that both become protected; generic workspace overlap still lacked component-boundary wording; explicit mutation/inode guarantees named only workspace. All confirmed; the audit now prunes the protected union, generic overlap is component-boundary based, and guarantees/tests include external Git coverage. |
+| 4 | `daemon-0173bb7e678046d9`; `ccabea43763224e007742378727340ffe53fa7c93a5ab67b41ae4f1face5107b` | Both reviewers: no High/Medium findings. All prior closeouts were independently rechecked. Convergence achieved; loop 5 was not run. |
+
+The earlier one-reviewer findings were disagreements in the review sense:
+Gemini reported a clean diff while Grok reported them. Local reproduction
+confirmed each concrete scenario, so none was overridden. The final loop is
+agreement: no confirmed High/Medium finding or unresolved disagreement
+remains. Production implementation and its acceptance fixtures remain
+intentionally pending rather than review findings.
 
 ## Purpose
 
@@ -956,13 +999,19 @@ Common code receives normalized mounts; it does not parse provider argv.
 
 #### Path rules
 
-All mount paths use a `ResolvedSandboxPath` carrying:
+All declared mount paths use a `ResolvedSandboxPath` carrying:
 
 - the configured spelling for diagnostics;
 - an absolute mount destination;
 - the canonical source returned by strict resolution;
 - access, origin, and persistence;
 - whether the destination existed or was safely created.
+
+A normalized mount operation is separate from a declaration. It carries one
+canonical destination and source, access and persistence, an ordered nonempty
+set of retained declaration origins, and the declarations or logical protected
+roots for which it is the coverage mount. Normalization never discards
+provenance merely because two paths collapse to one operation.
 
 Rules are:
 
@@ -1010,17 +1059,65 @@ Rules are:
    parsed as one filesystem pathname per LF-delimited line; a relative entry
    resolves from the object directory that owns that `objects/info/alternates`,
    not from the repository or `objects/info`. Absolute entries remain absolute.
+   Discovery emits logical Git protection records in fixed role order
+   `worktree_git_dir`, `common_git_dir`, `primary_object_store`, then recursive
+   `alternate_object_store`. Alternates use breadth-first traversal, preserve
+   line order within each file, and parse a canonical object store at most
+   once. Every duplicate or cycle edge is still retained as provenance,
+   including its referring object store and line ordinal.
    Empty entries, NUL, non-filesystem URLs, decoding failures, a missing final
    line delimiter, and paths that fail common strict resolution are malformed;
    comments have no special grammar. Recursion uses cycle detection and the
    common path/audit budget. Malformed, missing, or unpinnable metadata/
    alternate paths fail closed.
 
-   Every resolved session-root Git metadata and object-store root receives
-   origin `git_metadata` and a specific read-only bind after all writable
-   declarations, even when it lives below provider/operator state. The final
-   provider environment under `read-only` unsets the closed repository-path
-   redirect list `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+   Each logical record has origin `git_metadata`, one canonical destination,
+   its role, and all retained discovery provenance. The authoritative concrete
+   coverage-mount set is then derived exactly once:
+
+   1. Group exact canonical destinations. Merge their Git roles and provenance
+      in the fixed role order above, then referring-root lexical order and line
+      ordinal. Access remains read-only and persistence remains
+      host-persistent.
+   2. Map every grouped destination equal to or a component-boundary
+      descendant of the canonical workspace to the final workspace mount.
+      Retain origin `git_metadata`, all roles, destinations, and discovery
+      provenance on that workspace operation in addition to origin `workspace`;
+      do not emit a redundant Git mount. Lexical prefix is never containment:
+      for workspace `/work/app`, sibling `/work/app.git` remains external.
+   3. Sort the remaining external grouped destinations by component depth then
+      lexical path. Select a destination as an external coverage anchor only
+      when no already selected anchor is its component-boundary ancestor.
+      Otherwise map it to the first, necessarily shallowest, selected ancestor.
+      The selected anchor operation retains the union of every covered logical
+      record's origin, roles, destinations, and provenance.
+   4. Emit exactly one read-only bind per external coverage anchor after every
+      writable bind. Emit the one workspace read-only bind last. A selected
+      external anchor that is a component-boundary descendant of writable
+      provider/operator state is the required narrowing rebind; an exact
+      protected/writable destination is still rejected. A writable destination
+      equal to or a component-boundary descendant of an external coverage
+      anchor is rejected as an ineffective exception; the only permitted
+      containment direction is a protected external anchor that is a
+      component-boundary descendant of a broader writable root, narrowed by
+      this later read-only bind.
+
+   Consequently, an ordinary worktree whose `.git`, common directory, and
+   objects are inside the workspace emits no extra Git bind: those logical
+   roots are proved by the workspace-last operation. External gitdirs, common
+   directories, object stores, and alternates emit only the deterministic
+   shallowest external anchors needed to cover them. A bare repository whose
+   git and common directories equal the workspace also emits only the final
+   workspace bind, with the bare Git roles and descendant object-store record
+   retained on it. Exact duplicates and containment never create duplicate
+   argv operations, lose an origin, or change which operation must prove each
+   logical root. A degenerate external Git anchor that is a component-boundary
+   ancestor of the workspace is allowed: the anchor is emitted in the external
+   phase and the more-specific workspace remains the final operation. Both are
+   read-only, and the ordinary writable-overlap and alias rules still apply.
+
+   The final provider environment under `read-only` unsets the closed
+   repository-path redirect list `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
    `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, and
    `GIT_INDEX_FILE`; `sandbox = "none"` preserves them. Discovery is stricter
    and removes every inherited `GIT_*` name before setting its isolated control
@@ -1048,33 +1145,44 @@ Rules are:
    deliberately fails closed for symlinked provider-state roots until that
    backend has separate compatibility evidence.
 6. Exact duplicate canonical destinations with identical access and
-   persistence collapse deterministically. A read-only and writable duplicate
+   persistence collapse deterministically into one operation while retaining
+   every origin and covered declaration. Git logical-root duplicate and
+   containment handling is the specific algorithm in rule 2 and takes
+   precedence over the generic collapse. A read-only and writable duplicate
    resolves to writable only when the writable declaration is explicit,
-   otherwise valid, and unrelated to a protected workspace/Git metadata root.
+   otherwise valid, and unrelated to a protected workspace/Git logical root.
    A writable declaration whose canonical destination equals a protected root
-   is always rejected; protected entries are never collapsed away or promoted
-   to writable.
-7. A writable path equal to or inside the workspace is rejected because the
-   final workspace bind would make the request ineffective. Writable ancestors
-   of the workspace are also rejected in the MVP; a final workspace rebind
-   would protect the workspace but leave an unexpectedly broad host subtree
-   writable.
+   is always rejected; protected provenance is never collapsed away or
+   promoted to writable. The workspace/Git equality of a bare repository is
+   not an access conflict: both declarations are read-only, their origins and
+   roles merge, and workspace-last placement wins.
+7. A writable path equal to or a component-boundary descendant of the workspace
+   is rejected because the final workspace bind would make the request
+   ineffective. A writable component-boundary ancestor of the workspace is also
+   rejected in the MVP; a final workspace rebind would protect the workspace
+   but leave an unexpectedly broad host subtree writable. Lexical-prefix
+   siblings such as workspace `/srv/acme` and writable `/srv/acme-scratch` have
+   no overlap.
 8. A writable declaration equal to `/` or the daemon user's resolved home is
    rejected regardless of origin. Provider-state and operator-writable roots
    follow the same breadth guard. Backend compatibility checks may impose
    narrower ownership, basename, relocation, or permitted-anchor rules.
 9. Before every launch, common code runs a bounded, no-symlink alias audit. It
-   parses the complete host mount table. For the workspace, every protected Git
-   metadata root, and every writable root, it first selects the enclosing mount
-   entry by longest component-boundary prefix. It then examines every mountpoint
-   equal to or below that target. Checking only the target or only descendant
-   mountpoints is forbidden. Each entry maps to its filesystem type and
-   underlying `(major:minor, mount root + relative path)` identity. A nested
-   writable-side mount whose underlying identity equals, contains, or is
-   contained by a protected workspace/Git identity is rejected. A nested mount
-   below the workspace is also rejected in the MVP unless the resulting subtree
-   is independently included in the protected read-only set. Exact root
-   `(st_dev, st_ino, file type)` equality is a second check.
+   parses the complete host mount table. Protected containment-pair sides are
+   exactly the workspace coverage operation and the emitted external Git
+   coverage anchors, not each descendant logical Git record independently.
+   Every logical record remains an input to the identity/inode walk through its
+   selected side. For each protected side and every writable root, the audit
+   first selects the enclosing mount entry by longest component-boundary
+   prefix. It then examines every mountpoint equal to or below that target.
+   Checking only the target or only descendant mountpoints is forbidden. Each
+   entry maps to its filesystem type and underlying `(major:minor, mount root +
+   relative path)` identity. A nested writable-side mount whose underlying
+   identity equals, contains, or is contained by a protected workspace/Git
+   coverage identity is rejected. A nested mount below the workspace is also
+   rejected in the MVP unless the resulting subtree is independently included
+   in the protected read-only coverage. Exact root `(st_dev, st_ino, file
+   type)` equality is a second check.
 
    Filesystem identity is capability-gated. The MVP candidate allowlist is
    `ext4`, `xfs`, and `tmpfs`; every type must pass the version-controlled
@@ -1091,18 +1199,30 @@ Rules are:
    algorithm and positive conditional fixtures; parsing mount options alone is
    insufficient.
 
-   For each writable/protected pair whose enclosing entries report the same
-   supported `st_dev`, the audit walks both trees without following symlinks and
-   rejects the precise intersection of all non-directory
-   `(st_dev, st_ino, file type)` entries. It never uses `st_nlink` as a security
-   filter. A protected `git_metadata` root is intentionally allowed below a
-   writable root because its later read-only rebind narrows that mount. For this
-   containment case, the writable-side walk prunes the exact protected subtree
-   and compares the protected tree with the writable remainder; any shared
-   non-directory inode outside the protected destination still fails as a
-   hard-link alias. The mount proof must verify the narrowing rebind. No other
-   protected/writable containment is exempt. Benign hard links wholly within
-   provider state remain allowed. A pair skips intersection only when pinned
+   For each writable/protected relation whose enclosing entries report the same
+   supported `st_dev`, the audit walks without following symlinks and rejects
+   the precise intersection of all non-directory `(st_dev, st_ino, file type)`
+   entries between protected coverage and genuinely writable remainder. It
+   never uses `st_nlink` as a security filter.
+
+   One writable root may contain several protected coverage sides. The audit
+   collects all such sides first, sorts them by depth then lexical path, and
+   derives a non-overlapping prune set by discarding a side already covered by
+   a selected component-boundary ancestor. One writable-side walk prunes the
+   complete set simultaneously. The union of every logical protected tree
+   covered by those sides is then compared with the writable remainder. A
+   shared inode between two regions that both become protected is allowed; a
+   shared inode from that protected union into the remainder fails as a
+   hard-link alias.
+
+   Protected external Git coverage below a writable root is intentionally
+   allowed because the later read-only rebinds narrow that mount. The mount
+   proof must verify every narrowing rebind and its logical-root coverage. A
+   descendant logical record never creates a second containment relation or
+   rejection; it participates in its selected coverage side's identity and
+   inode comparison. No other protected/writable containment is exempt. Benign
+   hard links wholly within writable provider state also remain allowed. A
+   relation skips intersection only when pinned
    root stats prove different `st_dev` values and the complete mount mapping
    above proves neither side contains a bind of the other's underlying
    identity; mount id or filesystem label alone never establishes separation.
@@ -1121,8 +1241,10 @@ Rules are:
    conditional test proves that exact runtime shape. The pre-launch audit
    closes aliases that already existed before the mounts were separated.
 10. Mounts sort by destination depth and lexical path within each access class.
-    Protected external Git metadata read-only binds follow every writable bind.
-    The workspace read-only bind is always the final filesystem operation.
+    The normalized external Git coverage-anchor binds from rule 2 follow every
+    writable bind in that same depth/lexical order. No covered descendant emits
+    another operation. The merged workspace/Git read-only bind is always the
+    final filesystem operation.
 
 These rules prevent argv order or symlink spelling from silently changing the
 effective boundary. They do not prevent a symlink *inside* the read-only
@@ -1164,9 +1286,14 @@ OS enforcement:
 
 The control uses the same engine flags and a private fixture, verifies a
 separate mount namespace and read-only/writable mount behavior, and starts no
-provider. Missing `bwrap`, an unsupported version, disabled user namespaces,
-container restrictions, setuid-policy errors, unavailable proc ancestry
-interfaces, and a failed mount proof are distinct sanitized reason codes.
+provider. Its read-only source contains a nested bind submount: establishment
+must prove both the source and submount effectively read-only and must reject a
+writable submount below the coverage destination. This version-gates
+Bubblewrap's recursive read-only behavior instead of inferring it from
+executable presence or version text. Missing `bwrap`, an unsupported version,
+disabled user namespaces, container restrictions, setuid-policy errors,
+unavailable proc ancestry interfaces, non-recursive read-only behavior, and a
+failed mount proof are distinct sanitized reason codes.
 `outer_sandbox_proc_identity_unavailable` explains that neither the kernel
 children interface nor the same-uid pinned proc scan is usable. The initial
 implementation explicitly uses `--unshare-user`; `--unshare-user-try` is
@@ -1360,7 +1487,7 @@ bwrap
   --bind <private-scratch>/system-var-tmp /var/tmp
   [normalized readable declarations as --ro-bind]
   [normalized writable declarations as --bind]
-  [protected external Git metadata as --ro-bind]
+  [normalized external Git coverage anchors as --ro-bind]
   --ro-bind <workspace> <workspace>       # final filesystem mount
   [--setenv/--unsetenv from the resolved environment]
   --chdir <effective-cwd>
@@ -1386,7 +1513,8 @@ capability.
 Arguments are passed as an argv vector, never shell-quoted text. Paths with
 spaces remain single values. The root bind precedes all exceptions. Read-only
 declarations precede writable declarations. More-specific normalized mounts
-follow less-specific mounts. Workspace is last regardless of lexical order.
+follow less-specific mounts. The normalized external Git coverage anchors
+follow all writable mounts. Workspace is last regardless of lexical order.
 
 `HOME` is preserved unless an adapter must relocate a provider whose state
 lookup is tilde-based. `TMPDIR`, `TMP`, `TEMP`, and XDG cache/config/data/state
@@ -1539,12 +1667,31 @@ authority.
 
 The supervisor reads `status` and `mountinfo` through the pinned reaper and
 bootstrap identities rather than reopening numeric paths. It then verifies a
-different mount namespace, read-only root/workspace, every
-origin=`git_metadata` read-only bind, writable scratch and every declared
-writable root, effective cwd, zero effective/permitted/ambient capabilities,
-the exact resolved destinations and access modes, and the exact hello fd-role
-map. Only then does it send `sandbox_ack`. The bootstrap closes control fds and
-execs the provider or SDK worker.
+different mount namespace, read-only root/workspace, every emitted external Git
+coverage anchor, writable scratch and every declared writable root, effective
+cwd, zero effective/permitted/ambient capabilities, the exact resolved
+destinations and access modes, and the exact hello fd-role map.
+
+Proof consumes the frozen normalized operations, not the pre-normalization
+declarations. For every coverage operation, the effective topmost mount at its
+destination must be the planned bind with the planned source identity and
+read-only flags. No writable submount may remain at or component-boundary below
+a coverage destination. An external anchor that is a component-boundary
+descendant of a writable root must be a later, more-specific read-only mount,
+and the workspace operation must be the final filesystem operation. A shadowed
+mount entry is never establishment evidence.
+
+The supervisor then walks the retained coverage mapping. Every logical Git root
+must be equal to or a component-boundary descendant of its recorded, verified
+anchor. Through the pinned bootstrap identity's namespace/root, it stats every
+logical destination without following a final symlink and requires an existing
+directory whose `(st_dev, st_ino, file type)` matches the plan's pinned
+pre-launch identity. Workspace-covered records may map only to the verified
+final workspace operation; external records may map only to the verified
+emitted anchor selected by normalization. Missing roles, origins, logical
+destinations, identity matches, narrowing relations, or an extra/unplanned
+coverage operation fail establishment. Only then does it send `sandbox_ack`.
+The bootstrap closes control fds and execs the provider or SDK worker.
 
 Any parse error, timeout, premature status EOF, missing or reused reaper or
 bootstrap identity, inconsistent ancestry/`NSpid`, mount mismatch, or early
@@ -1818,19 +1965,23 @@ For an `os_enforced` `read-only` turn, the design guarantees:
 
 - the resolved workspace is mounted read-only last, and every resolved
   session-root Git directory, common Git directory, primary object directory,
-  and local alternate object store is specifically read-only after writable
-  mounts;
+  and local alternate object store maps to one effective, topmost, proved
+  read-only coverage mount: the final workspace operation for in-workspace or
+  bare roots, or a normalized external anchor emitted after writable mounts;
 - direct create, overwrite, rename, delete, chmod, timestamp, and mutating Git
-  operations against the established workspace mount fail at the OS boundary;
-- the underlying supplied workspace and `.git` objects cannot be modified
-  through a declared writable path, inherited fd, remount, or writable rebind;
+  operations against the established workspace and every logical Git root
+  covered by an external anchor fail at the OS boundary;
+- the underlying supplied workspace and session-root Git metadata/objects
+  cannot be modified through a declared writable path, inherited fd, remount,
+  or writable rebind;
 - provider CLI/SDK runtime, local callbacks, local tools, stdio MCP servers,
   hooks, plugins, skills, subagents, shell children, and descendants inherit
   the same mount namespace when that backend advertises support;
 - provider cwd remains the authoritative resolved host path;
 - only declared provider/operator state and private scratch are writable;
-- no pre-existing inode alias connects the workspace tree to a writable mount,
-  and no unrelated writable file descriptor crosses the exec boundary;
+- no pre-existing inode alias connects the workspace or external Git protection
+  trees to a genuinely writable remainder, and no unrelated writable file
+  descriptor crosses the exec boundary;
 - a failed namespace proof cannot start the permissive inner provider profile;
 - cancellation, timeout, daemon disconnect, reset, close, and provider crash
   transfer or complete ownership of the whole process tree.
@@ -1928,7 +2079,8 @@ Acceptance:
 
 - common code contains no concrete backend import/id branch;
 - exact argv, mount order, path rules, environment, prompt and settings are
-  deterministic;
+  deterministic, including Git duplicate/containment collapse, retained
+  origins/roles, workspace/bare absorption, and logical-root-to-mount proof;
 - namespace proof gates the permissive Codex command;
 - workspace, `.git`, child writes and symlink cases match the stated boundary;
 - timeout/cancel/crash reap descendants and cleanup scratch;
@@ -2069,7 +2221,7 @@ Use four layers:
 | adapter protocol accepted without backend-id imports or branches | hermetic contract |
 | built-in mock resolves through its typed `no_local_effects` adapter and participates in readiness | hermetic registry/workflow |
 | exact Bubblewrap argv including JSON-status fd, caps, spaces, cwd/env, deterministic order | hermetic |
-| relative/nonexistent paths, safe state creation, ownership, broad-root/ancestor and symlink rejection | hermetic |
+| relative/nonexistent paths, safe state creation, ownership, broad-root/component-boundary-ancestor and symlink rejection, plus lexical-prefix workspace/writable siblings | hermetic |
 | workspace-equal writable rejection; enclosing and nested mount discovery; all-inode intersection; supported ext4/xfs/tmpfs and rejected OverlayFS/Btrfs/network/FUSE types; audit limits | hermetic inode/mount/performance fixtures plus conditional supported mounts |
 | settings, health, dry-run, CLI, MCP, REST and TUI projections | hermetic route/tool/UI |
 | all-no-local-effects skips bwrap; mixed selection still checks every OS-enforced member | hermetic selection/preflight |
@@ -2077,9 +2229,11 @@ Use four layers:
 | JSON-lines `child-pid` reaper/bootstrap ancestry and `NSpid`, live stream plus final `exit-code`, zero capabilities; provider cannot exec before proof/ACK | hermetic proc/status readers plus conditional real marker |
 | exact inherited-FD whitelist including transient enumeration and stdio-transfer fds; writable workspace/session FD cannot reach CLI or worker | hermetic spawn fixtures plus conditional `/proc/self/fd` |
 | read-only `/`, workspace and `.git`; tracked reads; private scratch/state | conditional Bubblewrap |
-| clean-env gitfile/worktree/bare/separate dirs, exact Git validation, missing/incompatible Git, strict alternate grammar/base/recursion, protected metadata below writable state pruned then rebound read-only; nested scope reported | hermetic Git fixtures plus conditional Bubblewrap |
+| clean-env gitfile/worktree/bare/separate dirs, exact Git validation, missing/incompatible Git, strict alternate grammar/base/breadth-first recursion, exact duplicate/cycle provenance, ordinary in-workspace and bare roots absorbed by workspace-last, sibling `workspace.git` kept external by component-boundary comparison, external ancestor coverage collapse, protected anchors below writable state pruned then rebound read-only, external anchors above workspace, and nested scope reported | hermetic Git fixtures plus conditional Bubblewrap |
+| frozen normalized Git coverage mapping drives argv and proof; every retained role/origin/logical destination maps to exactly one effective topmost workspace or external-anchor operation; logical-root identity/existence, recursive read-only submounts, and missing/extra operations are checked | hermetic plan/proof fixtures plus conditional Bubblewrap |
+| writable destination equal to or a component-boundary descendant of an external Git coverage anchor is rejected; one or several protected anchors below writable state are accepted only with proved narrowing rebinds; the writable walk prunes the union of protected sides, covered descendant logical roots form no separate relation, hardlinks among protected sides are allowed, and a hardlink from their union into writable remainder is rejected | hermetic overlap/inode fixtures plus conditional Bubblewrap |
 | scratch anchor below `/tmp`/`/var/tmp`/workspace is rejected; safe `$TMPDIR`, `/tmp`, `/var/tmp` remain private and cleaned | hermetic allocator plus conditional Bubblewrap |
-| create/overwrite/delete/rename/chmod/timestamp/Git mutations blocked | conditional Bubblewrap |
+| create/overwrite/delete/rename/chmod/timestamp/Git mutations blocked in the workspace and every external Git logical root | conditional Bubblewrap |
 | runtime hard link from workspace bind into same-filesystem writable bind fails `EXDEV` and host content is unchanged | conditional Bubblewrap |
 | nested host bind of workspace below writable state is rejected before provider exec | conditional Bubblewrap mount fixture |
 | direct and nested remount/rebind cannot mutate workspace; private mask changes only inner view | conditional Bubblewrap |
@@ -2163,13 +2317,16 @@ choices explicitly:
   `read-only` remains fail-closed.
 - Complete writable provider state for the MVP.
 - Operator path exceptions are global-user-only, not start fields; writable
-  `/`, the user home, workspace paths, and workspace ancestors are forbidden.
+  `/`, the user home, workspace paths, and component-boundary workspace
+  ancestors are forbidden; lexical-prefix siblings do not overlap.
 - Symlinked writable roots fail closed.
 - The MVP filesystem allowlist is ext4/xfs/tmpfs after acceptance evidence;
   OverlayFS, Btrfs, network, union, FUSE, and unknown filesystems fail closed
   until a versioned identity algorithm and conditional fixtures are added.
 - Session-root Git protection includes bare repositories and recursive local
-  alternates; a repository candidate without compatible Git fails closed.
+  alternates; canonical duplicates and contained roots retain provenance while
+  mapping to one deterministic coverage operation, and a repository candidate
+  without compatible Git fails closed.
 - SDK local execution uses a complete out-of-process worker.
 - `xai_sdk` uses a revocable `no_local_effects` capability, not a nominal
   Bubblewrap claim.
@@ -2202,11 +2359,10 @@ The intended mount order is:
 3. normalized readable declarations;
 4. the selected backend state root and authorized operator paths writable at
    their real paths;
-5. every resolved session-root Git directory, common directory, primary object
-   store, and local alternate object store read-only again, including any that
-   narrows a writable root; and
+5. every normalized external session-root Git coverage anchor read-only again,
+   including any that narrows a writable root; and
 6. the resolved workspace mounted read-only again as the final, more-specific
-   bind.
+   bind, covering all in-workspace Git roots and bare-repository roles.
 
 This is deliberately simpler than a synthetic provider home or copy-on-write
 overlay and accommodates provider upgrades that add new mutable state. Its
@@ -2237,7 +2393,9 @@ The design and tests must state exactly what is protected. For the initial
 read-only posture:
 
 - The supplied workdir and the session-root repository's resolved Git metadata
-  and local object stores are readable but not writable. Creating, replacing,
+  and local object stores are readable but not writable. Every logical Git root
+  retains its role and provenance and maps to exactly one effective, topmost,
+  proved workspace or external-anchor coverage mount. Creating, replacing,
   renaming, deleting, chmodding, or changing timestamps there must fail.
 - A child process or shell started by the provider inherits the same boundary.
 - Symlinks resolved within the workspace mount remain protected. A symlink
@@ -2729,8 +2887,8 @@ authoritative design resolves them as follows:
   commands headlessly without an approval prompt.
 - The workdir and the session-root repository's resolved worktree/bare,
   common, object, and local-alternate metadata are protected by an independently
-  verified OS boundary against
-  direct filesystem operations by the provider and its child processes.
+  verified OS boundary through the deterministic normalized coverage mapping
+  against direct filesystem operations by the provider and its child processes.
   Nested-repository external metadata, symlinks into declared provider state,
   and writes delegated to external host services follow the documented weaker
   MVP guarantee.
