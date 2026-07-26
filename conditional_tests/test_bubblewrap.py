@@ -17,6 +17,7 @@ from agent_collab.backends.claude_cli.sandbox import (
     ClaudeCliSandboxAdapter,
 )
 from agent_collab.backends.antigravity_cli.sandbox import AntigravityCliSandboxAdapter
+from agent_collab.backends.xai_cli.sandbox import XaiCliSandboxAdapter
 from agent_collab.sandbox.plan import SandboxOperatorConfig, resolve_session_plan
 from agent_collab.sandbox.policy import resolve_sandbox_policy
 from agent_collab.sandbox.specs import (
@@ -175,6 +176,51 @@ child = subprocess.run(
         "-c",
         "import os,pathlib;"
         "p=pathlib.Path(os.environ['ANTIGRAVITY_BOUNDARY_WORKSPACE'])/'child-forbidden';"
+        "\ntry: p.write_text('x'); print('allowed')"
+        "\nexcept OSError: print('blocked')",
+    ],
+    check=True,
+    text=True,
+    stdout=subprocess.PIPE,
+)
+result["child"] = child.stdout.strip()
+print(json.dumps(result, sort_keys=True))
+"""
+
+XAI_ACTION = r"""#!__PYTHON__
+import json, os, pathlib, subprocess, sys
+workspace = pathlib.Path(os.environ["XAI_BOUNDARY_WORKSPACE"])
+state = pathlib.Path(os.environ["XAI_BOUNDARY_STATE"])
+result = {
+    "permission_bypass_once": sys.argv.count("bypassPermissions") == 1
+        and "--permission-mode" in sys.argv,
+    "native_sandbox_off_once": sys.argv.count("off") == 1
+        and "--sandbox" in sys.argv,
+    "cwd_identity": "--cwd" in sys.argv
+        and sys.argv[sys.argv.index("--cwd") + 1] == str(workspace),
+    "grok_home_identity": pathlib.Path(os.environ["GROK_HOME"]) == state,
+    "prompt_has_policy": sys.argv[-1].startswith("FILESYSTEM POLICY\n"),
+}
+try:
+    (workspace / "direct-forbidden").write_text("x", encoding="utf-8")
+    result["direct"] = "allowed"
+except OSError:
+    result["direct"] = "blocked"
+(state / "persistent-allowed").write_text("state", encoding="utf-8")
+pathlib.Path(os.environ["TMPDIR"]).joinpath("scratch-allowed").write_text(
+    "scratch", encoding="utf-8"
+)
+pathlib.Path("/tmp/grok-legacy-warning-only").write_text("private", encoding="utf-8")
+pathlib.Path(os.environ["XDG_CACHE_HOME"]).joinpath("cache-allowed").write_text(
+    "cache", encoding="utf-8"
+)
+result["state_scratch_legacy"] = "allowed"
+child = subprocess.run(
+    [
+        sys.executable,
+        "-c",
+        "import os,pathlib;"
+        "p=pathlib.Path(os.environ['XAI_BOUNDARY_WORKSPACE'])/'child-forbidden';"
         "\ntry: p.write_text('x'); print('allowed')"
         "\nexcept OSError: print('blocked')",
     ],
@@ -635,4 +681,103 @@ class BubblewrapBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 (state / "persistent-allowed").read_text(encoding="utf-8"),
                 "state",
             )
+            self.assertFalse(scratch.exists())
+
+    async def test_xai_execution_shape_contains_direct_and_descendant_writes(self):
+        if platform.system() != "Linux":
+            self.skipTest("xAI Bubblewrap boundary test requires Linux")
+        if shutil.which("bwrap") is None:
+            self.skipTest("xAI Bubblewrap boundary test requires bwrap on PATH")
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        if not runtime:
+            self.skipTest("XDG_RUNTIME_DIR is unavailable for the safe scratch anchor")
+        runtime_path = Path(runtime)
+        try:
+            runtime_stat = runtime_path.stat()
+        except OSError:
+            self.skipTest("XDG_RUNTIME_DIR is not accessible")
+        if runtime_stat.st_uid != os.getuid() or runtime_stat.st_mode & 0o077:
+            self.skipTest("XDG_RUNTIME_DIR is not an owner-private daemon runtime")
+
+        with tempfile.TemporaryDirectory(
+            prefix="agent-collab-xai-boundary-",
+            dir=runtime_path,
+        ) as raw:
+            root = Path(raw).resolve()
+            root.chmod(0o700)
+            workspace = root / "workspace"
+            home = root / "provider-home"
+            state = home / ".grok"
+            workspace.mkdir(mode=0o700)
+            state.mkdir(parents=True, mode=0o700)
+            fake_xai = root / "fake-xai"
+            fake_xai.write_text(
+                XAI_ACTION.replace("__PYTHON__", str(Path(sys.executable).resolve())),
+                encoding="utf-8",
+            )
+            fake_xai.chmod(0o700)
+            command = (
+                str(fake_xai),
+                "--permission-mode",
+                "plan",
+                "--sandbox",
+                "strict",
+                "--cwd",
+                str(workspace),
+                "-p",
+            )
+            plan = resolve_session_plan(
+                policy=resolve_sandbox_policy("read-only", "none"),
+                workspace_path=workspace,
+                agents={
+                    "xai": (
+                        None,
+                        {
+                            "HOME": str(home),
+                            "GROK_HOME": str(state),
+                            "XAI_BOUNDARY_WORKSPACE": str(workspace),
+                            "XAI_BOUNDARY_STATE": str(state),
+                        },
+                        XaiCliSandboxAdapter(),
+                    )
+                },
+                command_previews={"xai": command},
+                operator=SandboxOperatorConfig(
+                    scratch_root=runtime_path / "agent-collab" / "sandbox-tests",
+                ),
+            ).agents["xai"]
+
+            process = await SandboxSupervisor().launch_cli(
+                plan,
+                command,
+                "run the xAI structural action",
+                stream_limit=1024 * 1024,
+            )
+            scratch = process._scratch
+            stdout_task = asyncio.create_task(process.stdout.read())
+            stderr_task = asyncio.create_task(process.stderr.read())
+            code = await process.wait()
+            stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+
+            self.assertEqual(code, 0, stderr.decode("utf-8", errors="replace"))
+            self.assertEqual(
+                json.loads(stdout.decode("utf-8")),
+                {
+                    "child": "blocked",
+                    "cwd_identity": True,
+                    "direct": "blocked",
+                    "grok_home_identity": True,
+                    "native_sandbox_off_once": True,
+                    "permission_bypass_once": True,
+                    "prompt_has_policy": True,
+                    "state_scratch_legacy": "allowed",
+                },
+            )
+            self.assertFalse((workspace / "direct-forbidden").exists())
+            self.assertFalse((workspace / "child-forbidden").exists())
+            self.assertEqual(
+                (state / "persistent-allowed").read_text(encoding="utf-8"),
+                "state",
+            )
+            self.assertFalse(Path("/tmp/grok-legacy-warning-only").exists())
             self.assertFalse(scratch.exists())

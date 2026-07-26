@@ -370,20 +370,35 @@ class XaiCredentialTests(unittest.TestCase):
             )
             self.assertEqual(xai_cli_credentials(base, {}), CREDENTIALS_OK)
 
-    def test_missing_or_malformed_auth_is_unknown(self):
+    def test_missing_or_empty_auth_is_unknown_without_opening_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             self.assertEqual(xai_cli_credentials(base, {}), CREDENTIALS_UNKNOWN)
-            (base / "auth.json").write_text("{broken", encoding="utf-8")
+            (base / "auth.json").write_text("", encoding="utf-8")
             self.assertEqual(xai_cli_credentials(base, {}), CREDENTIALS_UNKNOWN)
 
-    def test_valid_but_empty_cached_auth_is_unknown(self):
+    def test_cached_auth_uses_only_regular_file_presence_not_secret_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            for payload in ({}, {"https://auth.x.ai::fixture": {}}):
+            auth = base / "auth.json"
+            for payload in ("{broken", json.dumps({}), json.dumps({"entry": {}})):
                 with self.subTest(payload=payload):
-                    (base / "auth.json").write_text(json.dumps(payload), encoding="utf-8")
-                    self.assertEqual(xai_cli_credentials(base, {}), CREDENTIALS_UNKNOWN)
+                    auth.write_text(payload, encoding="utf-8")
+                    with mock.patch.object(Path, "read_text", side_effect=AssertionError):
+                        self.assertEqual(xai_cli_credentials(base, {}), CREDENTIALS_OK)
+            auth.unlink()
+            auth.symlink_to(base / "missing")
+            self.assertEqual(xai_cli_credentials(base, {}), CREDENTIALS_UNKNOWN)
+
+    def test_effective_grok_home_environment_selects_cached_auth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "custom"
+            base.mkdir()
+            (base / "auth.json").write_text("cached", encoding="utf-8")
+            self.assertEqual(
+                xai_cli_credentials(env={"GROK_HOME": str(base)}),
+                CREDENTIALS_OK,
+            )
 
 
 if __name__ == "__main__":

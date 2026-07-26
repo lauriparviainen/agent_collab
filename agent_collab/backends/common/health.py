@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import time
 from dataclasses import dataclass
@@ -259,25 +260,31 @@ def xai_cli_credentials(
 ) -> str:
     """Best-effort Grok Build authentication evidence without reading secrets.
 
-    A non-empty ``XAI_API_KEY`` or cached entry in ``~/.grok/auth.json`` is
-    definite evidence. Missing or indeterminate local evidence stays
-    ``unknown`` because Grok may receive credentials through agent config.
+    A non-empty ``XAI_API_KEY`` or a non-empty regular ``auth.json`` under the
+    effective ``GROK_HOME`` is positive evidence. The cache file is never opened:
+    authentication contents remain provider-owned. Missing or indeterminate local
+    evidence stays ``unknown`` because Grok may receive credentials through model
+    config or an external provider.
     """
 
     environ = os.environ if env is None else env
     if environ.get("XAI_API_KEY"):
         return CREDENTIALS_OK
-    base = grok_home if grok_home is not None else Path.home() / ".grok"
+    if grok_home is not None:
+        base = grok_home
+    elif environ.get("GROK_HOME"):
+        base = Path(environ["GROK_HOME"]).expanduser()
+    else:
+        raw_home = environ.get("HOME")
+        base = (Path(raw_home).expanduser() if raw_home else Path.home()) / ".grok"
     auth_file = base / "auth.json"
-    if not auth_file.exists():
-        return CREDENTIALS_UNKNOWN
     try:
-        data = json.loads(auth_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        value = os.lstat(auth_file)
+    except OSError:
         return CREDENTIALS_UNKNOWN
-    if isinstance(data, dict) and any(bool(value) for value in data.values()):
-        return CREDENTIALS_OK
-    return CREDENTIALS_UNKNOWN
+    if not stat.S_ISREG(value.st_mode) or value.st_size == 0:
+        return CREDENTIALS_UNKNOWN
+    return CREDENTIALS_OK
 
 
 def xai_api_key_credentials(env: Optional[Mapping[str, str]] = None) -> str:

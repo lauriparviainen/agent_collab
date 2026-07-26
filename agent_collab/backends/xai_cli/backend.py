@@ -13,7 +13,6 @@ from ...backend_contract import (
 )
 from ...config import AgentConfig
 from ...runners import AgentRunner
-from ...sandbox.specs import UnsupportedSandboxAdapter
 from ..base import BackendCapabilities, BackendHealth
 from ..common.cli import (
     cli_command_preview,
@@ -26,6 +25,7 @@ from ..common.cli import (
 from ..common.health import default_version_runner, probe_cli_backend, xai_cli_credentials
 from ..common.options import canonical_reasoning
 from .parser import XaiStreamingParser
+from .sandbox import XaiCliSandboxAdapter
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 
@@ -45,7 +45,7 @@ class XaiCliBackend:
     event_fidelity = "message_first"
     provider_session_id_kind = "session"
     capabilities = BackendCapabilities()
-    sandbox_adapter = UnsupportedSandboxAdapter()
+    sandbox_adapter = XaiCliSandboxAdapter()
     checks_credentials = True
     block_on_unavailable = True
 

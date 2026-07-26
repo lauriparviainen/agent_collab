@@ -48,6 +48,14 @@ The xAI CLI accepts `XAI_API_KEY` or Grok's cached local sign-in. The xAI SDK
 test specifically requires `XAI_API_KEY`, emits message-only events, and asserts
 response identity rather than prose.
 
+The xAI CLI also has a separate paid outer-sandbox acceptance. It is skipped
+unless `AGENT_COLLAB_IT_XAI_SANDBOX_STATE` names an operator-authorized
+absolute complete `.grok` directory. The fixture uses that root directly,
+exercises one Bash action, workspace/Git/child write denial, persistent state,
+private and legacy temporary paths, and descendant cleanup, then removes its
+guarded markers. Do not point it at state that the operator has not authorized
+for mutation.
+
 The Antigravity SDK test uses Vertex when Google Application Default
 Credentials are available. It reads the credential path from
 `GOOGLE_APPLICATION_CREDENTIALS`, defaulting to gcloud's standard

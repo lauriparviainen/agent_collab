@@ -72,7 +72,12 @@ class ClaudeCliSandboxAdapterTests(unittest.TestCase):
         self.assertNotIn("claude_cli", Path("agent_collab/sandbox/plan.py").read_text())
 
     def test_every_backend_outside_completed_cli_stages_remains_fail_closed(self):
-        supported = {("antigravity", "cli"), ("claude", "cli"), ("codex", "cli")}
+        supported = {
+            ("antigravity", "cli"),
+            ("claude", "cli"),
+            ("codex", "cli"),
+            ("xai", "cli"),
+        }
         for agent_type in backends.registered_agent_types():
             for backend_id in backends.registered_backends(agent_type):
                 spec = backends.get_backend(agent_type, backend_id).sandbox_adapter.describe(

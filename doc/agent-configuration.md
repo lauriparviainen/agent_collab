@@ -372,9 +372,9 @@ boundary. It is separate from provider-native fields such as
 `backend_options.codex_cli.sandbox`. The two layers are reported separately in
 session settings and option discovery.
 
-Stages 1, 2, and 4 accept `read-only` for `codex_cli`, `claude_cli`,
-`antigravity_cli`, and the in-memory mock backend. `xai_cli` and every SDK
-backend fail closed with
+Stages 1 through 4 accept `read-only` for `codex_cli`, `claude_cli`,
+`xai_cli`, `antigravity_cli`, and the in-memory mock backend. Every SDK backend
+fails closed with
 `outer_sandbox_unsupported`; they are not silently exempted. The shipped
 default remains `none` until the complete backend readiness gate is met, so
 omitting this field preserves existing execution. Explicit `none` also leaves
@@ -416,14 +416,41 @@ provider `sandbox=false`; configured conflicts are removed or rejected
 deterministically. The OS keyring remains reachable as an explicitly reported
 external service outside the filesystem guarantee.
 
+Grok uses the complete effective `GROK_HOME`, defaulting to `~/.grok`, as its
+only persistent writable state root. It must already exist at an absolute,
+daemon-user-owned, non-symlinked, owner-private path; the adapter exports that
+exact mounted identity through `GROK_HOME`. Cached `auth.json`,
+`XAI_API_KEY`, and syntactically valid model-specific environment-key
+configuration remain usable without credential values entering settings or
+logs. Managed/requirements configuration, external authentication provider
+commands, symlinked project extensions, ambient Claude/Cursor extension
+discovery, and configured filesystem dependencies outside `GROK_HOME` or the
+protected workspace fail before Grok executes. The same containment gate
+checks MCP command, argument, and working-directory paths in Grok TOML and
+project `.mcp.json`. Project discovery follows the effective `--cwd` ancestor
+chain, and relative dependencies resolve from that effective command cwd.
+Disable ambient compatibility cells in `GROK_HOME/config.toml` when those
+foreign configuration trees exist but are not needed.
+
+After the common proof ACK, the Grok adapter replaces configured permission
+and native-sandbox controls with `--permission-mode bypassPermissions
+--sandbox off`. Here `--sandbox off` is Grok's provider-native option; it does
+not disable agent-collab's outer Bubblewrap boundary. Configured `--cwd` and
+agent-profile paths are validated and retained with read-only identity.
+Leader/resume/worktree/prompt-file execution shapes are rejected. Ordinary
+temporary and XDG writes, including Grok's warning-only legacy `/tmp` attempt,
+stay in common private turn scratch rather than creating a second persistent
+writable root. Remote model/MCP/auth services remain outside the filesystem
+boundary.
+
 Current staged readiness and rollback are:
 
 | Backend shape | Explicit outer `read-only` | Rollback |
 | --- | --- | --- |
 | `codex_cli` | OS-enforced direct process (Stage 1) | explicit/configured `none` |
 | `claude_cli` | OS-enforced direct process (Stage 2) | explicit/configured `none` |
+| `xai_cli` | OS-enforced direct process (Stage 3) | explicit/configured `none` |
 | `antigravity_cli` | OS-enforced direct process (Stage 4) | explicit/configured `none` |
-| `xai_cli` | pending Stage 3; start rejected | no implicit fallback |
 | all SDK backends | unsupported; start rejected | no implicit fallback |
 | in-memory mock | audited no-local-effects | `none` disables the policy label |
 

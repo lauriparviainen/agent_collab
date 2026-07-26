@@ -266,6 +266,79 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(command_event["raw"]["command_preview"], preview)
         self.assertNotIn("PRIVATE ANTIGRAVITY DRY RUN PROMPT", str(command_event["raw"]))
 
+    async def test_xai_read_only_settings_dry_run_and_command_event_match(self):
+        from agent_collab.backends.xai_cli import sandbox as xai_sandbox
+        from agent_collab.sandbox.bubblewrap import BubblewrapInstallation
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir(mode=0o700)
+            home = root / "provider-home"
+            state_root = home / ".grok"
+            state_root.mkdir(parents=True, mode=0o700)
+            managed_root = root / "managed"
+            managed_root.mkdir(mode=0o700)
+            manager = SessionManager()
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "AGENT_COLLAB_HOME": str(root / "daemon-home"),
+                        "HOME": str(home),
+                        "GROK_HOME": str(state_root),
+                    },
+                ),
+                mock.patch.object(
+                    xai_sandbox,
+                    "SYSTEM_MANAGED_CONFIG_ROOT",
+                    managed_root,
+                ),
+                mock.patch.object(
+                    xai_sandbox,
+                    "LEGACY_MANAGED_SETTINGS",
+                    root / "absent-managed-settings.json",
+                ),
+                mock.patch(
+                    "agent_collab.sandbox.plan.resolve_scratch_anchor",
+                    return_value=Path("/safe/scratch"),
+                ),
+                mock.patch(
+                    "agent_collab.sandbox.bubblewrap.discover_bubblewrap",
+                    return_value=BubblewrapInstallation(Path("/usr/bin/bwrap"), "fixture"),
+                ),
+            ):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="PRIVATE XAI DRY RUN PROMPT",
+                        workflow="solo",
+                        members={"claude_cli": "xai_cli"},
+                        sandbox="read-only",
+                        dry_run=True,
+                        max_turns=1,
+                        timeout=5,
+                        detail="full",
+                        workdir=workspace,
+                    )
+                )
+                final = await self._wait_for_terminal(manager, state.session_id)
+                events = manager.read_events(state.session_id, 0).events
+
+        self.assertEqual(final.status, "done")
+        outer = state.settings["agents"]["xai_cli"]["outer_sandbox"]
+        self.assertEqual(outer["support"], "direct_process")
+        self.assertEqual(outer["enforcement"], "os_enforced")
+        self.assertIn("external services", outer["external_services"][0])
+        preview = state.settings["agents"]["xai_cli"]["command_preview"]
+        permission_index = preview.index("--permission-mode")
+        self.assertEqual(preview[permission_index + 1], "bypassPermissions")
+        sandbox_index = preview.index("--sandbox")
+        self.assertEqual(preview[sandbox_index + 1], "off")
+        self.assertNotIn("PRIVATE XAI DRY RUN PROMPT", preview)
+        command_event = next(item for item in events if item["type"] == "command")
+        self.assertEqual(command_event["raw"]["command_preview"], preview)
+        self.assertNotIn("PRIVATE XAI DRY RUN PROMPT", str(command_event["raw"]))
+
     async def test_unsupported_read_only_rejects_before_session_creation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

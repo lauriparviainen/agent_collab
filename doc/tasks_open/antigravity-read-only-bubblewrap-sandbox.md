@@ -22,15 +22,137 @@
 > changing either historical implementation record. Its first review session
 > produced one clean report and one timeout; fresh session
 > `daemon-8b4c9140eaae44ea` converged with both reviewers reporting no
-> High/Medium findings.
+> High/Medium findings. Stage 3 now implements the canonical `xai_cli` slice
+> without changing the completed Stage 1, Stage 2, or Stage 4 records. Its
+> six permitted independent production-review loops found and closed the
+> confirmed findings recorded below. There are no unresolved confirmed
+> findings or disagreements. Formal Stage 3 convergence is not claimed because
+> the sixth-loop High finding required a post-review fix and the explicit limit
+> forbids a seventh frozen recheck.
 
-**Status:** Stages 1, 2, and 4 implemented and locally verified; Stage 2 and
-Stage 4 production reviews converged. Stage 3 and the SDK stages remain
-pending.
+**Status:** CLI Stages 1 through 4 implemented; Stage 2 and Stage 4 production
+reviews converged. Stage 3 is implemented and locally verified; its six-loop
+production review limit is exhausted without formal same-loop convergence.
+The SDK stages remain pending.
 
 **Created:** 2026-07-25.
 
 **Issue:** [#43](https://github.com/lauriparviainen/agent_collab/issues/43)
+
+## Stage 3 implementation handoff (2026-07-26)
+
+Stage 3 adds outer `read-only` only for `xai_cli`. Its typed direct-process
+adapter reuses the common Bubblewrap plan, launcher, establishment proof,
+supervision, reporting, and cleanup without any xAI backend-id branch in common
+sandbox code. The complete effective `GROK_HOME` (default `~/.grok`) is the
+only persistent writable root. It must already exist with absolute,
+non-symlinked exact identity, daemon ownership, owner-private permissions, and
+no workspace, Git, home-breadth, mount-alias, or hard-link conflict. The exact
+validated mount is exported through `GROK_HOME`; the complete home is never
+writable.
+
+Cached auth is detected from regular-file metadata without opening credential
+contents. `XAI_API_KEY` and syntactically valid model `env_key` names remain
+supported without secret projection. External auth-provider commands are
+rejected because their filesystem dependencies cannot be proved. Remote model,
+MCP, and authentication services are reported as outside the filesystem
+boundary.
+
+The adapter checks Grok 0.2.111's current path/configuration surface:
+`--cwd`, `--agent`, `GROK_AGENT`, debug/log paths, user/project config,
+managed/requirements files, sandbox profiles, skills, hooks, agents, plugins,
+MCP, LSP, and ambient Claude/Cursor compatibility. Contained extension
+processes inherit the same namespace; symlinked or escaping dependencies,
+managed pins, external auth, leader/resume/worktree/restore/prompt-file shapes,
+and malformed paths or owned flags fail before provider execution. Project
+config, extension, ambient-compatibility, and `.mcp.json` discovery follows the
+effective `--cwd` ancestor chain. Relative dependencies are resolved against
+that effective command cwd. Configured provider-visible paths retain read-only
+identity.
+
+Only after the common nonce-bound proof ACK does the adapter remove conflicting
+permission/native-sandbox controls and force
+`--permission-mode bypassPermissions --sandbox off`. The latter is Grok's
+provider-native Landlock control, distinct from the still-enforced outer
+Bubblewrap policy. Ordinary temporary and XDG writes plus Grok's warning-only
+legacy `/tmp` attempt stay in common private turn scratch; no second persistent
+writable root is added. Explicit/configured outer `none` remains the unchanged
+default and exact rollback, preserving the original Grok command and native
+posture with no silent fallback.
+
+Focused hermetic coverage includes support/registry exposure, state/auth path
+shapes, exact environment/argv projection, config/extension gates, outer-none
+preservation, terminal fidelity, command-preview consistency, and the
+backend-neutral live-harness repair. Conditional Bubblewrap coverage exercises
+direct and descendant write denial, writable state/private XDG and temporary
+space, configured cwd identity, legacy `/tmp` isolation, and cleanup. The
+opt-in paid acceptance requires
+`AGENT_COLLAB_IT_XAI_SANDBOX_STATE=/absolute/path/to/.grok`; it remains
+intentionally unrun without separate authorization.
+
+Final local verification passed:
+
+| Command | Outcome |
+| --- | --- |
+| `./agent_collab_dev.sh test` | Ruff lint/format and 1,305 hermetic tests passed; one expected skip |
+| `./agent_collab_dev.sh build --check` | Config and both generated daemon API artifacts verified current |
+| `./agent_collab_dev.sh bubblewrap-test` | Seven real Bubblewrap tests passed |
+| `git diff --check` | Passed |
+
+Issue #43 was fetched read-only after verification and remains open. No issue
+comment, label, state, push, or pull-request mutation was made.
+
+## Stage 3 implementation review reconciliation (2026-07-26)
+
+All six authorized loops used one `interactive=false` parallel
+`grok-gemini-review` session over base
+`40718371cb408408a8c2f55a73a1831692db44ac`:
+
+- `xai_cli`: Grok 4.5, high reasoning,
+  `permission_mode=bypassPermissions`, provider sandbox `read-only`;
+- `antigravity_cli`: Gemini 3.1 Pro High, mode `plan`; and
+- outer sandbox `none`, so review startup did not depend on the implementation
+  under review.
+
+The frozen scope was the same 21 paths in every loop:
+`README.md`, `agent_collab/backends/common/health.py`,
+`agent_collab/backends/xai_cli/README.md`,
+`agent_collab/backends/xai_cli/backend.py`,
+`agent_collab/backends/xai_cli/sandbox.py`,
+`conditional_tests/test_bubblewrap.py`, `doc/agent-configuration.md`,
+`doc/implementation-notes.md`,
+`doc/tasks_open/antigravity-read-only-bubblewrap-sandbox.md`,
+`integration_tests/README.md`,
+`integration_tests/backends/antigravity_cli/test_live.py`,
+`integration_tests/backends/claude_cli/test_live.py`,
+`integration_tests/backends/codex_cli/test_live.py`,
+`integration_tests/backends/xai_cli/test_live.py`,
+`integration_tests/harness.py`,
+`tests/backends/antigravity_cli/test_sandbox.py`,
+`tests/backends/claude_cli/test_sandbox.py`,
+`tests/backends/xai_cli/test_backend.py`,
+`tests/backends/xai_cli/test_sandbox.py`, `tests/test_daemon.py`, and
+`tests/test_integration_harness.py`. Direct dependencies were allowed only
+when needed. Each coordinator digest combined `git diff --binary HEAD` with
+sorted untracked path/content SHA-256 records. The worktree remained unchanged
+between each freeze and terminal result. Grok reported that its independent
+digest encoding did not reproduce the coordinator value, but reviewed the
+current frozen listed paths; this was not a code finding or a scope change.
+
+| Loop | Session and frozen digest | Findings, adjudication, and local closeout |
+| --- | --- | --- |
+| 1 | `daemon-4b33ce08f55c4328`; `be6fd4584e5db7fb8d5c0b986c81abe136d00f0defdae286edd65d269693bc98` | Gemini: none. Grok: three Medium findings—MCP `cwd` was ignored, interior relative traversal tokens bypassed path classification, and project `.mcp.json` was not inspected. All confirmed; the common process gate now validates MCP cwd, all relative/option path tokens, and project MCP JSON, with regressions. |
+| 2 | `daemon-3590375c52334d58`; `80e15082e30b4cf222d487a19471c44eff26fcd95489d934e82ca243786b2d62` | Gemini: none. Grok: two Medium findings—bare `..` and `--flag=/absolute` forms still bypassed argument containment. Both confirmed; token normalization now validates plain, assigned, and ambiguous concatenated path forms. |
+| 3 | `daemon-01b031c10f79427d`; `5e76052a8ea43fd9a2cac776c0215e6f4a15d372c4b5885e713990cd6a9e2a02` | Gemini: none. Grok: one Medium finding—assigned forms of continue/fork/restore ownership flags were retained. Confirmed; every bare and assigned ownership form is rejected and tested. |
+| 4 | `daemon-8130bc3dcd594c2e`; `85ef52de167b533a2398883e5935ca152d78097ad5f55262b2e4217f6ff5dd0f` | Gemini: none. Grok: two Medium findings—attached short ownership flags and project discovery that ignored effective `--cwd`. Both confirmed; attached/cluster-leading `-c`, `-r`, and `-w` forms fail closed, while separated/assigned/absolute/bare-relative effective cwd paths are traced and inspected. |
+| 5 | `daemon-473796c6a9b54673`; `e0fa135a7c010b67afbf347d9a2b3bdf0d832d19931921017c68a7432edc45fc` | Gemini: none. Grok: two Medium findings—intermediate effective-cwd ancestors were omitted from project extension symlink and ambient Claude/Cursor discovery. Both confirmed; config, MCP, extension, and ambient checks now share one deduplicated ancestor walk, with intermediate regressions. |
+| 6 | `daemon-24030bbbce1f42e9`; `8dc3f01cdd05c39158877f95c3babd3d2d21c33cef0bb304b684f343e5992d1a` | Gemini: none. Grok: one High finding—relative dependencies from configs discovered under external effective `--cwd` were validated against the original session cwd. Confirmed; config-relative MCP command/args/cwd, hook, skill, and plugin paths now use the effective command cwd. External rejection and contained nested-workspace acceptance regressions pass. |
+
+All confirmed findings were fixed, focused xAI sandbox coverage reached 30
+passing tests, and the complete gates above passed after the sixth-loop fix.
+There are no unresolved confirmed findings or reviewer disagreements. Formal
+same-loop convergence is not claimed: loop 6 changed after adjudication and
+the explicit six-loop limit forbids another review session.
 
 ## Final review reconciliation (2026-07-26)
 

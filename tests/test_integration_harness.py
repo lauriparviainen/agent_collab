@@ -51,6 +51,17 @@ class IntegrationHarnessOptionTests(unittest.TestCase):
             harness.missing_reason("claude", "sdk", "missing").startswith("[strict-missing]")
         )
 
+    def test_live_agent_resolves_canonical_cli_source_without_provider_branch(self):
+        for provider in ("claude", "codex", "antigravity", "xai"):
+            with self.subTest(provider=provider):
+                case = LiveBackendTestCase(methodName="runTest")
+                case.provider = provider
+                case.backend_id = "cli"
+                agent = case.live_agent()
+                self.assertEqual(agent.id, f"{provider}_cli")
+                self.assertEqual(agent.type, provider)
+                self.assertEqual(agent.backend, "cli")
+
 
 if __name__ == "__main__":
     unittest.main()

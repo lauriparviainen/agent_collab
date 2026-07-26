@@ -121,7 +121,7 @@ class LiveBackendTestCase(unittest.TestCase):
 
     def live_agent(self) -> AgentConfig:
         config = builtin_config()
-        source = config.agents[self.provider]
+        source = config.agents[f"{self.provider}_{self.backend_id}"]
         backend_config = dict(source.backend_config)
         backend_config.update(self.agent_backend_config())
         return AgentConfig(

@@ -4,9 +4,13 @@ Registered as `xai_cli` (`type="xai"`, `backend="cli"`). It requires the Grok
 Build `grok` command and runs headless single turns with newline-delimited
 `streaming-json`; the built-in command includes `--no-auto-update`.
 
-Authentication uses `XAI_API_KEY` or Grok's own cached sign-in under
-`~/.grok/auth.json`. Agent-collab checks only for non-empty credential evidence
-and never reads credential values into events or logs.
+Authentication uses `XAI_API_KEY`, a model-specific configured environment
+key, or Grok's cached sign-in under the complete effective `GROK_HOME`
+(default `~/.grok`). Agent-collab checks environment presence or cached-file
+metadata only; it does not open cached auth or put credential values in
+settings, events, or logs. External authentication provider commands are
+rejected under outer read-only because their undeclared filesystem
+dependencies cannot be proved.
 
 [`options.toml`](options.toml) declares accepted MCP/session options;
 [`defaults.toml`](defaults.toml) owns the shipped command, option values, and
@@ -53,5 +57,86 @@ The typed turn outcome uses the same evidence: `EndTurn` completes,
 without `end` fails even after partial text. Conflicting terminal markers fail
 with `provider_protocol_conflict`; identical duplicates are harmless.
 
-Hermetic tests: `python3 -m unittest tests.backends.xai_cli.test_backend`.
-Credentialed test: `./agent_collab_dev.sh integration-test xai_cli --strict`.
+## Outer read-only filesystem boundary
+
+The top-level agent-collab `sandbox="read-only"` policy is separate from this
+backend's provider-native `sandbox` option. On Linux, Stage 3 reuses the common
+Bubblewrap launcher and establishment proof. Grok and every Bash, hook, plugin,
+skill, MCP process, subagent, and descendant start only inside the proved PID
+and mount namespace. The workspace, discovered Git storage, host root, and
+home remain read-only. Common private scratch owns `/tmp`, `/var/tmp`,
+`$TMPDIR`, and XDG cache/config/data/state.
+
+The adapter declares `direct_process` support for `none` and `read-only`. For
+read-only, the complete effective `GROK_HOME` is the single persistent writable
+exception. The directory must already exist, be absolute, retain exact
+non-symlinked path identity, be owned by the daemon uid, and not be group/world
+writable. It may not be the whole home, overlap the workspace or protected Git
+storage, or alias protected data. `GROK_HOME` inside the namespace is set to
+the exact mounted path. Grok may update auth, configuration, sessions, indexes,
+skills, plugins, hooks, and other state below it; that state is not a
+confidentiality boundary.
+
+Before provider execution the adapter rejects:
+
+- Grok `managed_config.toml`, `requirements.toml`, system managed files, or the
+  legacy managed-settings source;
+- malformed config, managed sandbox pins, symlinked project extensions, and
+  ambient Claude/Cursor compatibility discovery unless its active cells are
+  explicitly disabled;
+- external auth-provider commands and configured extension filesystem paths,
+  including MCP command, argument, and working-directory paths from Grok TOML
+  or project `.mcp.json`, outside `GROK_HOME` or the protected workspace;
+- leader, resume, worktree, restore, and prompt-file shapes that can change
+  execution ownership; and
+- malformed permission, native-sandbox, path-bearing, or prompt-boundary
+  arguments.
+
+Configured `--cwd`, `--agent`, and `GROK_AGENT` paths are traced, required to
+exist without symlink relocation, and declared read-only where they are
+outside provider state. Project config, `.mcp.json`, extension-symlink, and
+ambient compatibility checks follow the effective `--cwd` ancestor chain;
+relative dependencies resolve from that effective cwd. Contained MCP, hook,
+skill, plugin, and LSP processes remain allowed and inherit Bubblewrap. Remote
+model/MCP/auth services are reported as external services outside the
+filesystem guarantee. Grok's legacy shared-temporary session attempt remains
+warning-only in common private scratch; it does not authorize another
+host-persistent writable root.
+
+Only after the common bootstrap receives its nonce-bound ACK does the adapter
+remove configured permission/native-sandbox flags and force:
+
+```text
+--permission-mode bypassPermissions --sandbox off
+```
+
+`--sandbox off` above disables Grok's native Landlock profile inside the
+already-established Bubblewrap namespace. It does not select outer
+`sandbox="none"`. Settings, dry-run events, and live command events show the
+same exact prompt-free prepared prefix.
+
+The shipped outer policy remains `none`. Explicit/configured outer `none` is
+the rollback: it bypasses adapter compatibility checks and preserves the exact
+original Grok command, including its provider-native permission and sandbox
+posture. A requested read-only policy never falls back automatically.
+
+Hermetic tests:
+
+```bash
+python3 -m unittest tests.backends.xai_cli.test_backend \
+  tests.backends.xai_cli.test_sandbox
+```
+
+Credential-free namespace acceptance:
+
+```bash
+./agent_collab_dev.sh bubblewrap-test
+```
+
+The opt-in paid acceptance requires an operator-authorized complete state
+directory and is not run by ordinary verification:
+
+```bash
+AGENT_COLLAB_IT_XAI_SANDBOX_STATE=/absolute/path/to/.grok \
+  ./agent_collab_dev.sh integration-test xai_cli --strict
+```

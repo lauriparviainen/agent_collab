@@ -62,7 +62,12 @@ class AntigravityCliSandboxAdapterTests(unittest.TestCase):
     def test_registry_exposes_only_completed_cli_slices_without_common_backend_branch(self):
         adapter = backends.get_backend("antigravity", "cli").sandbox_adapter
         self.assertIsInstance(adapter, AntigravityCliSandboxAdapter)
-        supported = {("antigravity", "cli"), ("claude", "cli"), ("codex", "cli")}
+        supported = {
+            ("antigravity", "cli"),
+            ("claude", "cli"),
+            ("codex", "cli"),
+            ("xai", "cli"),
+        }
         for agent_type in backends.registered_agent_types():
             for backend_id in backends.registered_backends(agent_type):
                 spec = backends.get_backend(agent_type, backend_id).sandbox_adapter.describe(

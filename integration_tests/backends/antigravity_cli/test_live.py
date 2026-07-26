@@ -77,7 +77,9 @@ class AntigravityCliLiveTests(LiveBackendTestCase):
                             sandbox="read-only",
                         )
                     )
-                    final = await manager.wait_session(started.session_id)
+                    result = await manager.wait_result(started.session_id, timeout_ms=300_000)
+                    self.assertTrue(result.settled, "Antigravity sandbox acceptance timed out")
+                    final = manager.get_session(started.session_id, detail="full")
                     self.assertEqual(final.status, "done", final.failure)
                     self.assertFalse((workspace / "workspace-child-forbidden").exists())
                     self.assertEqual(

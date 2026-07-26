@@ -60,8 +60,8 @@ and Git discovery, normalized mounts, and alias auditing happen before session
 state is created. Each backend registry entry owns a typed `sandbox_adapter`;
 common sandbox code must not branch on backend ids.
 
-Stages 1, 2, and 4 implement `read-only` for `codex_cli`, `claude_cli`, and
-`antigravity_cli` through
+Stages 1 through 4 implement `read-only` for `codex_cli`, `claude_cli`,
+`xai_cli`, and `antigravity_cli` through
 `agent_collab/sandbox/`. A standalone stdlib bootstrap is the first process
 inside Bubblewrap. It reports its exact inherited descriptor roles, then waits
 for a nonce-bound ACK while the daemon pins the namespace reaper/bootstrap and
@@ -89,6 +89,18 @@ arguments with skip-permissions, `accept-edits`, and provider sandbox disabled
 only after the common outer proof ACK. Its stateful plain-text parser retains
 explicit tool/action failure status as terminal evidence even when `agy` exits
 zero.
+
+The Grok Stage 3 adapter keeps the complete effective `GROK_HOME` persistent
+and writable, exports its exact validated mount identity, and keeps ordinary
+temporary/XDG plus legacy `/tmp` writes in common private scratch. It validates
+configured `--cwd`/agent paths, environment-key auth names, contained
+extensions, and project configuration while rejecting managed/requirements
+configuration, external auth commands, ambient foreign extension discovery,
+escaping filesystem dependencies, and leader/resume/worktree/prompt-file
+shapes. Only after the outer proof ACK does it force
+`--permission-mode bypassPermissions --sandbox off`. Cached auth health uses
+file metadata without opening provider credentials. Grok terminal fidelity
+remains unchanged: only `EndTurn` succeeds.
 
 `none` bypasses the sandbox launcher and preserves existing command behavior.
 Unsupported adapters reject explicit read-only before engine discovery.
