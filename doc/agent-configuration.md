@@ -376,9 +376,11 @@ Stages 1 through 4 accept `read-only` for `codex_cli`, `claude_cli`,
 `xai_cli`, `antigravity_cli`, and the in-memory mock backend. Every SDK backend
 fails closed with
 `outer_sandbox_unsupported`; they are not silently exempted. The shipped
-default remains `none` until the complete backend readiness gate is met, so
-omitting this field preserves existing execution. Explicit `none` also leaves
-the provider command and its native controls unchanged.
+default remains `none` until the complete backend readiness gate is met
+(including SDK stages), so omitting this field preserves existing execution.
+Explicit `none` also leaves the provider command and its native controls
+unchanged. Paid CLI outer-sandbox acceptance env vars and path shapes are
+documented in [integration_tests/README.md](../integration_tests/README.md).
 
 On Linux, a supported CLI read-only start:
 

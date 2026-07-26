@@ -48,13 +48,37 @@ The xAI CLI accepts `XAI_API_KEY` or Grok's cached local sign-in. The xAI SDK
 test specifically requires `XAI_API_KEY`, emits message-only events, and asserts
 response identity rather than prose.
 
-The xAI CLI also has a separate paid outer-sandbox acceptance. It is skipped
-unless `AGENT_COLLAB_IT_XAI_SANDBOX_STATE` names an operator-authorized
-absolute complete `.grok` directory. The fixture uses that root directly,
-exercises one Bash action, workspace/Git/child write denial, persistent state,
-private and legacy temporary paths, and descendant cleanup, then removes its
-guarded markers. Do not point it at state that the operator has not authorized
-for mutation.
+### Paid outer-sandbox acceptances (CLI Stages 1–4)
+
+Each subprocess CLI backend has a separate paid outer-sandbox acceptance. The
+tests are skipped unless the matching environment variable names an
+operator-authorized absolute complete provider-state directory. The fixture
+uses that root as the writable provider state for one real tool turn under
+`sandbox=read-only`, asserts workspace (and where applicable Git/child)
+write denial plus a successful state-root marker write, then removes its
+guarded markers. Prefer a temporary owner-private copy of only the auth
+metadata the operator authorizes; do not point these variables at a live
+shared home unless that mutation is explicitly accepted. The tests construct
+an in-process `SessionManager` with an isolated `AGENT_COLLAB_HOME` and do
+not require restarting the user daemon.
+
+| Backend | Environment variable | Required path shape |
+| --- | --- | --- |
+| `codex_cli` | `AGENT_COLLAB_IT_CODEX_SANDBOX_STATE` | complete `CODEX_HOME` directory |
+| `claude_cli` | `AGENT_COLLAB_IT_CLAUDE_SANDBOX_STATE` | complete `CLAUDE_CONFIG_DIR` directory |
+| `antigravity_cli` | `AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE` | complete directory named `.gemini` |
+| `xai_cli` | `AGENT_COLLAB_IT_XAI_SANDBOX_STATE` | complete directory named `.grok` |
+
+Example (xAI; same pattern for the other three with their variables):
+
+```bash
+AGENT_COLLAB_IT_XAI_SANDBOX_STATE=/absolute/path/to/.grok \
+  ./agent_collab_dev.sh integration-test xai_cli --strict
+```
+
+The xAI acceptance also checks private/legacy temporary paths and post-turn
+descendant cleanup. Antigravity may still reach the OS keyring as an external
+service outside the filesystem guarantee.
 
 The Antigravity SDK test uses Vertex when Google Application Default
 Credentials are available. It reads the credential path from

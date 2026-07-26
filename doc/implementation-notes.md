@@ -69,8 +69,12 @@ proves PID namespace identity, zero capabilities, cwd, mount access and source
 identity, and Git logical-root identity. Only after that proof does the
 bootstrap exec the adapter-selected permissive provider command. Provider
 stdout/stderr use separate pipes from Bubblewrap/bootstrap diagnostics.
-Termination owns the Bubblewrap process group and exact wait; the PID namespace
-reaps descendants and private scratch is removed after completion.
+Termination owns the Bubblewrap process group and exact wait; completion waits
+for every pinned namespace pidfd (not the first ready one) so detached
+descendants cannot outlive teardown. Private scratch is removed after
+completion. The CLI product slice (Stages 1–4) is acceptance-verified on the
+design branch; SDK backends remain unsupported for outer `read-only` and must
+be implemented before merging that work to `main`.
 
 The Claude Stage 2 adapter keeps the complete effective `CLAUDE_CONFIG_DIR`
 persistent and writable, leaves legacy `~/.claude.json` read-only, maps

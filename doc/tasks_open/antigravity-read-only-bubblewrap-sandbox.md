@@ -30,14 +30,92 @@
 > the sixth-loop High finding required a post-review fix and the explicit limit
 > forbids a seventh frozen recheck.
 
-**Status:** CLI Stages 1 through 4 implemented; Stage 2 and Stage 4 production
-reviews converged. Stage 3 is implemented and locally verified; its six-loop
-production review limit is exhausted without formal same-loop convergence.
-The SDK stages remain pending.
+**Status:** CLI product slice stabilized on
+`design/bubblewrap-implementation`. Stages 1–4 are implemented; free gates and
+all four paid CLI outer-sandbox acceptances pass. Stage 2 and Stage 4
+production reviews converged; Stage 1 and Stage 3 exhausted their six-loop
+limits without formal same-loop convergence and have no unresolved confirmed
+findings. **Do not merge this branch to `main` until every SDK backend stage
+is implemented** (or positively audited `no_local_effects` where applicable).
+The shipped outer default remains `none`. Issue #43 stays open.
 
 **Created:** 2026-07-25.
 
 **Issue:** [#43](https://github.com/lauriparviainen/agent_collab/issues/43)
+
+## CLI product-slice stabilization (2026-07-26)
+
+This record freezes the subprocess CLI outer-sandbox surface as ready for
+continued SDK work on the same branch. It does **not** authorize a merge to
+`main`, a default-policy flip to `read-only`, issue closeout, or an install
+that would restart a live daemon used by other agents.
+
+### Scope held stable
+
+| Backend | Outer `read-only` | Notes |
+| --- | --- | --- |
+| Common launcher | yes | policy/plan/paths/bootstrap/supervisor; descendant reaping waits every pinned pidfd |
+| `codex_cli` | yes (Stage 1) | complete effective `CODEX_HOME` writable |
+| `claude_cli` | yes (Stage 2) | complete effective `CLAUDE_CONFIG_DIR` writable |
+| `xai_cli` | yes (Stage 3) | complete effective `GROK_HOME` writable |
+| `antigravity_cli` | yes (Stage 4) | complete `$HOME/.gemini` writable; OS keyring external |
+| all `*_sdk` backends | unsupported | fail closed with `outer_sandbox_unsupported` |
+
+Rollback remains explicit/configured outer `sandbox = "none"`. No silent
+fallback. No shared-daemon install was run during this stabilization.
+
+### Free gates (this host)
+
+| Command | Outcome |
+| --- | --- |
+| `./agent_collab_dev.sh test` | Ruff lint/format and 1,306 hermetic tests passed; one expected skip |
+| `./agent_collab_dev.sh build --check` | Config and both generated daemon API artifacts verified current |
+| `./agent_collab_dev.sh bubblewrap-test` | Eight real Bubblewrap tests passed |
+| `git diff --check` | Passed |
+
+### Paid CLI outer-sandbox acceptances
+
+Each acceptance used an owner-private temporary complete provider-state root
+with only the operator-authorized authentication (and minimal config) metadata
+copied in. Real home state trees were not used as the writable root and
+retained no acceptance markers after cleanup. Tests ran through an in-process
+`SessionManager` with an isolated `AGENT_COLLAB_HOME`; the user daemon was not
+restarted.
+
+| Backend | Environment | Result |
+| --- | --- | --- |
+| `codex_cli` | `AGENT_COLLAB_IT_CODEX_SANDBOX_STATE` → temporary complete `CODEX_HOME` (auth + config only) | Passed in 18.917s (`gpt-5.6-luna` / low) |
+| `claude_cli` | `AGENT_COLLAB_IT_CLAUDE_SANDBOX_STATE` → temporary complete `CLAUDE_CONFIG_DIR` (credentials + settings) | Passed in 18.190s (`sonnet` / low) |
+| `antigravity_cli` | `AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE` → temporary complete `.gemini` under private `HOME` | Passed in 16.473s (`gemini-3.5-flash-low`) |
+| `xai_cli` | already recorded under Stage 3 paid-acceptance follow-up | Passed in 22.786s (Grok 4.5 / low) |
+
+Operator preconditions for re-running any acceptance:
+
+1. Linux host with `bwrap` and unprivileged user namespaces.
+2. A **dedicated** absolute state directory the operator authorizes for mutation
+   (prefer a temporary copy; do not point at an active multi-agent home unless
+   that mutation is explicitly accepted).
+3. Auth material sufficient for one non-interactive tool turn; never log or
+   print credential contents.
+4. For Antigravity, basename must be `.gemini` and `HOME` is the parent; the
+   OS keyring may still be consulted outside the filesystem guarantee.
+5. For Grok, basename must be `.grok` and the path must be owner-private.
+6. Run only the acceptance method (or
+   `./agent_collab_dev.sh integration-test <backend> --strict` with the env set).
+   Do **not** run `./agent_collab.sh install` while other agents share the
+   daemon; install restarts a running daemon.
+
+### Explicitly deferred until after SDK stages
+
+- Merge of `design/bubblewrap-implementation` to `main`
+- Built-in/default outer `sandbox = "read-only"` for shipped agents/workflows
+- Closing issue #43
+- SDK outer support (`antigravity_sdk`, `claude_sdk`, `codex_sdk` worker
+  boundary; `xai_sdk` `no_local_effects` audit)
+- Non-Linux engines, network/IPC/keyring isolation, resource/seccomp limits
+
+Next implementation work on this branch is the SDK stages, not further CLI
+feature expansion or a merge.
 
 ## Stage 3 implementation handoff (2026-07-26)
 
