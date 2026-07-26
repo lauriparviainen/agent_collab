@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
 import uuid
 
 from .config import (
@@ -612,6 +612,7 @@ class SessionManager:
                 collab_config,
                 workdir,
                 selection.agent_backends,
+                normalized.agent_options,
             )
         except Exception as exc:
             from .sandbox.specs import SandboxFailure
@@ -657,6 +658,7 @@ class SessionManager:
         config: CollaborationConfig,
         workdir: Path,
         agent_backends: Dict[str, str],
+        agent_options: Mapping[str, Mapping[str, Any]],
     ) -> Any:
         from . import backends as backend_registry
         from .paths import AgentCollabHome
@@ -680,13 +682,22 @@ class SessionManager:
         workflow = config.workflows[request.workflow]
         selected = list(dict.fromkeys(workflow_members(workflow)))
         agents = {}
+        command_previews = {}
         for agent_id in selected:
             agent = config.agents[agent_id]
             if request.mock or agent.type == "mock":
                 adapter = NoLocalEffectsSandboxAdapter()
             else:
                 backend_id = agent_backends[agent_id]
-                adapter = backend_registry.get_backend(agent.type, backend_id).sandbox_adapter
+                backend = backend_registry.get_backend(agent.type, backend_id)
+                adapter = backend.sandbox_adapter
+                preview = backend.command_preview(
+                    agent,
+                    dict(agent_options.get(agent_id, {})),
+                    workdir,
+                )
+                if preview is not None:
+                    command_previews[agent_id] = tuple(preview)
             agents[agent_id] = (agent.cwd, dict(agent.env), adapter)
         operator = SandboxOperatorConfig(
             extra_readable_dirs=tuple(config.system.sandbox_extra_readable_dirs),
@@ -701,6 +712,7 @@ class SessionManager:
             workspace_path=workdir,
             agents=agents,
             operator=operator,
+            command_previews=command_previews,
         )
         enforced = [
             item

@@ -12,9 +12,15 @@
 > verified. There are no unresolved confirmed findings or disagreements.
 > Formal review convergence is not claimed because the sixth-session diff
 > changed after adjudication and the explicit limit forbids a seventh session.
+> Stage 2 now implements the `claude_cli` adapter on the same branch without
+> changing that historical Stage 1 record. Its first independent production
+> review session, `daemon-624f7a278c604d10`, found one confirmed Medium
+> command-event projection defect; the fix and regression test are locally
+> green. Post-fix session `daemon-0bac6b95c4344bb3` converged: both independent
+> reviewers rechecked the closeout and reported no High/Medium findings.
 
-**Status:** Stage 1 implemented and locally verified; six-session
-production-review limit reached without formal post-fix convergence.
+**Status:** Stages 1 and 2 implemented and locally verified; Stage 2
+production review converged.
 
 **Created:** 2026-07-25.
 
@@ -63,6 +69,95 @@ remains. Production implementation and its acceptance fixtures remain
 intentionally pending in that historical design-review record rather than
 review findings; the implementation record below supersedes that delivery
 status.
+
+## Stage 2 implementation review reconciliation (2026-07-26)
+
+Stage 2 loop 1 used one `interactive=false` parallel
+`grok-gemini-review` session over the same frozen working-tree diff:
+
+- session: `daemon-624f7a278c604d10`;
+- base: `HEAD`;
+- frozen diff digest:
+  `9aa3183622819d83fceb4adc9cffceec33ca5b51f72c755b691cec2efcbf04dd`;
+- `xai_cli`: Grok 4.5, high reasoning and thinking,
+  `permission_mode=bypassPermissions`, provider sandbox `read-only`;
+- `antigravity_cli`: Gemini 3.1 Pro High, mode `plan`; and
+- changed-file scope: `README.md`,
+  `agent_collab/backends/claude_cli/{README.md,backend.py,sandbox.py}`,
+  `agent_collab/{daemon.py,default_config.toml,options.py,referee.py,runners.py}`,
+  `agent_collab/sandbox/{bubblewrap.py,plan.py,specs.py}`,
+  `conditional_tests/test_bubblewrap.py`, `doc/agent-configuration.md`,
+  `doc/implementation-notes.md`,
+  `integration_tests/backends/claude_cli/test_live.py`,
+  `tests/backends/claude_cli/test_sandbox.py`,
+  `tests/sandbox/test_bubblewrap.py`, and `tests/test_daemon.py`.
+
+Gemini completed with no High/Medium findings. Grok reported one Medium
+finding, so the reviewer reports disagreed. Local tracing confirmed it:
+`SubprocessRunner` emitted the raw provider prefix for a live read-only turn
+while `SandboxSupervisor` executed `prepare_inner(...)`. An ambient Claude MCP
+configuration could therefore appear enabled in the audit event even though
+the actual child received the strict empty-MCP profile. Live command events now
+derive their prompt-free preview through the same pure adapter preparation as
+dry-run and settings projection, while the supervisor remains the sole launch
+rewrite authority. A hermetic runner test proves the event contains the
+prepared prefix and the supervisor still receives the original prefix.
+
+Focused post-fix verification passed 109 runner, Claude adapter, and daemon
+tests plus `git diff --check`. Because the reviewed diff changed, loop 1 does
+not establish convergence.
+
+Stage 2 loop 2 used the same workflow, members, models, and effective options
+in session `daemon-0bac6b95c4344bb3`. It reviewed the fresh 21-file
+working-tree diff against `HEAD` with frozen digest
+`90194a2216a6942998a2bcd5c61bdc22d05bf342d571b236154dc2de9eff4eaa`;
+the additional scope was this task document and `tests/test_runners.py`.
+Both reviewers explicitly rechecked the live command-event closeout and
+confirmed that events use the prompt-free prepared prefix while the supervisor
+receives and rewrites the original prefix at launch. Both reported no
+High/Medium findings. There was no disagreement and no candidate finding to
+adjudicate, so convergence was achieved after two of the six permitted
+parallel sessions; no further paid loop was run. This paragraph is the
+documentation-only post-review record of that frozen implementation snapshot.
+
+## Stage 2 implementation handoff (2026-07-26)
+
+Stage 2 extends the common Stage 1 launcher only for `claude_cli`. The adapter
+advertises `direct_process` read-only support, validates the complete effective
+`CLAUDE_CONFIG_DIR` (or default `~/.claude`) as persistent writable state,
+keeps legacy `~/.claude.json` read-only, maps `CLAUDE_CODE_TMPDIR` to private
+scratch, disables automatic updates, rejects detectable admin-managed settings
+or MCP policy, removes conflicting provider flags, and applies
+`--dangerously-skip-permissions`, strict empty MCP configuration, and transient
+native-sandbox disablement only behind the proven outer boundary. `--add-dir`
+paths remain visible but read-only. Explicit `sandbox = "none"` preserves the
+original provider command and remains the default rollback.
+
+The daemon, referee, dry-run runner, settings projection, and private-temp
+mapping changes are backend-neutral; common code contains no Claude backend-id
+branch. Unit, daemon, real Bubblewrap, and opt-in credentialed acceptance
+coverage accompany the adapter. Before production review, the complete local
+gate passed 1,255 hermetic tests with one expected skip,
+`./agent_collab_dev.sh build --check`, five real Bubblewrap tests, and
+`git diff --check`.
+
+Final post-review verification produced the same result:
+
+- `./agent_collab_dev.sh test`: Ruff lint and format checks passed; 1,255
+  hermetic tests passed with one expected skip;
+- `./agent_collab_dev.sh build --check`: effective configuration and generated
+  OpenAPI/HTTP artifacts verified current;
+- `./agent_collab_dev.sh bubblewrap-test`: five real Linux namespace tests
+  passed, including the Claude-shaped boundary fixture;
+- `git diff --check`: passed; and
+- GitHub issue #43 was fetched read-only and remained open.
+
+The credentialed Claude acceptance remains intentionally unrun. It requires a
+dedicated complete state directory through
+`AGENT_COLLAB_IT_CLAUDE_SANDBOX_STATE` and separate authorization for
+`./agent_collab_dev.sh integration-test claude_cli --strict`; the current task
+did not authorize that provider call. Stage 1 history above and below is
+preserved as historical evidence, not rewritten as Stage 2 work.
 
 ## Stage 1 implementation review reconciliation (2026-07-26)
 

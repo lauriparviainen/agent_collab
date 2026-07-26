@@ -97,11 +97,13 @@ class EnvironmentSpec:
     set_values: Mapping[str, str] = field(default_factory=dict)
     unset_names: Tuple[str, ...] = ()
     secret_names: Tuple[str, ...] = ()
+    private_tmp_names: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "set_values", MappingProxyType(dict(self.set_values)))
         object.__setattr__(self, "unset_names", tuple(self.unset_names))
         object.__setattr__(self, "secret_names", tuple(self.secret_names))
+        object.__setattr__(self, "private_tmp_names", tuple(self.private_tmp_names))
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,7 @@ class SandboxContext:
     workspace: Path
     cwd: Path
     inherited_environment: Mapping[str, str]
+    command_preview: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "workspace", self.workspace)
@@ -160,6 +163,7 @@ class SandboxContext:
             "inherited_environment",
             MappingProxyType(dict(self.inherited_environment)),
         )
+        object.__setattr__(self, "command_preview", tuple(self.command_preview))
 
 
 @runtime_checkable

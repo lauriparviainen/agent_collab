@@ -176,6 +176,7 @@ class Referee:
         workflow = self.collab_config.workflows[self.config.workflow]
         selected = list(dict.fromkeys(workflow_members(workflow)))
         agents = {}
+        command_previews = {}
         for agent_id in selected:
             agent = self.collab_config.agents[agent_id]
             if self.config.mock or agent.type == "mock":
@@ -184,13 +185,21 @@ class Referee:
                 backend_id = self._backend_for(agent_id) or backend_registry.resolve_backend_id(
                     agent
                 )
-                adapter = backend_registry.get_backend(agent.type, backend_id).sandbox_adapter
+                backend = backend_registry.get_backend(agent.type, backend_id)
+                adapter = backend.sandbox_adapter
+                options = self._options_for(agent_id)
+                if not options:
+                    options = dict(backend.normalize_options(agent, {}))
+                preview = backend.command_preview(agent, options, self.workdir)
+                if preview is not None:
+                    command_previews[agent_id] = tuple(preview)
             agents[agent_id] = (agent.cwd, dict(agent.env), adapter)
         system = self.collab_config.system
         return resolve_session_plan(
             policy=policy,
             workspace_path=self.workdir,
             agents=agents,
+            command_previews=command_previews,
             operator=SandboxOperatorConfig(
                 extra_readable_dirs=tuple(system.sandbox_extra_readable_dirs),
                 extra_writable_dirs=tuple(system.sandbox_extra_writable_dirs),

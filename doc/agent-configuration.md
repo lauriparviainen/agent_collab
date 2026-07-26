@@ -372,21 +372,21 @@ boundary. It is separate from provider-native fields such as
 `backend_options.codex_cli.sandbox`. The two layers are reported separately in
 session settings and option discovery.
 
-Stage 1 accepts `read-only` only for `codex_cli` and the in-memory mock
-backend. Other CLI and SDK backends fail closed with
+Stages 1–2 accept `read-only` for `codex_cli`, `claude_cli`, and the in-memory
+mock backend. Other CLI and every SDK backend fail closed with
 `outer_sandbox_unsupported`; they are not silently exempted. The shipped
 default remains `none` until the complete backend readiness gate is met, so
 omitting this field preserves existing execution. Explicit `none` also leaves
 the provider command and its native controls unchanged.
 
-On Linux, a `codex_cli` read-only start:
+On Linux, a supported CLI read-only start:
 
 - validates the workspace, Git metadata, writable provider state, filesystem,
   mount aliases, and hard links before session creation;
 - establishes and proves a Bubblewrap namespace before the permissive inner
-  Codex profile can execute;
+  provider profile can execute;
 - makes `/`, the workspace, and resolved Git storage read-only while keeping a
-  private `$TMPDIR` and the complete effective `CODEX_HOME` writable;
+  private `$TMPDIR` and the complete effective provider state writable;
 - reaps the namespace and removes private scratch on completion, stop, or
   failure.
 
@@ -396,11 +396,30 @@ state root: authentication, SQLite state, skills, plugins, and other Codex
 extensions below it remain available. A workspace symlink into this declared
 state follows the writable target; session settings report this limitation.
 
+Claude uses the same common boundary with the complete effective
+`CLAUDE_CONFIG_DIR` (normally `~/.claude`) writable. Its legacy
+`~/.claude.json` remains read-only, while `session-env` and all other state
+below the selected config root can persist. After proof, the adapter applies
+`--dangerously-skip-permissions`, disables Claude's native sandbox through
+transient settings, and forces a strict empty MCP configuration. Explicit
+settings that conflict with this profile and admin-managed settings/MCP fail
+closed. `CLAUDE_CODE_TMPDIR` is private turn scratch.
+
+Current staged readiness and rollback are:
+
+| Backend shape | Explicit outer `read-only` | Rollback |
+| --- | --- | --- |
+| `codex_cli` | OS-enforced direct process (Stage 1) | explicit/configured `none` |
+| `claude_cli` | OS-enforced direct process (Stage 2) | explicit/configured `none` |
+| `xai_cli`, `antigravity_cli` | unsupported; start rejected | no implicit fallback |
+| all SDK backends | unsupported; start rejected | no implicit fallback |
+| in-memory mock | audited no-local-effects | `none` disables the policy label |
+
 Only global user config may set outer-sandbox operator policy:
 
 ```toml
 [system]
-sandbox_default = "none"              # "read-only" is opt-in during Stage 1
+sandbox_default = "none"              # "read-only" stays opt-in during staged rollout
 # sandbox_override = "read-only"      # installation-wide, callers cannot conflict
 sandbox_extra_readable_dirs = []
 sandbox_extra_writable_dirs = []
@@ -411,13 +430,13 @@ sandbox_alias_audit_timeout_seconds = 10
 
 Project `[system]` tables are ignored. Operator paths and a scratch root must
 be absolute and pass strict ownership, symlink, overlap, filesystem, and alias
-checks. The engine is Linux-only in Stage 1; an explicit `read-only` request
+checks. The engine is Linux-only; an explicit `read-only` request
 fails before provider execution when Bubblewrap or compatible user namespaces
 are unavailable.
 
 ```bash
 agent-collab start --sandbox read-only --workflow solo \
-  --members '{"claude_cli":"codex_cli"}' "Inspect this repository"
+  "Inspect this repository"
 ```
 
 REST, MCP, direct CLI, dry-run, session detail, TUI detail, and

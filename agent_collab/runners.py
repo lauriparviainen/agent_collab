@@ -63,12 +63,14 @@ class DryRunRunner(AgentRunner):
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         run_dir = _resolve_run_dir(workdir, self.cwd)
         command = self.command_builder(run_dir) if self.command_builder else list(self.command)
+        policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
+        if getattr(policy, "value", policy) == "read-only":
+            command = list(self.sandbox_plan.prepare_inner(command))
         raw = {
             "command_preview": command,
             "workdir": str(run_dir),
             "startup": "not_attempted_dry_run",
         }
-        policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
         if policy is not None:
             raw["sandbox"] = getattr(policy, "value", str(policy))
         await emit(
@@ -164,28 +166,31 @@ class SubprocessRunner(AgentRunner):
         from .sandbox.specs import SandboxFailure, SandboxPolicy
 
         policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
-        command_raw = {
-            "command_preview": list(command_prefix),
-            "workdir": str(run_dir),
-            "sandbox": "read-only" if policy is SandboxPolicy.READ_ONLY else "none",
-            "mount_labels": [
-                label
-                for operation in getattr(self.sandbox_plan, "operations", ())
-                for label in operation.labels
-            ],
-            "startup": (
-                "establishment_pending" if policy is SandboxPolicy.READ_ONLY else "disabled"
-            ),
-        }
-        await emit(
-            Event.create(
-                "referee",
-                "command",
-                f"preparing {self.name} in {run_dir}",
-                command_raw,
-            )
-        )
         try:
+            command_preview = list(command_prefix)
+            if policy is SandboxPolicy.READ_ONLY:
+                command_preview = list(self.sandbox_plan.prepare_inner(command_prefix))
+            command_raw = {
+                "command_preview": command_preview,
+                "workdir": str(run_dir),
+                "sandbox": "read-only" if policy is SandboxPolicy.READ_ONLY else "none",
+                "mount_labels": [
+                    label
+                    for operation in getattr(self.sandbox_plan, "operations", ())
+                    for label in operation.labels
+                ],
+                "startup": (
+                    "establishment_pending" if policy is SandboxPolicy.READ_ONLY else "disabled"
+                ),
+            }
+            await emit(
+                Event.create(
+                    "referee",
+                    "command",
+                    f"preparing {self.name} in {run_dir}",
+                    command_raw,
+                )
+            )
             env = os.environ.copy()
             env.update(self.env)
             if policy is SandboxPolicy.READ_ONLY:

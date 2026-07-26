@@ -144,11 +144,83 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(outer["support"], "no_local_effects")
             self.assertEqual(outer["enforcement"], "not_applicable_no_local_effects")
 
+    async def test_claude_read_only_dry_run_projects_effective_profile_without_prompt(self):
+        from agent_collab.backends.claude_cli import sandbox as claude_sandbox
+        from agent_collab.sandbox.bubblewrap import BubblewrapInstallation
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir(mode=0o700)
+            state_root = root / "claude-state"
+            state_root.mkdir(mode=0o700)
+            managed_root = root / "managed"
+            managed_root.mkdir(mode=0o700)
+            manager = SessionManager()
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "AGENT_COLLAB_HOME": str(root / "home"),
+                        "CLAUDE_CONFIG_DIR": str(state_root),
+                    },
+                ),
+                mock.patch.object(
+                    claude_sandbox,
+                    "LINUX_MANAGED_CONFIG_ROOT",
+                    managed_root,
+                ),
+                mock.patch(
+                    "agent_collab.sandbox.plan.resolve_scratch_anchor",
+                    return_value=Path("/safe/scratch"),
+                ),
+                mock.patch(
+                    "agent_collab.sandbox.bubblewrap.discover_bubblewrap",
+                    return_value=BubblewrapInstallation(Path("/usr/bin/bwrap"), "fixture"),
+                ),
+            ):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="PRIVATE CLAUDE DRY RUN PROMPT",
+                        workflow="solo",
+                        sandbox="read-only",
+                        dry_run=True,
+                        max_turns=1,
+                        timeout=5,
+                        detail="full",
+                        workdir=workspace,
+                    )
+                )
+                final = await self._wait_for_terminal(manager, state.session_id)
+                events = manager.read_events(state.session_id, 0).events
+
+        self.assertEqual(final.status, "done")
+        outer = state.settings["agents"]["claude_cli"]["outer_sandbox"]
+        self.assertEqual(outer["support"], "direct_process")
+        self.assertEqual(outer["enforcement"], "os_enforced")
+        preview = state.settings["agents"]["claude_cli"]["command_preview"]
+        self.assertIn("--dangerously-skip-permissions", preview)
+        self.assertNotIn("--permission-mode", preview)
+        self.assertNotIn("PRIVATE CLAUDE DRY RUN PROMPT", preview)
+        command_event = next(item for item in events if item["type"] == "command")
+        self.assertEqual(command_event["raw"]["command_preview"], preview)
+        self.assertNotIn("PRIVATE CLAUDE DRY RUN PROMPT", str(command_event["raw"]))
+
     async def test_unsupported_read_only_rejects_before_session_creation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             manager = SessionManager()
-            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+            from agent_collab.backends import get_backend
+            from agent_collab.sandbox.specs import UnsupportedSandboxAdapter
+
+            with (
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}),
+                mock.patch.object(
+                    get_backend("claude", "cli"),
+                    "sandbox_adapter",
+                    UnsupportedSandboxAdapter(),
+                ),
+            ):
                 with self.assertRaises(StartOptionsError) as raised:
                     await manager.start_session(
                         StartSessionRequest(

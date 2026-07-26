@@ -127,14 +127,21 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("output transport failed", error.text)
 
     async def test_launch_time_sandbox_failure_retains_its_stable_outcome_code(self):
+        prepared_prefix = (
+            sys.executable,
+            "-c",
+            "raise SystemExit('prepared provider must not run')",
+        )
+        plan = SimpleNamespace(
+            policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+            operations=(),
+            prepare_inner=mock.Mock(return_value=prepared_prefix),
+        )
         runner = SubprocessRunner(
             "codex",
             [sys.executable, "-c", "raise SystemExit('provider must not run')"],
             _json_message_parser,
-            sandbox_plan=SimpleNamespace(
-                policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
-                operations=(),
-            ),
+            sandbox_plan=plan,
         )
         supervisor = mock.Mock()
         supervisor.launch_cli = mock.AsyncMock(
@@ -161,6 +168,15 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             (outcome.outcome, outcome.code),
             ("failed", "outer_sandbox_hardlink_alias"),
+        )
+        command = next(event for event in events if event.type == "command")
+        self.assertEqual(command.raw["command_preview"], list(prepared_prefix))
+        plan.prepare_inner.assert_called_once_with(runner.command_prefix)
+        supervisor.launch_cli.assert_awaited_once_with(
+            plan,
+            runner.command_prefix,
+            "prompt",
+            stream_limit=runner.stream_limit,
         )
         error = next(event for event in events if event.type == "error")
         self.assertEqual(error.raw["code"], "outer_sandbox_hardlink_alias")
@@ -196,6 +212,7 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
             sandbox_plan=SimpleNamespace(
                 policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
                 operations=(),
+                prepare_inner=lambda command: tuple(command),
             ),
         )
         supervisor = mock.Mock()

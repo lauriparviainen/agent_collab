@@ -145,15 +145,22 @@ def resolve_session_plan(
     workspace_path: Path,
     agents: Mapping[str, tuple[Optional[str], Mapping[str, str], SandboxAdapter]],
     operator: SandboxOperatorConfig,
+    command_previews: Optional[Mapping[str, Sequence[str]]] = None,
     audit: bool = True,
 ) -> ResolvedSandboxSessionPlan:
     workspace = resolve_workspace(workspace_path)
+    previews = command_previews or {}
     resolved: dict[str, ResolvedSandboxPlan] = {}
     for agent_id, (configured_cwd, environment, adapter) in agents.items():
         cwd = resolve_effective_cwd(workspace, configured_cwd)
         inherited = os.environ.copy()
         inherited.update(environment)
-        context = SandboxContext(workspace.destination, cwd, inherited)
+        context = SandboxContext(
+            workspace.destination,
+            cwd,
+            inherited,
+            tuple(previews.get(agent_id, ())),
+        )
         spec = adapter.describe(context)
         if policy.effective not in spec.policies:
             raise SandboxFailure(

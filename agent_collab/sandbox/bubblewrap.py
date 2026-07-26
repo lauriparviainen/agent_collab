@@ -260,6 +260,8 @@ def build_bubblewrap_argv(
         "XDG_DATA_HOME": str(scratch / "xdg-data"),
         "XDG_STATE_HOME": str(scratch / "xdg-state"),
     }
+    for name in plan.spec.environment.private_tmp_names:
+        environment[name] = str(private_tmp)
     unset = set(plan.spec.environment.unset_names) | set(GIT_REDIRECT_ENV)
     argv = [
         str(installation.executable),

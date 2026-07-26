@@ -109,7 +109,10 @@ class BubblewrapArgvTests(unittest.TestCase):
             spec=BackendSandboxSpec(
                 support=SandboxSupport.DIRECT_PROCESS,
                 policies=frozenset({SandboxPolicy.READ_ONLY}),
-                environment=EnvironmentSpec(set_values={"CODEX_HOME": "/state"}),
+                environment=EnvironmentSpec(
+                    set_values={"CODEX_HOME": "/state"},
+                    private_tmp_names=("CLAUDE_CODE_TMPDIR",),
+                ),
                 native_profile=NativeSandboxProfile(),
             ),
             adapter=UnsupportedSandboxAdapter(),
@@ -148,6 +151,8 @@ class BubblewrapArgvTests(unittest.TestCase):
         self.assertEqual(argv[-2:], ("--", "/usr/bin/true"))
         self.assertLess(argv.index("--unsetenv"), argv.index("--setenv"))
         self.assertIn("/work with spaces", argv)
+        claude_tmp_index = argv.index("CLAUDE_CODE_TMPDIR")
+        self.assertEqual(argv[claude_tmp_index + 1], "/scratch/tmp")
 
 
 class SandboxLaunchInputTests(unittest.TestCase):

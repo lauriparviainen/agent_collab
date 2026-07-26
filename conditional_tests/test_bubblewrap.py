@@ -11,6 +11,11 @@ import sys
 import tempfile
 import unittest
 
+from agent_collab.backends.claude_cli.sandbox import (
+    EMPTY_MCP_CONFIG,
+    TRANSIENT_NATIVE_SETTINGS,
+    ClaudeCliSandboxAdapter,
+)
 from agent_collab.sandbox.plan import SandboxOperatorConfig, resolve_session_plan
 from agent_collab.sandbox.policy import resolve_sandbox_policy
 from agent_collab.sandbox.specs import (
@@ -90,6 +95,45 @@ import os, subprocess, sys, time
 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
 print(child.pid, flush=True)
 time.sleep(60)
+"""
+
+CLAUDE_ACTION = r"""#!__PYTHON__
+import json, os, pathlib, subprocess, sys
+workspace = pathlib.Path(os.environ["CLAUDE_BOUNDARY_WORKSPACE"])
+state = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"])
+result = {
+    "dangerous_once": sys.argv.count("--dangerously-skip-permissions") == 1,
+    "strict_mcp_once": sys.argv.count("--strict-mcp-config") == 1,
+    "empty_mcp": EMPTY_MCP in sys.argv,
+    "transient_settings": TRANSIENT_SETTINGS in sys.argv,
+    "prompt_has_policy": sys.argv[-1].startswith("FILESYSTEM POLICY\n"),
+    "claude_tmp_is_private_tmp": os.environ["CLAUDE_CODE_TMPDIR"] == os.environ["TMPDIR"],
+    "updater_disabled": os.environ["DISABLE_AUTOUPDATER"] == "1",
+}
+try:
+    (workspace / "direct-forbidden").write_text("x", encoding="utf-8")
+    result["direct"] = "allowed"
+except OSError:
+    result["direct"] = "blocked"
+session_env = state / "session-env" / "fixture"
+session_env.mkdir(parents=True)
+(session_env / "allowed").write_text("state", encoding="utf-8")
+result["state"] = "allowed"
+child = subprocess.run(
+    [
+        sys.executable,
+        "-c",
+        "import os,pathlib;"
+        "p=pathlib.Path(os.environ['CLAUDE_BOUNDARY_WORKSPACE'])/'child-forbidden';"
+        "\ntry: p.write_text('x'); print('allowed')"
+        "\nexcept OSError: print('blocked')",
+    ],
+    check=True,
+    text=True,
+    stdout=subprocess.PIPE,
+)
+result["child"] = child.stdout.strip()
+print(json.dumps(result, sort_keys=True))
 """
 
 
@@ -338,3 +382,106 @@ class BubblewrapBoundaryTests(unittest.IsolatedAsyncioTestCase):
                     stream_limit=1024 * 1024,
                 )
             self.assertEqual(raised.exception.code, "outer_sandbox_hardlink_alias")
+
+    async def test_claude_execution_shape_contains_direct_and_descendant_writes(self):
+        if platform.system() != "Linux":
+            self.skipTest("Claude Bubblewrap boundary test requires Linux")
+        if shutil.which("bwrap") is None:
+            self.skipTest("Claude Bubblewrap boundary test requires bwrap on PATH")
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        if not runtime:
+            self.skipTest("XDG_RUNTIME_DIR is unavailable for the safe scratch anchor")
+        runtime_path = Path(runtime)
+        try:
+            runtime_stat = runtime_path.stat()
+        except OSError:
+            self.skipTest("XDG_RUNTIME_DIR is not accessible")
+        if runtime_stat.st_uid != os.getuid() or runtime_stat.st_mode & 0o077:
+            self.skipTest("XDG_RUNTIME_DIR is not an owner-private daemon runtime")
+
+        with tempfile.TemporaryDirectory(
+            prefix="agent-collab-claude-boundary-",
+            dir=runtime_path,
+        ) as raw:
+            root = Path(raw).resolve()
+            root.chmod(0o700)
+            workspace = root / "workspace"
+            state = root / "claude-state"
+            workspace.mkdir(mode=0o700)
+            state.mkdir(mode=0o700)
+            fake_claude = root / "fake-claude"
+            fake_claude.write_text(
+                CLAUDE_ACTION.replace("__PYTHON__", str(Path(sys.executable).resolve()))
+                .replace("EMPTY_MCP", repr(EMPTY_MCP_CONFIG))
+                .replace("TRANSIENT_SETTINGS", repr(TRANSIENT_NATIVE_SETTINGS)),
+                encoding="utf-8",
+            )
+            fake_claude.chmod(0o700)
+            command = (
+                str(fake_claude),
+                "-p",
+                "--permission-mode",
+                "default",
+                "--mcp-config",
+                '{"mcpServers":{"ambient":{"command":"local"}}}',
+            )
+            adapter = ClaudeCliSandboxAdapter()
+            try:
+                plan = resolve_session_plan(
+                    policy=resolve_sandbox_policy("read-only", "none"),
+                    workspace_path=workspace,
+                    agents={
+                        "claude": (
+                            None,
+                            {
+                                "CLAUDE_CONFIG_DIR": str(state),
+                                "CLAUDE_BOUNDARY_WORKSPACE": str(workspace),
+                            },
+                            adapter,
+                        )
+                    },
+                    command_previews={"claude": command},
+                    operator=SandboxOperatorConfig(
+                        scratch_root=runtime_path / "agent-collab" / "sandbox-tests",
+                    ),
+                ).agents["claude"]
+            except SandboxFailure as exc:
+                if exc.code == "outer_sandbox_backend_incompatible":
+                    self.skipTest("Claude admin-managed configuration is active")
+                raise
+
+            process = await SandboxSupervisor().launch_cli(
+                plan,
+                command,
+                "run the Claude structural action",
+                stream_limit=1024 * 1024,
+            )
+            scratch = process._scratch
+            stdout_task = asyncio.create_task(process.stdout.read())
+            stderr_task = asyncio.create_task(process.stderr.read())
+            code = await process.wait()
+            stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+
+            self.assertEqual(code, 0, stderr.decode("utf-8", errors="replace"))
+            self.assertEqual(
+                json.loads(stdout.decode("utf-8")),
+                {
+                    "child": "blocked",
+                    "claude_tmp_is_private_tmp": True,
+                    "dangerous_once": True,
+                    "direct": "blocked",
+                    "empty_mcp": True,
+                    "prompt_has_policy": True,
+                    "state": "allowed",
+                    "strict_mcp_once": True,
+                    "transient_settings": True,
+                    "updater_disabled": True,
+                },
+            )
+            self.assertFalse((workspace / "direct-forbidden").exists())
+            self.assertFalse((workspace / "child-forbidden").exists())
+            self.assertEqual(
+                (state / "session-env" / "fixture" / "allowed").read_text(encoding="utf-8"),
+                "state",
+            )
+            self.assertFalse(scratch.exists())

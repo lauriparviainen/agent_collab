@@ -60,16 +60,24 @@ and Git discovery, normalized mounts, and alias auditing happen before session
 state is created. Each backend registry entry owns a typed `sandbox_adapter`;
 common sandbox code must not branch on backend ids.
 
-Stage 1 implements `read-only` for `codex_cli` through
+Stages 1–2 implement `read-only` for `codex_cli` and `claude_cli` through
 `agent_collab/sandbox/`. A standalone stdlib bootstrap is the first process
 inside Bubblewrap. It reports its exact inherited descriptor roles, then waits
 for a nonce-bound ACK while the daemon pins the namespace reaper/bootstrap and
 proves PID namespace identity, zero capabilities, cwd, mount access and source
 identity, and Git logical-root identity. Only after that proof does the
-bootstrap exec the adapter-selected permissive Codex command. Provider
+bootstrap exec the adapter-selected permissive provider command. Provider
 stdout/stderr use separate pipes from Bubblewrap/bootstrap diagnostics.
 Termination owns the Bubblewrap process group and exact wait; the PID namespace
 reaps descendants and private scratch is removed after completion.
+
+The Claude Stage 2 adapter keeps the complete effective `CLAUDE_CONFIG_DIR`
+persistent and writable, leaves legacy `~/.claude.json` read-only, maps
+`CLAUDE_CODE_TMPDIR` to private scratch, rejects admin-managed configuration,
+and replaces ambient MCP/permission/native-sandbox arguments with the strict
+empty-MCP, skip-permissions, transient-sandbox-disabled profile only after the
+outer proof gate. The common command context and dry-run projection remain
+backend-neutral.
 
 `none` bypasses the sandbox launcher and preserves existing command behavior.
 Unsupported adapters reject explicit read-only before engine discovery.
