@@ -89,7 +89,7 @@ space, configured cwd identity, legacy `/tmp` isolation, and cleanup. The
 opt-in paid acceptance requires
 `AGENT_COLLAB_IT_XAI_SANDBOX_STATE=/absolute/path/to/.grok`. One separately
 authorized run and its teardown-fixture correction are recorded below; the
-corrected paid rerun remains pending separate authorization.
+corrected paid rerun passed.
 
 Final local verification passed:
 
@@ -181,8 +181,15 @@ to be absent immediately when completion settles.
 The live acceptance now runs a repeating background marker writer with all
 stdio detached. After the supervised turn settles it deletes any marker
 legitimately written during the live turn and waits for a survivor to recreate
-it. This distinguishes in-turn execution from post-teardown survival. No
-second credentialed call was made after changing the fixture.
+it. This distinguishes in-turn execution from post-teardown survival.
+
+The separately authorized corrected rerun used Grok 4.5 with low thinking and
+the same owner-private temporary `.grok` authentication copy. The single
+acceptance test passed in 22.786 seconds. Its direct, child, Git, private
+scratch, persistent state, legacy `/tmp`, and post-completion descendant
+assertions all passed. Cleanup removed the temporary state and every guarded
+marker; the real `.grok` root retained mode `0755`, its authentication file
+retained mode `0600`, and the repository remained clean.
 
 The user-requested follow-up dual review used parallel session
 `daemon-d56b1b857c584fc9` against `HEAD`, outer sandbox `none`, with
@@ -207,6 +214,7 @@ Final follow-up verification passed:
 | `./agent_collab_dev.sh test` | Ruff lint/format and 1,306 hermetic tests passed; one expected skip |
 | `./agent_collab_dev.sh build --check` | Config and both generated daemon API artifacts verified current |
 | `./agent_collab_dev.sh bubblewrap-test` | Eight real Bubblewrap tests passed |
+| Corrected paid xAI sandbox acceptance | One Grok 4.5/low acceptance passed in 22.786 seconds |
 | `git diff --check` | Passed |
 
 ## Final review reconciliation (2026-07-26)
