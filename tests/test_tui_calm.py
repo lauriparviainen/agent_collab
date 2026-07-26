@@ -38,6 +38,7 @@ from agent_collab.tui_core import (
     overlay_body_lines,
     render_transcript_lines,
     select_hint,
+    session_sandbox_policy,
     spinner_frame,
     xterm256_from_hex,
 )
@@ -185,14 +186,25 @@ class ContextLineTests(unittest.TestCase):
 
         home = os.path.expanduser("~")
         self.assertEqual(
-            format_context_line(f"{home}/projects/x", "main"), "workdir: ~/projects/x (main)"
+            format_context_line(f"{home}/projects/x", "main", "read-only"),
+            "workdir: ~/projects/x (main) · sandbox: read-only",
         )
 
     def test_no_workdir_yields_app_name(self):
         self.assertEqual(format_context_line("", None), "agent-collab")
 
-    def test_path_without_branch(self):
-        self.assertEqual(format_context_line("/srv/repo", None), "workdir: /srv/repo")
+    def test_path_without_branch_or_outer_sandbox(self):
+        self.assertEqual(
+            format_context_line("/srv/repo", None),
+            "workdir: /srv/repo · sandbox: none",
+        )
+
+    def test_session_sandbox_policy_defaults_to_none(self):
+        self.assertEqual(session_sandbox_policy({"settings": {}}), "none")
+        self.assertEqual(
+            session_sandbox_policy({"settings": {"sandbox": {"effective": "read-only"}}}),
+            "read-only",
+        )
 
 
 class PaletteFormatterTests(unittest.TestCase):
@@ -404,6 +416,7 @@ def _session():
             "settings": {
                 "workflow": {"name": "cross-review", "sequence": ["claude", "codex"]},
                 "interactive": True,
+                "sandbox": {"effective": "read-only"},
                 "agents": {
                     "claude": {
                         "type": "claude",
@@ -444,11 +457,12 @@ class RenderIntegrationTests(unittest.TestCase):
     """Headless end-to-end render smoke tests over a FakeScreen (not curses)."""
 
     def test_main_layout_regions_render(self):
-        app, screen = _app_with_transcript(24, 100)
+        app, screen = _app_with_transcript(24, 120)
         app._render()
         out = screen.text()
         context = out.splitlines()[0]
         self.assertIn("workdir: /home/dev/agent_collab (main)", context)
+        self.assertIn("· sandbox: read-only", context)
         # Agent cluster right-aligned on the context line, canonical backend names.
         self.assertIn("claude_cli: opus-4.8 · codex_sdk: gpt-5", context)
         # Info line: task and workflow.

@@ -1081,13 +1081,33 @@ def abbreviate_path(path: Any) -> str:
     return text
 
 
-def format_context_line(workdir: Any, branch: Any = None) -> str:
-    """``workdir: <path> (<branch>)`` — explicit label; branch only when known."""
+def session_sandbox_policy(session: Any) -> str:
+    """Return the effective outer policy displayed by the TUI context line."""
+
+    raw_settings = _value(session, "settings", None)
+    settings = raw_settings if isinstance(raw_settings, Mapping) else {}
+    raw_sandbox = settings.get("sandbox")
+    sandbox = raw_sandbox if isinstance(raw_sandbox, Mapping) else {}
+    effective = str(sandbox.get("effective") or "").strip()
+    return effective if effective in {"read-only", "none"} else "none"
+
+
+def format_context_line(
+    workdir: Any,
+    branch: Any = None,
+    sandbox: Any = "none",
+) -> str:
+    """Render workdir, optional branch, and effective outer-sandbox policy."""
+
     path = abbreviate_path(workdir)
     if not path:
         return "agent-collab"
     branch = str(branch or "").strip()
-    return f"workdir: {path} ({branch})" if branch else f"workdir: {path}"
+    policy = str(sandbox or "").strip()
+    if policy not in {"read-only", "none"}:
+        policy = "none"
+    workdir_text = f"workdir: {path} ({branch})" if branch else f"workdir: {path}"
+    return f"{workdir_text} · sandbox: {policy}"
 
 
 def git_branch(workdir: Any) -> Optional[str]:

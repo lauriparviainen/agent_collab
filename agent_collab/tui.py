@@ -63,6 +63,7 @@ from .tui_core import (
     select_latest_session_id,
     selected_picker_session_id,
     selected_slash_command,
+    session_sandbox_policy,
     session_is_terminal,
     session_workflow_name,
     should_start_poller,
@@ -1246,7 +1247,8 @@ class TuiApp:
 
     def _render_context_line(self, y: int, width: int) -> None:
         workdir = self.session.workdir if self.session else ""
-        text = format_context_line(workdir, self.branch)
+        sandbox = session_sandbox_policy(self.session) if self.session else "none"
+        text = format_context_line(workdir, self.branch, sandbox)
         self._add(y, 1, text, max(0, width - 1), self._style("dim"))
         # Agent cluster right-aligned into the otherwise-empty context row,
         # with a 2-cell gap so it never crowds the branch/workdir text.
