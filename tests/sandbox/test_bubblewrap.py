@@ -45,8 +45,10 @@ from agent_collab.sandbox.specs import (
 )
 from agent_collab.sandbox.supervisor import (
     SandboxSupervisor,
+    _PinnedProcess,
     _allocate_scratch,
     _resolve_inner_executable,
+    _wait_pins,
     _verify_recursive_read_only_control,
     _verify_coverage_plan,
 )
@@ -175,6 +177,30 @@ class SandboxLaunchInputTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, "outer_sandbox_inner_command_invalid")
         self.assertEqual(raised.exception.phase, "launch")
+
+
+class PinnedProcessWaitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wait_requires_every_pidfd_to_signal_exit(self):
+        first_read, first_write = os.pipe2(os.O_CLOEXEC)
+        second_read, second_write = os.pipe2(os.O_CLOEXEC)
+        proc_fd = os.open("/proc/self", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        pins = (
+            _PinnedProcess(os.getpid(), os.dup(proc_fd), 0, first_read),
+            _PinnedProcess(os.getpid(), os.dup(proc_fd), 0, second_read),
+        )
+        os.close(proc_fd)
+        loop = asyncio.get_running_loop()
+        loop.call_later(0.01, os.write, first_write, b"x")
+        loop.call_later(0.10, os.write, second_write, b"x")
+        started = loop.time()
+        try:
+            await _wait_pins(pins, 1.0)
+            self.assertGreaterEqual(loop.time() - started, 0.08)
+        finally:
+            for pin in pins:
+                pin.close()
+            os.close(first_write)
+            os.close(second_write)
 
 
 class RecursiveReadOnlyControlTests(unittest.IsolatedAsyncioTestCase):

@@ -84,9 +84,12 @@ class XaiCliLiveTests(LiveBackendTestCase):
                                 "fail; require `git tag forbidden` to fail; write and read a "
                                 "scratch marker below $TMPDIR; write "
                                 "/tmp/agent-collab-xai-legacy-acceptance (this is private "
-                                "sandbox temporary space); start a background child that waits "
-                                "5 seconds then writes "
-                                "$GROK_HOME/.agent-collab-sandbox-descendant-survived; and only "
+                                "sandbox temporary space); start one background child whose "
+                                "infinite loop waits 0.25 seconds and then overwrites "
+                                "$GROK_HOME/.agent-collab-sandbox-descendant-survived with the "
+                                "word survived on every iteration, with all of that child's "
+                                "standard streams redirected from or to /dev/null; do not wait "
+                                "for it; only "
                                 "after every required denial/success, write the exact word "
                                 "boundary-ok to "
                                 "$GROK_HOME/.agent-collab-sandbox-acceptance. Report results. "
@@ -111,7 +114,12 @@ class XaiCliLiveTests(LiveBackendTestCase):
                         "boundary-ok",
                     )
                     self.assertFalse(legacy_host_marker.exists())
-                    await asyncio.sleep(6)
+                    # The child may write while the provider is legitimately
+                    # still producing its final answer. Discard that evidence
+                    # only after the supervised turn settles; a namespace
+                    # survivor will recreate the marker on its next iteration.
+                    descendant_marker.unlink(missing_ok=True)
+                    await asyncio.sleep(2)
                     self.assertFalse(
                         descendant_marker.exists(),
                         "a Grok descendant survived namespace teardown",

@@ -1153,7 +1153,7 @@ def _signal_group(pid: int, value: signal.Signals) -> None:
 
 
 async def _wait_pins(pins: Sequence[_PinnedProcess], timeout: float) -> None:
-    pidfds = [item.pidfd for item in pins if item.pidfd is not None]
+    pidfds = {item.pidfd for item in pins if item.pidfd is not None}
     if not pidfds:
         return
 
@@ -1162,6 +1162,19 @@ async def _wait_pins(pins: Sequence[_PinnedProcess], timeout: float) -> None:
         for descriptor in pidfds:
             assert descriptor is not None
             poller.register(descriptor, select.POLLIN)
-        poller.poll(max(1, int(timeout * 1000)))
+        pending = set(pidfds)
+        deadline = time.monotonic() + timeout
+        terminal = select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            events = poller.poll(max(1, int(remaining * 1000)))
+            if not events:
+                return
+            for descriptor, flags in events:
+                if descriptor in pending and flags & terminal:
+                    pending.remove(descriptor)
+                    poller.unregister(descriptor)
 
     await asyncio.to_thread(wait)

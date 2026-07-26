@@ -99,6 +99,22 @@ print(child.pid, flush=True)
 time.sleep(60)
 """
 
+NORMAL_EXIT_DESCENDANT_ACTION = r"""
+import os, pathlib, subprocess, sys, time
+release = pathlib.Path(os.environ["BOUNDARY_STATE"]) / "normal-exit-release"
+child = subprocess.Popen(
+    [sys.executable, "-I", "-S", "-c", "import time; time.sleep(60)"],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    close_fds=True,
+    start_new_session=True,
+)
+print(child.pid, flush=True)
+while not release.exists():
+    time.sleep(0.01)
+"""
+
 CLAUDE_ACTION = r"""#!__PYTHON__
 import json, os, pathlib, subprocess, sys
 workspace = pathlib.Path(os.environ["CLAUDE_BOUNDARY_WORKSPACE"])
@@ -434,6 +450,61 @@ class BubblewrapBoundaryTests(unittest.IsolatedAsyncioTestCase):
                     break
                 await asyncio.sleep(0.01)
             self.assertFalse(Path(f"/proc/{child_pid}").exists())
+            self.assertFalse(scratch.exists())
+
+    async def test_normal_exit_reaps_detached_descendant_before_completion(self):
+        if platform.system() != "Linux":
+            self.skipTest("Bubblewrap boundary tests require Linux")
+        if shutil.which("bwrap") is None:
+            self.skipTest("Bubblewrap boundary tests require bwrap on PATH")
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        if not runtime:
+            self.skipTest("XDG_RUNTIME_DIR is unavailable for the safe scratch anchor")
+        runtime_path = Path(runtime)
+        if runtime_path.stat().st_uid != os.getuid() or runtime_path.stat().st_mode & 0o077:
+            self.skipTest("XDG_RUNTIME_DIR is not an owner-private daemon runtime")
+
+        with tempfile.TemporaryDirectory(
+            prefix="agent-collab-normal-exit-reaping-",
+            dir=runtime_path,
+        ) as raw:
+            root = Path(raw).resolve()
+            root.chmod(0o700)
+            workspace = root / "workspace"
+            state = root / "state"
+            workspace.mkdir(mode=0o700)
+            state.mkdir(mode=0o700)
+            plan = resolve_session_plan(
+                policy=resolve_sandbox_policy("read-only", "none"),
+                workspace_path=workspace,
+                agents={"fixture": (None, {}, _Adapter(root, workspace, state))},
+                operator=SandboxOperatorConfig(
+                    scratch_root=runtime_path / "agent-collab" / "sandbox-tests",
+                ),
+            ).agents["fixture"]
+            process = await SandboxSupervisor().launch_cli(
+                plan,
+                (
+                    str(Path(sys.executable).resolve()),
+                    "-I",
+                    "-S",
+                    "-c",
+                    NORMAL_EXIT_DESCENDANT_ACTION,
+                ),
+                "start detached descendant fixture",
+                stream_limit=1024 * 1024,
+            )
+            scratch = process._scratch
+            int((await asyncio.wait_for(process.stdout.readline(), 2)).decode().strip())
+            bootstrap_pid = process._pins[1].pid
+            children_path = Path(f"/proc/{bootstrap_pid}/task/{bootstrap_pid}/children")
+            host_children = [int(value) for value in children_path.read_text().split()]
+            self.assertEqual(len(host_children), 1)
+            host_child_pid = host_children[0]
+            (state / "normal-exit-release").write_text("release", encoding="utf-8")
+            code = await asyncio.wait_for(process.wait(), 5)
+            self.assertEqual(code, 0)
+            self.assertFalse(Path(f"/proc/{host_child_pid}").exists())
             self.assertFalse(scratch.exists())
 
     async def test_each_launch_rejects_hardlink_planted_after_plan_resolution(self):

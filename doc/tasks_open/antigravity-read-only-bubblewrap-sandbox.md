@@ -87,8 +87,9 @@ backend-neutral live-harness repair. Conditional Bubblewrap coverage exercises
 direct and descendant write denial, writable state/private XDG and temporary
 space, configured cwd identity, legacy `/tmp` isolation, and cleanup. The
 opt-in paid acceptance requires
-`AGENT_COLLAB_IT_XAI_SANDBOX_STATE=/absolute/path/to/.grok`; it remains
-intentionally unrun without separate authorization.
+`AGENT_COLLAB_IT_XAI_SANDBOX_STATE=/absolute/path/to/.grok`. One separately
+authorized run and its teardown-fixture correction are recorded below; the
+corrected paid rerun remains pending separate authorization.
 
 Final local verification passed:
 
@@ -153,6 +154,60 @@ passing tests, and the complete gates above passed after the sixth-loop fix.
 There are no unresolved confirmed findings or reviewer disagreements. Formal
 same-loop convergence is not claimed: loop 6 changed after adjudication and
 the explicit six-loop limit forbids another review session.
+
+## Stage 3 paid-acceptance teardown follow-up (2026-07-26)
+
+The separately authorized paid xAI acceptance used an owner-private temporary
+complete `.grok` state containing only the operator-authorized cached
+authentication metadata. The real state contents were not mutated, and its
+original mode was restored after the preceding preflight attempt. Grok 4.5
+reached `done`; direct and child workspace writes and the Git tag were denied,
+private temporary and persistent state writes succeeded, and the host legacy
+`/tmp` marker remained absent. The original one-shot descendant assertion then
+failed because its five-second marker existed after completion.
+
+That marker did not prove a teardown escape: the background child could write
+while Grok was still producing its final answer and be killed normally
+afterward. A credential-free detached-child reproduction confirmed normal
+Bubblewrap namespace teardown. The audit did identify a separate common
+supervisor defect: `_wait_pins` returned when any pidfd became ready, so an
+already-exited bootstrap could end the observation grace before the pinned
+namespace reaper signaled exit. The common helper now waits for every pidfd.
+Hermetic coverage drives two independently signaled descriptors, and the real
+Bubblewrap fixture resolves the descendant's host PID through the still-pinned
+bootstrap before releasing the provider, then requires that exact host process
+to be absent immediately when completion settles.
+
+The live acceptance now runs a repeating background marker writer with all
+stdio detached. After the supervised turn settles it deletes any marker
+legitimately written during the live turn and waits for a survivor to recreate
+it. This distinguishes in-turn execution from post-teardown survival. No
+second credentialed call was made after changing the fixture.
+
+The user-requested follow-up dual review used parallel session
+`daemon-d56b1b857c584fc9` against `HEAD`, outer sandbox `none`, with
+`xai_cli` Grok 4.5/high/`bypassPermissions`/provider `read-only` and
+`antigravity_cli` Gemini 3.6 Flash High/`plan`. Its four-path frozen scope was
+`agent_collab/sandbox/supervisor.py`,
+`conditional_tests/test_bubblewrap.py`,
+`integration_tests/backends/xai_cli/test_live.py`, and
+`tests/sandbox/test_bubblewrap.py`; the sorted
+path-NUL-content-SHA-256-manifest digest was
+`95eb3c3049f53b86b796649a5a4358ac903e624636f2e73044084809eb8dc3de`.
+Gemini reported no High/Medium findings. Grok reported two Medium conditional
+test findings: the fixture confused a namespace-local child PID with a host
+PID, and its delayed assertions did not prove reaping before completion.
+These were single-reviewer disagreements and both were confirmed locally.
+The synchronized pinned-bootstrap/host-child fixture above resolves both.
+
+Final follow-up verification passed:
+
+| Command | Outcome |
+| --- | --- |
+| `./agent_collab_dev.sh test` | Ruff lint/format and 1,306 hermetic tests passed; one expected skip |
+| `./agent_collab_dev.sh build --check` | Config and both generated daemon API artifacts verified current |
+| `./agent_collab_dev.sh bubblewrap-test` | Eight real Bubblewrap tests passed |
+| `git diff --check` | Passed |
 
 ## Final review reconciliation (2026-07-26)
 
