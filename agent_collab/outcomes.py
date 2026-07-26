@@ -83,6 +83,9 @@ OUTER_SANDBOX_FAILURE_CODES = frozenset(
         "outer_sandbox_writable_git_overlap",
         "outer_sandbox_writable_too_broad",
         "outer_sandbox_writable_workspace_overlap",
+        "outer_sandbox_worker_protocol_invalid",
+        "outer_sandbox_worker_terminated",
+        "outer_sandbox_worker_backpressure_exceeded",
     }
 )
 CANONICAL_MESSAGES.update(

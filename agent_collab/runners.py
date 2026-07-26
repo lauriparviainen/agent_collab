@@ -510,7 +510,7 @@ def configured_runner(
         ) from exc
     normalized = dict(backend.normalize_options(agent, dict(options or {})))
     runner = backend.create_runner(agent, verbose, normalized)
-    if isinstance(runner, SubprocessRunner):
+    if hasattr(runner, "sandbox_plan"):
         runner.sandbox_plan = sandbox_plan
     return runner
 

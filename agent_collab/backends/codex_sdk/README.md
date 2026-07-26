@@ -53,6 +53,23 @@ serializes run/reset/close; cancelling the asyncio waiter does not claim a
 provider interrupt. Missing/incompatible runtime setup fails probing or produces
 an error event.
 
+## Outer filesystem sandbox
+
+Stage 5 advertises outer `sandbox = "read-only"` as an `sdk_worker` backend.
+Agent-collab launches a supervised Bubblewrap namespace, proves establishment,
+then runs `python -m agent_collab.sandbox.sdk_worker` with a framed control
+socket. The worker owns the complete Codex SDK client, app-server, and any
+local tool descendants. The complete effective `CODEX_HOME` is the persistent
+writable state root (same contract as `codex_cli`). After outer proof, the
+worker forces SDK `danger-full-access` for non-interactive tool use; that is
+not OS isolation.
+
+`sandbox = "none"` (the default) keeps the historical in-process daemon runner
+and does not start Bubblewrap. Explicit outer `none` is the rollback path.
+
 ## Testing
 
-Hermetic: `./agent_collab_dev.sh test -k codex_sdk`. Live: `./agent_collab_dev.sh integration-test codex_sdk`.
+Hermetic: `./agent_collab_dev.sh test -k codex_sdk` plus
+`tests/sandbox/test_worker_*.py`. Live: `./agent_collab_dev.sh integration-test
+codex_sdk`. Paid outer-sandbox acceptance for the worker path remains a later
+credentialed gate.

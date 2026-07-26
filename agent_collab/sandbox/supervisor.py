@@ -36,7 +36,7 @@ from .paths import (
     parse_mountinfo,
 )
 from .plan import ResolvedSandboxPlan
-from .specs import PathAccess, PathOrigin, SandboxFailure, SandboxPolicy
+from .specs import PathAccess, PathOrigin, SandboxFailure, SandboxPolicy, SandboxSupport
 
 PROOF_FRAME_LIMIT = 16 * 1024
 ESTABLISHMENT_TIMEOUT_SECONDS = 15.0
@@ -184,7 +184,83 @@ class SandboxSupervisor:
                 *_resolve_inner_executable(prepared, plan.context.inherited_environment),
                 rendered_prompt,
             )
-            return await self._launch(plan, scratch, inner, stream_limit=stream_limit)
+            process, _worker = await self._launch(
+                plan,
+                scratch,
+                inner,
+                stream_limit=stream_limit,
+                with_worker=False,
+            )
+            return process
+        except SandboxFailure:
+            if scratch is not None:
+                shutil.rmtree(scratch, ignore_errors=True)
+            raise
+        except asyncio.TimeoutError as exc:
+            if scratch is not None:
+                shutil.rmtree(scratch, ignore_errors=True)
+            raise SandboxFailure(
+                "outer_sandbox_bootstrap_failed",
+                "the sandbox timed out while establishing the isolated process",
+                phase="establishment",
+            ) from exc
+        except OSError as exc:
+            if scratch is not None:
+                shutil.rmtree(scratch, ignore_errors=True)
+            raise SandboxFailure(
+                "outer_sandbox_bootstrap_failed",
+                "the sandbox could not allocate or start its isolated process",
+                phase="launch",
+            ) from exc
+        except BaseException:
+            if scratch is not None:
+                shutil.rmtree(scratch, ignore_errors=True)
+            raise
+
+    async def launch_sdk_worker(
+        self,
+        plan: ResolvedSandboxPlan,
+        *,
+        stream_limit: int,
+    ) -> Tuple[SupervisedProcess, socket.socket]:
+        """Establish Bubblewrap and return the process plus the daemon worker socket."""
+
+        if plan.policy.effective is not SandboxPolicy.READ_ONLY:
+            raise SandboxFailure(
+                "outer_sandbox_policy_invalid",
+                "SandboxSupervisor received a non-read-only plan",
+                phase="launch",
+            )
+        if plan.support is not SandboxSupport.SDK_WORKER:
+            raise SandboxFailure(
+                "outer_sandbox_policy_invalid",
+                "SandboxSupervisor.launch_sdk_worker requires sdk_worker support",
+                phase="launch",
+            )
+        scratch: Optional[Path] = None
+        try:
+            scratch = _allocate_scratch(plan)
+            # Keep the venv path: Path.resolve() follows bin/python -> /usr/bin
+            # and loses site-packages (openai_codex lives only in the venv).
+            # -I isolates from cwd/PYTHONPATH so a reviewed workspace cannot
+            # shadow agent_collab.sandbox.sdk_worker via sys.path injection.
+            python = _worker_python_executable()
+            # Placeholder fd replaced after the worker socketpair is created.
+            inner = (
+                python,
+                "-I",
+                "-m",
+                "agent_collab.sandbox.sdk_worker",
+                "--worker-fd",
+                "3",
+            )
+            return await self._launch(
+                plan,
+                scratch,
+                inner,
+                stream_limit=stream_limit,
+                with_worker=True,
+            )
         except SandboxFailure:
             if scratch is not None:
                 shutil.rmtree(scratch, ignore_errors=True)
@@ -223,11 +299,12 @@ class SandboxSupervisor:
         process: Optional[SupervisedProcess] = None
         try:
             await _verify_recursive_read_only_control(self.installation, scratch)
-            process = await self._launch(
+            process, _worker = await self._launch(
                 plan,
                 scratch,
                 (str(Path(true_path).resolve()),),
                 stream_limit=64 * 1024,
+                with_worker=False,
             )
             code = await process.wait()
             if code != 0:
@@ -252,7 +329,8 @@ class SandboxSupervisor:
         inner: Sequence[str],
         *,
         stream_limit: int,
-    ) -> SupervisedProcess:
+        with_worker: bool,
+    ) -> Tuple[SupervisedProcess, Optional[socket.socket]]:
         # The session plan is immutable, but host inode aliases and nested
         # mounts are not. Repeat the bounded host audit immediately before
         # every preflight and provider launch so a hard link planted after
@@ -269,17 +347,44 @@ class SandboxSupervisor:
             socket.AF_UNIX,
             socket.SOCK_STREAM | socket.SOCK_CLOEXEC,
         )
+        worker_parent: Optional[socket.socket] = None
+        worker_child: Optional[socket.socket] = None
+        if with_worker:
+            worker_parent, worker_child = socket.socketpair(
+                socket.AF_UNIX,
+                socket.SOCK_STREAM | socket.SOCK_CLOEXEC,
+            )
         provider_input = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
         stdout_read, stdout_write = os.pipe2(os.O_CLOEXEC)
         stderr_read, stderr_write = os.pipe2(os.O_CLOEXEC)
+        worker_fd = None if worker_child is None else worker_child.fileno()
         handles = BootstrapHandles(
             status=status_write,
             proof=proof_child.fileno(),
             provider_stdin=provider_input,
             provider_stdout=stdout_write,
             provider_stderr=stderr_write,
+            worker=worker_fd,
         )
-        argv = build_bubblewrap_argv(self.installation, plan, scratch, handles, inner)
+        effective_inner = list(inner)
+        if with_worker:
+            if worker_fd is None:
+                raise SandboxFailure(
+                    "outer_sandbox_bootstrap_failed",
+                    "the sandbox worker control socket was not allocated",
+                    phase="launch",
+                )
+            # Replace the placeholder --worker-fd argument with the real child fd.
+            try:
+                flag_index = effective_inner.index("--worker-fd")
+                effective_inner[flag_index + 1] = str(worker_fd)
+            except (ValueError, IndexError) as exc:
+                raise SandboxFailure(
+                    "outer_sandbox_inner_command_invalid",
+                    "the SDK worker command is missing --worker-fd",
+                    phase="launch",
+                ) from exc
+        argv = build_bubblewrap_argv(self.installation, plan, scratch, handles, effective_inner)
         process: Optional[asyncio.subprocess.Process] = None
         parent_close = [
             status_read,
@@ -311,6 +416,9 @@ class SandboxSupervisor:
                 os.close(descriptor)
                 parent_close.remove(descriptor)
             proof_child.close()
+            if worker_child is not None:
+                worker_child.close()
+                worker_child = None
 
             status_reader, status_file = await _reader_from_fd(status_read, limit=64 * 1024)
             stdout_reader, stdout_file = await _reader_from_fd(stdout_read, limit=stream_limit)
@@ -391,7 +499,7 @@ class SandboxSupervisor:
                     ) from exc
                 raise
 
-            return SupervisedProcess(
+            supervised = SupervisedProcess(
                 process,
                 stdout_reader,
                 stderr_reader,
@@ -402,9 +510,16 @@ class SandboxSupervisor:
                 diagnostic_tasks=diagnostic_tasks,
                 pins=pins,
             )
+            owned_worker = worker_parent
+            worker_parent = None
+            return supervised, owned_worker
         except BaseException:
             proof_parent.close()
             proof_child.close()
+            if worker_parent is not None:
+                worker_parent.close()
+            if worker_child is not None:
+                worker_child.close()
             if process is not None:
                 _signal_group(process.pid, signal.SIGTERM)
                 try:
@@ -576,6 +691,32 @@ async def _verify_recursive_read_only_control(
         if stderr_task is not None:
             await asyncio.gather(stderr_task, return_exceptions=True)
         shutil.rmtree(control, ignore_errors=True)
+
+
+def _worker_python_executable() -> str:
+    """Absolute interpreter path that preserves a virtualenv entrypoint.
+
+    ``sys.executable`` under a venv is often a symlink into ``/usr/bin``. Fully
+    resolving it drops ``pyvenv.cfg`` association and site-packages. Use an
+    absolute path that stops before following the final system binary.
+    """
+
+    raw = Path(sys.executable)
+    if not raw.is_absolute():
+        found = shutil.which(str(raw))
+        raw = Path(found) if found is not None else raw.absolute()
+    current = raw
+    # Walk through relative symlink components inside the venv bin dir only.
+    seen: set[Path] = set()
+    while current.is_symlink() and current not in seen:
+        seen.add(current)
+        target = current.readlink()
+        if target.is_absolute():
+            # Symlink leaves the venv tree (common: bin/python3.12 -> /usr/bin).
+            # Keep the venv path so Python still loads the environment.
+            return str(current)
+        current = current.parent / target
+    return str(current)
 
 
 def _resolve_inner_executable(

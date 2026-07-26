@@ -32,12 +32,15 @@
 
 **Status:** CLI product slice stabilized on
 `design/bubblewrap-implementation`. Stages 1–4 are implemented; free gates and
-all four paid CLI outer-sandbox acceptances pass. Stage 2 and Stage 4
-production reviews converged; Stage 1 and Stage 3 exhausted their six-loop
-limits without formal same-loop convergence and have no unresolved confirmed
-findings. **Do not merge this branch to `main` until every SDK backend stage
-is implemented** (or positively audited `no_local_effects` where applicable).
-The shipped outer default remains `none`. Issue #43 stays open.
+all four paid CLI outer-sandbox acceptances pass. Stage 5 implements the
+generic framed SDK worker plus `codex_sdk` outer `read-only`; dual production
+review loop 6 converged (both reviewers: no High/Medium findings). Stage 2 and
+Stage 4 production reviews converged; Stage 1 and Stage 3 exhausted their
+six-loop limits without formal same-loop convergence and have no unresolved
+confirmed findings. **Do not merge this branch to `main` until every remaining
+SDK backend stage is implemented** (or positively audited `no_local_effects`
+where applicable). The shipped outer default remains `none`. Issue #43 stays
+open.
 
 **Created:** 2026-07-25.
 
@@ -114,8 +117,33 @@ Operator preconditions for re-running any acceptance:
   boundary; `xai_sdk` `no_local_effects` audit)
 - Non-Linux engines, network/IPC/keyring isolation, resource/seccomp limits
 
-Next implementation work on this branch is the SDK stages, not further CLI
-feature expansion or a merge.
+Next implementation work on this branch is the remaining SDK stages
+(`claude_sdk`, `antigravity_sdk`, `xai_sdk`), not further CLI feature expansion
+or a merge.
+
+## Stage 5 implementation review reconciliation (2026-07-26)
+
+Stage 5 adds a backend-neutral framed SDK-worker transport and outer
+`read-only` for `codex_sdk`. Outer `none` retains the historical in-process
+runner. Production dual reviews used `dual-review` with
+`interactive=false`, outer sandbox `none`:
+
+- `codex_cli`: `gpt-5.6-sol`, high reasoning, provider `sandbox=read-only`
+- `antigravity_cli`: `gemini-3.1-pro-high`, `mode=plan`
+
+| Loop | Session | Findings and closeout |
+| --- | --- | --- |
+| 1 | `daemon-ac6d9b28e0334461` (+ native `019f9f6e-a3dc-74e3-860a-0d9ec1d5d8af`) | Confirmed High/Medium: venv resolve, sticky-cancel orphan, open leak, cwd, sqlite, streaming, `-I`, stdio drain. Fixed. |
+| 2 | `daemon-86c8cbc1223e4ba5` | Gemini clean; Codex Medium: stream emit + external sqlite. Fixed. |
+| 3 | `daemon-b43eebcd6ad64a19` | Gemini clean; Codex Medium: worker collect buffering + symlink config skip. Fixed (run-started frame; fail-closed symlink). |
+| 4 | `daemon-4b0e9a6916f149c3` | Gemini Medium broken-symlink `exists()`; Codex Medium open_connection leak, none-path symlink, emit backpressure. Fixed. |
+| 5 | `daemon-832ffe618e784e9e` | Gemini clean; Codex Medium IncompleteRead hello mapping + failure emit hang. Fixed. |
+| 6 | `daemon-e3c114bf659d4ae8` | **Both reviewers: No High/Medium findings.** Convergence. |
+
+Final local verification after loop 6: `./agent_collab_dev.sh test` 1,319
+passed (1 skip); `./agent_collab_dev.sh bubblewrap-test` 8 passed. Work remains
+uncommitted until the operator requests a commit. Remaining SDK stages are
+still pending before merge.
 
 ## Stage 3 implementation handoff (2026-07-26)
 

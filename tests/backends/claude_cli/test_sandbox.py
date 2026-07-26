@@ -76,6 +76,7 @@ class ClaudeCliSandboxAdapterTests(unittest.TestCase):
             ("antigravity", "cli"),
             ("claude", "cli"),
             ("codex", "cli"),
+            ("codex", "sdk"),
             ("xai", "cli"),
         }
         for agent_type in backends.registered_agent_types():

@@ -73,8 +73,11 @@ Termination owns the Bubblewrap process group and exact wait; completion waits
 for every pinned namespace pidfd (not the first ready one) so detached
 descendants cannot outlive teardown. Private scratch is removed after
 completion. The CLI product slice (Stages 1–4) is acceptance-verified on the
-design branch; SDK backends remain unsupported for outer `read-only` and must
-be implemented before merging that work to `main`.
+design branch. Stage 5 adds a backend-neutral framed SDK worker transport and
+moves `codex_sdk` into a supervised Bubblewrap worker for outer `read-only`;
+`sandbox = "none"` retains the in-daemon Codex SDK runner. Remaining SDK
+backends stay unsupported until their stages land; do not merge to `main` until
+that gate is complete.
 
 The Claude Stage 2 adapter keeps the complete effective `CLAUDE_CONFIG_DIR`
 persistent and writable, leaves legacy `~/.claude.json` read-only, maps
