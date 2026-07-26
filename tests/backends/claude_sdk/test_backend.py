@@ -570,6 +570,8 @@ class ClaudeOptionMappingTests(unittest.TestCase):
                 setting_sources=None,
                 max_thinking_tokens=None,
                 effort=None,
+                strict_mcp_config=None,
+                mcp_servers=None,
             ):
                 captured.update(
                     {
@@ -581,6 +583,8 @@ class ClaudeOptionMappingTests(unittest.TestCase):
                         "setting_sources": setting_sources,
                         "max_thinking_tokens": max_thinking_tokens,
                         "effort": effort,
+                        "strict_mcp_config": strict_mcp_config,
+                        "mcp_servers": mcp_servers,
                     }
                 )
 
@@ -593,9 +597,20 @@ class ClaudeOptionMappingTests(unittest.TestCase):
         self.assertEqual(captured["permission_mode"], "acceptEdits")
         self.assertEqual(captured["effort"], "high")
         self.assertEqual(captured["setting_sources"], [])  # runs do not implicitly load fs settings
+        self.assertIsNone(captured.get("strict_mcp_config"))
+        self.assertIsNone(captured.get("mcp_servers"))
         self.assertEqual(captured["cwd"], "/w")
         self.assertEqual(captured["system_prompt"], {"type": "preset", "preset": "claude_code"})
         self.assertEqual(captured["tools"], {"type": "preset", "preset": "claude_code"})
+
+        build_claude_agent_options(
+            FakeOptions,
+            {"model": "sonnet"},
+            Path("/w"),
+            suppress_ambient_mcp=True,
+        )
+        self.assertIs(captured["strict_mcp_config"], True)
+        self.assertEqual(captured["mcp_servers"], {})
 
     def test_build_agent_options_omits_resume_fields_on_fresh_connections(self):
         captured = {}
@@ -640,6 +655,8 @@ class ClaudeOptionMappingTests(unittest.TestCase):
         kwargs = options_cls.call_args.kwargs
         self.assertEqual(kwargs["cwd"], "/w")
         self.assertEqual(kwargs["setting_sources"], [])
+        self.assertNotIn("strict_mcp_config", kwargs)
+        self.assertNotIn("mcp_servers", kwargs)
         self.assertIn("system_prompt", kwargs)
         self.assertIn("tools", kwargs)
 

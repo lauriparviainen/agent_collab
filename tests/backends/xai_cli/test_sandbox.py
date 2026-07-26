@@ -74,6 +74,7 @@ class XaiCliSandboxAdapterTests(unittest.TestCase):
         supported = {
             ("antigravity", "cli"),
             ("claude", "cli"),
+            ("claude", "sdk"),
             ("codex", "cli"),
             ("codex", "sdk"),
             ("xai", "cli"),

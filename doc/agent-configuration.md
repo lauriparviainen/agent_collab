@@ -373,10 +373,10 @@ boundary. It is separate from provider-native fields such as
 session settings and option discovery.
 
 Stages 1 through 4 accept `read-only` for `codex_cli`, `claude_cli`,
-`xai_cli`, `antigravity_cli`, and the in-memory mock backend. Stage 5 accepts
-`read-only` for `codex_sdk` via a supervised SDK worker inside Bubblewrap;
-`sandbox = "none"` keeps the historical in-daemon Codex SDK runner.
-`claude_sdk`, `antigravity_sdk`, and unsupported adapters still fail closed with
+`xai_cli`, `antigravity_cli`, and the in-memory mock backend. Stages 5–6 accept
+`read-only` for `codex_sdk` and `claude_sdk` via a supervised SDK worker inside
+Bubblewrap; `sandbox = "none"` keeps the historical in-daemon SDK runners.
+`antigravity_sdk` and other unsupported adapters still fail closed with
 `outer_sandbox_unsupported`. `xai_sdk` remains pending its
 `no_local_effects` audit stage. The shipped default remains `none` until the
 complete backend readiness gate is met (including remaining SDK stages), so
@@ -457,6 +457,7 @@ Current staged readiness and rollback are:
 | `xai_cli` | OS-enforced direct process (Stage 3) | explicit/configured `none` |
 | `antigravity_cli` | OS-enforced direct process (Stage 4) | explicit/configured `none` |
 | `codex_sdk` | OS-enforced SDK worker (Stage 5) | explicit/configured `none` (in-process) |
+| `claude_sdk` | OS-enforced SDK worker (Stage 6) | explicit/configured `none` (in-process) |
 | remaining SDK backends | unsupported; start rejected | no implicit fallback |
 | in-memory mock | audited no-local-effects | `none` disables the policy label |
 

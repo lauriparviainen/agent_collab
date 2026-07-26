@@ -34,7 +34,9 @@
 `design/bubblewrap-implementation`. Stages 1–4 are implemented; free gates and
 all four paid CLI outer-sandbox acceptances pass. Stage 5 implements the
 generic framed SDK worker plus `codex_sdk` outer `read-only`; dual production
-review loop 6 converged (both reviewers: no High/Medium findings). Stage 2 and
+review loop 6 converged (both reviewers: no High/Medium findings). Stage 6
+adds `claude_sdk` on the same worker transport; dual production review loop 8
+converged (both reviewers: no High/Medium findings). Stage 2 and
 Stage 4 production reviews converged; Stage 1 and Stage 3 exhausted their
 six-loop limits without formal same-loop convergence and have no unresolved
 confirmed findings. **Do not merge this branch to `main` until every remaining
@@ -113,13 +115,13 @@ Operator preconditions for re-running any acceptance:
 - Merge of `design/bubblewrap-implementation` to `main`
 - Built-in/default outer `sandbox = "read-only"` for shipped agents/workflows
 - Closing issue #43
-- SDK outer support (`antigravity_sdk`, `claude_sdk`, `codex_sdk` worker
-  boundary; `xai_sdk` `no_local_effects` audit)
+- Remaining SDK outer support (`antigravity_sdk` worker; `xai_sdk`
+  `no_local_effects` audit). Stages 5–6 (`codex_sdk`, `claude_sdk`) are
+  implemented on this branch with dual-review convergence.
 - Non-Linux engines, network/IPC/keyring isolation, resource/seccomp limits
 
-Next implementation work on this branch is the remaining SDK stages
-(`claude_sdk`, `antigravity_sdk`, `xai_sdk`), not further CLI feature expansion
-or a merge.
+Next implementation work on this branch is Stages 7–8 (`antigravity_sdk`,
+`xai_sdk`), not further CLI feature expansion or a merge.
 
 ## Stage 5 implementation review reconciliation (2026-07-26)
 
@@ -144,6 +146,31 @@ Final local verification after loop 6: `./agent_collab_dev.sh test` 1,319
 passed (1 skip); `./agent_collab_dev.sh bubblewrap-test` 8 passed. Work remains
 uncommitted until the operator requests a commit. Remaining SDK stages are
 still pending before merge.
+
+## Stage 6 implementation review reconciliation (2026-07-26)
+
+Stage 6 adds outer `read-only` for `claude_sdk` on the Stage 5 framed SDK
+worker transport. Outer `none` retains the historical in-process Claude SDK
+runner. Production dual reviews used the same pairing as Stage 5:
+
+- `codex_cli`: `gpt-5.6-sol`, high reasoning, provider `sandbox=read-only`
+- `antigravity_cli`: `gemini-3.1-pro-high`, `mode=plan`
+- outer sandbox `none`, `interactive=false`
+
+| Loop | Session | Findings and closeout |
+| --- | --- | --- |
+| 1 | `daemon-f6457c05f45e4bdd` | Confirmed Medium: duplicate provider_session, event buffering until complete, hard-coded `source=codex`. Fixed (dedupe, mid-turn emit queue, backend-derived source). |
+| 2 | `daemon-8c0f757b9c2e4a8f` | Gemini clean; Codex Medium: worker process ≠ continuity, ambient MCP, unbounded queue. Fixed (session flag, strict empty MCP on worker, bounded queue). |
+| 3 | `daemon-6a975964e1684107` | Gemini clean; Codex High empty/dot `CLAUDE_CONFIG_DIR`→HOME; Medium byte-budget occupancy only. Fixed (fail-closed config dir; wire-size occupancy + later cumulative). |
+| 4 | `daemon-de1a0f8ad2ea4ef3` | Gemini clean; Codex Medium `len(repr)` undercount. Fixed (`encode_frame` UTF-8 wire size). |
+| 5 | `daemon-d0c5cb3583a94f6c` | Gemini clean; Codex Medium cumulative budget reset on drain + daemon `repr`. Fixed (`run_event_bytes`; daemon wire size). |
+| 6 | `daemon-efd3231887d844e1` | Gemini clean; Codex Medium pending-prompt join after failed first turn. Fixed (soft-drop worker without session). |
+| 7 | `daemon-5aad06c297fd4598` | Gemini clean; Codex Medium hard-terminal after soft fail + strict MCP on none path. Fixed (`_drop_worker_session`; `suppress_ambient_mcp` worker-only). |
+| 8 | `daemon-56cfe030700a419b` | **Both reviewers: No High/Medium findings.** Convergence. |
+
+Final local verification after loop 8: `./agent_collab_dev.sh test` 1,326
+passed (1 skip); `./agent_collab_dev.sh bubblewrap-test` 8 passed. Remaining
+SDK stages (`antigravity_sdk`, `xai_sdk`) are still pending before merge.
 
 ## Stage 3 implementation handoff (2026-07-26)
 

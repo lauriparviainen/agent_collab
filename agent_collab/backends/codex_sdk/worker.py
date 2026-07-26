@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List, Mapping, Optional, Tuple
+from typing import Any, Awaitable, Callable, List, Mapping, Optional, Tuple
 
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
 from .backend import (
@@ -13,6 +13,8 @@ from .backend import (
     _reset_conversation_bounded,
     iter_codex_turn_events,
 )
+
+EventEmit = Callable[[Any], Awaitable[None]]
 
 
 class CodexSdkWorkerBackend:
@@ -49,7 +51,13 @@ class CodexSdkWorkerBackend:
         self._verbose = verbose
         self._workspace = workspace
 
-    async def run(self, prompt: str, *, run_id: str) -> Tuple[List[Any], TurnOutcome]:
+    async def run(
+        self,
+        prompt: str,
+        *,
+        run_id: str,
+        emit: Optional[EventEmit] = None,
+    ) -> Tuple[List[Any], TurnOutcome]:
         del run_id
         if self._conversation is None:
             raise RuntimeError("codex sdk worker is not open")
@@ -57,6 +65,8 @@ class CodexSdkWorkerBackend:
         exception_code: Optional[str] = None
         events: List[Any] = []
         try:
+            # Codex settles thread.run before events are available, so residual
+            # return-list delivery remains the primary path; emit is optional.
             outcome: CodexTurnOutcome = await self._conversation.run(prompt)
             if outcome.thread_id:
                 self._conversation.note_session_id(outcome.thread_id)
@@ -107,6 +117,10 @@ class CodexSdkWorkerBackend:
         result = evidence.resolve(exception_code=exception_code)
         if result.outcome != "completed" and self._conversation is not None:
             await _reset_conversation_bounded(self._conversation)
+        if emit is not None:
+            for event in events:
+                await emit(event)
+            return [], result
         return events, result
 
     async def reset(self) -> None:

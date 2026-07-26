@@ -6,6 +6,7 @@ import unittest
 
 from agent_collab.events import Event
 from agent_collab.outcomes import TurnOutcome
+from agent_collab.sandbox.sdk_worker import event_source_for_backend
 from agent_collab.sandbox.worker_codec import (
     WorkerProtocolError,
     decode_frame,
@@ -53,6 +54,26 @@ class WorkerCodecTests(unittest.TestCase):
         self.assertEqual(outcome_to_payload(outcome)["outcome"], "completed")
         failed = TurnOutcome("failed", "provider_transport_failed")
         self.assertEqual(outcome_to_payload(failed)["code"], "provider_transport_failed")
+
+    def test_event_source_for_backend_strips_shape_suffix(self) -> None:
+        self.assertEqual(event_source_for_backend("claude_sdk"), "claude")
+        self.assertEqual(event_source_for_backend("codex_sdk"), "codex")
+        self.assertEqual(event_source_for_backend("claude_cli"), "claude")
+
+    def test_encode_frame_counts_utf8_bytes_not_python_chars(self) -> None:
+        from agent_collab.sandbox.worker_codec import encode_frame, make_frame
+
+        # Multibyte text is larger on the wire than len(text) or len(repr(...)).
+        text = "测" * 1000
+        payload = make_frame(
+            "event",
+            run_id="r1",
+            sequence=1,
+            event={"source": "claude", "type": "message", "text": text},
+        )
+        encoded = encode_frame(payload)
+        self.assertGreater(len(encoded), len(text))
+        self.assertGreater(len(encoded), len(repr(payload.get("event"))))
 
 
 if __name__ == "__main__":

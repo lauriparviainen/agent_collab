@@ -18,6 +18,7 @@ from .worker_codec import (
     WORKER_KILL_GRACE_SECONDS,
     WORKER_TERMINATE_GRACE_SECONDS,
     WorkerProtocolError,
+    encode_frame,
     event_from_payload,
     make_frame,
     parse_outcome_payload,
@@ -153,8 +154,22 @@ class SupervisedWorkerSession:
                         event_count += 1
                         if event_count > MAX_EVENTS_PER_RUN:
                             raise WorkerProtocolError("worker event count exceeded the run limit")
-                        encoded = repr(event_payload)
-                        event_bytes += len(encoded)
+                        # Cumulative UTF-8 wire size for the framed event, not
+                        # Python repr length (which undercounts multibyte text).
+                        try:
+                            wire = encode_frame(
+                                make_frame(
+                                    "event",
+                                    run_id=run_id,
+                                    sequence=seq,
+                                    event=event_payload,
+                                )
+                            )
+                        except WorkerProtocolError as exc:
+                            raise WorkerProtocolError(
+                                "worker event frame exceeds the transport size limit"
+                            ) from exc
+                        event_bytes += len(wire)
                         if event_bytes > MAX_EVENT_BYTES_PER_RUN:
                             raise WorkerProtocolError("worker event bytes exceeded the run limit")
                         event = event_from_payload(event_payload)

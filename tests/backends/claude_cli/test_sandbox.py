@@ -75,6 +75,7 @@ class ClaudeCliSandboxAdapterTests(unittest.TestCase):
         supported = {
             ("antigravity", "cli"),
             ("claude", "cli"),
+            ("claude", "sdk"),
             ("codex", "cli"),
             ("codex", "sdk"),
             ("xai", "cli"),

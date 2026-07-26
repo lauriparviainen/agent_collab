@@ -14,9 +14,14 @@ import secrets
 import select
 import sys
 import traceback
-from typing import Any, Callable, Dict, Mapping, Optional, Protocol
+from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Protocol
 
 from .worker_codec import (
+    FRAME_LIMIT,
+    MAX_EVENT_BYTES_PER_RUN,
+    MAX_EVENTS_PER_RUN,
+    WorkerProtocolError,
+    encode_frame,
     event_to_payload,
     make_frame,
     outcome_to_payload,
@@ -26,11 +31,19 @@ from .worker_codec import (
     validate_envelope,
 )
 
+EventEmit = Callable[[Any], Awaitable[None]]
+
 
 class WorkerBackend(Protocol):
     async def open(self, payload: Mapping[str, Any]) -> None: ...
 
-    async def run(self, prompt: str, *, run_id: str) -> tuple[list[Any], Any]: ...
+    async def run(
+        self,
+        prompt: str,
+        *,
+        run_id: str,
+        emit: Optional[EventEmit] = None,
+    ) -> tuple[list[Any], Any]: ...
 
     async def reset(self) -> None: ...
 
@@ -42,11 +55,21 @@ BackendFactory = Callable[[], WorkerBackend]
 
 def _registry() -> Dict[str, BackendFactory]:
     # Lazy imports keep unsupported backends out of the worker until requested.
+    from ..backends.claude_sdk.worker import ClaudeSdkWorkerBackend
     from ..backends.codex_sdk.worker import CodexSdkWorkerBackend
 
     return {
+        "claude_sdk": ClaudeSdkWorkerBackend,
         "codex_sdk": CodexSdkWorkerBackend,
     }
+
+
+def event_source_for_backend(backend_id: str) -> str:
+    """Map a registered worker backend id to the Event.source provider name."""
+
+    if backend_id.endswith("_sdk") or backend_id.endswith("_cli"):
+        return backend_id.rsplit("_", 1)[0]
+    return backend_id
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -83,19 +106,36 @@ async def _serve(channel: int) -> int:
         make_frame("hello", instance=instance, worker_pid=os.getpid()),
     )
     backend: Optional[WorkerBackend] = None
+    event_source = "sdk"
     active_run: Optional[str] = None
     run_task: Optional[asyncio.Task[Any]] = None
+    # Bound mid-turn streaming so a chatty provider cannot exhaust memory while
+    # the daemon sink is slow; full put() blocks and applies backpressure.
+    event_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=MAX_EVENTS_PER_RUN)
+    queued_event_bytes = 0
+    run_event_bytes = 0
     seen_requests: set[str] = set()
     sequence = 0
     closed = False
 
     while not closed:
         if run_task is not None and active_run is not None:
-            # While a provider run is in flight, poll for cancel/close without
-            # blocking the event loop on a long SDK turn.
-            envelope = await _recv_while_running(loop, channel, run_task)
+            # Stream any mid-turn events before polling cancel/close so Claude
+            # assistant/tool output is not lost if the turn is later killed.
+            sequence, queued_event_bytes = await _drain_event_queue(
+                loop,
+                channel,
+                event_queue,
+                run_id=active_run,
+                sequence=sequence,
+                queued_event_bytes=queued_event_bytes,
+            )
+            envelope = await _recv_while_running(loop, channel, run_task, event_queue)
             if envelope is None:
-                # Run finished first; harvest its result below via run_task.
+                # Either an event is ready or the run finished; drain again.
+                if not event_queue.empty():
+                    continue
+                # Run finished first; harvest residual events plus the result.
                 try:
                     events, outcome = await run_task
                 except asyncio.CancelledError:
@@ -113,7 +153,15 @@ async def _serve(channel: int) -> int:
                     run_task = None
                     finished_run = active_run
                     active_run = None
-                # sequence may already be 1 from the run-started status frame.
+                sequence, queued_event_bytes = await _drain_event_queue(
+                    loop,
+                    channel,
+                    event_queue,
+                    run_id=finished_run,
+                    sequence=sequence,
+                    queued_event_bytes=queued_event_bytes,
+                )
+                # Residual return-list events (Codex collects after thread.run).
                 for event in events:
                     sequence += 1
                     await loop.run_in_executor(
@@ -139,6 +187,8 @@ async def _serve(channel: int) -> int:
                     ),
                 )
                 sequence = 0
+                queued_event_bytes = 0
+                run_event_bytes = 0
                 continue
         else:
             payload = await loop.run_in_executor(None, recv_frame_sync, channel)
@@ -175,6 +225,8 @@ async def _serve(channel: int) -> int:
                     sanitize_error_text(f"worker open failed: {exc}"),
                 )
                 return 1
+            if isinstance(backend_id, str) and backend_id:
+                event_source = event_source_for_backend(backend_id)
             await loop.run_in_executor(
                 None,
                 send_frame_sync,
@@ -200,9 +252,8 @@ async def _serve(channel: int) -> int:
                 await _send_error(loop, channel, "a run is already active")
                 return 1
             active_run = run_id
-            # Emit an immediate status so the daemon sees progress while the
-            # collected SDK turn is still in flight (Codex returns events only
-            # after thread.run settles).
+            # Immediate status so the daemon sees progress while an SDK turn
+            # that only settles at the end (Codex) is still in flight.
             await loop.run_in_executor(
                 None,
                 send_frame_sync,
@@ -213,7 +264,7 @@ async def _serve(channel: int) -> int:
                     sequence=1,
                     event={
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "source": "codex",
+                        "source": event_source,
                         "type": "status",
                         "text": "sdk worker run started",
                         "raw": {"phase": "run_started"},
@@ -222,7 +273,43 @@ async def _serve(channel: int) -> int:
                 ),
             )
             sequence = 1
-            run_task = asyncio.create_task(backend.run(prompt, run_id=run_id))
+            queued_event_bytes = 0
+            run_event_bytes = 0
+
+            async def _emit(event: Any) -> None:
+                nonlocal queued_event_bytes, run_event_bytes
+                payload = event_to_payload(event)
+                # Measure the actual UTF-8 frame that will cross the socket, not
+                # Python repr length (which undercounts multibyte text).
+                try:
+                    frame_bytes = encode_frame(
+                        make_frame(
+                            "event",
+                            run_id=run_id,
+                            sequence=1,
+                            event=payload,
+                        )
+                    )
+                except WorkerProtocolError as exc:
+                    raise RuntimeError(
+                        "worker event exceeds the transport frame size limit"
+                    ) from exc
+                encoded_size = len(frame_bytes)
+                if encoded_size > FRAME_LIMIT:
+                    raise RuntimeError("worker event exceeds the transport frame size limit")
+                # Cumulative per-run wire budget (does not reset when drained).
+                if run_event_bytes + encoded_size > MAX_EVENT_BYTES_PER_RUN:
+                    raise RuntimeError("worker run exceeded the per-run byte budget")
+                # In-flight queue occupancy: wait if memory would grow too large.
+                while queued_event_bytes + encoded_size > MAX_EVENT_BYTES_PER_RUN:
+                    await asyncio.sleep(0.01)
+                await event_queue.put((payload, encoded_size))
+                queued_event_bytes += encoded_size
+                run_event_bytes += encoded_size
+
+            run_task = asyncio.create_task(
+                backend.run(prompt, run_id=run_id, emit=_emit),
+            )
             continue
 
         if frame_type == "cancel":
@@ -291,25 +378,69 @@ async def _serve(channel: int) -> int:
     return 0
 
 
+async def _drain_event_queue(
+    loop: asyncio.AbstractEventLoop,
+    channel: int,
+    event_queue: asyncio.Queue[Any],
+    *,
+    run_id: str,
+    sequence: int,
+    queued_event_bytes: int,
+) -> tuple[int, int]:
+    while True:
+        try:
+            item = event_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return sequence, queued_event_bytes
+        if isinstance(item, tuple) and len(item) == 2:
+            payload, encoded_size = item
+            queued_event_bytes = max(0, queued_event_bytes - int(encoded_size))
+        else:
+            # Back-compat for residual object puts (should not occur in production).
+            payload = event_to_payload(item)
+            encoded_size = 0
+        sequence += 1
+        await loop.run_in_executor(
+            None,
+            send_frame_sync,
+            channel,
+            make_frame(
+                "event",
+                run_id=run_id,
+                sequence=sequence,
+                event=payload,
+            ),
+        )
+
+
 async def _recv_while_running(
     loop: asyncio.AbstractEventLoop,
     channel: int,
     run_task: asyncio.Task[Any],
+    event_queue: asyncio.Queue[Any],
 ) -> Optional[dict[str, Any]]:
-    """Return a control frame if one arrives before the run task finishes."""
+    """Return a control frame if one arrives before the run task finishes.
+
+    Also returns ``None`` early when the event queue has mid-turn events so
+    the serve loop can stream them without waiting out the full select timeout.
+    """
 
     while not run_task.done():
+        if not event_queue.empty():
+            return None
         ready = await loop.run_in_executor(
             None,
             select.select,
             [channel],
             [],
             [],
-            0.1,
+            0.05,
         )
         if ready[0]:
             payload = await loop.run_in_executor(None, recv_frame_sync, channel)
             return validate_envelope(payload, expected_direction="daemon")
+        if not event_queue.empty():
+            return None
     return None
 
 

@@ -57,6 +57,25 @@ restart-safe resume, no provider-verified interrupt, no tool gating). The
 disposable/session workdir is passed as SDK cwd. Missing wheels fail
 availability probing; runtime/auth errors become transcript error events.
 
+## Outer filesystem sandbox
+
+Stage 6 advertises outer `sandbox = "read-only"` as an `sdk_worker` backend.
+Agent-collab launches a supervised Bubblewrap namespace, proves establishment,
+then runs `python -I -m agent_collab.sandbox.sdk_worker`. The worker owns the
+complete Claude SDK client, Claude Code runtime, and local tool descendants.
+The complete effective `CLAUDE_CONFIG_DIR` is the persistent writable state
+root (same contract as `claude_cli`). After outer proof, the worker forces
+`permission_mode=bypassPermissions` for non-interactive tool use and forces
+`strict_mcp_config` with an empty MCP map so ambient project/user MCP is not
+inherited on the worker path. Outer `sandbox = "none"` keeps historical
+in-process behavior (including ambient MCP when the SDK would load it).
+Admin-managed settings under `/etc/claude-code` fail closed. Legacy
+`~/.claude.json` remains outside the writable state mount when using the
+default config location.
+
+`sandbox = "none"` (the default) keeps the historical in-process daemon runner
+and does not start Bubblewrap. Explicit outer `none` is the rollback path.
+
 ## Testing
 
 Hermetic: `./agent_collab_dev.sh test -k claude_sdk`. Live: `./agent_collab_dev.sh integration-test claude_sdk`.

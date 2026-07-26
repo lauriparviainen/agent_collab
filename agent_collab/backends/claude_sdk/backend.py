@@ -47,7 +47,8 @@ from ...config import AgentConfig
 from ...events import Event, compact_json
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
 from ...runners import AgentRunner, AsyncEventSink
-from ...sandbox.specs import UnsupportedSandboxAdapter
+from ...sandbox.specs import SandboxPolicy
+from .sandbox import ClaudeSdkSandboxAdapter
 from ..base import (
     BackendCapabilities,
     BackendHealth,
@@ -98,7 +99,7 @@ ConversationFactory = Callable[
 
 
 class ClaudeSdkBackend:
-    sandbox_adapter = UnsupportedSandboxAdapter()
+    sandbox_adapter = ClaudeSdkSandboxAdapter()
     """Registered as ``(claude, "sdk")`` with live-session continuity."""
 
     id = "sdk"
@@ -159,6 +160,11 @@ class ClaudeSdkBackend:
         summary["system_prompt"] = "claude_code"
         summary["tools"] = "claude_code"
         summary["conversation"] = "persistent"
+        summary["outer_sandbox"] = {
+            "support": "sdk_worker",
+            "read_only": "complete_worker_inside_bubblewrap",
+            "none": "in_process_daemon_runner",
+        }
         return summary
 
 
@@ -177,15 +183,258 @@ class ClaudeSdkRunner(AgentRunner):
         self._conversation_factory = conversation_factory
         self._conversation: Optional[ClaudeConversation] = None
         self._workdir: Optional[Path] = None
+        self.sandbox_plan: Optional[object] = None
+        self._worker_session: Optional[object] = None
+        self._worker_terminal = False
+        # Provider continuity is established only after a captured session id,
+        # not merely because a Bubblewrap worker process is still alive.
+        self._worker_provider_active = False
 
     def conversation_active(self) -> bool:
+        if self._worker_terminal:
+            return False
+        if self._worker_session is not None:
+            session = self._worker_session
+            if getattr(session, "terminal", False):
+                return False
+            return self._worker_provider_active
         return self._conversation is not None and self._conversation.active()
 
     async def close(self) -> None:
+        if self._worker_session is not None:
+            session = self._worker_session
+            self._worker_session = None
+            self._worker_terminal = True
+            self._worker_provider_active = False
+            try:
+                await session.close()  # type: ignore[union-attr]
+            except Exception:
+                try:
+                    await session.force_teardown()  # type: ignore[union-attr]
+                except Exception:
+                    pass
         if self._conversation is not None:
             await self._conversation.close()
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
+        policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
+        if policy is SandboxPolicy.READ_ONLY:
+            return await self._run_turn_worker(prompt, workdir, emit)
+        return await self._run_turn_in_process(prompt, workdir, emit)
+
+    async def _run_turn_worker(
+        self, prompt: str, workdir: Path, emit: AsyncEventSink
+    ) -> TurnOutcome:
+        from ...sandbox.specs import SandboxFailure
+        from ...sandbox.worker_codec import WorkerProtocolError
+
+        if self._worker_terminal:
+            await emit(
+                Event.create(
+                    "error",
+                    "error",
+                    f"{self.name} outer sandbox worker is terminal",
+                    {
+                        "code": "outer_sandbox_worker_terminated",
+                        "phase": "worker",
+                        "fatal": True,
+                    },
+                )
+            )
+            return TurnOutcome("failed", "outer_sandbox_worker_terminated")
+
+        if self.verbose:
+            await emit(Event.create("claude", "status", f"claude sdk worker starting in {workdir}"))
+        try:
+            session = await self._worker_for(workdir)
+            scratch = getattr(session, "_scratch", None)
+            effective_prompt = self.sandbox_plan.render_prompt(prompt, scratch)  # type: ignore[union-attr]
+
+            async def tracking_emit(event: Any) -> None:
+                session_meta = getattr(event, "provider_session", None)
+                if isinstance(session_meta, Mapping) and session_meta.get("provider_session_id"):
+                    self._worker_provider_active = True
+                elif isinstance(getattr(event, "raw", None), Mapping):
+                    raw = event.raw
+                    if raw.get("provider_session_id"):
+                        self._worker_provider_active = True
+                await emit(event)
+
+            _buffered, outcome = await session.run(effective_prompt, emit=tracking_emit)
+            # If the worker never established a provider session, drop it after a
+            # non-completed turn. The in-process conversation may retain an
+            # undelivered prompt; with conversation_active false the referee
+            # re-issues the full task, and a live worker would join that onto
+            # the retained prompt and duplicate the turn. Soft-drop keeps the
+            # runner eligible to launch a fresh worker on the next turn.
+            if outcome.outcome != "completed" and not self._worker_provider_active:
+                await self._drop_worker_session()
+            return outcome
+        except asyncio.CancelledError:
+            await self._terminate_worker_session()
+            raise
+        except SandboxFailure as exc:
+            await self._terminate_worker_session()
+            await self._emit_sandbox_failure(emit, exc)
+            return TurnOutcome("failed", exc.code)
+        except WorkerProtocolError as exc:
+            await self._terminate_worker_session()
+            await self._emit_sandbox_failure(emit, exc)
+            return TurnOutcome("failed", exc.code)
+        except Exception as exc:
+            await self._terminate_worker_session()
+            await emit(sdk_error_event("claude", exc))
+            return TurnOutcome("failed", "provider_transport_failed")
+
+    async def _emit_sandbox_failure(self, emit: AsyncEventSink, exc: Any) -> None:
+        try:
+            await asyncio.wait_for(
+                emit(
+                    Event.create(
+                        "error",
+                        "error",
+                        f"{self.name} outer sandbox failed during {exc.phase}: {exc}",
+                        {
+                            "code": exc.code,
+                            "phase": exc.phase,
+                            "fatal": True,
+                            "remediation": list(getattr(exc, "remediation", ()) or ()),
+                        },
+                    )
+                ),
+                1.0,
+            )
+        except Exception:
+            pass
+
+    async def _drop_worker_session(self) -> None:
+        """Kill the current worker but remain eligible for a later relaunch."""
+
+        session = self._worker_session
+        self._worker_session = None
+        self._worker_provider_active = False
+        if session is None:
+            return
+        try:
+            session.kill()  # type: ignore[union-attr]
+        except Exception:
+            try:
+                session.terminate()  # type: ignore[union-attr]
+            except Exception:
+                pass
+        try:
+            await asyncio.shield(session.wait())  # type: ignore[union-attr]
+        except Exception:
+            pass
+
+    async def _terminate_worker_session(self) -> None:
+        session = self._worker_session
+        if session is not None:
+            try:
+                session.kill()  # type: ignore[union-attr]
+            except Exception:
+                try:
+                    session.terminate()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+        self._worker_session = None
+        self._worker_terminal = True
+        self._worker_provider_active = False
+        if session is None:
+            return
+        try:
+            await asyncio.shield(session.cancel_active())  # type: ignore[union-attr]
+        except asyncio.CancelledError:
+            try:
+                asyncio.create_task(session.wait())  # type: ignore[union-attr]
+            except Exception:
+                pass
+            raise
+        except Exception:
+            try:
+                session.kill()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            try:
+                await asyncio.shield(session.wait())  # type: ignore[union-attr]
+            except Exception:
+                pass
+
+    async def _worker_for(self, workdir: Path) -> Any:
+        from ...sandbox.bubblewrap import discover_bubblewrap
+        from ...sandbox.supervisor import SandboxSupervisor
+        from ...sandbox.worker_session import SupervisedWorkerSession, handshake_worker
+        from ..common.sdk import agent_environment
+
+        resolved = workdir.resolve()
+        if self._worker_terminal:
+            raise RuntimeError("claude sdk worker session is terminal")
+        if self._worker_session is not None:
+            if getattr(self._worker_session, "terminal", False):
+                self._worker_session = None
+                self._worker_terminal = True
+                self._worker_provider_active = False
+                raise RuntimeError("claude sdk worker session is terminal")
+            if self._workdir != resolved:
+                raise RuntimeError("claude sdk worker workdir changed between turns")
+            return self._worker_session
+        plan = self.sandbox_plan
+        if plan is None:
+            raise RuntimeError("claude sdk worker requires a resolved sandbox plan")
+        installation = await asyncio.to_thread(discover_bubblewrap)
+        process, worker_sock = await SandboxSupervisor(installation).launch_sdk_worker(
+            plan,  # type: ignore[arg-type]
+            stream_limit=8 * 1024 * 1024,
+        )
+        assert worker_sock is not None
+        reader = writer = None
+        try:
+            worker_sock.setblocking(False)
+            reader, writer = await asyncio.open_connection(sock=worker_sock)
+            instance = await handshake_worker(reader, writer)
+            adapter = ClaudeSdkSandboxAdapter()
+            effective_cwd = getattr(getattr(plan, "context", None), "cwd", None) or resolved
+            payload = adapter.worker_open_payload_for_agent(
+                agent_id=self.name,
+                options=self.options,
+                workspace=getattr(getattr(plan, "context", None), "workspace", None) or resolved,
+                cwd=effective_cwd,
+                agent_env=agent_environment(self.agent),
+                verbose=self.verbose,
+            )
+            session = SupervisedWorkerSession(process, reader, writer, instance=instance)
+            session._scratch = process._scratch  # type: ignore[attr-defined]
+            await session.open(payload)
+        except BaseException:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            try:
+                await process.wait()
+            except Exception:
+                pass
+            if writer is not None:
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+            else:
+                try:
+                    worker_sock.close()
+                except Exception:
+                    pass
+            self._worker_terminal = True
+            self._worker_provider_active = False
+            raise
+        self._worker_session = session
+        self._workdir = resolved
+        return session
+
+    async def _run_turn_in_process(
+        self, prompt: str, workdir: Path, emit: AsyncEventSink
+    ) -> TurnOutcome:
         if self.verbose:
             await emit(Event.create("claude", "status", f"claude sdk starting in {workdir}"))
         conversation: Optional[ClaudeConversation] = None
@@ -433,6 +682,8 @@ def build_claude_agent_options(
     options: Dict[str, Any],
     workdir: Path,
     resume_session_id: Optional[str] = None,
+    *,
+    suppress_ambient_mcp: bool = False,
 ) -> Any:
     """Construct the verified ``ClaudeAgentOptions`` coding-agent configuration.
 
@@ -442,19 +693,25 @@ def build_claude_agent_options(
     ``resume_session_id`` is set only when reconnecting a captured provider
     session (with ``fork_session=False`` so the id is continued, not forked);
     a fresh first connection must omit both fields.
+    ``suppress_ambient_mcp`` is for the outer read-only worker path only.
     """
 
     mapped = _map_sdk_options(options)
     if resume_session_id is not None:
         mapped["resume"] = resume_session_id
         mapped["fork_session"] = False
-    return options_cls(
+    kwargs: Dict[str, Any] = {
         **mapped,
-        cwd=str(workdir),
-        setting_sources=[],
-        system_prompt={"type": "preset", "preset": "claude_code"},
-        tools={"type": "preset", "preset": "claude_code"},
-    )
+        "cwd": str(workdir),
+        "setting_sources": [],
+        "system_prompt": {"type": "preset", "preset": "claude_code"},
+        "tools": {"type": "preset", "preset": "claude_code"},
+    }
+    if suppress_ambient_mcp:
+        # Match claude_cli outer read-only: --strict-mcp-config with empty map.
+        kwargs["strict_mcp_config"] = True
+        kwargs["mcp_servers"] = {}
+    return options_cls(**kwargs)
 
 
 def _backend_unavailable(reason: str) -> BackendUnavailable:
@@ -465,6 +722,8 @@ def _default_conversation(
     agent: AgentConfig,
     options: Dict[str, Any],
     workdir: Path,
+    *,
+    suppress_ambient_mcp: bool = False,
 ) -> ClaudeConversation:
     """Build one lazy-imported persistent conversation for a runner."""
 
@@ -478,7 +737,13 @@ def _default_conversation(
                 "claude_agent_sdk has no compatible ClaudeSDKClient "
                 "connect/query/receive_response/disconnect API"
             )
-    return _PersistentClaudeConversation(ClaudeSDKClient, ClaudeAgentOptions, options, workdir)
+    return _PersistentClaudeConversation(
+        ClaudeSDKClient,
+        ClaudeAgentOptions,
+        options,
+        workdir,
+        suppress_ambient_mcp=suppress_ambient_mcp,
+    )
 
 
 class _PersistentClaudeConversation:
@@ -490,11 +755,14 @@ class _PersistentClaudeConversation:
         options_cls: Any,
         options: Dict[str, Any],
         workdir: Path,
+        *,
+        suppress_ambient_mcp: bool = False,
     ) -> None:
         self._client_cls = client_cls
         self._options_cls = options_cls
         self._options = dict(options)
         self._workdir = workdir
+        self._suppress_ambient_mcp = suppress_ambient_mcp
         self._lock = asyncio.Lock()
         self._client: Any = None
         self._session_id: Optional[str] = None
@@ -566,6 +834,7 @@ class _PersistentClaudeConversation:
                 self._options,
                 self._workdir,
                 resume_session_id=resume_id,
+                suppress_ambient_mcp=self._suppress_ambient_mcp,
             )
         )
         try:
