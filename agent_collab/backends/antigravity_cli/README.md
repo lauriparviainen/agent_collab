@@ -29,14 +29,55 @@ Every non-empty stdout line becomes `antigravity/message`. Tool structure and pr
 
 This message-only transport has the one provisional clean-EOF fallback: exit
 zero plus at least one non-empty stdout message completes; empty output,
-nonzero exit, or output/transport failure fails. No prose is classified as a
-provider cancellation or refusal. A stronger marker contract remains pending
-provider evidence.
+nonzero exit, or output/transport failure fails. Explicit Antigravity
+`TOOL_ERROR`/tool-action failure status lines are retained as private terminal
+evidence, so a provider exit of zero cannot turn a reported action failure into
+a successful turn. Ordinary response prose is not classified as a provider
+cancellation or refusal.
 
 ## Capabilities and security
 
-`resume`, `interrupt`, and `tool_gate` are false. Execution is confined to the resolved cwd/add-dir configuration.
+`resume`, `interrupt`, and `tool_gate` are false. Execution uses the resolved
+cwd/add-dir configuration and closes stdin.
+
+The separate top-level outer policy supports `sandbox="read-only"` in Stage 4.
+It reuses the common Linux Bubblewrap launcher and declares exactly
+`$HOME/.gemini` as complete persistent writable Antigravity state. `HOME` must
+be absolute; the adapter validates the `.gemini` basename and maps the inner
+`HOME` to its validated parent because Antigravity has no supported state-root
+relocation variable. The state directory must already exist, be owned by the
+daemon user, contain no symlink component, and not be group/world writable.
+The `antigravity-cli/bin/agentapi` materialization path is also checked before
+provider execution.
+
+Only after the outer namespace proof ACK does the adapter replace configured
+controls with:
+
+- `--dangerously-skip-permissions`;
+- `--mode accept-edits`; and
+- `--sandbox=false`.
+
+Every repeated `--add-dir PATH` or `--add-dir=PATH` remains provider-visible
+but is normalized as read-only. Malformed add-dir or conflicting native-profile
+arguments fail closed. Top-level `sandbox="none"` is the explicit rollback: it
+preserves the exact original provider command and independently configured
+native mode/sandbox posture.
+
+The workspace and session-root Git storage are read-only, while all content
+below `.gemini`—including credentials, settings, history, plugins, MCP/hooks,
+and helpers—remains writable by Antigravity and descendants. The OS keyring is
+reported as an external service outside the filesystem boundary. Keyring
+contents and side effects, readable host files, network and remote services,
+and delegated writes are not isolated or claimed as protected.
 
 ## Testing
 
-Hermetic: `./agent_collab_dev.sh test -k antigravity_cli`. Live: `./agent_collab_dev.sh integration-test antigravity_cli`.
+Hermetic: `python3 -m unittest tests.backends.antigravity_cli.test_backend
+tests.backends.antigravity_cli.test_sandbox`. Credential-free real namespace:
+`./agent_collab_dev.sh bubblewrap-test`. Live:
+`./agent_collab_dev.sh integration-test antigravity_cli`. The paid Stage 4
+acceptance is skipped unless
+`AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE` names an operator-authorized
+dedicated complete `.gemini` directory; it covers native keyring authentication,
+agentapi shell execution, child containment, persistent state, workspace denial,
+and cleanup.

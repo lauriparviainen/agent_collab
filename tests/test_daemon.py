@@ -206,6 +206,66 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(command_event["raw"]["command_preview"], preview)
         self.assertNotIn("PRIVATE CLAUDE DRY RUN PROMPT", str(command_event["raw"]))
 
+    async def test_antigravity_read_only_settings_dry_run_and_command_event_match(self):
+        from agent_collab.sandbox.bubblewrap import BubblewrapInstallation
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir(mode=0o700)
+            home = root / "provider-home"
+            state_root = home / ".gemini"
+            state_root.mkdir(parents=True, mode=0o700)
+            manager = SessionManager()
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "AGENT_COLLAB_HOME": str(root / "daemon-home"),
+                        "HOME": str(home),
+                    },
+                ),
+                mock.patch(
+                    "agent_collab.sandbox.plan.resolve_scratch_anchor",
+                    return_value=Path("/safe/scratch"),
+                ),
+                mock.patch(
+                    "agent_collab.sandbox.bubblewrap.discover_bubblewrap",
+                    return_value=BubblewrapInstallation(Path("/usr/bin/bwrap"), "fixture"),
+                ),
+            ):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="PRIVATE ANTIGRAVITY DRY RUN PROMPT",
+                        workflow="solo",
+                        members={"claude_cli": "antigravity_cli"},
+                        sandbox="read-only",
+                        dry_run=True,
+                        max_turns=1,
+                        timeout=5,
+                        detail="full",
+                        workdir=workspace,
+                    )
+                )
+                final = await self._wait_for_terminal(manager, state.session_id)
+                events = manager.read_events(state.session_id, 0).events
+
+        self.assertEqual(final.status, "done")
+        outer = state.settings["agents"]["antigravity_cli"]["outer_sandbox"]
+        self.assertEqual(outer["support"], "direct_process")
+        self.assertEqual(outer["enforcement"], "os_enforced")
+        self.assertEqual(
+            outer["external_services"],
+            ["OS keyring (external service outside filesystem boundary)"],
+        )
+        preview = state.settings["agents"]["antigravity_cli"]["command_preview"]
+        self.assertIn("--dangerously-skip-permissions", preview)
+        self.assertIn("--sandbox=false", preview)
+        self.assertNotIn("PRIVATE ANTIGRAVITY DRY RUN PROMPT", preview)
+        command_event = next(item for item in events if item["type"] == "command")
+        self.assertEqual(command_event["raw"]["command_preview"], preview)
+        self.assertNotIn("PRIVATE ANTIGRAVITY DRY RUN PROMPT", str(command_event["raw"]))
+
     async def test_unsupported_read_only_rejects_before_session_creation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

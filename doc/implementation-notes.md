@@ -60,7 +60,8 @@ and Git discovery, normalized mounts, and alias auditing happen before session
 state is created. Each backend registry entry owns a typed `sandbox_adapter`;
 common sandbox code must not branch on backend ids.
 
-Stages 1–2 implement `read-only` for `codex_cli` and `claude_cli` through
+Stages 1, 2, and 4 implement `read-only` for `codex_cli`, `claude_cli`, and
+`antigravity_cli` through
 `agent_collab/sandbox/`. A standalone stdlib bootstrap is the first process
 inside Bubblewrap. It reports its exact inherited descriptor roles, then waits
 for a nonce-bound ACK while the daemon pins the namespace reaper/bootstrap and
@@ -78,6 +79,16 @@ and replaces ambient MCP/permission/native-sandbox arguments with the strict
 empty-MCP, skip-permissions, transient-sandbox-disabled profile only after the
 outer proof gate. The common command context and dry-run projection remain
 backend-neutral.
+
+The Antigravity Stage 4 adapter keeps the complete `~/.gemini` tree persistent
+and writable, validates its basename and maps `HOME` to its parent, checks the
+`antigravity-cli/bin/agentapi` materialization path, declares every `--add-dir`
+as read-only, and reports the OS keyring as an external service outside the
+filesystem boundary. It replaces configured permission/mode/native-sandbox
+arguments with skip-permissions, `accept-edits`, and provider sandbox disabled
+only after the common outer proof ACK. Its stateful plain-text parser retains
+explicit tool/action failure status as terminal evidence even when `agy` exits
+zero.
 
 `none` bypasses the sandbox launcher and preserves existing command behavior.
 Unsupported adapters reject explicit read-only before engine discovery.

@@ -8,7 +8,6 @@ from typing import Any, Dict, Mapping, Optional
 from ...backend_contract import OptionSpec, load_option_schema, normalize_declared_options
 from ...config import AgentConfig
 from ...runners import AgentRunner
-from ...sandbox.specs import UnsupportedSandboxAdapter
 from ..base import BackendCapabilities, BackendHealth
 from ..common.cli import (
     cli_settings_summary,
@@ -21,7 +20,8 @@ from ..common.cli import (
     set_flag_value_before_print_prompt,
 )
 from ..common.health import antigravity_credentials, default_version_runner, probe_cli_backend
-from .parser import parse_antigravity_line
+from .parser import AntigravityParser
+from .sandbox import AntigravityCliSandboxAdapter
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 
@@ -33,7 +33,7 @@ class AntigravityCliBackend:
     event_fidelity = "message_only"
     provider_session_id_kind = None
     capabilities = BackendCapabilities()
-    sandbox_adapter = UnsupportedSandboxAdapter()
+    sandbox_adapter = AntigravityCliSandboxAdapter()
     checks_credentials = True
     block_on_unavailable = True
     # The supported ``agy -p`` surface is message-only.  Until the provider
@@ -117,6 +117,6 @@ class AntigravityCliBackend:
             agent,
             verbose,
             options,
-            parse_antigravity_line,
+            AntigravityParser(),
             command_builder=lambda run_dir: self.build_command(agent, options, run_dir),
         )

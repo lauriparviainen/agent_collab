@@ -816,6 +816,7 @@ def _describe_backends(
                         "support": sandbox_spec.support.value,
                         "policies": sorted(item.value for item in sandbox_spec.policies),
                         "provider_native_profile": dict(sandbox_spec.native_profile.summary),
+                        "external_services": list(sandbox_spec.external_services),
                     },
                 },
                 "effective": {"option_schema": effective_schema},

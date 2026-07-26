@@ -7,7 +7,7 @@ schema_version = 11
 
 [system]
 timezone = "local"
-# Stages 1-2 intentionally keep the production default inactive. Linux may
+# The completed CLI stages intentionally keep the production default inactive. Linux may
 # move this to "read-only" only after the complete shipped-backend readiness
 # gate.
 sandbox_default = "none"

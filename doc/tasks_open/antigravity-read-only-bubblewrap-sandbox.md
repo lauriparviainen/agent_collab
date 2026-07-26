@@ -18,9 +18,15 @@
 > command-event projection defect; the fix and regression test are locally
 > green. Post-fix session `daemon-0bac6b95c4344bb3` converged: both independent
 > reviewers rechecked the closeout and reported no High/Medium findings.
+> Stage 4 now implements the canonical `antigravity_cli` slice without
+> changing either historical implementation record. Its first review session
+> produced one clean report and one timeout; fresh session
+> `daemon-8b4c9140eaae44ea` converged with both reviewers reporting no
+> High/Medium findings.
 
-**Status:** Stages 1 and 2 implemented and locally verified; Stage 2
-production review converged.
+**Status:** Stages 1, 2, and 4 implemented and locally verified; Stage 2 and
+Stage 4 production reviews converged. Stage 3 and the SDK stages remain
+pending.
 
 **Created:** 2026-07-25.
 
@@ -158,6 +164,81 @@ dedicated complete state directory through
 `./agent_collab_dev.sh integration-test claude_cli --strict`; the current task
 did not authorize that provider call. Stage 1 history above and below is
 preserved as historical evidence, not rewritten as Stage 2 work.
+
+## Stage 4 implementation review reconciliation (2026-07-26)
+
+Stage 4 loop 1 used normal `interactive=false` parallel session
+`daemon-9480d6e446434dd3` over the 14-file working-tree diff against `HEAD`
+(`3bd8afd1bcdeb04a57d5e01b420115531c3c67bb`) with frozen SHA-256
+`d31c57d8c4e17326e2c616acff291e514b89a834ec914d97f4b10a4a1b0bb8c0`.
+The start-eligible `grok-gemini-review` workflow selected `xai_cli` with
+`grok-4.5`, high thinking, `permission_mode=bypassPermissions`, and provider
+`sandbox=read-only`, plus `antigravity_cli` with `gemini-3.1-pro-high` and
+`mode=plan`; outer sandbox was explicitly `none`.
+
+Gemini inspected the frozen scope and reported no High/Medium findings. Grok
+reached the 900-second local turn deadline without a final report, producing
+the structured `local_turn_timed_out` outcome. There was therefore no
+candidate finding, agreement, or disagreement to adjudicate, but one clean
+reviewer plus a missing report does not establish convergence. The worktree
+was not edited while the session was live. Pre-review verification passed
+Ruff lint and formatting, 1,272 hermetic tests with one expected skip,
+`./agent_collab_dev.sh build --check`, six credential-free Bubblewrap tests,
+and `git diff --check`. Loop 2 follows with a fresh freeze and an explicit
+recheck requirement.
+
+Stage 4 loop 2 used the same workflow, members, models, effective options, and
+explicit outer `none` in session `daemon-8b4c9140eaae44ea`, with the local
+turn timeout raised to 1,800 seconds. It reviewed a fresh 15-file
+working-tree diff against the same base with frozen SHA-256
+`1b26c3f0089c91a9e2203f12332f03e71f7109a4bda57c1e4c2c972f764f299d`;
+the additional file was this task document's loop 1 record. Gemini reported
+exactly `No High/Medium findings.` Grok completed its independent inspection
+and likewise concluded `No High/Medium findings.` There was no candidate
+finding, disagreement, or local override to adjudicate. Convergence was
+therefore achieved after two of the six permitted parallel sessions, and no
+further paid loop was run. This paragraph is the documentation-only
+post-review record of the frozen implementation snapshot.
+
+## Stage 4 implementation handoff (2026-07-26)
+
+Stage 4 adds outer `read-only` only for `antigravity_cli`; Stage 3 `xai_cli`
+and every SDK stage remain pending and unsupported. The adapter declares the
+complete `$HOME/.gemini` tree as persistent writable state, validates its
+tilde/basename identity, maps inner `HOME` to the state parent, checks safe
+`antigravity-cli/bin/agentapi` materialization, normalizes every `--add-dir`
+path read-only, and reports the OS keyring as an external service outside the
+filesystem guarantee. Only after the common Bubblewrap proof ACK does it force
+skip-permissions, `mode=accept-edits`, and provider `sandbox=false`. Explicit
+outer `none` remains the default and exact rollback without a silent fallback.
+
+The Antigravity message-only parser now retains explicit tool/action failure
+status as terminal evidence, so exit zero plus a reported failure remains a
+failed turn. Focused unit, daemon, conditional namespace, and opt-in live
+acceptance coverage accompany the adapter. The credentialed Antigravity
+acceptance remains intentionally unrun pending separate authorization and an
+operator-authorized complete `.gemini` state root.
+
+Final post-review verification passed:
+
+- `./agent_collab_dev.sh test`: Ruff lint and formatting checks passed; 1,272
+  hermetic tests passed with one expected skip;
+- `./agent_collab_dev.sh build --check`: effective configuration and generated
+  OpenAPI/HTTP artifacts verified current;
+- `./agent_collab_dev.sh bubblewrap-test`: six real Linux namespace tests
+  passed, including the Antigravity-shaped boundary fixture;
+- `git diff --check`: passed; and
+- GitHub issue #43 was fetched read-only and remained open.
+
+Production readiness is intentionally scoped to Linux hosts that satisfy the
+common Bubblewrap preflight and provide a daemon-owned, safely materializable
+complete `.gemini` state tree. The OS keyring remains an external service,
+outside the filesystem boundary, and credential availability is therefore an
+operator concern. Rollback is the unchanged default
+`outer_sandbox = "none"`, which preserves the original Antigravity command
+exactly. The credentialed acceptance command remains pending because this
+slice did not authorize a provider call; Stage 3 `xai_cli` and every SDK stage
+are separate future work.
 
 ## Stage 1 implementation review reconciliation (2026-07-26)
 

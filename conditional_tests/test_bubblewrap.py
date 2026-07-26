@@ -16,6 +16,7 @@ from agent_collab.backends.claude_cli.sandbox import (
     TRANSIENT_NATIVE_SETTINGS,
     ClaudeCliSandboxAdapter,
 )
+from agent_collab.backends.antigravity_cli.sandbox import AntigravityCliSandboxAdapter
 from agent_collab.sandbox.plan import SandboxOperatorConfig, resolve_session_plan
 from agent_collab.sandbox.policy import resolve_sandbox_policy
 from agent_collab.sandbox.specs import (
@@ -125,6 +126,55 @@ child = subprocess.run(
         "-c",
         "import os,pathlib;"
         "p=pathlib.Path(os.environ['CLAUDE_BOUNDARY_WORKSPACE'])/'child-forbidden';"
+        "\ntry: p.write_text('x'); print('allowed')"
+        "\nexcept OSError: print('blocked')",
+    ],
+    check=True,
+    text=True,
+    stdout=subprocess.PIPE,
+)
+result["child"] = child.stdout.strip()
+print(json.dumps(result, sort_keys=True))
+"""
+
+ANTIGRAVITY_ACTION = r"""#!__PYTHON__
+import json, os, pathlib, subprocess, sys
+workspace = pathlib.Path(os.environ["ANTIGRAVITY_BOUNDARY_WORKSPACE"])
+state = pathlib.Path(os.environ["HOME"]) / ".gemini"
+add_dirs = []
+for index, value in enumerate(sys.argv):
+    if value == "--add-dir" and index + 1 < len(sys.argv):
+        add_dirs.append(sys.argv[index + 1])
+    elif value.startswith("--add-dir="):
+        add_dirs.append(value.split("=", 1)[1])
+result = {
+    "dangerous_once": sys.argv.count("--dangerously-skip-permissions") == 1,
+    "accept_edits": "--mode" in sys.argv
+        and sys.argv[sys.argv.index("--mode") + 1] == "accept-edits",
+    "native_sandbox_disabled": sys.argv.count("--sandbox=false") == 1,
+    "workspace_add_dir_identity": add_dirs == [str(workspace)],
+    "home_maps_state_parent": state == pathlib.Path(os.environ["ANTIGRAVITY_BOUNDARY_STATE"]),
+    "prompt_has_policy": sys.argv[-1].startswith("FILESYSTEM POLICY\n"),
+}
+try:
+    (workspace / "direct-forbidden").write_text("x", encoding="utf-8")
+    result["direct"] = "allowed"
+except OSError:
+    result["direct"] = "blocked"
+helper = state / "antigravity-cli" / "bin" / "agentapi"
+helper.parent.mkdir(parents=True, exist_ok=True)
+helper.write_text("materialized", encoding="utf-8")
+(state / "persistent-allowed").write_text("state", encoding="utf-8")
+pathlib.Path(os.environ["TMPDIR"]).joinpath("scratch-allowed").write_text(
+    "scratch", encoding="utf-8"
+)
+result["state_and_helper"] = "allowed"
+child = subprocess.run(
+    [
+        sys.executable,
+        "-c",
+        "import os,pathlib;"
+        "p=pathlib.Path(os.environ['ANTIGRAVITY_BOUNDARY_WORKSPACE'])/'child-forbidden';"
         "\ntry: p.write_text('x'); print('allowed')"
         "\nexcept OSError: print('blocked')",
     ],
@@ -482,6 +532,107 @@ class BubblewrapBoundaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse((workspace / "child-forbidden").exists())
             self.assertEqual(
                 (state / "session-env" / "fixture" / "allowed").read_text(encoding="utf-8"),
+                "state",
+            )
+            self.assertFalse(scratch.exists())
+
+    async def test_antigravity_execution_shape_contains_helper_and_descendant_writes(self):
+        if platform.system() != "Linux":
+            self.skipTest("Antigravity Bubblewrap boundary test requires Linux")
+        if shutil.which("bwrap") is None:
+            self.skipTest("Antigravity Bubblewrap boundary test requires bwrap on PATH")
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        if not runtime:
+            self.skipTest("XDG_RUNTIME_DIR is unavailable for the safe scratch anchor")
+        runtime_path = Path(runtime)
+        try:
+            runtime_stat = runtime_path.stat()
+        except OSError:
+            self.skipTest("XDG_RUNTIME_DIR is not accessible")
+        if runtime_stat.st_uid != os.getuid() or runtime_stat.st_mode & 0o077:
+            self.skipTest("XDG_RUNTIME_DIR is not an owner-private daemon runtime")
+
+        with tempfile.TemporaryDirectory(
+            prefix="agent-collab-antigravity-boundary-",
+            dir=runtime_path,
+        ) as raw:
+            root = Path(raw).resolve()
+            root.chmod(0o700)
+            workspace = root / "workspace"
+            home = root / "provider-home"
+            state = home / ".gemini"
+            workspace.mkdir(mode=0o700)
+            state.mkdir(parents=True, mode=0o700)
+            fake_antigravity = root / "fake-antigravity"
+            fake_antigravity.write_text(
+                ANTIGRAVITY_ACTION.replace("__PYTHON__", str(Path(sys.executable).resolve())),
+                encoding="utf-8",
+            )
+            fake_antigravity.chmod(0o700)
+            command = (
+                str(fake_antigravity),
+                "--mode",
+                "plan",
+                "--sandbox",
+                "--add-dir",
+                str(workspace),
+                "-p",
+            )
+            plan = resolve_session_plan(
+                policy=resolve_sandbox_policy("read-only", "none"),
+                workspace_path=workspace,
+                agents={
+                    "antigravity": (
+                        None,
+                        {
+                            "HOME": str(home),
+                            "ANTIGRAVITY_BOUNDARY_WORKSPACE": str(workspace),
+                            "ANTIGRAVITY_BOUNDARY_STATE": str(state),
+                        },
+                        AntigravityCliSandboxAdapter(),
+                    )
+                },
+                command_previews={"antigravity": command},
+                operator=SandboxOperatorConfig(
+                    scratch_root=runtime_path / "agent-collab" / "sandbox-tests",
+                ),
+            ).agents["antigravity"]
+
+            process = await SandboxSupervisor().launch_cli(
+                plan,
+                command,
+                "run the Antigravity structural action",
+                stream_limit=1024 * 1024,
+            )
+            scratch = process._scratch
+            stdout_task = asyncio.create_task(process.stdout.read())
+            stderr_task = asyncio.create_task(process.stderr.read())
+            code = await process.wait()
+            stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+
+            self.assertEqual(code, 0, stderr.decode("utf-8", errors="replace"))
+            self.assertEqual(
+                json.loads(stdout.decode("utf-8")),
+                {
+                    "accept_edits": True,
+                    "child": "blocked",
+                    "dangerous_once": True,
+                    "direct": "blocked",
+                    "home_maps_state_parent": True,
+                    "native_sandbox_disabled": True,
+                    "prompt_has_policy": True,
+                    "state_and_helper": "allowed",
+                    "workspace_add_dir_identity": True,
+                },
+            )
+            self.assertFalse((workspace / "direct-forbidden").exists())
+            self.assertFalse((workspace / "child-forbidden").exists())
+            self.assertEqual(
+                (state / "antigravity-cli" / "bin" / "agentapi").read_text(encoding="utf-8"),
+                "materialized",
+            )
+            self.assertEqual(
+                (state / "persistent-allowed").read_text(encoding="utf-8"),
                 "state",
             )
             self.assertFalse(scratch.exists())

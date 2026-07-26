@@ -372,8 +372,9 @@ boundary. It is separate from provider-native fields such as
 `backend_options.codex_cli.sandbox`. The two layers are reported separately in
 session settings and option discovery.
 
-Stages 1–2 accept `read-only` for `codex_cli`, `claude_cli`, and the in-memory
-mock backend. Other CLI and every SDK backend fail closed with
+Stages 1, 2, and 4 accept `read-only` for `codex_cli`, `claude_cli`,
+`antigravity_cli`, and the in-memory mock backend. `xai_cli` and every SDK
+backend fail closed with
 `outer_sandbox_unsupported`; they are not silently exempted. The shipped
 default remains `none` until the complete backend readiness gate is met, so
 omitting this field preserves existing execution. Explicit `none` also leaves
@@ -405,13 +406,24 @@ transient settings, and forces a strict empty MCP configuration. Explicit
 settings that conflict with this profile and admin-managed settings/MCP fail
 closed. `CLAUDE_CODE_TMPDIR` is private turn scratch.
 
+Antigravity uses exactly `$HOME/.gemini` as its complete writable state root.
+Because `agy` has no supported relocation variable, `HOME` must be the absolute
+parent of a real `.gemini` directory; path identity, ownership, permissions,
+and the `antigravity-cli/bin/agentapi` materialization path are checked before
+launch. Repeated `--add-dir` paths remain visible read-only. After the outer
+proof ACK, the adapter forces skip-permissions, `mode=accept-edits`, and
+provider `sandbox=false`; configured conflicts are removed or rejected
+deterministically. The OS keyring remains reachable as an explicitly reported
+external service outside the filesystem guarantee.
+
 Current staged readiness and rollback are:
 
 | Backend shape | Explicit outer `read-only` | Rollback |
 | --- | --- | --- |
 | `codex_cli` | OS-enforced direct process (Stage 1) | explicit/configured `none` |
 | `claude_cli` | OS-enforced direct process (Stage 2) | explicit/configured `none` |
-| `xai_cli`, `antigravity_cli` | unsupported; start rejected | no implicit fallback |
+| `antigravity_cli` | OS-enforced direct process (Stage 4) | explicit/configured `none` |
+| `xai_cli` | pending Stage 3; start rejected | no implicit fallback |
 | all SDK backends | unsupported; start rejected | no implicit fallback |
 | in-memory mock | audited no-local-effects | `none` disables the policy label |
 
@@ -626,7 +638,9 @@ sandbox = "read-only"
 
 Uses the installed `agy` CLI and its Google OAuth sign-in (including sign-in
 cached through the OS keyring). It does not use `GEMINI_API_KEY`. Output is
-message-only, and `mode = "plan"` is the shipped read-only posture. See the
+message-only, and `mode = "plan"` is the shipped provider-native read-only
+posture. An explicit top-level `sandbox = "read-only"` instead applies the
+Stage 4 OS boundary and audited permissive native profile described above. See the
 [backend reference](../agent_collab/backends/antigravity_cli/README.md).
 
 ```toml
