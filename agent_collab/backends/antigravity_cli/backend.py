@@ -8,6 +8,7 @@ from typing import Any, Dict, Mapping, Optional
 from ...backend_contract import OptionSpec, load_option_schema, normalize_declared_options
 from ...config import AgentConfig
 from ...runners import AgentRunner
+from ...sandbox.specs import UnsupportedSandboxAdapter
 from ..base import BackendCapabilities, BackendHealth
 from ..common.cli import (
     cli_settings_summary,
@@ -32,6 +33,7 @@ class AntigravityCliBackend:
     event_fidelity = "message_only"
     provider_session_id_kind = None
     capabilities = BackendCapabilities()
+    sandbox_adapter = UnsupportedSandboxAdapter()
     checks_credentials = True
     block_on_unavailable = True
     # The supported ``agy -p`` surface is message-only.  Until the provider

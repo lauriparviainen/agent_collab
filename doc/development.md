@@ -46,6 +46,18 @@ Run only the hermetic unit suite:
 python3 -m unittest discover -s tests -t .
 ```
 
+Run the separate credential-free Linux namespace acceptance suite when
+Bubblewrap and unprivileged user namespaces are available:
+
+```bash
+./agent_collab_dev.sh bubblewrap-test
+```
+
+This suite exercises real workspace/child write denial, writable declared
+state and private scratch, symlink and hard-link boundaries, prompt delivery,
+descendant reaping, and scratch cleanup. It skips only with an explicit engine
+or platform reason. It does not make provider or network calls.
+
 Validate repository configuration and generate the daemon REST API artifacts:
 
 ```bash

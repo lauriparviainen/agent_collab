@@ -2,6 +2,7 @@ import unittest
 
 from agent_collab.outcomes import (
     CANONICAL_MESSAGES,
+    OUTER_SANDBOX_FAILURE_CODES,
     SessionFailure,
     TerminalEvidence,
     TerminalEvidenceAccumulator,
@@ -79,6 +80,14 @@ class EvidencePrecedenceTests(unittest.TestCase):
 
 
 class OutcomeSanitizationTests(unittest.TestCase):
+    def test_every_outer_sandbox_code_is_a_canonical_turn_outcome(self):
+        self.assertGreater(len(OUTER_SANDBOX_FAILURE_CODES), 1)
+        for code in OUTER_SANDBOX_FAILURE_CODES:
+            with self.subTest(code=code):
+                outcome = TurnOutcome("failed", code)
+                self.assertEqual(outcome.code, code)
+                self.assertEqual(outcome.message, CANONICAL_MESSAGES[code])
+
     def test_canonical_message_cannot_be_replaced_by_hostile_exception_text(self):
         hostile = "Bearer secret-token /home/private prompt contents"
         with self.assertRaises(ValueError):

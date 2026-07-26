@@ -22,6 +22,7 @@ from ..common.cli import (
 from ..common.health import default_version_runner, probe_cli_backend
 from ..common.options import highest_precedence_choices, resolve_codex_effort
 from .parser import CodexStreamingParser
+from .sandbox import CodexCliSandboxAdapter
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 
@@ -33,6 +34,7 @@ class CodexCliBackend:
     event_fidelity = "typed"
     provider_session_id_kind = "thread"
     capabilities = BackendCapabilities()
+    sandbox_adapter = CodexCliSandboxAdapter()
     checks_credentials = False
     block_on_unavailable = False
 

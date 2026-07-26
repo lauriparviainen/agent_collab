@@ -1,0 +1,313 @@
+"""Resolve immutable per-agent sandbox plans before session creation."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import os
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Mapping, Optional, Sequence, Tuple
+
+from .paths import (
+    GitProtectionRecord,
+    MountOperation,
+    ResolvedSandboxPath,
+    audit_aliases,
+    component_contains,
+    create_private_directory,
+    discover_session_git,
+    normalize_mounts,
+    resolve_effective_cwd,
+    resolve_state_root,
+    resolve_workspace,
+)
+from .specs import (
+    BackendSandboxSpec,
+    CreationPolicy,
+    PathAccess,
+    PathOrigin,
+    Persistence,
+    ResolvedSandboxPolicy,
+    SandboxAdapter,
+    SandboxContext,
+    SandboxEnforcement,
+    SandboxFailure,
+    SandboxPolicy,
+    SandboxSupport,
+    StateRootSpec,
+)
+
+
+@dataclass(frozen=True)
+class SandboxOperatorConfig:
+    extra_readable_dirs: Tuple[Path, ...] = ()
+    extra_writable_dirs: Tuple[Path, ...] = ()
+    alias_audit_max_entries: int = 1_000_000
+    alias_audit_timeout_seconds: int = 10
+    scratch_root: Optional[Path] = None
+    agent_collab_home: Optional[Path] = None
+
+
+@dataclass(frozen=True)
+class ResolvedSandboxPlan:
+    policy: ResolvedSandboxPolicy
+    support: SandboxSupport
+    enforcement: SandboxEnforcement
+    context: SandboxContext
+    spec: BackendSandboxSpec
+    adapter: SandboxAdapter
+    operations: Tuple[MountOperation, ...] = ()
+    git_records: Tuple[GitProtectionRecord, ...] = ()
+    scratch_anchor: Optional[Path] = None
+    git_metadata_scope: str = "session_root"
+    alias_audit_max_entries: int = 1_000_000
+    alias_audit_timeout_seconds: int = 10
+
+    def prepare_inner(self, command: Sequence[str]) -> Tuple[str, ...]:
+        return self.adapter.prepare_inner(self, command)
+
+    def render_prompt(self, user_prompt: str, scratch: Optional[Path]) -> str:
+        if self.policy.effective is SandboxPolicy.NONE:
+            return user_prompt
+        if self.enforcement is SandboxEnforcement.NOT_APPLICABLE_NO_LOCAL_EFFECTS:
+            block = (
+                "FILESYSTEM POLICY\n"
+                "This backend exposes no local file, tool, callback, scratch, or child-process "
+                "surface. No OS sandbox is applicable.\n"
+            )
+        else:
+            if scratch is None:
+                raise SandboxFailure(
+                    "outer_sandbox_scratch_anchor_invalid",
+                    "an OS-enforced prompt requires resolved private scratch",
+                    phase="launch",
+                )
+            temp = scratch / "tmp"
+            block = (
+                "FILESYSTEM POLICY\n"
+                f"Workspace root: {self.context.workspace}\n"
+                f"Current directory: {self.context.cwd}\n"
+                "Access: OS-enforced read-only.\n"
+                f"Use $TMPDIR ({temp}) for temporary files and command output.\n"
+                "Do not attempt workspace edits; describe proposed changes in your response.\n"
+            )
+        if self.spec.backend_prompt_augmentation:
+            block += self.spec.backend_prompt_augmentation.rstrip() + "\n"
+        return block + "\n" + user_prompt
+
+    def settings(self, *, full: bool) -> dict[str, Any]:
+        writable = [
+            {
+                "label": operation.labels[0],
+                "access": "persistent writable"
+                if operation.persistence is Persistence.HOST
+                else "private writable",
+                **({"destination": str(operation.destination)} if full else {}),
+                "origin": operation.origins[0].value,
+                "persistence": operation.persistence.value,
+            }
+            for operation in self.operations
+            if operation.access is PathAccess.WRITABLE
+        ]
+        return {
+            "support": self.support.value,
+            "enforcement": self.enforcement.value,
+            "provider_native_profile": dict(self.spec.native_profile.summary),
+            "writable_exceptions": writable
+            if full
+            else [{"label": item["label"], "access": item["access"]} for item in writable],
+            "git_metadata_scope": self.git_metadata_scope,
+            "external_services": list(self.spec.external_services),
+        }
+
+
+@dataclass(frozen=True)
+class ResolvedSandboxSessionPlan:
+    policy: ResolvedSandboxPolicy
+    engine: str
+    establishment: str
+    agents: Mapping[str, ResolvedSandboxPlan]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "agents", MappingProxyType(dict(self.agents)))
+
+    def settings(self) -> dict[str, Optional[str]]:
+        return {
+            **self.policy.to_dict(),
+            "engine": self.engine,
+            "establishment": self.establishment,
+        }
+
+
+def resolve_session_plan(
+    *,
+    policy: ResolvedSandboxPolicy,
+    workspace_path: Path,
+    agents: Mapping[str, tuple[Optional[str], Mapping[str, str], SandboxAdapter]],
+    operator: SandboxOperatorConfig,
+    audit: bool = True,
+) -> ResolvedSandboxSessionPlan:
+    workspace = resolve_workspace(workspace_path)
+    resolved: dict[str, ResolvedSandboxPlan] = {}
+    for agent_id, (configured_cwd, environment, adapter) in agents.items():
+        cwd = resolve_effective_cwd(workspace, configured_cwd)
+        inherited = os.environ.copy()
+        inherited.update(environment)
+        context = SandboxContext(workspace.destination, cwd, inherited)
+        spec = adapter.describe(context)
+        if policy.effective not in spec.policies:
+            raise SandboxFailure(
+                "outer_sandbox_unsupported",
+                f"agent {agent_id!r} does not support outer sandbox policy "
+                f"{policy.effective.value!r}",
+                remediation=("Select sandbox='none' only when installation policy permits it.",),
+            )
+        if policy.effective is SandboxPolicy.NONE:
+            resolved[agent_id] = ResolvedSandboxPlan(
+                policy=policy,
+                support=spec.support,
+                enforcement=SandboxEnforcement.DISABLED,
+                context=context,
+                spec=spec,
+                adapter=adapter,
+            )
+            continue
+        if spec.support is SandboxSupport.UNSUPPORTED:
+            raise SandboxFailure(
+                "outer_sandbox_unsupported",
+                f"agent {agent_id!r} has no Stage 1 read-only sandbox adapter",
+            )
+        if spec.support is SandboxSupport.NO_LOCAL_EFFECTS:
+            resolved[agent_id] = ResolvedSandboxPlan(
+                policy=policy,
+                support=spec.support,
+                enforcement=SandboxEnforcement.NOT_APPLICABLE_NO_LOCAL_EFFECTS,
+                context=context,
+                spec=spec,
+                adapter=adapter,
+            )
+            continue
+
+        for check in spec.compatibility:
+            try:
+                check.check()
+            except SandboxFailure:
+                raise
+            except Exception as exc:
+                raise SandboxFailure(
+                    "outer_sandbox_backend_incompatible",
+                    f"backend compatibility check {check.name!r} failed",
+                ) from exc
+
+        declarations: list[ResolvedSandboxPath] = []
+        for state_spec in spec.state_roots:
+            declarations.append(resolve_state_root(state_spec))
+        for visible_spec in spec.provider_visible_paths:
+            declarations.append(resolve_state_root(visible_spec))
+        for label, access, paths in (
+            ("Operator readable", PathAccess.READ_ONLY, operator.extra_readable_dirs),
+            ("Operator writable", PathAccess.WRITABLE, operator.extra_writable_dirs),
+        ):
+            for path in paths:
+                declarations.append(
+                    resolve_state_root(
+                        StateRootSpec(
+                            label=label,
+                            destination=path,
+                            access=access,
+                            persistence=Persistence.HOST,
+                            creation=CreationPolicy.MUST_EXIST,
+                            origin=PathOrigin.OPERATOR,
+                        )
+                    )
+                )
+        git = discover_session_git(workspace)
+        operations = normalize_mounts(workspace, declarations, git.records)
+        scratch_anchor = resolve_scratch_anchor(
+            operator,
+            workspace=workspace.destination,
+            overmounts=tuple(item.destination for item in operations),
+        )
+        if audit:
+            audit_aliases(
+                operations,
+                git.records,
+                max_entries=operator.alias_audit_max_entries,
+                timeout_seconds=operator.alias_audit_timeout_seconds,
+            )
+        resolved[agent_id] = ResolvedSandboxPlan(
+            policy=policy,
+            support=spec.support,
+            enforcement=SandboxEnforcement.OS_ENFORCED,
+            context=context,
+            spec=spec,
+            adapter=adapter,
+            operations=operations,
+            git_records=git.records,
+            scratch_anchor=scratch_anchor,
+            alias_audit_max_entries=operator.alias_audit_max_entries,
+            alias_audit_timeout_seconds=operator.alias_audit_timeout_seconds,
+        )
+
+    enforcement = {item.enforcement for item in resolved.values()}
+    if policy.effective is SandboxPolicy.NONE:
+        engine = "none"
+        establishment = "disabled"
+    elif enforcement == {SandboxEnforcement.NOT_APPLICABLE_NO_LOCAL_EFFECTS}:
+        engine = "not_applicable"
+        establishment = "not_applicable"
+    elif SandboxEnforcement.NOT_APPLICABLE_NO_LOCAL_EFFECTS in enforcement:
+        engine = "mixed"
+        establishment = "required"
+    else:
+        engine = "bubblewrap"
+        establishment = "required"
+    return ResolvedSandboxSessionPlan(policy, engine, establishment, resolved)
+
+
+def resolve_scratch_anchor(
+    operator: SandboxOperatorConfig,
+    *,
+    workspace: Path,
+    overmounts: Sequence[Path],
+) -> Path:
+    candidates: list[Path] = []
+    if operator.scratch_root is not None:
+        candidates.append(operator.scratch_root.expanduser())
+    else:
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        if runtime:
+            candidates.append(Path(runtime) / "agent-collab" / "sandbox")
+        home = operator.agent_collab_home
+        if home is None:
+            home = Path(os.environ.get("AGENT_COLLAB_HOME", "~/.agent-collab")).expanduser()
+        candidates.append(home / "runtime" / "sandbox")
+    for candidate in candidates:
+        try:
+            absolute = candidate.absolute()
+            if (
+                component_contains(Path("/tmp"), absolute)
+                or component_contains(Path("/var/tmp"), absolute)
+                or component_contains(workspace, absolute)
+                or any(component_contains(destination, absolute) for destination in overmounts)
+            ):
+                continue
+            parent = absolute
+            while not parent.exists() and parent.parent != parent:
+                parent = parent.parent
+            if parent.is_symlink() or os.stat(parent).st_uid != os.getuid():
+                continue
+            create_private_directory(absolute)
+            if absolute.resolve(strict=True) != absolute:
+                continue
+            value = os.stat(absolute, follow_symlinks=False)
+            if value.st_uid != os.getuid() or value.st_mode & 0o077:
+                continue
+            return absolute
+        except (OSError, SandboxFailure):
+            continue
+    raise SandboxFailure(
+        "outer_sandbox_scratch_anchor_invalid",
+        "no safe daemon-owned sandbox scratch anchor is available",
+        remediation=("Set system.sandbox_scratch_root to a safe absolute private directory.",),
+    )

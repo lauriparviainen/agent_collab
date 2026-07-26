@@ -55,6 +55,7 @@ from ...config import AgentConfig
 from ...events import Event, compact_json
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
 from ...runners import AgentRunner, AsyncEventSink
+from ...sandbox.specs import UnsupportedSandboxAdapter
 from ..base import (
     BackendCapabilities,
     BackendHealth,
@@ -161,6 +162,7 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 
 
 class AntigravitySdkBackend:
+    sandbox_adapter = UnsupportedSandboxAdapter()
     """Registered as ``(antigravity, "sdk")`` with in-session continuity."""
 
     id = "sdk"

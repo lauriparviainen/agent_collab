@@ -8,6 +8,7 @@ from typing import Any, Dict, Mapping, Optional
 from ...backend_contract import OptionSpec, load_option_schema, normalize_declared_options
 from ...config import AgentConfig
 from ...runners import AgentRunner
+from ...sandbox.specs import UnsupportedSandboxAdapter
 from ..base import BackendCapabilities, BackendHealth
 from ..common.cli import (
     cli_command_preview,
@@ -30,6 +31,7 @@ class ClaudeCliBackend:
     event_fidelity = "typed"
     provider_session_id_kind = "session"
     capabilities = BackendCapabilities()
+    sandbox_adapter = UnsupportedSandboxAdapter()
     checks_credentials = False
     block_on_unavailable = False
 

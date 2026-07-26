@@ -4,11 +4,17 @@
 > retrieved from agent-collab session `daemon-06219f667ad44f0e`. Its one
 > unresolved Medium finding is reconciled below by the normative Git protection
 > record, coverage-mount normalization, ordering, and establishment-proof
-> contract. Four additional dual-review loops converged in session
+> contract. Four additional design-review loops converged in session
 > `daemon-0173bb7e678046d9`: both independent reviewers reported no confirmed
-> High/Medium findings. No production code has been implemented.
+> High/Medium findings. Stage 1 production implementation review has used
+> all six permitted parallel sessions. The latest was
+> `daemon-675a2f82d8de4bc7`; its two confirmed findings are fixed and locally
+> verified. There are no unresolved confirmed findings or disagreements.
+> Formal review convergence is not claimed because the sixth-session diff
+> changed after adjudication and the explicit limit forbids a seventh session.
 
-**Status:** Design review converged; production implementation pending.
+**Status:** Stage 1 implemented and locally verified; six-session
+production-review limit reached without formal post-fix convergence.
 
 **Created:** 2026-07-25.
 
@@ -54,7 +60,189 @@ Gemini reported a clean diff while Grok reported them. Local reproduction
 confirmed each concrete scenario, so none was overridden. The final loop is
 agreement: no confirmed High/Medium finding or unresolved disagreement
 remains. Production implementation and its acceptance fixtures remain
-intentionally pending rather than review findings.
+intentionally pending in that historical design-review record rather than
+review findings; the implementation record below supersedes that delivery
+status.
+
+## Stage 1 implementation review reconciliation (2026-07-26)
+
+Implementation loop 1 used one `interactive=false`
+`grok-gemini-review` session over the same frozen working-tree diff:
+
+- session: `daemon-1d0409a4dc1b4b8f`;
+- frozen diff digest:
+  `0f20f0ab52fd2b70a45ea77da08200fdbd505a410ce880c645a697f290b71890`;
+- `xai_cli`: Grok 4.5, high reasoning,
+  `permission_mode=bypassPermissions`, provider sandbox `read-only`; and
+- `antigravity_cli`: Claude Opus 4.6 Thinking, mode `plan`.
+
+The reviewers disagreed; every claim was checked against the cited code and
+the authoritative design:
+
+| Reviewer finding | Adjudication |
+| --- | --- |
+| Grok High: alias auditing occurred at session-plan time but not immediately before each preflight/provider launch, permitting a host hard link planted after planning to bridge writable state into a protected inode | Confirmed. Audit limits are now retained in the immutable plan and the bounded host audit runs through `asyncio.to_thread` before every `_launch`. A real Bubblewrap conditional fixture plants the link after plan resolution and requires rejection before provider execution. |
+| Grok Medium: establishment proved logical Git identities but did not prove the retained logical-root-to-coverage-operation mapping | Confirmed. Establishment now validates workspace-last ordering, exact coverage origins/roles/logical destinations, one anchor per logical root, and writable-ancestor narrowing before ACK, then checks every logical identity through the pinned namespace root. |
+| Grok Medium: the alias walk used pathname `stat`/`scandir` rather than pinned directory descriptors | Confirmed. The walk now opens the absolute root component-by-component with `O_NOFOLLOW`, retains a pinned root descriptor, reopens queued descendants relative to it, compares pinned identities, and opens each observed child without following a final symlink. |
+| Antigravity High: synchronous Bubblewrap discovery could block the daemon event loop for up to the probe timeout on every turn | Confirmed with severity reduced to Medium: launch remained fail-closed, but unrelated sessions could stall. Runtime discovery now runs in `asyncio.to_thread`; daemon start preflight already ran on its preparation worker. |
+| Antigravity Medium: changing the shared absolute-path-list parser from canonical to lexical paths regressed symlink-based `[workdir].restrict_workdir_roots` | Confirmed. Workdir roots again use canonical resolution, while new sandbox operator lists use a dedicated lexical parser so launch-time no-symlink validation retains evidence. |
+| Antigravity Medium: sandbox launch ignored `SubprocessRunner.env` | Rejected. Both the runner and immutable plan derive their environment from the same `agent.env`; adapter-owned changes are applied by deterministic Bubblewrap `--setenv`/`--unsetenv` operations. |
+| Antigravity Medium: `proof_child.close()` could run twice | Rejected. Python socket close is idempotent, the descriptor is not reused through the closed socket object, and cleanup intentionally closes every partially initialized resource. |
+
+Loop 1 therefore produced five confirmed fixes and two rejected claims. A
+fresh frozen diff will be reviewed in loop 2 after verification.
+
+Implementation loop 2 used the same reviewer configuration in session
+`daemon-0f48651bd6de4ed3` over frozen diff
+`73265522ada9557d6b365ad29345a2716075a9cb06a1e3d1acf56fd8ca73e9e5`.
+Antigravity completed its turn but emitted only inspection-progress messages,
+not a final qualifying finding report. Grok rechecked all five loop 1 fixes
+successfully and reported two independent findings:
+
+| Reviewer finding | Adjudication |
+| --- | --- |
+| Grok High: mount alias comparison inspected nested mounts only below writable roots, not nested writable aliases below protected workspace/Git coverage | Confirmed. Alias comparison now builds the complete enclosing/nested underlying-identity set on both protected and writable sides and compares their cross product. The exact external-Git-below-writable narrowing relation remains allowed; a nested writable bind below workspace is rejected by a hermetic mountinfo fixture. |
+| Grok Medium: provider/operator writable roots were validated only during plan resolution; a path replaced or made unsafe before a later launch could still be mounted | Confirmed. Normalized operations now retain their pinned root identity. Every launch audit repeats component no-symlink, identity, daemon ownership, and group/world-writable checks for declared writable roots before mount construction. |
+
+A local normative recheck also found that compatibility-preserving command
+events for `none` still carried the full prompt-bearing `argv`, contrary to the
+common launcher logging contract. Execution remains byte-for-byte unchanged,
+but command and dry-run events now expose only the prompt-free command preview;
+regression tests assert that `argv` and the task prompt are absent.
+
+Loop 2 therefore produced two confirmed reviewer fixes plus one local contract
+fix. Because one reviewer did not produce a final report and the diff changed,
+convergence was not claimed; loop 3 follows after verification.
+
+Implementation loop 3 reviewed frozen diff
+`f9e1b5abb484d698bdfb570f6a6d6f91dd1095e87457fa765d4280715e6b414d`.
+The configured parallel session was `daemon-b47c0dc7c59546bb`. Grok 4.5
+completed its full review and reported no High/Medium findings, including an
+explicit recheck of every loop 1 and loop 2 closeout. The requested
+Antigravity Claude Opus 4.6 Thinking turn failed before inspection because the
+provider reported `Individual quota reached`.
+
+A supplementary Antigravity Gemini 3.1 Pro High read-only solo session,
+`daemon-365adc19b4de4015`, inspected the same frozen digest and independently
+reported `No High/Medium findings`. That solo retry did not follow the required
+normal-parallel fallback procedure, so it is recorded as supplementary
+evidence only and is not used to claim convergence. Loop 3 consumed the third
+of six permitted parallel sessions. The exact sanitized Opus failure selects
+Gemini 3.1 Pro High, mode `plan`, for every subsequent normal
+`grok-gemini-review` loop; loop 4 follows after the complete verification gate.
+
+Implementation loop 4 used normal `interactive=false` parallel session
+`daemon-70e53b5299ff49f0`, the fourth of six permitted sessions, over the
+59-file frozen diff
+`ac9f1b386a6af4f83c2d21c1ce3b8f4172061c1ff3691666b95b9b1528131c52`.
+The effective members were Grok 4.5 with high reasoning,
+`permission_mode=bypassPermissions`, and provider sandbox `read-only`, plus
+the required quota fallback Gemini 3.1 Pro High in mode `plan`. Gemini reported
+no High/Medium findings. Grok rechecked the previous closeouts and reported one
+independent High finding:
+
+| Reviewer finding | Adjudication |
+| --- | --- |
+| A launch-time `SandboxFailure` returned `TurnOutcome("failed", exc.code)`, but the strict outcome allowlist did not contain any `outer_sandbox_*` codes. Constructing the outcome therefore raised `ValueError`, and the referee reduced the escaped exception to the incorrect `provider_transport_failed` code. | Confirmed directly: `TurnOutcome("failed", "outer_sandbox_hardlink_alias")` raised before the fix, while the launch remained fail-closed. Every current outer-sandbox failure code is now explicitly canonical with a non-sensitive message. A focused runner test injects a launch-time hard-link rejection and proves that the exact stable code reaches the turn outcome without provider execution; an outcome test constructs every registered sandbox code. |
+
+Loop 4 therefore produced one confirmed reporting fix. The focused outcome and
+runner suites pass. Because the diff changed, convergence is not claimed; loop
+5 follows after proportionate verification.
+
+Implementation loop 5 used normal `interactive=false` parallel session
+`daemon-9a99d5a519514dc9`, the fifth of six permitted sessions, over the
+62-file frozen diff
+`6257fac24a92d6fb8d98c68685a72b571d54ed34202e0cfe324e7a83d5dec0df`.
+The effective members and options were unchanged from loop 4. Gemini rechecked
+all prior closeouts and reported no High/Medium findings. Grok confirmed the
+loop 4 launch-time fix, then reported two independent Medium findings:
+
+| Reviewer finding | Adjudication |
+| --- | --- |
+| A post-establishment `SandboxFailure` from `SupervisedProcess.wait()` was caught as a generic stream/parser exception and reduced to `provider_output_invalid`; cleanup then waited on the same failed completion task again. | Confirmed. The runner now preserves a post-ACK sandbox code separately from provider evidence, emits the sanitized sandbox failure event, records the reaped exit code when available, gives the boundary failure precedence over partial or terminal provider output, and retrieves the owned completion task during cleanup. A focused fake supervised process proves `outer_sandbox_status_contradiction` survives even after a provider-completed marker. |
+| Scratch allocation and absolute executable resolution could raise raw `FileNotFoundError`, which the runner's ordinary unsandboxed missing-command handler mislabeled `provider_transport_failed`. | Confirmed. Private scratch creation, permissions, and subtree setup now clean up and reduce `OSError` to `outer_sandbox_scratch_anchor_invalid`; absolute/located executable resolution reduces filesystem and symlink-resolution failures to `outer_sandbox_inner_command_invalid`. The public launch boundary also converts remaining launch `OSError` failures to a stable sandbox bootstrap code. Focused tests cover a removed scratch anchor and missing absolute provider path. |
+
+Loop 5 therefore produced two confirmed reporting/diagnostic fixes. The
+focused sandbox, outcome, and runner suites pass. Because the diff changed,
+convergence is not claimed; the sixth and final permitted parallel loop follows
+after complete verification.
+
+Implementation loop 6 used normal `interactive=false` parallel session
+`daemon-675a2f82d8de4bc7`, the sixth and final permitted session, over the
+62-file frozen diff
+`320a6a03625bb364a9cecb3965d307c487cf1f6affaf88366c6650d886e99552`.
+The effective members and options were unchanged from loops 4 and 5. Gemini
+reported no High/Medium findings. Grok confirmed every loop 5 closeout, then
+reported two independent Medium findings:
+
+| Reviewer finding | Adjudication |
+| --- | --- |
+| `asyncio.wait_for` establishment timeout escaped as a non-sandbox exception, becoming `provider_transport_failed` on a turn or an unstructured start failure. | Confirmed. Establishment timeouts are now reduced to `outer_sandbox_bootstrap_failed` during the proof phase, and the public launch boundary defensively performs the same reduction. A focused injected-timeout test pins the stable code and phase. |
+| Start preflight reused the session plan with `true` but omitted the normative private nested-bind fixture that version-gates recursive read-only behavior. | Confirmed against the availability-control contract. Preflight now runs a credential-free private Bubblewrap control with a writable parent bind, a separately writable nested bind mount, and a final read-only bind over the parent. Both direct and nested writes must fail; exit/host-marker contradictions use the distinct `outer_sandbox_recursive_read_only_unavailable` code. A hermetic non-recursive failure fixture and the real conditional Bubblewrap preflight test cover the gate. Direct Linux evidence with the production argv shape passed before adoption. |
+
+Loop 6 therefore produced two confirmed fixes. The reviewers disagreed only in
+the advisory-report sense: Gemini was clean, while Grok reported the two
+findings; direct code-path reproduction and the missing normative fixture
+confirmed both, so neither is an unresolved disagreement. The focused suites
+and real Bubblewrap control pass. The six-session limit is reached and no
+seventh review will run. Because these final fixes necessarily changed the
+reviewed diff, formal convergence is not claimed; the handoff records
+limit-reached with no unresolved confirmed finding, followed by the complete
+final verification gate.
+
+## Stage 1 implementation handoff (2026-07-26)
+
+Stage 1 is implemented on branch `design/bubblewrap-implementation`. It adds
+the backend-neutral policy/spec/plan/launcher/supervision seam, Linux
+Bubblewrap enforcement, immutable path and Git coverage normalization,
+fail-before-provider bootstrap proof, per-launch alias and writable-root
+revalidation, typed configuration/API/settings/CLI/TUI reporting, stable
+outer-sandbox outcomes, and conditional real-namespace coverage.
+
+`codex_cli` is the only Stage 1 backend that advertises
+`direct_process` read-only support. Its adapter declares the complete effective
+`CODEX_HOME` as persistent writable state and applies the composite native
+approval/sandbox bypass only inside the proven outer boundary. The other seven
+real CLI/SDK backends remain explicitly unsupported for outer read-only and
+reject that policy before session creation; their later backend stages are not
+silently emulated or weakened. Explicit `sandbox = "none"` remains the visible
+rollback and does not itself relax provider-native controls.
+
+Final local verification after the sixth review and its fixes:
+
+- `./agent_collab_dev.sh test`: 1,238 tests passed, one expected skip;
+- `./agent_collab_dev.sh bubblewrap-test`: four real Bubblewrap tests passed,
+  including recursive read-only preflight, workspace/descendant denial,
+  writable state/scratch, hard-link re-audit, termination, and cleanup;
+- `./agent_collab_dev.sh build --check`: effective config and generated daemon
+  API artifacts verified current;
+- `git diff --check`: passed; and
+- GitHub issue #43 was fetched read-only and remained open.
+
+The paid, credentialed Codex acceptance in
+`integration_tests/backends/codex_cli/test_live.py` was not run because this
+implementation request did not authorize credentialed provider calls. It
+remains the supported-but-pending acceptance: an operator must supply a
+dedicated complete `CODEX_HOME` through
+`AGENT_COLLAB_IT_CODEX_SANDBOX_STATE` and explicitly authorize
+`./agent_collab_dev.sh integration-test codex_cli --strict`. The test requires
+a real tool turn, denied workspace write, successful persistent state write,
+and guarded marker cleanup.
+
+The Stage 1 guarantee is filesystem integrity for the normalized workspace and
+session-root Git coverage inside the contained process tree. The documented
+MVP limitations remain: visible host files and credentials are readable;
+network, remote tools/services, keyrings, IPC services, and delegated writes
+are not isolated; declared provider state and workspace symlink targets into
+that state remain writable; nested-repository external Git metadata requires
+selecting that repository as the session root; resource/seccomp/DoS controls
+are absent; and macOS, Windows, unsupported filesystems, and unimplemented
+backend adapters fail closed rather than receive weaker enforcement.
+
+Six of six permitted production review sessions were used. The final two
+Medium findings were confirmed, fixed, and covered locally, leaving no
+unresolved confirmed finding or disagreement. Formal convergence is not
+claimed because no post-fix seventh session was permitted.
 
 ## Purpose
 

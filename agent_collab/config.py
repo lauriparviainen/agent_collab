@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config_migrations import ConfigError, migrate_config_data
 from .paths import AgentCollabHome, atomic_write_private_text, project_config_path, user_config_path
+from .sandbox.specs import SandboxPolicy
 
 _logger = logging.getLogger("agent_collab.config")
 
@@ -133,6 +134,13 @@ class WorkTimeConfig:
 @dataclass
 class SystemConfig:
     timezone: str = "local"
+    sandbox_default: SandboxPolicy = SandboxPolicy.NONE
+    sandbox_override: Optional[SandboxPolicy] = None
+    sandbox_extra_readable_dirs: List[Path] = field(default_factory=list)
+    sandbox_extra_writable_dirs: List[Path] = field(default_factory=list)
+    sandbox_alias_audit_max_entries: int = 1_000_000
+    sandbox_alias_audit_timeout_seconds: int = 10
+    sandbox_scratch_root: Optional[Path] = None
 
 
 @dataclass
@@ -604,11 +612,59 @@ def merge_config_data(
     if system is not None and system != {}:
         if not isinstance(system, Mapping):
             raise ConfigError("[system] must be a table")
-        unknown = sorted(set(system) - {"timezone"})
+        allowed_system_fields = {
+            "timezone",
+            "sandbox_default",
+            "sandbox_override",
+            "sandbox_extra_readable_dirs",
+            "sandbox_extra_writable_dirs",
+            "sandbox_alias_audit_max_entries",
+            "sandbox_alias_audit_timeout_seconds",
+            "sandbox_scratch_root",
+        }
+        unknown = sorted(set(system) - allowed_system_fields)
         if unknown:
             raise ConfigError(f"unknown field system.{unknown[0]}")
         if "timezone" in system:
             config.system.timezone = _expect_str(system["timezone"], "system.timezone")
+        if "sandbox_default" in system:
+            config.system.sandbox_default = _expect_sandbox_policy(
+                system["sandbox_default"], "system.sandbox_default"
+            )
+        if "sandbox_override" in system:
+            config.system.sandbox_override = _expect_sandbox_policy(
+                system["sandbox_override"], "system.sandbox_override"
+            )
+        if "sandbox_extra_readable_dirs" in system:
+            config.system.sandbox_extra_readable_dirs = _expect_lexical_absolute_path_list(
+                system["sandbox_extra_readable_dirs"],
+                "system.sandbox_extra_readable_dirs",
+            )
+        if "sandbox_extra_writable_dirs" in system:
+            config.system.sandbox_extra_writable_dirs = _expect_lexical_absolute_path_list(
+                system["sandbox_extra_writable_dirs"],
+                "system.sandbox_extra_writable_dirs",
+            )
+        if "sandbox_alias_audit_max_entries" in system:
+            value = _expect_int(
+                system["sandbox_alias_audit_max_entries"],
+                "system.sandbox_alias_audit_max_entries",
+            )
+            if value < 1_000_000:
+                raise ConfigError("system.sandbox_alias_audit_max_entries must be at least 1000000")
+            config.system.sandbox_alias_audit_max_entries = value
+        if "sandbox_alias_audit_timeout_seconds" in system:
+            value = _expect_int(
+                system["sandbox_alias_audit_timeout_seconds"],
+                "system.sandbox_alias_audit_timeout_seconds",
+            )
+            if value < 10:
+                raise ConfigError("system.sandbox_alias_audit_timeout_seconds must be at least 10")
+            config.system.sandbox_alias_audit_timeout_seconds = value
+        if "sandbox_scratch_root" in system:
+            config.system.sandbox_scratch_root = _expect_absolute_path(
+                system["sandbox_scratch_root"], "system.sandbox_scratch_root"
+            )
 
     usage_windows = data.get("usage_windows", {})
     if usage_windows is not None and usage_windows != {}:
@@ -1164,6 +1220,19 @@ def render_user_config(token: Optional[str] = None) -> str:
             "",
         )
     )
+    lines.extend(
+        (
+            "# Agent-collab outer filesystem policy. Stage 1 keeps the default inactive;",
+            '# set sandbox_default = "read-only" only for supported selections.',
+            "[system]",
+            'sandbox_default = "none"',
+            "sandbox_extra_readable_dirs = []",
+            "sandbox_extra_writable_dirs = []",
+            "sandbox_alias_audit_max_entries = 1000000",
+            "sandbox_alias_audit_timeout_seconds = 10",
+            "",
+        )
+    )
     for name in registered_backend_names():
         enabled = "true" if name in builtin_enabled else "false"
         lines.extend((f"[backends.{name}]", f"enabled = {enabled}", ""))
@@ -1633,6 +1702,27 @@ def _expect_int(value: Any, label: str) -> int:
     return value
 
 
+def _expect_sandbox_policy(value: Any, label: str) -> SandboxPolicy:
+    text = _expect_str(value, label)
+    try:
+        return SandboxPolicy(text)
+    except ValueError as exc:
+        raise ConfigError(f"{label} must be 'read-only' or 'none'") from exc
+
+
+def _expect_absolute_path(value: Any, label: str) -> Path:
+    raw_path = _expect_str(value, label)
+    if not raw_path.strip():
+        raise ConfigError(f"{label} must be a non-empty path")
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        raise ConfigError(f"{label} must be absolute (or start with ~)")
+    # Preserve lexical components for the launch-time no-symlink walk. Eager
+    # ``resolve()`` here would erase evidence that an operator path traversed a
+    # symlink before the sandbox validator could reject it.
+    return path.absolute()
+
+
 def _expect_str_list(value: Any, label: str) -> List[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ConfigError(f"{label} must be an array of strings")
@@ -1652,6 +1742,21 @@ def _expect_absolute_path_list(value: Any, label: str) -> List[Path]:
         if normalized not in resolved:
             resolved.append(normalized)
     return resolved
+
+
+def _expect_lexical_absolute_path_list(value: Any, label: str) -> List[Path]:
+    paths = _expect_str_list(value, label)
+    result: List[Path] = []
+    for index, raw_path in enumerate(paths):
+        if not raw_path.strip():
+            raise ConfigError(f"{label}[{index}] must be a non-empty path")
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            raise ConfigError(f"{label}[{index}] must be absolute (or start with ~)")
+        lexical = path.absolute()
+        if lexical not in result:
+            result.append(lexical)
+    return result
 
 
 def _expect_str_dict(value: Any, label: str) -> Dict[str, str]:

@@ -119,6 +119,52 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("daemon mock task", part)
             self.assertTrue(saw_preview)
 
+    async def test_mock_read_only_reports_no_local_effects_without_engine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="typed mock boundary",
+                        workflow="solo",
+                        mock=True,
+                        sandbox="read-only",
+                        max_turns=1,
+                        timeout=5,
+                        workdir=root,
+                    )
+                )
+                final = await self._wait_for_terminal(manager, state.session_id)
+
+            self.assertEqual(final.status, "done")
+            self.assertEqual(state.settings["sandbox"]["effective"], "read-only")
+            self.assertEqual(state.settings["sandbox"]["engine"], "not_applicable")
+            outer = state.settings["agents"]["claude_cli"]["outer_sandbox"]
+            self.assertEqual(outer["support"], "no_local_effects")
+            self.assertEqual(outer["enforcement"], "not_applicable_no_local_effects")
+
+    async def test_unsupported_read_only_rejects_before_session_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with self.assertRaises(StartOptionsError) as raised:
+                    await manager.start_session(
+                        StartSessionRequest(
+                            task="unsupported boundary",
+                            workflow="solo",
+                            dry_run=True,
+                            sandbox="read-only",
+                            workdir=root,
+                        )
+                    )
+
+            detail = raised.exception.to_dict()["details"][0]
+            self.assertEqual(detail["path"], "sandbox")
+            self.assertEqual(detail["code"], "outer_sandbox_unsupported")
+            self.assertEqual(manager.list_sessions(), [])
+
     async def test_detail_view_selects_compact_or_full_without_mutating_storage(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

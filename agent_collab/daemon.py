@@ -17,6 +17,7 @@ from .config import (
     ConfigError,
     load_config,
     resolve_existing_workdir,
+    workflow_members,
 )
 from .events import VALID_TYPES, Event, compact_json, utc_timestamp
 from .outcomes import CANONICAL_MESSAGES, SessionFailure, TurnOutcomeRecord
@@ -90,6 +91,7 @@ class StartSessionRequest:
     session_id: Optional[str] = None
     backend_options: Optional[Dict[str, Dict[str, Any]]] = None
     backend: Optional[str] = None
+    sandbox: Optional[str] = None
     # Start-time workflow member selection ({slot: agent_id}); validated and
     # folded into the session's config snapshot by resolve_workflow_members.
     members: Optional[Dict[str, str]] = None
@@ -108,6 +110,8 @@ class StartSessionRequest:
     # the runner uses the same agents/types/backends the start response
     # advertised — never a possibly-divergent reload. Not a user input.
     collab_config: Optional[CollaborationConfig] = None
+    # Resolved immutable outer-sandbox plan; not a user input.
+    sandbox_plan: Optional[Any] = None
     # Scheduler-only exemption for its daemon-owned empty workdir. from_wire
     # never accepts or sets this flag, so external starts remain confined by
     # [workdir].restrict_workdir_roots.
@@ -140,6 +144,7 @@ class StartSessionRequest:
             interactive_idle_timeout=model.interactive_idle_timeout,
             backend_options=model.backend_options,
             backend=model.backend,
+            sandbox=model.sandbox,
             members=model.members,
             detail=model.detail,
         )
@@ -347,6 +352,7 @@ class _PreparedSessionStart:
     settings: Dict[str, Any]
     capabilities: Dict[str, bool]
     interactive_idle_timeout: float
+    sandbox_plan: Any
 
 
 class SessionManager:
@@ -419,6 +425,29 @@ class SessionManager:
                     except (AttributeError, TypeError, ValueError):
                         continue
             data["turn_outcomes"] = sanitized
+        settings = data.get("settings")
+        if settings is None or isinstance(settings, dict) and "sandbox" not in settings:
+            settings = {} if settings is None else copy.deepcopy(settings)
+            settings["sandbox"] = {
+                "requested": None,
+                "effective": "none",
+                "source": "legacy_session",
+                "engine": "none",
+                "establishment": "historical_unenforced",
+            }
+            warnings = settings.setdefault("warnings", [])
+            if isinstance(warnings, list):
+                warnings.append(
+                    {
+                        "code": "outer_sandbox_legacy_session",
+                        "path": "sandbox",
+                        "message": (
+                            "this session predates outer-sandbox recording and remains "
+                            "historically unenforced"
+                        ),
+                    }
+                )
+            data["settings"] = settings
         try:
             return SessionState(**data)
         except TypeError:
@@ -440,6 +469,7 @@ class SessionManager:
         request.agent_options = prepared.agent_options
         request.resolved_backends = prepared.agent_backends
         request.collab_config = prepared.collab_config
+        request.sandbox_plan = prepared.sandbox_plan
         request.interactive = bool(request.interactive)
         request.interactive_idle_timeout = prepared.interactive_idle_timeout
 
@@ -576,6 +606,21 @@ class SessionManager:
         except ConfigError as exc:
             raise SessionRequestError(str(exc)) from exc
         normalized_options = normalized.backend_options
+        try:
+            sandbox_plan = self._resolve_sandbox_plan(
+                request,
+                collab_config,
+                workdir,
+                selection.agent_backends,
+            )
+        except Exception as exc:
+            from .sandbox.specs import SandboxFailure
+
+            if isinstance(exc, SandboxFailure):
+                raise StartOptionsError(
+                    [{"path": "sandbox", "message": str(exc), "code": exc.code}]
+                ) from exc
+            raise
         interactive = bool(request.interactive)
         interactive_idle_timeout = self._normalize_idle_timeout(request.interactive_idle_timeout)
         catalog_warnings = self._model_catalog_warnings(request, collab_config, selection)
@@ -590,6 +635,7 @@ class SessionManager:
             interactive_idle_timeout=interactive_idle_timeout,
             turn_timeout=int(request.timeout),
             workdir=workdir,
+            sandbox_plan=sandbox_plan,
         )
         capabilities = self._session_capabilities(collab_config, selection.agent_backends)
         return _PreparedSessionStart(
@@ -602,7 +648,72 @@ class SessionManager:
             settings=settings,
             capabilities=capabilities,
             interactive_idle_timeout=interactive_idle_timeout,
+            sandbox_plan=sandbox_plan,
         )
+
+    def _resolve_sandbox_plan(
+        self,
+        request: StartSessionRequest,
+        config: CollaborationConfig,
+        workdir: Path,
+        agent_backends: Dict[str, str],
+    ) -> Any:
+        from . import backends as backend_registry
+        from .paths import AgentCollabHome
+        from .sandbox.bubblewrap import discover_bubblewrap
+        from .sandbox.plan import (
+            SandboxOperatorConfig,
+            resolve_session_plan,
+        )
+        from .sandbox.policy import resolve_sandbox_policy
+        from .sandbox.specs import (
+            NoLocalEffectsSandboxAdapter,
+            SandboxEnforcement,
+        )
+        from .sandbox.supervisor import SandboxSupervisor
+
+        policy = resolve_sandbox_policy(
+            request.sandbox,
+            config.system.sandbox_default,
+            config.system.sandbox_override,
+        )
+        workflow = config.workflows[request.workflow]
+        selected = list(dict.fromkeys(workflow_members(workflow)))
+        agents = {}
+        for agent_id in selected:
+            agent = config.agents[agent_id]
+            if request.mock or agent.type == "mock":
+                adapter = NoLocalEffectsSandboxAdapter()
+            else:
+                backend_id = agent_backends[agent_id]
+                adapter = backend_registry.get_backend(agent.type, backend_id).sandbox_adapter
+            agents[agent_id] = (agent.cwd, dict(agent.env), adapter)
+        operator = SandboxOperatorConfig(
+            extra_readable_dirs=tuple(config.system.sandbox_extra_readable_dirs),
+            extra_writable_dirs=tuple(config.system.sandbox_extra_writable_dirs),
+            alias_audit_max_entries=config.system.sandbox_alias_audit_max_entries,
+            alias_audit_timeout_seconds=config.system.sandbox_alias_audit_timeout_seconds,
+            scratch_root=config.system.sandbox_scratch_root,
+            agent_collab_home=AgentCollabHome.resolve().root,
+        )
+        plan = resolve_session_plan(
+            policy=policy,
+            workspace_path=workdir,
+            agents=agents,
+            operator=operator,
+        )
+        enforced = [
+            item
+            for item in plan.agents.values()
+            if item.enforcement is SandboxEnforcement.OS_ENFORCED
+        ]
+        if enforced:
+            installation = discover_bubblewrap()
+            if not request.dry_run:
+                supervisor = SandboxSupervisor(installation)
+                for item in enforced:
+                    asyncio.run(supervisor.preflight(item))
+        return plan
 
     def _model_catalog_warnings(
         self,
@@ -1222,6 +1333,7 @@ class SessionManager:
             ),
             answer_commit_callback=lambda answer: self._record_session_answer(managed, answer),
             stop_signal=managed.stop_signal,
+            sandbox_plan=request.sandbox_plan,
         )
 
         try:

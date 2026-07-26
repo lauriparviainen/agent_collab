@@ -548,6 +548,16 @@ See [agent configuration](doc/agent-configuration.md) for provider setup,
 backend selection, typed options, custom agents, and custom workflows. Each
 backend also documents itself in `agent_collab/backends/<provider>_<backend>/README.md`.
 
+Stage 1 of the Linux outer filesystem sandbox is available as an explicit
+top-level `sandbox=read-only` start policy for `codex_cli`. It proves a
+Bubblewrap namespace before Codex executes, protects the workspace and resolved
+Git storage, and keeps the complete effective Codex state root writable.
+The shipped outer default remains `none`, and unsupported backends fail closed
+when read-only is requested. This policy is separate from each provider's own
+`backend_options.*.sandbox` or permission mode. See
+[Outer filesystem sandbox](doc/agent-configuration.md#outer-filesystem-sandbox)
+for configuration, limitations, reporting, and rollback.
+
 ## Cost, privacy, and honest limits
 
 - `agent-collab` does not provide or broker model accounts. Each provider CLI

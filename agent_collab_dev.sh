@@ -14,12 +14,14 @@ Usage:
   ./agent_collab_dev.sh help
   ./agent_collab_dev.sh build [--check] [--workdir DIR]
   ./agent_collab_dev.sh test
+  ./agent_collab_dev.sh bubblewrap-test
   ./agent_collab_dev.sh integration-test [PROVIDER_BACKEND] [--strict]
   ./agent_collab_dev.sh smoke
 
 build validates the effective config and regenerates the daemon REST API
 artifacts under doc/daemon_api_doc; build --check fails if they differ
 without writing. test runs Ruff and the hermetic unittest suite.
+bubblewrap-test runs the credential-free conditional Linux namespace suite.
 integration-test makes credentialed model calls. smoke runs a mock session
 end to end.
 
@@ -48,6 +50,11 @@ case "${1:-help}" in
     "$python_bin" -m ruff check .
     "$python_bin" -m ruff format --check .
     exec "$python_bin" -m unittest discover -s tests -t . "$@"
+    ;;
+  bubblewrap-test)
+    shift
+    cd "$repo_root"
+    exec "$python_bin" -m unittest discover -s conditional_tests -t . "$@"
     ;;
   integration-test)
     shift

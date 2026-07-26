@@ -133,6 +133,8 @@ class RefereeConfig:
     # event_id, timestamp}. Never called for a non-completed turn.
     answer_commit_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None
     stop_signal: Optional[RefereeStopSignal] = None
+    sandbox: Optional[str] = None
+    sandbox_plan: Optional[Any] = None
 
 
 class Referee:
@@ -155,6 +157,49 @@ class Referee:
         # transcript[watermark:] minus the agent's own events. Never advanced to
         # completion-time length, so peer events emitted mid-turn stay in the delta.
         self._agent_watermarks: Dict[str, int] = {}
+        self.sandbox_plan = config.sandbox_plan
+        if self.sandbox_plan is None:
+            self.sandbox_plan = self._resolve_direct_sandbox_plan()
+
+    def _resolve_direct_sandbox_plan(self) -> Any:
+        from . import backends as backend_registry
+        from .paths import AgentCollabHome
+        from .sandbox.plan import SandboxOperatorConfig, resolve_session_plan
+        from .sandbox.policy import resolve_sandbox_policy
+        from .sandbox.specs import NoLocalEffectsSandboxAdapter
+
+        policy = resolve_sandbox_policy(
+            self.config.sandbox,
+            self.collab_config.system.sandbox_default,
+            self.collab_config.system.sandbox_override,
+        )
+        workflow = self.collab_config.workflows[self.config.workflow]
+        selected = list(dict.fromkeys(workflow_members(workflow)))
+        agents = {}
+        for agent_id in selected:
+            agent = self.collab_config.agents[agent_id]
+            if self.config.mock or agent.type == "mock":
+                adapter = NoLocalEffectsSandboxAdapter()
+            else:
+                backend_id = self._backend_for(agent_id) or backend_registry.resolve_backend_id(
+                    agent
+                )
+                adapter = backend_registry.get_backend(agent.type, backend_id).sandbox_adapter
+            agents[agent_id] = (agent.cwd, dict(agent.env), adapter)
+        system = self.collab_config.system
+        return resolve_session_plan(
+            policy=policy,
+            workspace_path=self.workdir,
+            agents=agents,
+            operator=SandboxOperatorConfig(
+                extra_readable_dirs=tuple(system.sandbox_extra_readable_dirs),
+                extra_writable_dirs=tuple(system.sandbox_extra_writable_dirs),
+                alias_audit_max_entries=system.sandbox_alias_audit_max_entries,
+                alias_audit_timeout_seconds=system.sandbox_alias_audit_timeout_seconds,
+                scratch_root=system.sandbox_scratch_root,
+                agent_collab_home=AgentCollabHome.resolve().root,
+            ),
+        )
 
     def request_stop(self) -> None:
         self.stop_signal.request()
@@ -182,7 +227,12 @@ class Referee:
                 options = self._options_for(agent_id)
                 preview = backend.command_preview(runtime_agent, options, self.workdir)
                 runners[agent_id] = (
-                    DryRunRunner(agent.id, preview, cwd=agent.cwd)
+                    DryRunRunner(
+                        agent.id,
+                        preview,
+                        cwd=agent.cwd,
+                        sandbox_plan=self.sandbox_plan.agents.get(agent_id),
+                    )
                     if preview is not None
                     else BackendDryRunRunner(agent.id, f"{agent.type}_{backend_id}", cwd=agent.cwd)
                 )
@@ -192,6 +242,7 @@ class Referee:
                     self.config.verbose,
                     self._options_for(agent_id),
                     self._backend_for(agent_id),
+                    self.sandbox_plan.agents.get(agent_id),
                 )
         return runners
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -622,7 +623,15 @@ def describe_options(
     from .events import utc_timestamp
 
     resolved_workdir = str(workdir.expanduser().resolve()) if workdir else "."
-    backends = _describe_backends(config, health, health_refresh, model_refresh, model_catalogs)
+    resolved_root = workdir.expanduser().resolve() if workdir else Path(".").resolve()
+    backends = _describe_backends(
+        config,
+        health,
+        health_refresh,
+        model_refresh,
+        model_catalogs,
+        workdir=resolved_root,
+    )
     agents = [
         _describe_agent(config, agent, backends)
         for agent in sorted(config.agents.values(), key=lambda item: item.id)
@@ -647,6 +656,7 @@ def describe_options(
             "model_request": model_refresh,
         },
         "workdir": resolved_workdir if workdir else None,
+        "outer_sandbox": _describe_outer_sandbox(config),
         "backends": backends,
         "agents": agents,
         "workflows": workflows,
@@ -667,6 +677,51 @@ def describe_options(
     return payload
 
 
+def _describe_outer_sandbox(config: CollaborationConfig) -> Dict[str, Any]:
+    from .sandbox.bubblewrap import discover_bubblewrap
+    from .sandbox.specs import SandboxFailure
+
+    try:
+        installation = discover_bubblewrap()
+        engine = {
+            "status": "discovered",
+            "platform": "linux",
+            "executable": str(installation.executable),
+            "version": installation.version,
+            "namespace_control": "repeated_at_start",
+            "reason_code": None,
+        }
+    except SandboxFailure as exc:
+        engine = {
+            "status": "unavailable",
+            "platform": "linux" if os.name == "posix" else os.name,
+            "executable": None,
+            "version": None,
+            "namespace_control": "not_run",
+            "reason_code": exc.code,
+            "remediation": list(exc.remediation),
+        }
+    system = config.system
+    return {
+        "sandbox_default": system.sandbox_default.value,
+        "sandbox_override": (
+            None if system.sandbox_override is None else system.sandbox_override.value
+        ),
+        "operator_paths": {
+            "readable": [str(item) for item in system.sandbox_extra_readable_dirs],
+            "writable": [str(item) for item in system.sandbox_extra_writable_dirs],
+        },
+        "alias_audit": {
+            "max_entries": system.sandbox_alias_audit_max_entries,
+            "timeout_seconds": system.sandbox_alias_audit_timeout_seconds,
+        },
+        "scratch_root": (
+            None if system.sandbox_scratch_root is None else str(system.sandbox_scratch_root)
+        ),
+        "engine": engine,
+    }
+
+
 def describe_options_for_workdir(
     workdir: Path, *, health_refresh: str = "cached", model_refresh: str = "cached"
 ) -> Dict[str, Any]:
@@ -684,6 +739,8 @@ def _describe_backends(
     health_refresh: str,
     model_refresh: str,
     model_catalogs: Any = None,
+    *,
+    workdir: Path,
 ) -> Dict[str, Any]:
     from . import backends as backend_registry
     from .config import backend_policy
@@ -695,6 +752,9 @@ def _describe_backends(
         for backend_id in backend_registry.registered_backends(agent_type):
             canonical = backend_registry.backend_name(agent_type, backend_id)
             backend = backend_registry.get_backend(agent_type, backend_id)
+            from .sandbox.specs import SandboxContext
+
+            sandbox_spec = backend.sandbox_adapter.describe(SandboxContext(workdir, workdir, {}))
             user_policy = backend_policy(config, canonical)
             agent = _representative_agent(config, agent_type, backend_id)
             option_schema = _option_object_schema(
@@ -752,6 +812,11 @@ def _describe_backends(
                     "provider_session_id_kind": backend.provider_session_id_kind,
                     "option_schema": option_schema,
                     "configuration_schema": config_schema,
+                    "outer_sandbox": {
+                        "support": sandbox_spec.support.value,
+                        "policies": sorted(item.value for item in sandbox_spec.policies),
+                        "provider_native_profile": dict(sandbox_spec.native_profile.summary),
+                    },
                 },
                 "effective": {"option_schema": effective_schema},
                 "model_catalog": model_catalog,
@@ -1187,6 +1252,7 @@ def build_session_settings(
     interactive_idle_timeout: float = 600.0,
     turn_timeout: Optional[int] = None,
     workdir: Optional[Path] = None,
+    sandbox_plan: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Build the effective session settings confirmation for start responses.
 
@@ -1242,6 +1308,8 @@ def build_session_settings(
             preview = backend.command_preview(agent, options, workdir)
             if preview is not None:
                 entry["command_preview"] = preview
+        if sandbox_plan is not None and agent_id in sandbox_plan.agents:
+            entry["outer_sandbox"] = sandbox_plan.agents[agent_id].settings(full=True)
         agents[agent_id] = entry
     settings: Dict[str, Any] = {
         "workflow": {
@@ -1255,6 +1323,8 @@ def build_session_settings(
     }
     if warnings:
         settings["warnings"] = [dict(warning) for warning in warnings]
+    if sandbox_plan is not None:
+        settings["sandbox"] = sandbox_plan.settings()
     return settings
 
 
@@ -1290,6 +1360,22 @@ def compact_session_settings(settings: Mapping[str, Any]) -> Dict[str, Any]:
             )
             for agent_id, agent in agents.items()
         }
+        for agent in out["agents"].values():
+            if not isinstance(agent, dict):
+                continue
+            outer = agent.get("outer_sandbox")
+            if not isinstance(outer, Mapping):
+                continue
+            compact_outer = dict(outer)
+            writable = outer.get("writable_exceptions")
+            if isinstance(writable, list):
+                compact_outer["writable_exceptions"] = [
+                    {key: value for key, value in item.items() if key in {"label", "access"}}
+                    if isinstance(item, Mapping)
+                    else item
+                    for item in writable
+                ]
+            agent["outer_sandbox"] = compact_outer
     return out
 
 

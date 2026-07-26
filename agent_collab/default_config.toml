@@ -1,12 +1,19 @@
 # General built-in policy lives here. Backend-specific shipped settings and
 # Event Window targets live in backends/<canonical>/defaults.toml.
 
-schema_version = 10
+schema_version = 11
 
 ##### SYSTEM CONFIG #####
 
 [system]
 timezone = "local"
+# Stage 1 intentionally keeps the production default inactive. Linux may move
+# this to "read-only" only after the complete shipped-backend readiness gate.
+sandbox_default = "none"
+sandbox_extra_readable_dirs = []
+sandbox_extra_writable_dirs = []
+sandbox_alias_audit_max_entries = 1000000
+sandbox_alias_audit_timeout_seconds = 10
 
 
 ##### USAGE WINDOWS #####

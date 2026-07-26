@@ -12,7 +12,7 @@ install calls it to write the user config forward (with a backup) so the file
 on disk stays current. Ambiguous or unknown data is left in place for the
 latest-schema validator to reject.
 
-Layout: one file per migration step (``v1_to_v2`` … ``v9_to_v10``), each owning
+Layout: one file per migration step (``v1_to_v2`` … ``v10_to_v11``), each owning
 its step's docstring, tables, and helpers. Shared machinery lives in named
 modules — :mod:`base` (schema constant + exceptions), :mod:`scope` (the
 project-scope filters), :mod:`writeback` (the install-time write-back path).
@@ -41,6 +41,7 @@ from .v6_to_v7 import _migrate_v6_to_v7
 from .v7_to_v8 import _migrate_v7_to_v8
 from .v8_to_v9 import _migrate_v8_to_v9
 from .v9_to_v10 import _migrate_v9_to_v10
+from .v10_to_v11 import _migrate_v10_to_v11
 from .writeback import UserConfigWriteBack, migrate_user_config_file
 
 __all__ = [
@@ -109,4 +110,5 @@ MIGRATIONS: Dict[int, Callable[[Dict[str, Any], str, str], Dict[str, Any]]] = {
     7: _migrate_v7_to_v8,
     8: _migrate_v8_to_v9,
     9: _migrate_v9_to_v10,
+    10: _migrate_v10_to_v11,
 }

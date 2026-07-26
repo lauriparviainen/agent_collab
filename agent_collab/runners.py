@@ -52,22 +52,31 @@ class DryRunRunner(AgentRunner):
         command: List[str],
         cwd: Optional[str] = None,
         command_builder: Optional[CommandBuilder] = None,
+        sandbox_plan: Optional[object] = None,
     ):
         self.name = name
         self.command = command
         self.cwd = cwd
         self.command_builder = command_builder
+        self.sandbox_plan = sandbox_plan
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         run_dir = _resolve_run_dir(workdir, self.cwd)
         command = self.command_builder(run_dir) if self.command_builder else list(self.command)
-        argv = command + [prompt]
+        raw = {
+            "command_preview": command,
+            "workdir": str(run_dir),
+            "startup": "not_attempted_dry_run",
+        }
+        policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
+        if policy is not None:
+            raw["sandbox"] = getattr(policy, "value", str(policy))
         await emit(
             Event.create(
                 "referee",
                 "command",
-                f"dry-run would execute in {run_dir}: {' '.join(argv)}",
-                {"argv": argv, "workdir": str(run_dir)},
+                f"dry-run would execute {self.name} in {run_dir}",
+                raw,
             )
         )
         return TurnOutcome("completed")
@@ -125,6 +134,7 @@ class SubprocessRunner(AgentRunner):
         stream_limit: int = DEFAULT_STREAM_LIMIT_BYTES,
         source: Optional[str] = None,
         clean_eof_fallback: bool = False,
+        sandbox_plan: Optional[object] = None,
     ):
         self.name = name
         self.command_prefix = command_prefix
@@ -143,6 +153,7 @@ class SubprocessRunner(AgentRunner):
             raise ValueError("stream_limit must be a positive integer")
         self.stream_limit = stream_limit
         self.clean_eof_fallback = bool(clean_eof_fallback)
+        self.sandbox_plan = sandbox_plan
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         run_dir = _resolve_run_dir(workdir, self.cwd)
@@ -150,26 +161,65 @@ class SubprocessRunner(AgentRunner):
             self.command_builder(run_dir) if self.command_builder else list(self.command_prefix)
         )
         argv = command_prefix + [prompt]
+        from .sandbox.specs import SandboxFailure, SandboxPolicy
+
+        policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
+        command_raw = {
+            "command_preview": list(command_prefix),
+            "workdir": str(run_dir),
+            "sandbox": "read-only" if policy is SandboxPolicy.READ_ONLY else "none",
+            "mount_labels": [
+                label
+                for operation in getattr(self.sandbox_plan, "operations", ())
+                for label in operation.labels
+            ],
+            "startup": (
+                "establishment_pending" if policy is SandboxPolicy.READ_ONLY else "disabled"
+            ),
+        }
         await emit(
             Event.create(
                 "referee",
                 "command",
-                f"starting {self.name}: {' '.join(argv[:-1])} <prompt>",
-                {"argv": argv, "workdir": str(run_dir)},
+                f"preparing {self.name} in {run_dir}",
+                command_raw,
             )
         )
         try:
             env = os.environ.copy()
             env.update(self.env)
-            process = await asyncio.create_subprocess_exec(
-                *argv,
-                cwd=str(run_dir),
-                env=env,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                limit=self.stream_limit,
-            )
+            if policy is SandboxPolicy.READ_ONLY:
+                from .sandbox.bubblewrap import discover_bubblewrap
+                from .sandbox.supervisor import SandboxSupervisor
+
+                installation = await asyncio.to_thread(discover_bubblewrap)
+                process = await SandboxSupervisor(installation).launch_cli(
+                    self.sandbox_plan,
+                    command_prefix,
+                    prompt,
+                    stream_limit=self.stream_limit,
+                )
+                startup = "established"
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    *argv,
+                    cwd=str(run_dir),
+                    env=env,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    limit=self.stream_limit,
+                )
+                startup = "disabled"
+            if policy is SandboxPolicy.READ_ONLY:
+                await emit(
+                    Event.create(
+                        "referee",
+                        "status",
+                        f"{self.name} outer sandbox established",
+                        {"sandbox": "read-only", "startup": startup},
+                    )
+                )
         except FileNotFoundError as exc:
             await emit(
                 Event.create(
@@ -180,11 +230,29 @@ class SubprocessRunner(AgentRunner):
                 )
             )
             return TurnOutcome("failed", "provider_transport_failed")
+        except Exception as exc:
+            if not isinstance(exc, SandboxFailure):
+                raise
+            await emit(
+                Event.create(
+                    "error",
+                    "error",
+                    f"{self.name} outer sandbox failed during {exc.phase}: {exc}",
+                    {
+                        "code": exc.code,
+                        "phase": exc.phase,
+                        "fatal": True,
+                        "remediation": list(exc.remediation),
+                    },
+                )
+            )
+            return TurnOutcome("failed", exc.code)
 
         queue: asyncio.Queue[Optional[Event]] = asyncio.Queue()
         evidence = TerminalEvidenceAccumulator()
         process_exit_code: Optional[int] = None
         exception_code: Optional[str] = None
+        sandbox_failure_code: Optional[str] = None
         produced_message = False
 
         async def read_line(reader: asyncio.StreamReader, stream: str) -> Optional[bytes]:
@@ -259,6 +327,10 @@ class SubprocessRunner(AgentRunner):
                 return
             except asyncio.TimeoutError:
                 pass
+            except Exception:
+                # wait_done records the owned completion task's original
+                # failure; cleanup must not replace it with a second wait.
+                return
             if process.returncode is None:
                 try:
                     process.kill()
@@ -272,9 +344,11 @@ class SubprocessRunner(AgentRunner):
                 # Ownership transfers to the loop; do not let an anomalous
                 # platform wait prevent timeout/interruption recording.
                 asyncio.create_task(process.wait())
+            except Exception:
+                return
 
         async def wait_done() -> None:
-            nonlocal process_exit_code, exception_code
+            nonlocal process_exit_code, exception_code, sandbox_failure_code
             stdout_task = asyncio.create_task(read_stdout())
             stderr_task = asyncio.create_task(read_stderr())
             process_task = asyncio.create_task(process.wait())
@@ -308,15 +382,38 @@ class SubprocessRunner(AgentRunner):
                 await terminate_process()
                 raise
             except Exception as exc:
-                exception_code = "provider_output_invalid"
-                await queue.put(
-                    Event.create(
-                        "error",
-                        "error",
-                        f"{self.name} output transport failed: {exc}",
-                        {"error": str(exc), "stream_limit": self.stream_limit, "fatal": True},
+                if isinstance(exc, SandboxFailure):
+                    sandbox_failure_code = exc.code
+                    returncode = process.returncode
+                    if isinstance(returncode, int) and not isinstance(returncode, bool):
+                        process_exit_code = returncode
+                    await queue.put(
+                        Event.create(
+                            "error",
+                            "error",
+                            f"{self.name} outer sandbox failed during {exc.phase}: {exc}",
+                            {
+                                "code": exc.code,
+                                "phase": exc.phase,
+                                "fatal": True,
+                                "remediation": list(exc.remediation),
+                            },
+                        )
                     )
-                )
+                else:
+                    exception_code = "provider_output_invalid"
+                    await queue.put(
+                        Event.create(
+                            "error",
+                            "error",
+                            f"{self.name} output transport failed: {exc}",
+                            {
+                                "error": str(exc),
+                                "stream_limit": self.stream_limit,
+                                "fatal": True,
+                            },
+                        )
+                    )
                 for task in tasks:
                     if not task.done():
                         task.cancel()
@@ -351,7 +448,13 @@ class SubprocessRunner(AgentRunner):
         finally:
             if not done_task.done():
                 done_task.cancel()
-                await asyncio.gather(done_task, return_exceptions=True)
+            await asyncio.gather(done_task, return_exceptions=True)
+        if sandbox_failure_code is not None:
+            return TurnOutcome(
+                "failed",
+                sandbox_failure_code,
+                process_exit_code=process_exit_code,
+            )
         return evidence.resolve(
             process_exit_code=process_exit_code,
             exception_code=exception_code,
@@ -377,6 +480,7 @@ def configured_runner(
     verbose: bool = False,
     options: Optional[Dict[str, object]] = None,
     backend_id: Optional[str] = None,
+    sandbox_plan: Optional[object] = None,
 ) -> AgentRunner:
     """Build the runner for an agent by delegating to its resolved backend.
 
@@ -400,7 +504,10 @@ def configured_runner(
             f"agents.{agent.id}.backend {resolved!r} is not registered for type {agent.type!r}"
         ) from exc
     normalized = dict(backend.normalize_options(agent, dict(options or {})))
-    return backend.create_runner(agent, verbose, normalized)
+    runner = backend.create_runner(agent, verbose, normalized)
+    if isinstance(runner, SubprocessRunner):
+        runner.sandbox_plan = sandbox_plan
+    return runner
 
 
 def _resolve_run_dir(workdir: Path, configured_cwd: Optional[str]) -> Path:

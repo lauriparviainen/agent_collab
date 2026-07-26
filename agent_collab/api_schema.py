@@ -617,6 +617,7 @@ NON_USER_START_FIELDS: Tuple[str, ...] = (
     "resolved_backends",
     "agent_options",
     "collab_config",
+    "sandbox_plan",
     "internal_workdir_exempt",
 )
 
@@ -641,6 +642,7 @@ class StartSessionRequestModel:
     interactive_idle_timeout: float = 600.0
     backend_options: Dict[str, Any] = field(default_factory=dict)
     backend: Optional[str] = None
+    sandbox: Optional[str] = None
     # Start-time workflow member selection: {slot: agent_id}, slots named by
     # the workflow's configured member ids. Absent/empty keeps the configured
     # members — deep validation (slots, enablement, distinctness) is the
@@ -663,6 +665,7 @@ class StartSessionRequestModel:
         "interactive_idle_timeout",
         "backend_options",
         "backend",
+        "sandbox",
         "members",
         "detail",
     )
@@ -676,6 +679,11 @@ class StartSessionRequestModel:
         backend = data.get("backend")
         if backend is not None and not isinstance(backend, str):
             raise ValueError("backend must be a string")
+        sandbox = data.get("sandbox")
+        if sandbox is not None and (
+            not isinstance(sandbox, str) or sandbox not in {"read-only", "none"}
+        ):
+            raise ValueError("sandbox must be 'read-only' or 'none'")
         members = _optional_object(data, "members")
         if not isinstance(members, dict) or not all(
             isinstance(key, str) and isinstance(value, str) for key, value in members.items()
@@ -693,6 +701,7 @@ class StartSessionRequestModel:
             interactive_idle_timeout=_number(data, "interactive_idle_timeout", 600.0),
             backend_options=_optional_object(data, "backend_options"),
             backend=str(backend) if backend is not None else None,
+            sandbox=str(sandbox) if sandbox is not None else None,
             members=dict(members),
             detail=_detail(data),
         )
@@ -713,6 +722,8 @@ class StartSessionRequestModel:
         }
         if self.backend is not None:
             out["backend"] = self.backend
+        if self.sandbox is not None:
+            out["sandbox"] = self.sandbox
         if self.members:
             out["members"] = dict(self.members)
         return out

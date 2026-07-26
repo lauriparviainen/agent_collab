@@ -119,7 +119,7 @@ Execution settings live on the user-global `[backends.<canonical>]` sections
 under the canonical name, with options-only personae nested beneath it. The
 caller's current shell directory does not affect project config unless it
 is also the session `workdir`. Config files declare a `schema_version`
-(currently 9, missing means 1); `agent_collab/config_migrations.py` migrates
+(currently 11, missing means 1); `agent_collab/config_migrations.py` migrates
 known old shapes in memory before validation, so old files keep loading even
 if nobody reinstalls. `./agent_collab.sh install` additionally migrates the
 **user** config file on disk to the current schema — a `config.toml.bak`

@@ -1,7 +1,9 @@
 import asyncio
 import json
 import sys
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from agent_collab.events import Event
@@ -10,6 +12,7 @@ from agent_collab.backends.codex_cli.parser import CodexStreamingParser
 from agent_collab.backends.antigravity_cli import parse_antigravity_line
 from agent_collab.backends.xai_cli.parser import XaiStreamingParser
 from agent_collab.runners import SubprocessRunner
+from agent_collab.sandbox.specs import SandboxFailure, SandboxPolicy
 
 
 def _json_message_parser(line, verbose):
@@ -122,6 +125,101 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(missing_command, error.raw["error"])
         self.assertNotIn("output transport failed", error.text)
+
+    async def test_launch_time_sandbox_failure_retains_its_stable_outcome_code(self):
+        runner = SubprocessRunner(
+            "codex",
+            [sys.executable, "-c", "raise SystemExit('provider must not run')"],
+            _json_message_parser,
+            sandbox_plan=SimpleNamespace(
+                policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+                operations=(),
+            ),
+        )
+        supervisor = mock.Mock()
+        supervisor.launch_cli = mock.AsyncMock(
+            side_effect=SandboxFailure(
+                "outer_sandbox_hardlink_alias",
+                "private diagnostic",
+                phase="alias-audit",
+                remediation=("remove the alias",),
+            )
+        )
+
+        with (
+            mock.patch(
+                "agent_collab.sandbox.bubblewrap.discover_bubblewrap",
+                return_value=object(),
+            ),
+            mock.patch(
+                "agent_collab.sandbox.supervisor.SandboxSupervisor",
+                return_value=supervisor,
+            ),
+        ):
+            events, outcome = await self._result(runner)
+
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("failed", "outer_sandbox_hardlink_alias"),
+        )
+        error = next(event for event in events if event.type == "error")
+        self.assertEqual(error.raw["code"], "outer_sandbox_hardlink_alias")
+        self.assertNotIn("private diagnostic", outcome.message)
+
+    async def test_post_establishment_sandbox_failure_overrides_provider_evidence(self):
+        class FailingSandboxProcess:
+            def __init__(self):
+                self.stdout = asyncio.StreamReader()
+                self.stderr = asyncio.StreamReader()
+                self.stdout.feed_data(b'{"type":"turn.completed"}\n')
+                self.stdout.feed_eof()
+                self.stderr.feed_eof()
+                self.returncode = 0
+
+            async def wait(self):
+                raise SandboxFailure(
+                    "outer_sandbox_status_contradiction",
+                    "private status diagnostic",
+                    phase="runtime",
+                )
+
+            def terminate(self):
+                raise AssertionError("reaped sandbox process must not be signalled")
+
+            def kill(self):
+                raise AssertionError("reaped sandbox process must not be signalled")
+
+        runner = SubprocessRunner(
+            "codex",
+            [sys.executable, "-c", "raise SystemExit('provider must not run')"],
+            CodexStreamingParser(),
+            sandbox_plan=SimpleNamespace(
+                policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+                operations=(),
+            ),
+        )
+        supervisor = mock.Mock()
+        supervisor.launch_cli = mock.AsyncMock(return_value=FailingSandboxProcess())
+
+        with (
+            mock.patch(
+                "agent_collab.sandbox.bubblewrap.discover_bubblewrap",
+                return_value=object(),
+            ),
+            mock.patch(
+                "agent_collab.sandbox.supervisor.SandboxSupervisor",
+                return_value=supervisor,
+            ),
+        ):
+            events, outcome = await self._result(runner)
+
+        self.assertEqual(
+            (outcome.outcome, outcome.code, outcome.process_exit_code),
+            ("failed", "outer_sandbox_status_contradiction", 0),
+        )
+        error = next(event for event in events if event.type == "error")
+        self.assertEqual(error.raw["code"], "outer_sandbox_status_contradiction")
+        self.assertNotIn("private status diagnostic", outcome.message)
 
     async def test_non_noisy_stderr_is_emitted_as_structured_error(self):
         script = "import sys; print('provider failed safely', file=sys.stderr)"

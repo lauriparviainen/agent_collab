@@ -92,7 +92,12 @@ command = "configured-claude"
                 )
 
             command_events = [event for event in events if event.type == "command"]
-            self.assertEqual(command_events[0].raw["argv"][0], "configured-claude")
+            self.assertNotIn("argv", command_events[0].raw)
+            self.assertNotIn("test task", command_events[0].raw["command_preview"])
+            self.assertEqual(
+                command_events[0].raw["command_preview"][0],
+                "configured-claude",
+            )
 
     def test_sdk_dry_run_does_not_construct_a_cli_command(self):
         config = CollaborationConfig(

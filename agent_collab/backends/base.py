@@ -149,6 +149,7 @@ class AgentBackend(Protocol):
     # backend. Consumers (the TUI) fall back to their own accent for unknown
     # or missing values, so this is display metadata, never gating detail.
     brand_color: str
+    sandbox_adapter: Any
 
     def probe(self) -> BackendHealth:
         """Return a fresh, side-effect-free health snapshot (never a model call)."""

@@ -24,6 +24,7 @@ from ...config import AgentConfig
 from ...events import Event
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
 from ...runners import AgentRunner, AsyncEventSink
+from ...sandbox.specs import UnsupportedSandboxAdapter
 from ..base import BackendCapabilities, BackendHealth, BackendUnavailable
 from ..common.health import probe_sdk_backend, xai_api_key_credentials
 from ..common.options import canonical_reasoning
@@ -75,6 +76,7 @@ def _map_sdk_options(options: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 class XaiSdkBackend:
+    sandbox_adapter = UnsupportedSandboxAdapter()
     id = "sdk"
     agent_type = "xai"
     # xAI's brand is monochrome rather than a single signature hue. A mid-light

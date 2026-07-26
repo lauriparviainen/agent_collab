@@ -13,6 +13,7 @@ from ...backend_contract import (
 )
 from ...config import AgentConfig
 from ...runners import AgentRunner
+from ...sandbox.specs import UnsupportedSandboxAdapter
 from ..base import BackendCapabilities, BackendHealth
 from ..common.cli import (
     cli_command_preview,
@@ -44,6 +45,7 @@ class XaiCliBackend:
     event_fidelity = "message_first"
     provider_session_id_kind = "session"
     capabilities = BackendCapabilities()
+    sandbox_adapter = UnsupportedSandboxAdapter()
     checks_credentials = True
     block_on_unavailable = True
 

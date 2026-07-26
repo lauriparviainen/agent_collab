@@ -55,12 +55,12 @@ schema, shared Event Window schedule, system settings, and workflows; backend
 fragments own backend commands, option defaults, and disabled Event Window
 targets. All shipped values remain inspectable without reading Python code.
 
-Config files declare a top-level `schema_version` (currently `9`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. `./agent_collab.sh install` additionally rewrites the user config file on disk to the current schema (see [Migration](#migration-from-the-agents-first-schema)). Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
+Config files declare a top-level `schema_version` (currently `11`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. `./agent_collab.sh install` additionally rewrites the user config file on disk to the current schema (see [Migration](#migration-from-the-agents-first-schema)). Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
 ## Example
 
 ```toml
-schema_version = 9
+schema_version = 11
 
 [backends.claude_cli]
 enabled = true
@@ -125,7 +125,7 @@ workflow (it becomes start-eligible once the `grok` CLI is installed; enable an
 opt-in `sdk` backend first if you would rather use one of those):
 
 ```toml
-schema_version = 9
+schema_version = 11
 
 [workflows.triple-review]
 parallel = ["claude_cli", "codex_cli", "xai_cli"]
@@ -365,6 +365,67 @@ slots (see "Member selection at start" above); `backend` and `backend_options`
 stay orthogonal transport and option choices for whichever agents end up
 selected.
 
+### Outer filesystem sandbox
+
+The top-level start field `sandbox` controls agent-collab's outer filesystem
+boundary. It is separate from provider-native fields such as
+`backend_options.codex_cli.sandbox`. The two layers are reported separately in
+session settings and option discovery.
+
+Stage 1 accepts `read-only` only for `codex_cli` and the in-memory mock
+backend. Other CLI and SDK backends fail closed with
+`outer_sandbox_unsupported`; they are not silently exempted. The shipped
+default remains `none` until the complete backend readiness gate is met, so
+omitting this field preserves existing execution. Explicit `none` also leaves
+the provider command and its native controls unchanged.
+
+On Linux, a `codex_cli` read-only start:
+
+- validates the workspace, Git metadata, writable provider state, filesystem,
+  mount aliases, and hard links before session creation;
+- establishes and proves a Bubblewrap namespace before the permissive inner
+  Codex profile can execute;
+- makes `/`, the workspace, and resolved Git storage read-only while keeping a
+  private `$TMPDIR` and the complete effective `CODEX_HOME` writable;
+- reaps the namespace and removes private scratch on completion, stop, or
+  failure.
+
+The effective `CODEX_HOME` must already exist, be daemon-user-owned, and not be
+group/world writable. It is intentionally a complete persistent writable
+state root: authentication, SQLite state, skills, plugins, and other Codex
+extensions below it remain available. A workspace symlink into this declared
+state follows the writable target; session settings report this limitation.
+
+Only global user config may set outer-sandbox operator policy:
+
+```toml
+[system]
+sandbox_default = "none"              # "read-only" is opt-in during Stage 1
+# sandbox_override = "read-only"      # installation-wide, callers cannot conflict
+sandbox_extra_readable_dirs = []
+sandbox_extra_writable_dirs = []
+sandbox_alias_audit_max_entries = 1000000
+sandbox_alias_audit_timeout_seconds = 10
+# sandbox_scratch_root = "/run/user/1000/agent-collab/sandbox"
+```
+
+Project `[system]` tables are ignored. Operator paths and a scratch root must
+be absolute and pass strict ownership, symlink, overlap, filesystem, and alias
+checks. The engine is Linux-only in Stage 1; an explicit `read-only` request
+fails before provider execution when Bubblewrap or compatible user namespaces
+are unavailable.
+
+```bash
+agent-collab start --sandbox read-only --workflow solo \
+  --members '{"claude_cli":"codex_cli"}' "Inspect this repository"
+```
+
+REST, MCP, direct CLI, dry-run, session detail, TUI detail, and
+`agent_collab_describe_options` use the same `read-only | none` policy and
+report its request/default/override source. Historical session records without
+the field are shown as `legacy_session` plus effective `none`; they never
+inherit a later read-only default.
+
 ### Default write posture
 
 Shipped defaults lean read-only: agents can call tools and inspect the
@@ -379,9 +440,11 @@ repository, but file writes need an explicit opt-in.
 | `antigravity_sdk` | no mode/permission control — follows the provider default | — |
 | `xai_sdk` | remote chat only, no tools | — |
 
-The posture is enforced by the provider's own sandbox/mode flag, not by prompt
-text. Session `backend_options`, a persona, or a user-config `options` table
-can loosen it deliberately.
+This table describes provider-native posture. It is not the outer filesystem
+boundary above. Session `backend_options`, a persona, or a user-config
+`options` table can loosen provider-native behavior deliberately; under an
+established outer `read-only` Codex session, agent-collab instead selects its
+audited non-interactive native profile after the namespace proof.
 
 Example option rules:
 

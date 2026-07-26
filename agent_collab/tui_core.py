@@ -370,6 +370,13 @@ def format_session_details(session: Any) -> Tuple[str, ...]:
     sequence = workflow_settings.get("sequence")
     if isinstance(sequence, Sequence) and not isinstance(sequence, (str, bytes)):
         lines.append(f"sequence: {' -> '.join(str(item) for item in sequence)}")
+    sandbox = settings.get("sandbox")
+    if isinstance(sandbox, Mapping):
+        lines.append(
+            "outer sandbox: "
+            f"{sandbox.get('effective')} · {sandbox.get('engine')} · "
+            f"{sandbox.get('establishment')}"
+        )
 
     for key in (
         "workdir",
@@ -761,6 +768,7 @@ def build_new_session_payload(
     interactive_idle_timeout: float = 600.0,
     backend_options: Optional[Mapping[str, Mapping[str, Any]]] = None,
     members: Optional[Mapping[str, str]] = None,
+    sandbox: Optional[str] = None,
 ) -> dict:
     task = task.strip()
     workflow = workflow.strip()
@@ -785,6 +793,10 @@ def build_new_session_payload(
     # the payload identical to a start without member selection.
     if members:
         payload["members"] = {str(slot): str(agent_id) for slot, agent_id in members.items()}
+    if sandbox is not None:
+        if sandbox not in {"read-only", "none"}:
+            raise ValueError("sandbox must be 'read-only' or 'none'")
+        payload["sandbox"] = sandbox
     return payload
 
 

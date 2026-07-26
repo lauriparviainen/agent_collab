@@ -23,6 +23,7 @@ from agent_collab.backends.common.health import (
 )
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.options import StartOptionsError, validate_start_backends
+from agent_collab.sandbox.specs import UnsupportedSandboxAdapter
 
 
 class _WhichFake:
@@ -191,6 +192,7 @@ class _GatingBackend:
     brand_color = "#123456"
     event_fidelity = "typed"
     provider_session_id_kind = None
+    sandbox_adapter = UnsupportedSandboxAdapter()
 
     def __init__(self, block_on_unavailable=True, checks_credentials=True):
         self.block_on_unavailable = block_on_unavailable

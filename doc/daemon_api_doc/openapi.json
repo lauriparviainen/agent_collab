@@ -799,6 +799,17 @@
             "default": false,
             "type": "boolean"
           },
+          "sandbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "task": {
             "minLength": 1,
             "pattern": ".*\\S.*",

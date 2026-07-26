@@ -10,6 +10,7 @@ from unittest import mock
 from agent_collab import cli
 from agent_collab import backends
 from agent_collab.backends.base import BackendCapabilities, BackendHealth
+from agent_collab.sandbox.specs import UnsupportedSandboxAdapter
 from agent_collab.config import (
     DEFAULT_CONFIG_PATH,
     MAX_PARALLEL_WORKFLOW_WIDTH,
@@ -47,7 +48,7 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_file_parses_with_fallback_toml_parser(self):
         data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(data["schema_version"], 10)
+        self.assertEqual(data["schema_version"], 11)
         self.assertNotIn("agents", data)
         self.assertNotIn("backends", data)
         self.assertNotIn("targets", data["usage_windows"])
@@ -931,6 +932,7 @@ class AgentBackendConfigTests(unittest.TestCase):
             provider_session_id_kind=None,
             checks_credentials=False,
             block_on_unavailable=False,
+            sandbox_adapter=UnsupportedSandboxAdapter(),
             probe=lambda: BackendHealth(),
             option_schema=lambda agent: {},
             normalize_options=lambda agent, requested: dict(requested),

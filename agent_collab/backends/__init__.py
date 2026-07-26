@@ -70,6 +70,8 @@ def register(backend: AgentBackend) -> None:
 
 
 def _validate_backend_contract(backend: AgentBackend) -> None:
+    from ..sandbox.specs import SandboxAdapter
+
     agent_type = getattr(backend, "agent_type", None)
     backend_id = getattr(backend, "id", None)
     if not isinstance(agent_type, str) or not agent_type:
@@ -78,6 +80,10 @@ def _validate_backend_contract(backend: AgentBackend) -> None:
         raise TypeError("backend.id must be a non-empty string")
     if not isinstance(getattr(backend, "capabilities", None), BackendCapabilities):
         raise TypeError(f"backend ({agent_type}, {backend_id}) must declare BackendCapabilities")
+    if not isinstance(getattr(backend, "sandbox_adapter", None), SandboxAdapter):
+        raise TypeError(
+            f"backend ({agent_type}, {backend_id}) must declare a typed sandbox_adapter"
+        )
     for attribute in ("block_on_unavailable", "checks_credentials"):
         if not isinstance(getattr(backend, attribute, None), bool):
             raise TypeError(

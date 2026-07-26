@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-CURRENT_CONFIG_SCHEMA = 10
+CURRENT_CONFIG_SCHEMA = 11
 
 _logger = logging.getLogger("agent_collab.config")
 

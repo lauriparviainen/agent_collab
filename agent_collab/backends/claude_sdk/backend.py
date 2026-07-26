@@ -47,6 +47,7 @@ from ...config import AgentConfig
 from ...events import Event, compact_json
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
 from ...runners import AgentRunner, AsyncEventSink
+from ...sandbox.specs import UnsupportedSandboxAdapter
 from ..base import (
     BackendCapabilities,
     BackendHealth,
@@ -97,6 +98,7 @@ ConversationFactory = Callable[
 
 
 class ClaudeSdkBackend:
+    sandbox_adapter = UnsupportedSandboxAdapter()
     """Registered as ``(claude, "sdk")`` with live-session continuity."""
 
     id = "sdk"

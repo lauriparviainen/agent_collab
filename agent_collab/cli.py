@@ -63,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run", action="store_true", help="Print commands without running configured agents."
     )
+    parser.add_argument(
+        "--sandbox",
+        choices=("read-only", "none"),
+        help="Agent-collab outer filesystem policy (default comes from [system]).",
+    )
     parser.add_argument("--mock", action="store_true", help="Use simulated agent runners.")
     parser.add_argument(
         "--verbose", action="store_true", help="Print compact unknown stream events."
@@ -178,6 +183,11 @@ def build_start_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--sandbox",
+        choices=("read-only", "none"),
+        help="Agent-collab outer filesystem policy (default comes from [system]).",
+    )
     parser.add_argument(
         "--backend",
         help="Execution backend for every selected agent (e.g. 'cli', 'sdk'). "
@@ -539,6 +549,8 @@ def _main_start(argv) -> int:
         }
         if args.backend:
             payload["backend"] = args.backend
+        if args.sandbox:
+            payload["sandbox"] = args.sandbox
         members = _json_object_arg(args.members, "--members")
         if members:
             payload["members"] = members
@@ -981,7 +993,20 @@ def _main_config(argv) -> int:
             f"sessions: retention_days={config.sessions.retention_days} "
             f"cleanup_interval_hours={config.sessions.cleanup_interval_hours}"
         )
-        print(f"system: timezone={config.system.timezone}")
+        sandbox_override = (
+            "unset"
+            if config.system.sandbox_override is None
+            else config.system.sandbox_override.value
+        )
+        print(
+            f"system: timezone={config.system.timezone} "
+            f"sandbox_default={config.system.sandbox_default.value} "
+            f"sandbox_override={sandbox_override} "
+            f"sandbox_alias_audit_max_entries="
+            f"{config.system.sandbox_alias_audit_max_entries} "
+            f"sandbox_alias_audit_timeout_seconds="
+            f"{config.system.sandbox_alias_audit_timeout_seconds}"
+        )
         from .config import effective_usage_window_schedule
 
         for target_id, target in sorted(config.usage_windows.targets.items()):
@@ -1221,6 +1246,13 @@ def _print_session(session) -> None:
     sequence = (settings.get("workflow") or {}).get("sequence")
     if sequence:
         print(f"sequence: {' -> '.join(sequence)}")
+    sandbox = settings.get("sandbox")
+    if isinstance(sandbox, dict):
+        print(
+            "outer_sandbox: "
+            f"effective={sandbox.get('effective')} source={sandbox.get('source')} "
+            f"engine={sandbox.get('engine')} establishment={sandbox.get('establishment')}"
+        )
     for agent_id, agent in (settings.get("agents") or {}).items():
         details = [
             f"{key}={value}" for key, value in agent.items() if key not in {"command_preview"}
@@ -1291,6 +1323,7 @@ def main(argv=None) -> int:
         workdir=args.workdir,
         log_dir=args.log_dir,
         session_id=args.session_id,
+        sandbox=args.sandbox,
     )
     try:
         run_sync(args.task, config)

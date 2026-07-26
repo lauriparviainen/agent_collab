@@ -13,6 +13,7 @@ from agent_collab.config import AgentConfig, builtin_config
 from agent_collab.options import StartOptionsError, validate_start_backends, validate_start_options
 from agent_collab.referee import Referee, RefereeConfig
 from agent_collab.runners import AgentRunner, SubprocessRunner
+from agent_collab.sandbox.specs import UnsupportedSandboxAdapter
 
 
 class RegistryResolutionTests(unittest.TestCase):
@@ -201,6 +202,7 @@ class _FakeBackend:
         self.provider_session_id_kind = None
         self.checks_credentials = False
         self.block_on_unavailable = False
+        self.sandbox_adapter = UnsupportedSandboxAdapter()
 
     def probe(self):  # pragma: no cover - not exercised here
         from agent_collab.backends.base import BackendHealth

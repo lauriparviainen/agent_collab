@@ -29,8 +29,24 @@ malformed output, transport failure, or nonzero exit fails closed.
 
 ## Capabilities and security
 
-`resume`, `interrupt`, and `tool_gate` are false. Execution is cwd-scoped with stdin closed; sandbox and approval policy remain explicit options.
+`resume`, `interrupt`, and `tool_gate` are false. Execution is cwd-scoped with
+stdin closed. Provider-native sandbox and approval policy remain explicit
+backend options.
+
+The separate top-level outer policy supports `sandbox="read-only"` in Stage 1.
+It resolves the complete effective `CODEX_HOME` as persistent writable state,
+requires that directory to exist with safe ownership and permissions, and
+proves a Linux Bubblewrap boundary before adding
+`--dangerously-bypass-approvals-and-sandbox`. Conflicting Codex-owned native
+sandbox/approval flags are removed only for that proven outer profile.
+Top-level `sandbox="none"` preserves the command byte-for-byte. Other
+backends remain outer-read-only unsupported until their own implementation
+stages.
 
 ## Testing
 
-Hermetic: `./agent_collab_dev.sh test -k codex_cli`. Live: `./agent_collab_dev.sh integration-test codex_cli`.
+Hermetic: `./agent_collab_dev.sh test -k codex_cli`. Credential-free real
+namespace boundary: `./agent_collab_dev.sh bubblewrap-test`. Live:
+`./agent_collab_dev.sh integration-test codex_cli`. The outer-sandbox live
+acceptance is skipped unless `AGENT_COLLAB_IT_CODEX_SANDBOX_STATE` names an
+operator-authorized dedicated complete Codex state root.

@@ -160,7 +160,12 @@ Start a session with `agent_collab_start`:
 ```
 
 Optional fields: `max_turns`, `timeout`, `mock`, `dry_run`, `interactive`,
-`interactive_idle_timeout`, `backend_options`, `backend`, `members`. For a
+`interactive_idle_timeout`, `backend_options`, `backend`, `members`, `sandbox`.
+The top-level `sandbox` is agent-collab's outer filesystem policy and accepts
+`read-only` or `none`; it is distinct from provider-native values inside
+`backend_options`. Stage 1 supports outer `read-only` for `codex_cli` and mock
+only, and fails closed for other selected backends. The shipped default is
+currently `none`. For a
 quick smoke test without provider calls, start
 `{"task": "...", "mock": true, "max_turns": 1}`.
 
@@ -189,6 +194,11 @@ watching. `settings` defaults to a compact view:
 - `settings.agents.<id>` — the effective typed options per agent (model,
   thinking level, permission/sandbox settings where applicable) plus `backend`
   and `capabilities`,
+- `settings.sandbox` — requested/effective outer policy, its source, engine,
+  and establishment requirement,
+- `settings.agents.<id>.outer_sandbox` — typed support/enforcement, the
+  provider-native profile selected by the outer policy, and sanitized writable
+  exceptions,
 - `jsonl_path` / `markdown_path` — where logs are written.
 
 Pass `detail: "full"` on start or status to also get

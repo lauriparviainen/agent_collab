@@ -131,6 +131,7 @@ class StartPayloadSyncTests(unittest.TestCase):
             "interactive_idle_timeout": 1.0,
             "backend_options": {},
             "backend": "cli",
+            "sandbox": "read-only",
             "members": {"claude_cli": "xai_cli"},
             "detail": "full",
         }
@@ -170,6 +171,20 @@ class StartPayloadSyncTests(unittest.TestCase):
             _start_payload({**base, "backend": 5})
         with self.assertRaises(ValueError):
             StartSessionRequestModel.from_dict({**base, "backend": 5})
+
+    def test_sandbox_enum_matches_dto_and_mcp_payload_validation(self):
+        base = {"task": "t", "workdir": "/w"}
+        for value in ("read-only", "none"):
+            self.assertEqual(
+                StartSessionRequestModel.from_dict({**base, "sandbox": value}).sandbox,
+                value,
+            )
+            self.assertEqual(_start_payload({**base, "sandbox": value})["sandbox"], value)
+        for value in ("workspace-write", "", 5):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                StartSessionRequestModel.from_dict({**base, "sandbox": value})
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                _start_payload({**base, "sandbox": value})
 
     def test_members_shape_rules_and_default_round_trip(self):
         base = {"task": "t", "workdir": "/w"}

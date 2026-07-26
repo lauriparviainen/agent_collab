@@ -237,7 +237,8 @@ sequence = ["antigravity_cli"]
             event = asyncio.run(_first_event(runner, workdir=root))
 
             self.assertIsNotNone(event)
-            argv = event.raw["argv"]
+            self.assertNotIn("argv", event.raw)
+            argv = event.raw["command_preview"]
             add_dir_index = argv.index("--add-dir")
             self.assertEqual(argv[add_dir_index + 1], str((root / "agent-root").resolve()))
             self.assertLess(add_dir_index, argv.index("-p"))
@@ -316,9 +317,12 @@ sequence = ["antigravity_cli"]
                     ).run("dry antigravity task")
                 )
             command_events = [e for e in events if e.type == "command"]
-            self.assertEqual(command_events[0].raw["argv"][0], "agy")
-            timeout_index = command_events[0].raw["argv"].index("--print-timeout")
-            self.assertEqual(command_events[0].raw["argv"][timeout_index + 1], "5s")
+            self.assertNotIn("argv", command_events[0].raw)
+            preview = command_events[0].raw["command_preview"]
+            self.assertNotIn("dry antigravity task", preview)
+            self.assertEqual(preview[0], "agy")
+            timeout_index = preview.index("--print-timeout")
+            self.assertEqual(preview[timeout_index + 1], "5s")
 
 
 if __name__ == "__main__":

@@ -54,6 +54,28 @@ jitter, fingerprint invalidation, duplicate guards, and fail-closed bounded
 catch-up. The scheduler's isolated workdir exemption is an internal-only
 `StartSessionRequest` field absent from the wire DTO.
 
+Schema 11 adds the typed outer-sandbox policy and operator controls. The
+built-in default remains `none`. Policy resolution, backend capability, path
+and Git discovery, normalized mounts, and alias auditing happen before session
+state is created. Each backend registry entry owns a typed `sandbox_adapter`;
+common sandbox code must not branch on backend ids.
+
+Stage 1 implements `read-only` for `codex_cli` through
+`agent_collab/sandbox/`. A standalone stdlib bootstrap is the first process
+inside Bubblewrap. It reports its exact inherited descriptor roles, then waits
+for a nonce-bound ACK while the daemon pins the namespace reaper/bootstrap and
+proves PID namespace identity, zero capabilities, cwd, mount access and source
+identity, and Git logical-root identity. Only after that proof does the
+bootstrap exec the adapter-selected permissive Codex command. Provider
+stdout/stderr use separate pipes from Bubblewrap/bootstrap diagnostics.
+Termination owns the Bubblewrap process group and exact wait; the PID namespace
+reaps descendants and private scratch is removed after completion.
+
+`none` bypasses the sandbox launcher and preserves existing command behavior.
+Unsupported adapters reject explicit read-only before engine discovery.
+Historical settings without an outer policy are projected as visible
+`legacy_session`/`none`; they are never upgraded implicitly.
+
 ## Backend Model
 
 An agent's provider `type` (`claude`, `codex`, `antigravity`, `xai`, `mock`) is
@@ -79,7 +101,7 @@ execution, not only the returned settings.
 
 Every backend owns declarative `options.toml` and `defaults.toml` files, plus
 `normalize_options`, `settings_summary`, `command_preview`, and runner
-construction. The option manifest declares accepted keys and values only;
+construction, and a typed `sandbox_adapter`. The option manifest declares accepted keys and values only;
 shipped default values live in the backend fragment's
 `[backends.<canonical>.options]` table and rank below argv inference and
 user-config options (`configured_defaults` in

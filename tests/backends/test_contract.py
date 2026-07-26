@@ -33,6 +33,7 @@ from agent_collab.options import (
 )
 from agent_collab.runners import AgentRunner, configured_runner
 from agent_collab.outcomes import TurnOutcome
+from agent_collab.sandbox.specs import UnsupportedSandboxAdapter
 
 
 class _ContractRunner(AgentRunner):
@@ -61,6 +62,7 @@ class _ContractBackend:
     provider_session_id_kind = None
     checks_credentials = False
     block_on_unavailable = False
+    sandbox_adapter = UnsupportedSandboxAdapter()
 
     def probe(self):
         return BackendHealth(status=HEALTH_OK)
@@ -115,6 +117,7 @@ def _registration_candidate(backend_id):
         provider_session_id_kind=source.provider_session_id_kind,
         checks_credentials=source.checks_credentials,
         block_on_unavailable=source.block_on_unavailable,
+        sandbox_adapter=source.sandbox_adapter,
         probe=source.probe,
         option_schema=source.option_schema,
         normalize_options=source.normalize_options,
@@ -418,6 +421,7 @@ class BuiltinBackendContractTests(unittest.TestCase):
             checks_credentials = False
             event_fidelity = "typed"
             provider_session_id_kind = None
+            sandbox_adapter = UnsupportedSandboxAdapter()
 
             def probe(self):
                 return BackendHealth()
@@ -427,6 +431,7 @@ class BuiltinBackendContractTests(unittest.TestCase):
 
     def test_missing_policy_and_fidelity_attributes_are_rejected_at_registration(self):
         for attribute in (
+            "sandbox_adapter",
             "block_on_unavailable",
             "checks_credentials",
             "event_fidelity",

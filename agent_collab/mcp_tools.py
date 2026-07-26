@@ -92,6 +92,7 @@ TOOLS = [
                 "interactive_idle_timeout": {"type": "number"},
                 "backend_options": {"type": "object", "additionalProperties": {"type": "object"}},
                 "backend": {"type": "string"},
+                "sandbox": {"type": "string", "enum": ["read-only", "none"]},
                 "members": {"type": "object", "additionalProperties": {"type": "string"}},
                 "detail": {"type": "string", "enum": ["compact", "full"]},
             },
@@ -731,6 +732,7 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
             "interactive_idle_timeout",
             "backend_options",
             "backend",
+            "sandbox",
             "members",
             "detail",
         )
@@ -745,6 +747,11 @@ def _start_payload(args: Dict[str, Any]) -> Dict[str, Any]:
     # backend is rejected. Keeps the /mcp path consistent with REST/from_wire.
     if payload.get("backend") is not None and not isinstance(payload["backend"], str):
         raise McpToolError("backend must be a string")
+    if payload.get("sandbox") is not None and payload["sandbox"] not in {
+        "read-only",
+        "none",
+    }:
+        raise McpToolError("sandbox must be 'read-only' or 'none'")
     return payload
 
 

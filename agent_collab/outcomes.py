@@ -38,6 +38,57 @@ CANONICAL_MESSAGES: Dict[str, str] = {
     "parallel_stage_no_accepted_member": "No parallel reviewer produced an accepted review",
 }
 
+# Sandbox failures are emitted with phase-specific remediation before they are
+# reduced to a terminal outcome.  Keep every stable code allowlisted here so a
+# launch-time rejection cannot be mistaken for a provider transport failure.
+OUTER_SANDBOX_FAILURE_CODES = frozenset(
+    {
+        "outer_sandbox_alias_audit_exceeded",
+        "outer_sandbox_alias_audit_failed",
+        "outer_sandbox_backend_incompatible",
+        "outer_sandbox_bootstrap_failed",
+        "outer_sandbox_capabilities_present",
+        "outer_sandbox_cwd_mismatch",
+        "outer_sandbox_engine_incompatible",
+        "outer_sandbox_engine_missing",
+        "outer_sandbox_filesystem_unsupported",
+        "outer_sandbox_git_discovery_invalid",
+        "outer_sandbox_git_discovery_unavailable",
+        "outer_sandbox_git_identity_mismatch",
+        "outer_sandbox_hardlink_alias",
+        "outer_sandbox_inner_command_invalid",
+        "outer_sandbox_legacy_session",
+        "outer_sandbox_mount_alias",
+        "outer_sandbox_mount_conflict",
+        "outer_sandbox_mount_proof_failed",
+        "outer_sandbox_mount_table_invalid",
+        "outer_sandbox_mount_table_unavailable",
+        "outer_sandbox_namespace_invalid",
+        "outer_sandbox_override_conflict",
+        "outer_sandbox_path_identity_changed",
+        "outer_sandbox_path_invalid",
+        "outer_sandbox_path_missing",
+        "outer_sandbox_path_ownership",
+        "outer_sandbox_path_permissions",
+        "outer_sandbox_path_symlink",
+        "outer_sandbox_platform_unsupported",
+        "outer_sandbox_policy_invalid",
+        "outer_sandbox_proc_identity_unavailable",
+        "outer_sandbox_protocol_invalid",
+        "outer_sandbox_recursive_read_only_unavailable",
+        "outer_sandbox_scratch_anchor_invalid",
+        "outer_sandbox_status_contradiction",
+        "outer_sandbox_status_invalid",
+        "outer_sandbox_unsupported",
+        "outer_sandbox_writable_git_overlap",
+        "outer_sandbox_writable_too_broad",
+        "outer_sandbox_writable_workspace_overlap",
+    }
+)
+CANONICAL_MESSAGES.update(
+    {code: "The outer sandbox rejected the provider launch" for code in OUTER_SANDBOX_FAILURE_CODES}
+)
+
 # These are provider enum tokens observed in repository fixtures or installed
 # interfaces.  Keep the list deliberately closed; prose is never accepted.
 PROVIDER_STOP_REASONS = frozenset(
