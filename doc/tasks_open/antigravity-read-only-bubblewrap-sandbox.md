@@ -232,14 +232,28 @@ boundary.
 The adapter checks Grok 0.2.111's current path/configuration surface:
 `--cwd`, `--agent`, `GROK_AGENT`, debug/log paths, user/project config,
 managed/requirements files, sandbox profiles, skills, hooks, agents, plugins,
-MCP, LSP, and ambient Claude/Cursor compatibility. Contained extension
+MCP, and LSP. Contained extension
 processes inherit the same namespace; symlinked or escaping dependencies,
 managed pins, external auth, leader/resume/worktree/restore/prompt-file shapes,
 and malformed paths or owned flags fail before provider execution. Project
-config, extension, ambient-compatibility, and `.mcp.json` discovery follows the
+config, extension, and `.mcp.json` discovery follows the
 effective `--cwd` ancestor chain. Relative dependencies are resolved against
 that effective command cwd. Configured provider-visible paths retain read-only
 identity.
+
+Ambient Claude/Cursor/Codex compatibility is contained, not rejected. Every
+Grok `[compat.<vendor>] <surface>` cell defaults to on and resolves as
+environment variable > `config.toml` > default, so a stock installation reads
+`~/.claude`, `~/.claude.json`, `~/.cursor`, and project equivalents for skills,
+rules, agents, MCP servers, and hooks. Those are extension sources the adapter's
+own MCP/hook/path audit never sees and the declared `GROK_HOME` root does not
+describe, so read-only sets every
+`GROK_{CLAUDE,CODEX,CURSOR}_{AGENTS,HOOKS,MCPS,RULES,SESSIONS,SKILLS}_ENABLED`
+to `false` in the sandboxed environment. `grok inspect --json` reports the cells
+as `enabled: false, source: "env"` and drops ambient skills and `~/.claude.json`
+MCP servers. Outer `none` never applies the variables. An earlier revision
+failed the start closed whenever an ambient vendor tree existed, which made
+read-only unusable on any host with `~/.claude` present.
 
 Only after the common nonce-bound proof ACK does the adapter remove conflicting
 permission/native-sandbox controls and force
@@ -247,8 +261,8 @@ permission/native-sandbox controls and force
 provider-native Landlock control, distinct from the still-enforced outer
 Bubblewrap policy. Ordinary temporary and XDG writes plus Grok's warning-only
 legacy `/tmp` attempt stay in common private turn scratch; no second persistent
-writable root is added. Explicit/configured outer `none` remains the unchanged
-default and exact rollback, preserving the original Grok command and native
+writable root is added. Explicit/configured outer `none` remains the exact
+rollback, preserving the original Grok command, environment, and native
 posture with no silent fallback.
 
 Focused hermetic coverage includes support/registry exposure, state/auth path

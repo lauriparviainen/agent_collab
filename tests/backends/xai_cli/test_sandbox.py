@@ -560,7 +560,7 @@ hooks = [{ command = "notify --output=../../outside" }]
                 )
                 self.assertNotIn("/etc/passwd", str(raised.exception))
 
-    def test_effective_cwd_intermediate_extensions_and_ambient_trees_fail_closed(self):
+    def test_effective_cwd_intermediate_extension_symlinks_fail_closed(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve()
             workspace = root / "workspace"
@@ -588,27 +588,6 @@ hooks = [{ command = "notify --output=../../outside" }]
 
             (project_grok / "skills").unlink()
             (intermediate / ".claude" / "skills").mkdir(parents=True)
-            plan = self._plan(
-                SandboxPolicy.READ_ONLY,
-                state,
-                workspace=workspace,
-                command=command,
-            )
-            with self.assertRaises(SandboxFailure) as raised:
-                self._run_compatibility(plan)
-            self.assertEqual(raised.exception.code, "outer_sandbox_backend_incompatible")
-
-            (state / "config.toml").write_text(
-                """
-[compat.claude]
-skills = false
-rules = false
-agents = false
-mcps = false
-hooks = false
-""",
-                encoding="utf-8",
-            )
             plan = self._plan(
                 SandboxPolicy.READ_ONLY,
                 state,
@@ -725,7 +704,7 @@ hooks = [{ command = "hooks/notify.sh payload/input.json" }]
                 self._run_compatibility(escaping)
         self.assertEqual(raised.exception.code, "outer_sandbox_backend_incompatible")
 
-    def test_project_extension_symlink_and_ambient_compatibility_fail_closed(self):
+    def test_project_extension_symlink_fails_closed_beside_contained_ambient_trees(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             workspace = root / "workspace"
@@ -749,27 +728,9 @@ hooks = [{ command = "hooks/notify.sh payload/input.json" }]
             (project / "hooks").unlink()
             home = root / "home"
             (home / ".claude").mkdir(parents=True)
-            plan = self._plan(
-                SandboxPolicy.READ_ONLY,
-                state,
-                home=home,
-                workspace=workspace,
-            )
-            with self.assertRaises(SandboxFailure) as raised:
-                self._run_compatibility(plan)
-            self.assertEqual(raised.exception.code, "outer_sandbox_backend_incompatible")
-
-            (state / "config.toml").write_text(
-                """
-[compat.claude]
-skills = false
-rules = false
-agents = false
-mcps = false
-hooks = false
-""",
-                encoding="utf-8",
-            )
+            (home / ".claude.json").write_text("{}\n", encoding="utf-8")
+            (home / ".cursor").mkdir()
+            (workspace / ".claude").mkdir()
             plan = self._plan(
                 SandboxPolicy.READ_ONLY,
                 state,
@@ -777,6 +738,45 @@ hooks = false
                 workspace=workspace,
             )
             self._run_compatibility(plan)
+
+    def test_ambient_vendor_compatibility_is_disabled_by_environment(self):
+        expected = {
+            f"GROK_{vendor}_{surface}_ENABLED": "false"
+            for vendor in ("CLAUDE", "CODEX", "CURSOR")
+            for surface in ("AGENTS", "HOOKS", "MCPS", "RULES", "SESSIONS", "SKILLS")
+        }
+        configurations = (
+            None,
+            "[compat.claude]\nskills = true\nrules = true\nagents = true\n"
+            "mcps = true\nhooks = true\n\n[compat.cursor]\nskills = true\n",
+            "[compat.claude]\nskills = false\nrules = false\nagents = false\n"
+            "mcps = false\nhooks = false\n",
+        )
+        for contents in configurations:
+            with self.subTest(config=contents), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw).resolve()
+                workspace = root / "workspace"
+                workspace.mkdir()
+                state = root / ".grok"
+                state.mkdir()
+                home = root / "home"
+                (home / ".claude" / "skills").mkdir(parents=True)
+                (home / ".claude.json").write_text("{}\n", encoding="utf-8")
+                (home / ".cursor" / "rules").mkdir(parents=True)
+                if contents is not None:
+                    (state / "config.toml").write_text(contents, encoding="utf-8")
+
+                plan = self._plan(
+                    SandboxPolicy.READ_ONLY,
+                    state,
+                    home=home,
+                    workspace=workspace,
+                )
+                self._run_compatibility(plan)
+                values = dict(plan.spec.environment.set_values)
+                self.assertEqual(values.get("GROK_HOME"), str(state))
+                for name, value in expected.items():
+                    self.assertEqual(values.get(name), value, name)
 
     def test_cwd_and_agent_file_are_declared_read_only_with_identity(self):
         with tempfile.TemporaryDirectory() as raw:

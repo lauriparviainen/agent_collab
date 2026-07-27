@@ -49,6 +49,17 @@ _EXTERNAL_SERVICE_SUMMARY = (
     "Configured remote model, MCP, and authentication services "
     "(external services outside filesystem boundary)",
 )
+_AMBIENT_COMPAT_VENDORS = ("claude", "codex", "cursor")
+_AMBIENT_COMPAT_SURFACES = ("agents", "hooks", "mcps", "rules", "sessions", "skills")
+# Grok resolves every `[compat.<vendor>] <surface>` cell as env var > config.toml >
+# default (on), so setting the environment names disables ambient Claude/Cursor/Codex
+# discovery whatever the host config says. Without this the complete GROK_HOME state
+# root would not describe every surface Grok reads and every extension it launches.
+_AMBIENT_COMPAT_DISABLED = {
+    f"GROK_{vendor.upper()}_{surface.upper()}_ENABLED": "false"
+    for vendor in _AMBIENT_COMPAT_VENDORS
+    for surface in _AMBIENT_COMPAT_SURFACES
+}
 
 
 @dataclass(frozen=True)
@@ -96,7 +107,7 @@ class XaiCliSandboxAdapter:
             ),
             provider_visible_paths=tuple(_provider_visible_paths(context, state)),
             environment=EnvironmentSpec(
-                set_values={"GROK_HOME": str(state)},
+                set_values={"GROK_HOME": str(state), **_AMBIENT_COMPAT_DISABLED},
                 unset_names=("GROK_SANDBOX", "GROK_SANDBOX_PROFILE"),
                 secret_names=("XAI_API_KEY",),
             ),
@@ -111,6 +122,7 @@ class XaiCliSandboxAdapter:
                     ),
                     "managed_configuration": "incompatible",
                     "extensions": "contained_or_rejected_before_execution",
+                    "ambient_compatibility": "vendor_surfaces_disabled_by_read_only_environment",
                     "legacy_shared_tmp": "warning_only_in_common_private_scratch",
                 },
                 command=(
@@ -285,7 +297,6 @@ def _validate_configuration(context: SandboxContext, state: Path, home: Path) ->
             _validate_project_mcp_data(data, context, state, execution_cwd)
 
     _validate_project_extension_paths(context)
-    _validate_ambient_compatibility(context, home, configs)
 
 
 def _validate_command_paths(context: SandboxContext, state: Path) -> None:
@@ -618,44 +629,6 @@ def _validate_project_extension_paths(context: SandboxContext) -> None:
                 _configuration_incompatible("a Grok project extension path is symlinked")
 
 
-def _validate_ambient_compatibility(
-    context: SandboxContext,
-    home: Path,
-    configs: Sequence[Path],
-) -> None:
-    merged: dict[str, Any] = {}
-    for path in configs:
-        data = _load_optional_toml(path)
-        compat = data.get("compat") if isinstance(data, Mapping) else None
-        if not isinstance(compat, Mapping):
-            continue
-        for vendor, values in compat.items():
-            if isinstance(values, Mapping):
-                current = merged.setdefault(str(vendor), {})
-                current.update(values)
-
-    sources = {
-        "cursor": (
-            home / ".cursor",
-            *(directory / ".cursor" for directory in _project_directories(context)),
-        ),
-        "claude": (
-            home / ".claude",
-            home / ".claude.json",
-            *(directory / ".claude" for directory in _project_directories(context)),
-        ),
-    }
-    for vendor, paths in sources.items():
-        settings = merged.get(vendor, {})
-        active = any(
-            settings.get(name, True) for name in ("skills", "rules", "agents", "mcps", "hooks")
-        )
-        if active and any(os.path.lexists(path) for path in paths):
-            _configuration_incompatible(
-                "ambient compatibility extensions escape the declared Grok state boundary"
-            )
-
-
 def _prepare_read_only_command(command: Sequence[str]) -> Tuple[str, ...]:
     if not command:
         _command_incompatible()
@@ -780,7 +753,7 @@ def _configuration_incompatible(message: str) -> None:
         message,
         remediation=(
             "Move Grok filesystem dependencies below the complete GROK_HOME or protected "
-            "workspace, disable ambient extensions, or select sandbox='none'.",
+            "workspace, or select sandbox='none'.",
         ),
     )
 

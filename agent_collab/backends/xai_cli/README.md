@@ -81,9 +81,7 @@ Before provider execution the adapter rejects:
 
 - Grok `managed_config.toml`, `requirements.toml`, system managed files, or the
   legacy managed-settings source;
-- malformed config, managed sandbox pins, symlinked project extensions, and
-  ambient Claude/Cursor compatibility discovery unless its active cells are
-  explicitly disabled;
+- malformed config, managed sandbox pins, and symlinked project extensions;
 - external auth-provider commands and configured extension filesystem paths,
   including MCP command, argument, and working-directory paths from Grok TOML
   or project `.mcp.json`, outside `GROK_HOME` or the protected workspace;
@@ -92,10 +90,26 @@ Before provider execution the adapter rejects:
 - malformed permission, native-sandbox, path-bearing, or prompt-boundary
   arguments.
 
+Grok's ambient vendor compatibility surfaces are contained rather than
+rejected. Grok resolves every `[compat.<vendor>] <surface>` cell as environment
+variable > `config.toml` > default, and every cell defaults to on, so an
+untouched installation scans `~/.claude`, `~/.claude.json`, `~/.cursor`, and
+their project equivalents for skills, rules, agents, MCP servers, and hooks —
+extension sources the adapter cannot audit and the declared `GROK_HOME` state
+root does not describe. Under read-only the adapter therefore sets
+`GROK_{CLAUDE,CODEX,CURSOR}_{AGENTS,HOOKS,MCPS,RULES,SESSIONS,SKILLS}_ENABLED`
+to `false` in the sandboxed environment, which wins over any host or project
+`config.toml`. Grok 0.2.112 documents the Codex cells other than `sessions` as
+reserved and inert, so those names are set defensively rather than because
+`.codex` discovery exists today. `grok inspect --json` reports the resulting
+cells as
+`enabled: false, source: "env"`. Outer `none` never applies these variables, so
+ambient discovery there behaves exactly as it does outside agent-collab.
+
 Configured `--cwd`, `--agent`, and `GROK_AGENT` paths are traced, required to
 exist without symlink relocation, and declared read-only where they are
-outside provider state. Project config, `.mcp.json`, extension-symlink, and
-ambient compatibility checks follow the effective `--cwd` ancestor chain;
+outside provider state. Project config, `.mcp.json`, and extension-symlink
+checks follow the effective `--cwd` ancestor chain;
 relative dependencies resolve from that effective cwd. Contained MCP, hook,
 skill, plugin, and LSP processes remain allowed and inherit Bubblewrap. Remote
 model/MCP/auth services are reported as external services outside the
@@ -115,10 +129,11 @@ already-established Bubblewrap namespace. It does not select outer
 `sandbox="none"`. Settings, dry-run events, and live command events show the
 same exact prompt-free prepared prefix.
 
-The shipped outer policy remains `none`. Explicit/configured outer `none` is
-the rollback: it bypasses adapter compatibility checks and preserves the exact
-original Grok command, including its provider-native permission and sandbox
-posture. A requested read-only policy never falls back automatically.
+Explicit/configured outer `none` is the rollback: it bypasses adapter
+compatibility checks and preserves the exact original Grok command and
+environment, including its provider-native permission and sandbox posture and
+its ambient vendor compatibility discovery. A requested read-only policy never
+falls back automatically.
 
 Hermetic tests:
 
