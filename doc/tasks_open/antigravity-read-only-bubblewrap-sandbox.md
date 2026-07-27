@@ -229,7 +229,7 @@ rejected because their filesystem dependencies cannot be proved. Remote model,
 MCP, and authentication services are reported as outside the filesystem
 boundary.
 
-The adapter checks Grok 0.2.111's current path/configuration surface:
+The adapter checks Grok 0.2.112's current path/configuration surface:
 `--cwd`, `--agent`, `GROK_AGENT`, debug/log paths, user/project config,
 managed/requirements files, sandbox profiles, skills, hooks, agents, plugins,
 MCP, and LSP. Contained extension
@@ -254,6 +254,13 @@ as `enabled: false, source: "env"` and drops ambient skills and `~/.claude.json`
 MCP servers. Outer `none` never applies the variables. An earlier revision
 failed the start closed whenever an ambient vendor tree existed, which made
 read-only unusable on any host with `~/.claude` present.
+
+Containment covers exactly the `claude|codex|cursor` x
+`agents|hooks|mcps|rules|sessions|skills` matrix, so a configured `[compat]`
+vendor or surface outside it still fails closed. The remaining residual is
+version coupling: containment is a stated contract against a Grok build that
+honours these cells and their environment precedence, verified against 0.2.112.
+Re-verify with `grok inspect --json` after a major Grok upgrade.
 
 Only after the common nonce-bound proof ACK does the adapter remove conflicting
 permission/native-sandbox controls and force

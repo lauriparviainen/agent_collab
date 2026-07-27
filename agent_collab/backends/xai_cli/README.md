@@ -101,8 +101,18 @@ root does not describe. Under read-only the adapter therefore sets
 to `false` in the sandboxed environment, which wins over any host or project
 `config.toml`. Grok 0.2.112 documents the Codex cells other than `sessions` as
 reserved and inert, so those names are set defensively rather than because
-`.codex` discovery exists today. `grok inspect --json` reports the resulting
-cells as
+`.codex` discovery exists today. A configured `[compat]` vendor or surface
+outside that matrix fails the start closed, because it is evidence of an
+ambient channel these variables do not turn off.
+
+Outer read-only ambient containment is therefore a stated contract against a
+Grok build that honours the compat cells and their environment precedence,
+verified here against grok 0.2.112. A Grok build that ambiently loaded vendor
+material while ignoring these names would start read-only with unaudited
+extension sources; re-verify with `grok inspect --json` after a major Grok
+upgrade, and use outer `none` if the contract no longer holds.
+
+`grok inspect --json` reports the resulting cells as
 `enabled: false, source: "env"`. Outer `none` never applies these variables, so
 ambient discovery there behaves exactly as it does outside agent-collab.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 import subprocess
@@ -916,7 +917,103 @@ hooks = [{ command = "hooks/notify.sh payload/input.json" }]
         self.assertEqual(profile["permissions"], "bypassed_after_outer_ack")
         self.assertEqual(profile["native_sandbox"], "disabled_after_outer_ack")
         self.assertIn("warning_only", profile["legacy_shared_tmp"])
+        self.assertEqual(
+            profile["ambient_compatibility"],
+            "vendor_surfaces_disabled_by_read_only_environment",
+        )
         self.assertIn("external services", facts["external_services"][0])
+
+    def test_uncontainable_compat_vendor_or_surface_fails_closed(self):
+        configurations = (
+            "[compat.windsurf]\nskills = true\n",
+            "[compat.claude]\nmemories = true\n",
+            "[compat]\nclaude = true\n",
+        )
+        for contents in configurations:
+            with self.subTest(config=contents), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw).resolve()
+                workspace = root / "workspace"
+                workspace.mkdir()
+                state = root / ".grok"
+                state.mkdir()
+                (state / "config.toml").write_text(contents, encoding="utf-8")
+                plan = self._plan(
+                    SandboxPolicy.READ_ONLY,
+                    state,
+                    workspace=workspace,
+                )
+                with self.assertRaises(SandboxFailure) as raised:
+                    self._run_compatibility(plan)
+                self.assertEqual(
+                    raised.exception.code,
+                    "outer_sandbox_backend_incompatible",
+                )
+
+    def test_read_only_launch_argv_disables_every_ambient_compat_cell(self):
+        from agent_collab.sandbox.bubblewrap import (
+            BubblewrapInstallation,
+            build_bubblewrap_argv,
+        )
+        from agent_collab.sandbox.supervisor import BootstrapHandles
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            state = root / ".grok"
+            state.mkdir()
+            plan = self._plan(SandboxPolicy.READ_ONLY, state, workspace=root)
+            argv = build_bubblewrap_argv(
+                BubblewrapInstallation(Path("/usr/bin/bwrap"), "0.6.3"),
+                plan,
+                root / "scratch",
+                BootstrapHandles(9, 10, 11, 12, 13),
+                ("/usr/bin/true",),
+            )
+
+        for vendor in ("CLAUDE", "CODEX", "CURSOR"):
+            for surface in ("AGENTS", "HOOKS", "MCPS", "RULES", "SESSIONS", "SKILLS"):
+                name = f"GROK_{vendor}_{surface}_ENABLED"
+                self.assertIn(name, argv, name)
+                index = argv.index(name)
+                self.assertEqual(argv[index - 1], "--setenv", name)
+                self.assertEqual(argv[index + 1], "false", name)
+
+    def test_outer_none_launch_environment_omits_ambient_compat_disables(self):
+        from agent_collab.runners import SubprocessRunner
+
+        captured: dict[str, dict[str, str]] = {}
+
+        async def fake_exec(*argv, **kwargs):
+            captured["env"] = dict(kwargs["env"])
+            raise FileNotFoundError("stop before launch")
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            state = root / ".grok"
+            state.mkdir()
+            plan = self._plan(SandboxPolicy.NONE, state, workspace=root)
+            runner = SubprocessRunner(
+                "xai",
+                ["/usr/bin/grok", "-p"],
+                lambda line, is_stderr: None,
+                sandbox_plan=plan,
+            )
+
+            async def emit(event):
+                return None
+
+            with mock.patch(
+                "agent_collab.runners.asyncio.create_subprocess_exec",
+                side_effect=fake_exec,
+            ):
+                asyncio.run(runner.run_turn("prompt", root, emit))
+
+        self.assertIn("env", captured)
+        leaked = sorted(
+            name
+            for name in captured["env"]
+            if name.startswith("GROK_") and name.endswith("_ENABLED")
+        )
+        self.assertEqual(leaked, [])
 
     def test_settings_preview_uses_exact_effective_inner_command(self):
         with tempfile.TemporaryDirectory() as raw:

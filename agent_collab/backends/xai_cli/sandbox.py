@@ -297,6 +297,7 @@ def _validate_configuration(context: SandboxContext, state: Path, home: Path) ->
             _validate_project_mcp_data(data, context, state, execution_cwd)
 
     _validate_project_extension_paths(context)
+    _validate_ambient_compatibility_coverage(configs)
 
 
 def _validate_command_paths(context: SandboxContext, state: Path) -> None:
@@ -627,6 +628,34 @@ def _validate_project_extension_paths(context: SandboxContext) -> None:
                 _configuration_incompatible("a Grok project extension cannot be inspected")
             if stat.S_ISLNK(value.st_mode):
                 _configuration_incompatible("a Grok project extension path is symlinked")
+
+
+def _validate_ambient_compatibility_coverage(configs: Sequence[Path]) -> None:
+    """Fail closed when configuration names a vendor or surface the environment cannot disable.
+
+    Containment holds only for the cells in `_AMBIENT_COMPAT_DISABLED`. A configured
+    vendor or surface outside that matrix is evidence of an ambient discovery channel
+    this adapter does not turn off, so it may not run under outer read-only.
+    """
+    for path in configs:
+        data = _load_optional_toml(path)
+        compat = data.get("compat") if isinstance(data, Mapping) else None
+        if compat is None:
+            continue
+        if not isinstance(compat, Mapping):
+            _configuration_incompatible("Grok compatibility configuration is malformed")
+        for vendor, values in compat.items():
+            if str(vendor) not in _AMBIENT_COMPAT_VENDORS:
+                _configuration_incompatible(
+                    "a configured Grok compatibility vendor is outside the contained set"
+                )
+            if not isinstance(values, Mapping):
+                _configuration_incompatible("Grok compatibility configuration is malformed")
+            for surface in values:
+                if str(surface) not in _AMBIENT_COMPAT_SURFACES:
+                    _configuration_incompatible(
+                        "a configured Grok compatibility surface is outside the contained set"
+                    )
 
 
 def _prepare_read_only_command(command: Sequence[str]) -> Tuple[str, ...]:
