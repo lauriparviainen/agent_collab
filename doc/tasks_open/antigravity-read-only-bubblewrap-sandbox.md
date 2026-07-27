@@ -1,9 +1,74 @@
 # Design the common Bubblewrap workspace sandbox
 
-> **Handoff / continue here (2026-07-27, outer default `read-only`):** Work on
-> branch `design/bubblewrap-implementation`. Stages 1–8 are implemented; the
-> built-in `sandbox_default` is now `read-only`. Issue #43 stays open until
-> release/merge readiness.
+> **Handoff / continue here (2026-07-27, all eight backends live-verified):**
+> Work on branch `design/bubblewrap-implementation`. Stages 1–8 are
+> implemented, the built-in `sandbox_default` is `read-only`, and all eight
+> enabled backends have completed live MCP turns under that default on this
+> host. The last functional gap — `xai_cli` refusing to start whenever an
+> ambient vendor tree existed — is closed by environment containment
+> (`13f2ead`, `907c0fb`, `3abf7cb`).
+>
+> **Feature work is complete. What remains is validation, not implementation.**
+> Issue #43 stays open until the owner has used the read-only default in real
+> daily work on their own machine. Do not close #43, do not merge to `main`,
+> and do not cut a release until the owner says that soak is done.
+>
+> ### Open items before closeout
+>
+> 1. **Owner soak (blocking).** Real-world use of the `read-only` default
+>    across normal work. This is the only reason #43 is still open.
+> 2. **Branch not pushed.** Three commits are local-only. CI on this repo runs
+>    a Python 3.10/3.11 matrix *without* vendor SDKs installed, so the local
+>    suite can pass where CI fails; push and check `gh run list` before
+>    treating the gates below as authoritative.
+> 3. **`xai_cli` read-only changes what Grok sees.** Ambient Claude/Cursor
+>    skills, rules, project `.claude/` memory, `~/.claude.json` MCP servers,
+>    and vendor hooks are not discovered under read-only. Generic top-level
+>    `CLAUDE.md` / `AGENTS.md` still load. Watch for this during the soak; it
+>    is the behaviour change most likely to surprise.
+> 4. **Grok version coupling.** Containment is a stated contract against a Grok
+>    build that honours the compat cells and their environment precedence,
+>    verified against 0.2.112. Re-verify with `grok inspect --json` after a
+>    major Grok upgrade.
+> 5. **`antigravity_sdk` model availability.** Some `gemini-3.x` flash ids 404
+>    on this Vertex project; `gemini-2.5-flash` works. Unrelated to sandboxing.
+>
+> ### Live verification (2026-07-27, this host, omitting start `sandbox`)
+>
+> Every session resolved `effective=read-only`, `source=configured_default`.
+>
+> | Backend | Engine / enforcement | Live turn |
+> | --- | --- | --- |
+> | `claude_cli` | bubblewrap / `os_enforced` | ok |
+> | `claude_sdk` | bubblewrap / `os_enforced` (worker) | ok |
+> | `codex_cli` | bubblewrap / `os_enforced` | ok |
+> | `codex_sdk` | bubblewrap / `os_enforced` (worker) | ok |
+> | `antigravity_cli` | bubblewrap / `os_enforced` | ok |
+> | `antigravity_sdk` | bubblewrap / `os_enforced` (worker) | ok (`gemini-2.5-flash`) |
+> | `xai_cli` | bubblewrap / `os_enforced` | ok (was: start rejected) |
+> | `xai_sdk` | not applicable / `no_local_effects` | ok |
+>
+> Free gates after the Stage 3 containment work: `./agent_collab_dev.sh test`
+> (1,377 hermetic tests), `build --check`, and `bubblewrap-test` (10 real
+> Bubblewrap tests) all green on this host.
+>
+> ### Stage 3 ambient-compatibility dual review (`grok-gemini-review`)
+>
+> `xai_cli`/`grok-4.5`/`thinking_level=high` + `antigravity_cli`/
+> `gemini-3.1-pro-high`/`mode=plan`, both under outer `read-only`.
+>
+> | Round | Session | Grok | Gemini | Result |
+> | --- | --- | --- | --- | --- |
+> | 1 | `daemon-e03c20fe5be54388` | approve + 3 Medium, 3 Low | clean | fixed in `907c0fb` |
+> | 2 | `daemon-4c5e095939fc4416` | approve + 2 Low, 2 Info | clean | fixed in `3abf7cb` |
+> | **3** | `daemon-4164b023bc5349ed` | **clean, no findings at any severity** | **clean** | **same-loop convergence** |
+>
+> Grok carried this review; Gemini reported no findings in any round. The
+> Mediums Grok found were real (unbounded containment matrix, untested
+> outer-`none` rollback claim, host-dependent test). For security-boundary
+> changes on this backend, do not treat a lone Gemini approval as sufficient.
+>
+> ### Previous handoff (Stage 8 — `xai_sdk` `no_local_effects`), retained for history
 >
 > ### Deliverable (one commit, Stage 8 — `xai_sdk` `no_local_effects`)
 >
@@ -47,12 +112,12 @@
 > - `plan.py` runs capability checks for `no_local_effects` (no Bubblewrap).
 > - Stage 7 `import_xai_sdk` / compat shim preserved.
 >
-> ### Next agent checklist
+> ### Next agent checklist (superseded — see "Open items before closeout")
 >
 > 1. **Done:** Stage 8 dual-review loop 11 same-loop clean; free gate green;
 >    commit `6004e41` with `Refs #43`.
 > 2. **Done:** built-in `sandbox_default = "read-only"` (code + docs).
-> 3. Leave #43 open until release/merge readiness; push branch when desired.
+> 3. **Done:** Stage 3 ambient containment; all eight backends live-verified.
 > 4. Explicit `sandbox = "none"` remains the documented opt-out.
 >
 > ### Key paths
@@ -75,11 +140,15 @@ install are implemented; dual-review loop 10 converged (both reviewers: no
 High/Medium findings) after cancel-safe close/drain teardown fixes. Stage 8
 implements the `xai_sdk` `no_local_effects` audit and adapter; dual-review
 loop 11 converged (both reviewers: no High/Medium findings). Stage 2 and
-Stage 4 production reviews converged; Stage 1 and Stage 3 exhausted their
-six-loop limits without formal same-loop convergence and have no unresolved
-confirmed findings. The shipped outer default is now `read-only`. **Merge to
-`main` remains an operator release decision.** Issue #43 stays open until
-closeout.
+Stage 4 production reviews converged; Stage 1 exhausted its six-loop limit
+without formal same-loop convergence and has no unresolved confirmed findings.
+Stage 3 later converged on its own dual-review loop when the ambient
+vendor-compatibility rejection was replaced with environment containment
+(round 3 clean from both reviewers). The shipped outer default is now
+`read-only`, and all eight enabled backends have completed live turns under it
+on this host. Implementation is complete; the remaining work is owner soak in
+real daily use. **Merge to `main` remains an operator release decision.**
+Issue #43 stays open until that soak confirms the default is comfortable.
 **Created:** 2026-07-25.
 
 **Issue:** [#43](https://github.com/lauriparviainen/agent_collab/issues/43)

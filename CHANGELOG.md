@@ -13,6 +13,14 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Contain Grok's ambient vendor compatibility under outer read-only instead of
+  refusing to start (#43, stage 3). `xai_cli` previously failed closed whenever
+  `~/.claude`, `~/.claude.json`, or `~/.cursor` existed, which made read-only
+  unusable on most developer hosts. Read-only sessions now disable the Grok
+  compat cells through the environment, so ambient skills, rules, agents, MCP
+  servers, and hooks are not discovered; a configured `[compat]` vendor or
+  surface outside that matrix still fails closed. Explicit `sandbox = "none"`
+  keeps ambient discovery exactly as Grok performs it outside agent-collab.
 - Ship outer filesystem `sandbox_default = "read-only"` after Stages 1–8 (#43).
   Omitting the start `sandbox` field now establishes the outer boundary for
   every supported backend; explicit `sandbox = "none"` remains the opt-out.
