@@ -600,6 +600,7 @@ class UsageWindowInvocationBoundaryTests(unittest.TestCase):
             )
             request = StartSessionRequest(
                 task="minimal",
+                sandbox="none",
                 workflow="usage-window",
                 workdir=usage_workdir,
                 max_turns=1,

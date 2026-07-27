@@ -80,6 +80,13 @@ def import_xai_sdk() -> ModuleType:
     ``ValueError`` that is not the known version-gate message under protobuf 7.
     """
 
+    # The protobuf-major gate only runs on first import, so an already-imported
+    # module needs no spoofing. Returning it here also keeps the shim from
+    # requiring protobuf where the caller supplied `xai_sdk` itself.
+    cached = sys.modules.get("xai_sdk")
+    if cached is not None:
+        return cached
+
     import google.protobuf
 
     real_version = google.protobuf.__version__

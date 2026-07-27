@@ -306,6 +306,7 @@ sequence = ["antigravity_cli"]
                 asyncio.run(
                     Referee(
                         RefereeConfig(
+                            sandbox="none",
                             workflow="solo-antigravity",
                             dry_run=True,
                             workdir=root,

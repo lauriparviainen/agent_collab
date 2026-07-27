@@ -453,6 +453,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     state = await manager.start_session(
                         StartSessionRequest(
                             task="later failure",
+                            sandbox="none",
                             workflow="cross-review",
                             max_turns=2,
                             timeout=5,
@@ -488,6 +489,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             )
             request = StartSessionRequest(
                 task="empty parallel review",
+                sandbox="none",
                 workflow="parallel",
                 workdir=root,
                 max_turns=1,
@@ -928,6 +930,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                     state = await manager.start_session(
                         StartSessionRequest(
                             task="stop active",
+                            sandbox="none",
                             workflow="solo",
                             max_turns=1,
                             timeout=30,
@@ -1539,6 +1542,7 @@ sequence = ["antigravity_sdk"]
                     state = await manager.start_session(
                         StartSessionRequest(
                             task="queued note task",
+                            sandbox="none",
                             workflow="cross-review",
                             max_turns=2,
                             timeout=5,

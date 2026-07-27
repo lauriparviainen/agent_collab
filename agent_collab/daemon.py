@@ -1388,6 +1388,10 @@ class SessionManager:
             ),
             answer_commit_callback=lambda answer: self._record_session_answer(managed, answer),
             stop_signal=managed.stop_signal,
+            # `sandbox_plan` is what a prepared start supplies and it wins outright.
+            # Carrying the request policy too keeps the referee's own fallback
+            # resolution on the requested policy rather than the configured default.
+            sandbox=request.sandbox,
             sandbox_plan=request.sandbox_plan,
         )
 

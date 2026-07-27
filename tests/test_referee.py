@@ -52,6 +52,7 @@ sequence = ["codex_cli"]
                 asyncio.run(
                     Referee(
                         RefereeConfig(
+                            sandbox="none",
                             workflow="codex-only",
                             mock=True,
                             workdir=root,
@@ -85,7 +86,12 @@ command = "configured-claude"
                 asyncio.run(
                     Referee(
                         RefereeConfig(
-                            dry_run=True, workdir=root, max_turns=1, timeout=5, color=False
+                            sandbox="none",
+                            dry_run=True,
+                            workdir=root,
+                            max_turns=1,
+                            timeout=5,
+                            color=False,
                         ),
                         printer=events.append,
                     ).run("test task")
@@ -106,6 +112,7 @@ command = "configured-claude"
         )
         referee = Referee(
             RefereeConfig(
+                sandbox="none",
                 workflow="solo",
                 dry_run=True,
                 collab_config=config,
@@ -164,6 +171,7 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
 
         referee = Referee(
             RefereeConfig(
+                sandbox="none",
                 workflow="test",
                 collab_config=self._config(sequence),
                 workdir=root,
@@ -422,6 +430,7 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
 
         referee = Referee(
             RefereeConfig(
+                sandbox="none",
                 workflow="parallel",
                 collab_config=self._config(members, provider_types),
                 workdir=root,
@@ -728,6 +737,7 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             referee = Referee(
                 RefereeConfig(
+                    sandbox="none",
                     workflow="sequence",
                     collab_config=config,
                     workdir=Path(tmp),
@@ -842,6 +852,7 @@ class UntargetedRoutingTests(unittest.IsolatedAsyncioTestCase):
     def _referee(self, root, sequence):
         return Referee(
             RefereeConfig(
+                sandbox="none",
                 workflow="test",
                 collab_config=self._config(sequence),
                 workdir=root,
@@ -988,6 +999,7 @@ class ContinuationPromptTests(unittest.IsolatedAsyncioTestCase):
             root = Path(tmp)
             referee = Referee(
                 RefereeConfig(
+                    sandbox="none",
                     workflow="solo",
                     collab_config=config,
                     workdir=root,
@@ -1029,6 +1041,7 @@ class RunnerCloseLifecycleTests(unittest.IsolatedAsyncioTestCase):
     def _referee(self, root, sequence, runners, *, timeout=5):
         referee = Referee(
             RefereeConfig(
+                sandbox="none",
                 workflow="test",
                 collab_config=self._config(sequence),
                 workdir=root,
