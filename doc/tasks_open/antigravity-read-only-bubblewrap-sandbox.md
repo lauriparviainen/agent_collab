@@ -98,6 +98,29 @@
 > outer-`none` rollback claim, host-dependent test). For security-boundary
 > changes on this backend, do not treat a lone Gemini approval as sufficient.
 >
+> ### CI repair and install state-dir dual review (`grok-gemini-review`)
+>
+> Same pair and options, covering `3abf7cb..721db0c`.
+>
+> | Round | Session | Grok | Gemini | Result |
+> | --- | --- | --- | --- | --- |
+> | 1 | `daemon-a7a94fe032434e75` | **changes required** (1 Medium, 3 Low) | approve | fixed in `08196e7` |
+> | 2 | `daemon-ee656f99a69a40a4` | approve + 1 Low, 2 Info | approve | fixed in `721db0c` |
+> | **3** | `daemon-11fc6117c9b14649` | **clean, no findings above Info** | **clean** | **same-loop convergence** |
+>
+> Round 1 was the first split verdict of this task, and Grok was right: the
+> `state dir` column used `Path.is_dir()`, which follows symlinks, while
+> `resolve_state_root` refuses a symlinked, non-directory, or group/world
+> writable root. A symlinked `~/.claude` reported `ok` and a ready backend and
+> then failed at session start — the exact false green the column exists to
+> prevent. The fix delegates the verdict to `resolve_state_root` itself so the
+> table cannot drift from what session start decides.
+>
+> Accepted residuals, all Info and non-blocking: a TOCTOU window between the
+> resolver call and the `lstat` classification (advisory report, not a security
+> decision), and the resolver's "must already exist" wording reaching the
+> repair remediation for a dangling symlink.
+>
 > ### Previous handoff (Stage 8 — `xai_sdk` `no_local_effects`), retained for history
 >
 > ### Deliverable (one commit, Stage 8 — `xai_sdk` `no_local_effects`)
