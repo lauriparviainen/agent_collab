@@ -24,7 +24,6 @@ from ...config import AgentConfig
 from ...events import Event
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
 from ...runners import AgentRunner, AsyncEventSink
-from ...sandbox.specs import UnsupportedSandboxAdapter
 from ..base import BackendCapabilities, BackendHealth, BackendUnavailable
 from ..common.health import probe_sdk_backend, xai_api_key_credentials
 from ..common.options import canonical_reasoning
@@ -39,6 +38,7 @@ from ..common.sdk import (
     stringify,
 )
 from .compat import import_xai_sdk
+from .sandbox import XaiSdkSandboxAdapter, production_chat_kwargs
 
 MODULE_NAME = "xai_sdk"
 PACKAGE_NAME = "xai-sdk"
@@ -77,7 +77,7 @@ def _map_sdk_options(options: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 class XaiSdkBackend:
-    sandbox_adapter = UnsupportedSandboxAdapter()
+    sandbox_adapter = XaiSdkSandboxAdapter()
     id = "sdk"
     agent_type = "xai"
     # xAI's brand is monochrome rather than a single signature hue. A mid-light
@@ -151,6 +151,7 @@ class XaiSdkRunner(AgentRunner):
         self.agent = agent
         self.verbose = verbose
         self.options = options
+        self.sandbox_plan: Optional[object] = None
         self._conversation_factory = conversation_factory
         self._conversation: Optional[XaiConversation] = None
         self._workdir: Optional[Path] = None
@@ -170,7 +171,11 @@ class XaiSdkRunner(AgentRunner):
         exception_code: Optional[str] = None
         try:
             conversation = self._conversation_for(workdir)
-            response = await conversation.run(prompt)
+            effective_prompt = prompt
+            if self.sandbox_plan is not None:
+                # no_local_effects uses scratch=None; OS-enforced is not this shape.
+                effective_prompt = self.sandbox_plan.render_prompt(prompt, None)  # type: ignore[union-attr]
+            response = await conversation.run(effective_prompt)
             response_id = stringify(getattr(response, "id", None))
             if response_id:
                 conversation.note_session_id(response_id)
@@ -347,13 +352,14 @@ class _PersistentXaiConversation:
             effective_prompt = self._pending_prompt
             if effective_prompt is None:
                 raise RuntimeError("xai sdk pending prompt was lost")
-            chat_kwargs = {
-                **self._chat_kwargs,
-                "store_messages": True,
-            }
-            if self._response_id is not None:
-                chat_kwargs["previous_response_id"] = self._response_id
-            chat = self._client.chat.create(**chat_kwargs)
+            # Stage 8 audited surface: sole create form is production_chat_kwargs
+            # expanded directly (no intermediate dict that can be mutated).
+            chat = self._client.chat.create(
+                **production_chat_kwargs(
+                    self._chat_kwargs,
+                    previous_response_id=self._response_id,
+                )
+            )
             chat.append(self._user_factory(effective_prompt))
             self._pending_prompt = None
 

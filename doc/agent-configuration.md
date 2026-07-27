@@ -376,11 +376,15 @@ Stages 1 through 4 accept `read-only` for `codex_cli`, `claude_cli`,
 `xai_cli`, `antigravity_cli`, and the in-memory mock backend. Stages 5–7 accept
 `read-only` for `codex_sdk`, `claude_sdk`, and `antigravity_sdk` via a
 supervised SDK worker inside Bubblewrap; `sandbox = "none"` keeps the
-historical in-daemon SDK runners. `xai_sdk` remains pending its
-`no_local_effects` audit stage. The shipped default remains `none` until the
-complete backend readiness gate is met (including remaining SDK stages), so
-omitting this field preserves existing execution. Explicit `none` also leaves
-the provider command and its native controls unchanged. Paid CLI outer-sandbox
+historical in-daemon SDK runners. Stage 8 positively audits `xai_sdk` as
+`no_local_effects`: outer `read-only` resolves to
+`not_applicable_no_local_effects` (no Bubblewrap) while the production path
+remains remote gRPC chat only. That is a versioned software capability pinned
+to the audited `xai-sdk` 1.17.x series and exact request surface — not an OS
+isolation claim. The shipped default remains `none` until the complete backend
+readiness gate and product decision to flip the default are met, so omitting
+this field preserves existing execution. Explicit `none` also leaves the
+provider command and its native controls unchanged. Paid CLI outer-sandbox
 acceptance env vars and path shapes are documented in
 [integration_tests/README.md](../integration_tests/README.md).
 

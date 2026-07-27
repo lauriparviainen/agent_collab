@@ -230,6 +230,17 @@ def resolve_session_plan(
                     f"agent {agent_id!r} has no Stage 1 read-only sandbox adapter",
                 )
             if spec.support is SandboxSupport.NO_LOCAL_EFFECTS:
+                # Versioned capability audit only — no Bubblewrap mounts.
+                for check in spec.compatibility:
+                    try:
+                        check.check()
+                    except SandboxFailure:
+                        raise
+                    except Exception as exc:
+                        raise SandboxFailure(
+                            "outer_sandbox_backend_incompatible",
+                            f"backend compatibility check {check.name!r} failed",
+                        ) from exc
                 resolved[agent_id] = ResolvedSandboxPlan(
                     policy=policy,
                     support=spec.support,

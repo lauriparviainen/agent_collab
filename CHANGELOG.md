@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Audit `xai_sdk` as outer-sandbox `no_local_effects` (#43, stage 8). Read-only
+  starts report `not_applicable_no_local_effects` without Bubblewrap; the
+  capability is pinned to the audited `xai-sdk` 1.17.x series and exact remote
+  chat request surface (revoked on drift). Mixed sessions still OS-enforce
+  other members. The shipped outer default remains `none`.
 - Add outer read-only Bubblewrap support for `antigravity_sdk` on the framed
   SDK-worker transport (#43, stage 7). Session-private roots, cancel-safe
   runner close/reaper drain before plan cleanup, and dual-review

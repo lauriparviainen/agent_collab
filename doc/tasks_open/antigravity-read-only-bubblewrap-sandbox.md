@@ -1,63 +1,66 @@
 # Design the common Bubblewrap workspace sandbox
 
-> **Handoff / continue here (2026-07-27, Stage 7 dual-review converged):** Work
+> **Handoff / continue here (2026-07-27, Stage 8 dual-review converged):** Work
 > on branch `design/bubblewrap-implementation`. **Do not merge, install, or
-> flip the outer default.** Issue #43 stays open. Stage 8 (`xai_sdk`
-> `no_local_effects`) remains later.
+> flip the outer default.** Issue #43 stays open.
 >
-> ### Deliverable (one commit, Stage 7 + protobuf coexistence)
+> ### Deliverable (one commit, Stage 8 — `xai_sdk` `no_local_effects`)
 >
-> 1. **Stage 7 — `antigravity_sdk` Bubblewrap outer-sandbox worker** (framed
->    SDK-worker pattern like Stages 5–6).
-> 2. **Protobuf coexistence for `xai-sdk` + `google-antigravity`** (settled
->    product intent — no dual venvs; shim + two-phase install).
+> 1. **Stage 8 — `xai_sdk` positively audited as `no_local_effects`** (not a
+>    Bubblewrap worker). Outer `read-only` →
+>    `not_applicable_no_local_effects`.
+> 2. Version-pinned request/source/import audit + hermetic deny-probe evidence;
+>    Stage 7 protobuf coexistence (`import_xai_sdk` / compat shim) preserved.
 >
-> ### Dual-review status — same-loop clean on loop 10
+> ### Dual-review status — same-loop clean on loop 11
 >
 > Review recipe: `workflow=dual-review`, `sandbox=none`, `interactive=false`,
 > `antigravity_cli`/`gemini-3.1-pro-high`/`mode=plan` +
-> `codex_cli`/`gpt-5.6-sol`/`thinking_level=high`/`sandbox=read-only`.
-> Owner lifted the 6-loop cap and authorized remaining dual-review starts.
+> `codex_cli`/`gpt-5.6-sol`/`thinking_level=medium`/`sandbox=read-only`.
+> Owner authorized continuous dual-review until same-loop agreement.
 >
 > | Loop | Session | Gemini | Codex | Result |
 > | --- | --- | --- | --- | --- |
-> | 1 | `daemon-c6ef7dac2c6e48de` | clean | Medium (doc pin) | fixed |
-> | 2 | `daemon-2d16794ee67449fe` | clean | Mediums (external cwd; pipx docs) | fixed |
-> | 3 | `daemon-54be140e6bdd44fe` | clean | Medium (plan cleanup vs close reaper) | fixed |
-> | 4 | `daemon-9ba7b8c14a984ffe` | clean | Medium (daemon rmtree races reaper) | fixed via reaper drain |
-> | 5 | `daemon-618a11d1b1234bd9` | clean | Mediums (cancel during close; live/probe bypass shim) | fixed |
-> | 6 | `daemon-c4e4ff79e349431e` | clean | Medium (cancel during drain still races cleanup) | fixed (close+drain as tasks) |
-> | 7 | `daemon-f1a116f2959d403f` | clean | Medium (CancelledError is BaseException on waits) | fixed |
-> | 8 | `daemon-82e5efce73b64e2e` | garbled | Medium (unshielded fallback still skips wait) | fixed via `_await_task_until` |
-> | 9 | `daemon-70f76806c0d94698` | clean | Medium (shield(wait) fan-out under cancel storm) | fixed (reuse one waiter) |
-> | **10** | `daemon-33de04f4c541485b` | **clean** | **clean** | **same-loop convergence** |
+> | 1 | `daemon-7db771a8abbf4394` | clean | High/Medium (metadata-only version; weak source audit) | fixed |
+> | 2 | `daemon-542e44eb865340d4` | Medium (hermetic shadow test) | High/Medium (ImportError skip; post-builder mutation; hermetic test) | fixed |
+> | 3 | `daemon-7ef3265e595e42f4` | clean | High (ImportError after side effects) | fixed |
+> | 4 | `daemon-a4455bcadc224255` | clean | Medium (metadata errors; create alias) | fixed |
+> | 5 | `daemon-a3883cf2656f46fa` | clean | High/Medium (execute-before-reject shadow; kwargs helper; series) | fixed High/Medium; series pin kept as design |
+> | 6 | `daemon-48dd9f6527de45e5` | clean | Medium (denylist gaps; deny probe home/tmp) | fixed |
+> | 7 | `daemon-ba5360ed70474e7a` | Medium (hermetic mock) | Medium (imports/tempfile; hermetic mock) | fixed |
+> | 8 | `daemon-6445b9cd15584f85` | clean | High (`__import__` bypass) | fixed |
+> | 9 | `daemon-07091d2d504741d7` | clean | High (relative import siblings) | fixed |
+> | 10 | `daemon-3b860749bc5a497a` | clean | Medium (shadow without dist metadata) | fixed |
+> | **11** | `daemon-e992329bd8e748d6` | **clean** | **clean** | **same-loop convergence** |
 >
-> ### Teardown fixes retained after convergence
+> ### Implementation notes retained after convergence
 >
-> - Plan multi-agent rollback + empty parent rmdir; daemon prepare cancel
->   shield + cleanup; session finally cleanup
-> - Worker control fd `set_inheritable(False)`; external cwd as
->   `LocalAgentConfig` extra workspace
-> - Referee: close/drain as tasks; `_await_task_until` reuses one shielded
->   waiter across cancels, then plan private-root cleanup
-> - Compat: exact gate, major 7, series `1.17.x`; `pyproject` `xai-sdk>=1.17,<1.18`
-> - Live test + xAI bwrap probe use `import_xai_sdk()`; README pipx/all caveats
+> - `XaiSdkSandboxAdapter`: `no_local_effects`, empty state roots, remote API
+>   external service; compatibility checks for series, source, import identity.
+> - `production_chat_kwargs` is the sole create surface; runner expands it
+>   directly into `chat.create`.
+> - Import identity uses `find_spec` before `import_xai_sdk`; shadows and
+>   resolvable-without-dist-info paths revoke.
+> - Source audit: create form, import allowlists, dynamic-import bans, AST
+>   local-effect call walk, `production_chat_kwargs` body.
+> - `plan.py` runs capability checks for `no_local_effects` (no Bubblewrap).
+> - Stage 7 `import_xai_sdk` / compat shim preserved.
 >
 > ### Next agent checklist
 >
-> 1. Free gate if not just re-run; Stage 7 commit applied with `Refs #43`.
-> 2. Stage 8 (`xai_sdk` `no_local_effects`) — design/implement next; no merge.
-> 3. Still no outer default flip, no install, no close of #43 until SDK stages done.
+> 1. Free gate green + Stage 8 commit applied with `Refs #43`.
+> 2. Product gate remains: no outer default flip, no install, no merge to
+>    `main`, leave #43 open until release readiness decides.
+> 3. All backend stages 1–8 are implemented or positively audited on this
+>    branch; merge blocked only on default-policy / release decision.
 >
 > ### Key paths
 >
-> `agent_collab/backends/antigravity_sdk/{sandbox,worker}.py`,
-> `agent_collab/backends/xai_sdk/compat.py`,
-> `tests/backends/antigravity_sdk/test_sandbox.py`,
-> `tests/backends/xai_sdk/test_compat.py`,
-> `conditional_tests/test_protobuf_coexistence.py`; plus edits to
-> `daemon.py`, `referee.py`, `sandbox/plan.py`, `sdk_worker.py`,
-> `user_install.py`, `pyproject.toml`, docs, tests.
+> `agent_collab/backends/xai_sdk/{sandbox,backend,compat}.py`,
+> `agent_collab/sandbox/plan.py`,
+> `tests/backends/xai_sdk/test_sandbox.py`,
+> docs (`agent-configuration`, `implementation-notes`, xai_sdk README),
+> CHANGELOG [Unreleased].
 
 **Status:** CLI product slice stabilized on
 `design/bubblewrap-implementation`. Stages 1–4 are implemented; free gates and
@@ -68,12 +71,13 @@ adds `claude_sdk` on the same worker transport; dual production review loop 8
 converged (both reviewers: no High/Medium findings). Stage 7
 `antigravity_sdk` worker + protobuf coexistence for shared xAI/Antigravity
 install are implemented; dual-review loop 10 converged (both reviewers: no
-High/Medium findings) after cancel-safe close/drain teardown fixes.
-Stage 2 and Stage 4 production reviews converged; Stage 1 and Stage 3
-exhausted their six-loop limits without formal same-loop convergence and have
-no unresolved confirmed findings. **Do not merge this branch to `main` until
-every remaining SDK backend stage is implemented** (or positively audited
-`no_local_effects` where applicable). The shipped outer default remains
+High/Medium findings) after cancel-safe close/drain teardown fixes. Stage 8
+implements the `xai_sdk` `no_local_effects` audit and adapter; dual-review
+loop 11 converged (both reviewers: no High/Medium findings). Stage 2 and
+Stage 4 production reviews converged; Stage 1 and Stage 3 exhausted their
+six-loop limits without formal same-loop convergence and have no unresolved
+confirmed findings. **Do not merge this branch to `main` until the product
+readiness/default-policy gate is met.** The shipped outer default remains
 `none`. Issue #43 stays open.
 **Created:** 2026-07-25.
 
@@ -95,7 +99,10 @@ that would restart a live daemon used by other agents.
 | `claude_cli` | yes (Stage 2) | complete effective `CLAUDE_CONFIG_DIR` writable |
 | `xai_cli` | yes (Stage 3) | complete effective `GROK_HOME` writable |
 | `antigravity_cli` | yes (Stage 4) | complete `$HOME/.gemini` writable; OS keyring external |
-| all `*_sdk` backends | unsupported | fail closed with `outer_sandbox_unsupported` |
+| `codex_sdk` | yes (Stage 5) | SDK worker inside Bubblewrap |
+| `claude_sdk` | yes (Stage 6) | SDK worker inside Bubblewrap |
+| `antigravity_sdk` | yes (Stage 7) | SDK worker inside Bubblewrap |
+| `xai_sdk` | yes (Stage 8) | `no_local_effects` → `not_applicable_no_local_effects` (no Bubblewrap) |
 
 Rollback remains explicit/configured outer `sandbox = "none"`. No silent
 fallback. No shared-daemon install was run during this stabilization.
@@ -146,14 +153,12 @@ Operator preconditions for re-running any acceptance:
 - Merge of `design/bubblewrap-implementation` to `main`
 - Built-in/default outer `sandbox = "read-only"` for shipped agents/workflows
 - Closing issue #43
-- Remaining SDK outer support (`xai_sdk` `no_local_effects` audit). Stages
-  5–7 (`codex_sdk`, `claude_sdk`, `antigravity_sdk`) are implemented on this
-  branch; Stage 7 dual-review closeout may still be in progress.
+- Remaining product gate for merge/default flip (Stages 5–8 SDK work is
+  implemented and dual-review converged on this branch).
 - Non-Linux engines, network/IPC/keyring isolation, resource/seccomp limits
 
-Next implementation work on this branch is dual-review closeout for Stage 7
-when needed, then Stage 8 (`xai_sdk`), not further CLI feature expansion or a
-merge.
+Next work on this branch is the product default-policy / merge gate — not
+further CLI feature expansion.
 
 ## Stage 5 implementation review reconciliation (2026-07-26)
 

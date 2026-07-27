@@ -79,6 +79,7 @@ class XaiCliSandboxAdapterTests(unittest.TestCase):
             ("codex", "cli"),
             ("codex", "sdk"),
             ("xai", "cli"),
+            ("xai", "sdk"),
         }
         for agent_type in backends.registered_agent_types():
             for backend_id in backends.registered_backends(agent_type):

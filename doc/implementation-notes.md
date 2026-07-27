@@ -76,8 +76,12 @@ completion. The CLI product slice (Stages 1–4) is acceptance-verified on the
 design branch. Stages 5–7 add a backend-neutral framed SDK worker transport and
 move `codex_sdk`, `claude_sdk`, and `antigravity_sdk` into a supervised
 Bubblewrap worker for outer `read-only`; `sandbox = "none"` retains the
-in-daemon SDK runners. Remaining SDK backends stay unsupported until their
-stages land; do not merge to `main` until that gate is complete.
+in-daemon SDK runners. Stage 8 audits `xai_sdk` as `no_local_effects` (remote
+gRPC only; no Bubblewrap worker): outer `read-only` reports
+`not_applicable_no_local_effects` when every selected member qualifies, and
+mixed sessions still OS-enforce members that require Bubblewrap. The shipped
+outer default remains `none`. Do not merge to `main` until the design branch
+gate and default-policy decision are complete.
 
 The Claude Stage 2 adapter keeps the complete effective `CLAUDE_CONFIG_DIR`
 persistent and writable, leaves legacy `~/.claude.json` read-only, maps

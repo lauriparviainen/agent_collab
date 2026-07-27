@@ -71,6 +71,30 @@ settings summary reports `conversation="persistent"`; restart-safe resume,
 interrupt, and tool-gate capabilities remain false. Credential values and SDK
 responses are never logged by health probes.
 
+## Outer sandbox: `no_local_effects` (Stage 8)
+
+Outer `sandbox = "read-only"` for this backend is **not** Bubblewrap. The
+audited production path is remote model/gRPC only: no local tools, callbacks,
+MCP, plugins, hooks, skills, subagents, child processes, or writable local
+provider-state root. Settings report:
+
+- `support`: `no_local_effects`
+- `enforcement`: `not_applicable_no_local_effects`
+
+An all-`no_local_effects` session uses engine `not_applicable` and skips host
+Bubblewrap checks. Mixed sessions still require OS enforcement for every
+member that needs it. This is a **versioned software capability** pinned to
+`xai-sdk` 1.17.x and the exact `chat.create` request surface (model,
+`store_messages`, `previous_response_id`, `reasoning_effort` only) — not an OS
+isolation claim. Dependency series drift or a new local execution surface
+revokes the capability to `unsupported` until the audit is renewed or the
+backend uses the generic SDK worker. The prompt preamble under read-only
+states that no local file/tool or scratch surface is exposed; it does not
+promise `$TMPDIR` or OS enforcement.
+
+Hermetic adapter and deny-probe tests:
+`python3 -m unittest tests.backends.xai_sdk.test_sandbox`.
+
 For this no-tools backend, `finish_reason=STOP` with non-empty content is the
 only verified completion. Empty content, length/token limits, unexpected tool
 calls, other finish reasons, SDK exceptions, and uncertain bounded close fail
