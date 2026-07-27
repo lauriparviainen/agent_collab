@@ -1,4 +1,5 @@
 import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -319,6 +320,61 @@ class InstallReadinessCollectionTests(unittest.TestCase):
                 # sign-in remediation would send operators down a dead end.
                 self.assertNotIn("initialize_provider_state", codes)
 
+    def test_unlookupable_state_directory_is_not_reported_as_uninitialized(self):
+        # The resolver folds every lookup error into outer_sandbox_path_missing.
+        # Only a genuinely absent path is the not-yet-signed-in case; a sign-in
+        # would not repair a broken symlink or an unreadable parent.
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            (home / ".claude").symlink_to(home / "never-created", target_is_directory=True)
+
+            payload = self._state_root_payload(home)
+            row = {item["backend"]: item for item in payload["rows"]}["claude_cli"]
+
+            self.assertEqual(row["state_root"], "invalid")
+            codes = [item.get("code") for item in row["remediation"]]
+            self.assertIn("repair_provider_state", codes)
+            self.assertNotIn("initialize_provider_state", codes)
+
+    @unittest.skipIf(os.getuid() == 0, "root bypasses directory permission checks")
+    def test_unreadable_state_directory_parent_reports_a_permissions_repair(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            parent = home / ".claude"
+            parent.mkdir(mode=0o700)
+            (parent / "inner").mkdir(mode=0o700)
+            config = builtin_config()
+            merge_config_data(
+                config,
+                {
+                    "backends": {
+                        "antigravity_cli": {"enabled": False},
+                        "codex_cli": {"enabled": False},
+                        "xai_cli": {"enabled": False},
+                    }
+                },
+            )
+            config.agents["claude_cli"].env["CLAUDE_CONFIG_DIR"] = str(parent / "inner")
+            parent.chmod(0o000)
+            try:
+                with mock.patch.dict("os.environ", {"HOME": str(home)}, clear=False):
+                    with mock.patch("pathlib.Path.home", return_value=home):
+                        payload = collect_install_readiness(
+                            config, health=lambda backend: _cli_health("claude")
+                        )
+            finally:
+                parent.chmod(0o700)
+            row = {item["backend"]: item for item in payload["rows"]}["claude_cli"]
+
+            self.assertEqual(row["state_root"], "invalid")
+            messages = [
+                item["message"]
+                for item in row["remediation"]
+                if item.get("code") == "repair_provider_state"
+            ]
+            self.assertEqual(len(messages), 1)
+            self.assertIn("permissions", messages[0])
+
     def test_state_directory_follows_the_configured_state_environment_override(self):
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)
@@ -405,7 +461,9 @@ class InstallReadinessCollectionTests(unittest.TestCase):
     def test_present_provider_state_directory_reports_ok(self):
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)
-            (home / ".claude").mkdir()
+            # Explicit mode: the resolver refuses a group/world-writable root,
+            # so an inherited umask must not decide this test.
+            (home / ".claude").mkdir(mode=0o700)
             payload = self._state_root_payload(home)
             rows = {row["backend"]: row for row in payload["rows"]}
 

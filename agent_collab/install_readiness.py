@@ -390,14 +390,28 @@ def _state_root_summary(backend: Any, agent: Any) -> Tuple[str, Optional[Dict[st
         try:
             resolve_state_root(root)
         except SandboxFailure as failure:
+            # The resolver folds every lookup error into one code, so a broken
+            # symlink or an unreadable parent arrives as "missing" too. Only a
+            # genuinely absent path is the not-yet-signed-in case; telling an
+            # operator to sign in would not fix either of the others.
             if failure.code == "outer_sandbox_path_missing":
-                return "missing", {
-                    "code": "initialize_provider_state",
-                    "message": (
-                        f"Sign in to this provider once so it creates {display}; the outer "
-                        "read-only sandbox requires that directory and will not create it."
-                    ),
-                }
+                presence = _path_presence(root.destination)
+                if presence == "absent":
+                    return "missing", {
+                        "code": "initialize_provider_state",
+                        "message": (
+                            f"Sign in to this provider once so it creates {display}; the outer "
+                            "read-only sandbox requires that directory and will not create it."
+                        ),
+                    }
+                if presence == "unreadable":
+                    return "invalid", {
+                        "code": "repair_provider_state",
+                        "message": (
+                            f"{display} cannot be inspected; check the permissions on it and "
+                            "its parent directories, or select sandbox='none'."
+                        ),
+                    }
             return "invalid", {
                 "code": "repair_provider_state",
                 "message": (
@@ -408,6 +422,22 @@ def _state_root_summary(backend: Any, agent: Any) -> Tuple[str, Optional[Dict[st
         except Exception:
             return "unknown", None
     return "ok", None
+
+
+def _path_presence(path: Path) -> str:
+    """Classify a path the resolver could not look up: absent, present, unreadable.
+
+    ``lstat`` rather than ``exists`` so a broken symlink counts as present: it
+    is something to repair, not something a provider sign-in would create.
+    """
+
+    try:
+        os.lstat(path.expanduser())
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "unreadable"
+    return "present"
 
 
 def _display_path(path: Path) -> str:
