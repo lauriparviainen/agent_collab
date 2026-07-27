@@ -17,21 +17,49 @@
 >
 > 1. **Owner soak (blocking).** Real-world use of the `read-only` default
 >    across normal work. This is the only reason #43 is still open.
-> 2. **Branch not pushed.** Three commits are local-only. CI on this repo runs
->    a Python 3.10/3.11 matrix *without* vendor SDKs installed, so the local
->    suite can pass where CI fails; push and check `gh run list` before
->    treating the gates below as authoritative.
-> 3. **`xai_cli` read-only changes what Grok sees.** Ambient Claude/Cursor
+> 2. **Done — branch pushed and CI repaired.** CI had been red since Stage 7
+>    and got worse with the default flip; both causes are fixed in `a543c92`.
+>    See "CI hermeticity" below. Reproduce the CI environment locally with
+>    `HOME=$(mktemp -d) python3 -m unittest discover -s tests -t .` — the
+>    normal gates cannot see these failures on a developer host.
+> 3. **Watch during soak: a backend whose state root does not exist yet.**
+>    Under `read-only` the provider state root must already exist, so a backend
+>    that is enabled but has never been run (no `~/.grok`, `~/.codex`, …) fails
+>    the start with "<provider> state must already exist" rather than a message
+>    that says to run the provider once first. In practice an authenticated
+>    provider always has its directory, so this may never surface; if it does,
+>    decide between a clearer remediation string and creating the declared root.
+> 4. **`xai_cli` read-only changes what Grok sees.** Ambient Claude/Cursor
 >    skills, rules, project `.claude/` memory, `~/.claude.json` MCP servers,
 >    and vendor hooks are not discovered under read-only. Generic top-level
 >    `CLAUDE.md` / `AGENTS.md` still load. Watch for this during the soak; it
 >    is the behaviour change most likely to surprise.
-> 4. **Grok version coupling.** Containment is a stated contract against a Grok
+> 5. **Grok version coupling.** Containment is a stated contract against a Grok
 >    build that honours the compat cells and their environment precedence,
 >    verified against 0.2.112. Re-verify with `grok inspect --json` after a
 >    major Grok upgrade.
-> 5. **`antigravity_sdk` model availability.** Some `gemini-3.x` flash ids 404
->    on this Vertex project; `gemini-2.5-flash` works. Unrelated to sandboxing.
+> 6. **`antigravity_sdk` model availability.** Some `gemini-3.x` flash ids 404
+>    on this Vertex project; the global user config now defaults this backend
+>    to `gemini-2.5-flash`. Unrelated to sandboxing.
+>
+> ### CI hermeticity (2026-07-27)
+>
+> Two independent breakages, both invisible on a developer host because this
+> machine has every provider installed and authenticated:
+>
+> - **From the default flip.** Sessions that omit `sandbox` now resolve a real
+>   outer plan, so hermetic referee/daemon/usage-window/antigravity tests began
+>   resolving provider state roots on the host. Those tests now pin
+>   `sandbox="none"`; they are about orchestration, not the outer boundary, and
+>   must not depend on whether the developer has `~/.claude`.
+> - **From Stage 7.** `import_xai_sdk` imported `google.protobuf` before
+>   honouring an already-imported `xai_sdk`, so tests injecting a stub module
+>   still required the real protobuf. It now returns the cached module first;
+>   the protobuf-major gate only runs on first import.
+>
+> Also fixed: the daemon never passed `request.sandbox` into `RefereeConfig`,
+> so when no plan was prepared the referee fell back to the configured default
+> and ignored an explicit request. The prepared plan still wins when present.
 >
 > ### Live verification (2026-07-27, this host, omitting start `sandbox`)
 >
