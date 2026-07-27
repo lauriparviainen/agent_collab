@@ -290,6 +290,118 @@ class InstallReadinessCollectionTests(unittest.TestCase):
                 [],
             )
 
+    def test_state_directory_the_plan_resolver_would_refuse_reports_invalid(self):
+        # install must not green-light a directory that exists but that
+        # resolve_state_root rejects at session start.
+        shapes = ("symlink", "file", "group_writable")
+        for shape in shapes:
+            with self.subTest(shape=shape), tempfile.TemporaryDirectory() as raw:
+                home = Path(raw)
+                state = home / ".claude"
+                if shape == "symlink":
+                    target = home / "elsewhere"
+                    target.mkdir(mode=0o700)
+                    state.symlink_to(target, target_is_directory=True)
+                elif shape == "file":
+                    state.write_text("not a directory\n", encoding="utf-8")
+                else:
+                    state.mkdir(mode=0o700)
+                    state.chmod(0o770)
+
+                payload = self._state_root_payload(home)
+                row = {item["backend"]: item for item in payload["rows"]}["claude_cli"]
+
+                self.assertEqual(row["state_root"], "invalid")
+                self.assertEqual(row["state"], "unavailable")
+                codes = [item.get("code") for item in row["remediation"]]
+                self.assertIn("repair_provider_state", codes)
+                # An unusable directory is not an un-initialized one; the
+                # sign-in remediation would send operators down a dead end.
+                self.assertNotIn("initialize_provider_state", codes)
+
+    def test_state_directory_follows_the_configured_state_environment_override(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            (home / ".claude").mkdir()
+            override = home / "elsewhere"
+            override.mkdir(mode=0o700)
+            config = builtin_config()
+            merge_config_data(
+                config,
+                {
+                    "backends": {
+                        "antigravity_cli": {"enabled": False},
+                        "codex_cli": {"enabled": False},
+                        "xai_cli": {"enabled": False},
+                    }
+                },
+            )
+            config.agents["claude_cli"].env["CLAUDE_CONFIG_DIR"] = str(override)
+            with mock.patch.dict("os.environ", {"HOME": str(home)}, clear=False):
+                with mock.patch("pathlib.Path.home", return_value=home):
+                    payload = collect_install_readiness(
+                        config, health=lambda backend: _cli_health("claude")
+                    )
+            row = {item["backend"]: item for item in payload["rows"]}["claude_cli"]
+            self.assertEqual(row["state_root"], "ok")
+
+            override.rmdir()
+            with mock.patch.dict("os.environ", {"HOME": str(home)}, clear=False):
+                with mock.patch("pathlib.Path.home", return_value=home):
+                    payload = collect_install_readiness(
+                        config, health=lambda backend: _cli_health("claude")
+                    )
+            row = {item["backend"]: item for item in payload["rows"]}["claude_cli"]
+            # The override is what matters, not the default ~/.claude that exists.
+            self.assertEqual(row["state_root"], "missing")
+
+    def test_state_directory_probe_failure_is_visible_and_non_fatal(self):
+        from agent_collab import backends as backend_registry
+
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            (home / ".claude").mkdir()
+            backend = backend_registry.get_backend("claude", "cli")
+            broken = mock.Mock()
+            broken.describe.side_effect = RuntimeError("adapter exploded")
+            with mock.patch.object(type(backend), "sandbox_adapter", broken):
+                payload = self._state_root_payload(home)
+            row = {item["backend"]: item for item in payload["rows"]}["claude_cli"]
+
+            self.assertEqual(row["state_root"], "unknown")
+            # Install reports rather than hard-fails on an unexpected adapter error.
+            self.assertEqual(row["state"], "usable")
+
+    def test_worse_probe_state_survives_the_state_directory_downgrade(self):
+        with tempfile.TemporaryDirectory() as raw:
+            config = builtin_config()
+            merge_config_data(
+                config,
+                {
+                    "backends": {
+                        "antigravity_cli": {"enabled": False},
+                        "codex_cli": {"enabled": False},
+                        "xai_cli": {"enabled": False},
+                    }
+                },
+            )
+            home = Path(raw)
+            with mock.patch.dict("os.environ", {"HOME": str(home)}, clear=False):
+                with mock.patch("pathlib.Path.home", return_value=home):
+                    payload = collect_install_readiness(
+                        config,
+                        health=lambda backend: _cli_health("claude", present=False),
+                    )
+            row = {item["backend"]: item for item in payload["rows"]}["claude_cli"]
+
+            self.assertEqual(row["state_root"], "missing")
+            self.assertEqual(row["state"], "unavailable")
+            codes = [item.get("code") for item in row["remediation"]]
+            # The missing dependency keeps its own remediation and the missing
+            # directory still reports alongside it.
+            self.assertIn("install_cli", codes)
+            self.assertIn("initialize_provider_state", codes)
+
     def test_present_provider_state_directory_reports_ok(self):
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)

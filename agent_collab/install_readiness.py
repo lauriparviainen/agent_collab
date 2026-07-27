@@ -22,7 +22,14 @@ from .config import (
     load_user_config,
 )
 from .options import assess_backend
-from .sandbox.specs import CreationPolicy, Persistence, SandboxContext, SandboxPolicy
+from .sandbox.paths import resolve_state_root
+from .sandbox.specs import (
+    CreationPolicy,
+    Persistence,
+    SandboxContext,
+    SandboxFailure,
+    SandboxPolicy,
+)
 
 
 SNAPSHOT_VERSION = 5
@@ -323,27 +330,19 @@ def _readiness_row(
             "checks_credentials": backend.checks_credentials,
         },
     )
-    state_root, missing = _state_root_summary(backend, _agent)
+    state_root, state_remediation = _state_root_summary(backend, _agent)
     state = assessment["state"]
     remediation = list(assessment["remediation"])
     # A provider that has never been signed in has no state directory yet, and
     # under outer read-only that directory is the writable exception rather than
     # something the sandbox may create. Report it and leave the backend not
     # ready; signing in once is what creates it.
-    if missing is not None and outer_read_only:
-        # A probe that already found something worse keeps its own state; a
-        # missing directory is the milder, more specific finding.
+    if state_remediation is not None and outer_read_only:
+        # A probe that already found something worse keeps its own state; an
+        # unusable directory is the milder, more specific finding.
         if state == "usable":
             state = "unavailable"
-        remediation.append(
-            {
-                "code": "initialize_provider_state",
-                "message": (
-                    f"Sign in to this provider once so it creates {missing}; the outer "
-                    "read-only sandbox requires that directory and will not create it."
-                ),
-            }
-        )
+        remediation.append(state_remediation)
     return {
         **base,
         "dependency": _dependency_summary(observed),
@@ -356,12 +355,18 @@ def _readiness_row(
     }
 
 
-def _state_root_summary(backend: Any, agent: Any) -> Tuple[str, Optional[str]]:
+def _state_root_summary(backend: Any, agent: Any) -> Tuple[str, Optional[Dict[str, str]]]:
     """Report the host-persistent state directories outer read-only requires.
 
-    Returns the display cell plus the first missing directory, or ``None`` when
-    nothing is missing. Backends whose roots are session-private, or that have
-    no local state at all, report no requirement.
+    Returns the display cell plus a remediation entry when the directory is not
+    usable. Backends whose roots are session-private, or that have no local
+    state at all, report no requirement.
+
+    The verdict comes from ``resolve_state_root`` itself rather than a private
+    existence check, so install cannot green-light a path the session-start plan
+    resolver would refuse — a symlinked or group-writable directory exists but
+    is rejected there. Only ``MUST_EXIST`` roots reach it, so the resolver's
+    create branch is unreachable and this stays a read-only inspection.
     """
 
     adapter = getattr(backend, "sandbox_adapter", None)
@@ -380,10 +385,29 @@ def _state_root_summary(backend: Any, agent: Any) -> Tuple[str, Optional[str]]:
         return "unknown", None
     if not required:
         return STATE_ROOT_NOT_APPLICABLE, None
-    missing = [root for root in required if not root.destination.is_dir()]
-    if not missing:
-        return "ok", None
-    return "missing", _display_path(missing[0].destination)
+    for root in required:
+        display = _display_path(root.destination)
+        try:
+            resolve_state_root(root)
+        except SandboxFailure as failure:
+            if failure.code == "outer_sandbox_path_missing":
+                return "missing", {
+                    "code": "initialize_provider_state",
+                    "message": (
+                        f"Sign in to this provider once so it creates {display}; the outer "
+                        "read-only sandbox requires that directory and will not create it."
+                    ),
+                }
+            return "invalid", {
+                "code": "repair_provider_state",
+                "message": (
+                    f"{display} cannot be the outer read-only writable root: {failure}. "
+                    "Repair the directory or select sandbox='none'."
+                ),
+            }
+        except Exception:
+            return "unknown", None
+    return "ok", None
 
 
 def _display_path(path: Path) -> str:
