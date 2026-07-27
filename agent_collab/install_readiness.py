@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import os
+from pathlib import Path
 import sys
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -20,10 +22,12 @@ from .config import (
     load_user_config,
 )
 from .options import assess_backend
+from .sandbox.specs import CreationPolicy, Persistence, SandboxContext, SandboxPolicy
 
 
-SNAPSHOT_VERSION = 4
+SNAPSHOT_VERSION = 5
 MAX_PROBE_WORKERS = 4
+STATE_ROOT_NOT_APPLICABLE = "—"
 ProbeKey = Tuple[str, Optional[str]]
 
 ModelDiscoveryFn = Callable[[CollaborationConfig, Mapping[str, Optional[str]]], Dict[str, Any]]
@@ -82,10 +86,17 @@ def collect_install_readiness(
         _group(groups, ("probe", *probe_key), fact, agent.id)
 
     health_results = _probe_selected_backends(pending, health)
+    outer_read_only = effective.system.sandbox_default is SandboxPolicy.READ_ONLY
     rows: List[Dict[str, Any]] = []
     attention_count = 0
     for group in groups.values():
-        row = _readiness_row(group["fact"], group["agents"], pending, health_results)
+        row = _readiness_row(
+            group["fact"],
+            group["agents"],
+            pending,
+            health_results,
+            outer_read_only=outer_read_only,
+        )
         rows.append(row)
         if row["state"] != "usable":
             attention_count += 1
@@ -264,6 +275,8 @@ def _readiness_row(
     agents: List[str],
     pending: Mapping[ProbeKey, Tuple[Any, Any]],
     health_results: Mapping[ProbeKey, BackendHealth],
+    *,
+    outer_read_only: bool = False,
 ) -> Dict[str, Any]:
     canonical = fact.get("canonical_backend")
     base: Dict[str, Any] = {
@@ -272,6 +285,7 @@ def _readiness_row(
         "dependency": "not checked",
         "credentials": "—",
         "version": None,
+        "state_root": STATE_ROOT_NOT_APPLICABLE,
         "reason": None,
         "remediation": [],
     }
@@ -309,15 +323,76 @@ def _readiness_row(
             "checks_credentials": backend.checks_credentials,
         },
     )
+    state_root, missing = _state_root_summary(backend, _agent)
+    state = assessment["state"]
+    remediation = list(assessment["remediation"])
+    # A provider that has never been signed in has no state directory yet, and
+    # under outer read-only that directory is the writable exception rather than
+    # something the sandbox may create. Report it and leave the backend not
+    # ready; signing in once is what creates it.
+    if missing is not None and outer_read_only:
+        # A probe that already found something worse keeps its own state; a
+        # missing directory is the milder, more specific finding.
+        if state == "usable":
+            state = "unavailable"
+        remediation.append(
+            {
+                "code": "initialize_provider_state",
+                "message": (
+                    f"Sign in to this provider once so it creates {missing}; the outer "
+                    "read-only sandbox requires that directory and will not create it."
+                ),
+            }
+        )
     return {
         **base,
         "dependency": _dependency_summary(observed),
         "credentials": _credential_summary(observed),
         "version": observed.version,
-        "state": assessment["state"],
+        "state_root": state_root,
+        "state": state,
         "reason": observed.reason,
-        "remediation": assessment["remediation"],
+        "remediation": remediation,
     }
+
+
+def _state_root_summary(backend: Any, agent: Any) -> Tuple[str, Optional[str]]:
+    """Report the host-persistent state directories outer read-only requires.
+
+    Returns the display cell plus the first missing directory, or ``None`` when
+    nothing is missing. Backends whose roots are session-private, or that have
+    no local state at all, report no requirement.
+    """
+
+    adapter = getattr(backend, "sandbox_adapter", None)
+    if adapter is None:
+        return STATE_ROOT_NOT_APPLICABLE, None
+    environment = {**os.environ, **dict(getattr(agent, "env", None) or {})}
+    workdir = Path.cwd()
+    try:
+        spec = adapter.describe(SandboxContext(workdir, workdir, environment))
+        required = [
+            root
+            for root in spec.state_roots
+            if root.persistence is Persistence.HOST and root.creation is CreationPolicy.MUST_EXIST
+        ]
+    except Exception:
+        return "unknown", None
+    if not required:
+        return STATE_ROOT_NOT_APPLICABLE, None
+    missing = [root for root in required if not root.destination.is_dir()]
+    if not missing:
+        return "ok", None
+    return "missing", _display_path(missing[0].destination)
+
+
+def _display_path(path: Path) -> str:
+    """Render below the home directory as ``~/...`` so install output stays terse."""
+
+    try:
+        return f"~/{path.relative_to(Path.home())}"
+    except ValueError:
+        return str(path)
 
 
 def _dependency_summary(health: BackendHealth) -> str:

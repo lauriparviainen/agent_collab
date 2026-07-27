@@ -445,6 +445,7 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
                 ", ".join(extra_agents),
                 item.get("dependency") or "unknown",
                 item.get("credentials") or "unknown",
+                item.get("state_root") or "—",
                 item.get("version") or "—",
             )
         )
@@ -457,10 +458,10 @@ def _print_backend_readiness(payload: Dict[str, Any]) -> bool:
                 remediation_rows.append(entry)
 
     if any(row[1] for row in table_rows):
-        headers = ("backend", "agents", "dependency", "credentials", "version")
+        headers = ("backend", "agents", "dependency", "credentials", "state dir", "version")
         printable = table_rows
     else:
-        headers = ("backend", "dependency", "credentials", "version")
+        headers = ("backend", "dependency", "credentials", "state dir", "version")
         printable = [(row[0], *row[2:]) for row in table_rows]
     # No max_widths: readiness facts are short-lived diagnostics and must not
     # be truncated; the terminal wraps long remediation text if it has to.

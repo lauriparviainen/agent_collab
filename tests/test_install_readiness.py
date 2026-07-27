@@ -1,5 +1,6 @@
 import io
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -73,7 +74,7 @@ class InstallModelDiscoveryWiringTests(unittest.TestCase):
             model_discovery=fake_discovery,
         )
 
-        self.assertEqual(payload["snapshot_version"], 4)
+        self.assertEqual(payload["snapshot_version"], 5)
         self.assertEqual(
             payload["model_discovery"],
             {"attempted": ["antigravity_cli"], "backends": {}, "warnings": []},
@@ -187,7 +188,12 @@ class InstallReadinessCollectionTests(unittest.TestCase):
         # Keep this collection test focused on the claude/codex pair.
         merge_config_data(
             config,
-            {"backends": {"antigravity_cli": {"enabled": False}, "xai_cli": {"enabled": False}}},
+            {
+                # Not a sandbox test: outer none keeps the provider state-root
+                # check from making the row states depend on this host's home.
+                "system": {"sandbox_default": "none"},
+                "backends": {"antigravity_cli": {"enabled": False}, "xai_cli": {"enabled": False}},
+            },
         )
         calls = []
 
@@ -221,11 +227,89 @@ class InstallReadinessCollectionTests(unittest.TestCase):
         self.assertEqual(rows["claude_cli"]["credentials"], "not checked")
         self.assertEqual(rows["codex_cli"]["dependency"], "codex missing")
 
+    def _state_root_payload(self, home, *, sandbox_default="read-only"):
+        config = builtin_config()
+        merge_config_data(
+            config,
+            {
+                "system": {"sandbox_default": sandbox_default},
+                "backends": {
+                    "antigravity_cli": {"enabled": False},
+                    "codex_cli": {"enabled": False},
+                    "xai_cli": {"enabled": False},
+                    "xai_sdk": {"enabled": True},
+                },
+            },
+        )
+        with mock.patch.dict("os.environ", {"HOME": str(home)}, clear=False):
+            with mock.patch("pathlib.Path.home", return_value=home):
+                return collect_install_readiness(config, health=lambda backend: _cli_health("x"))
+
+    def test_missing_provider_state_directory_is_reported_and_not_created(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            payload = self._state_root_payload(home)
+            rows = {row["backend"]: row for row in payload["rows"]}
+
+            self.assertEqual(rows["claude_cli"]["state_root"], "missing")
+            self.assertEqual(rows["claude_cli"]["state"], "unavailable")
+            messages = [
+                item["message"]
+                for item in rows["claude_cli"]["remediation"]
+                if item.get("code") == "initialize_provider_state"
+            ]
+            self.assertEqual(len(messages), 1)
+            self.assertIn("~/.claude", messages[0])
+            # Reporting must never be creation: the installer leaves the
+            # provider's own directory to the provider's own sign-in.
+            self.assertEqual(sorted(home.iterdir()), [])
+
+    def test_backends_without_a_host_persistent_root_report_no_requirement(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self._state_root_payload(Path(raw))
+            rows = {row["backend"]: row for row in payload["rows"]}
+
+            # xai_sdk has no local state at all, so it can never be blocked by
+            # a missing directory.
+            self.assertEqual(rows["xai_sdk"]["state_root"], "—")
+            self.assertEqual(rows["xai_sdk"]["state"], "usable")
+
+    def test_missing_state_directory_is_reported_but_not_blocking_under_outer_none(self):
+        with tempfile.TemporaryDirectory() as raw:
+            payload = self._state_root_payload(Path(raw), sandbox_default="none")
+            rows = {row["backend"]: row for row in payload["rows"]}
+
+            self.assertEqual(rows["claude_cli"]["state_root"], "missing")
+            self.assertEqual(rows["claude_cli"]["state"], "usable")
+            self.assertEqual(
+                [
+                    item
+                    for item in rows["claude_cli"]["remediation"]
+                    if item.get("code") == "initialize_provider_state"
+                ],
+                [],
+            )
+
+    def test_present_provider_state_directory_reports_ok(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            (home / ".claude").mkdir()
+            payload = self._state_root_payload(home)
+            rows = {row["backend"]: row for row in payload["rows"]}
+
+            self.assertEqual(rows["claude_cli"]["state_root"], "ok")
+            self.assertEqual(rows["claude_cli"]["state"], "usable")
+
     def test_deduplicates_shared_effective_backend_probe(self):
         config = builtin_config()
         merge_config_data(
             config,
-            {"backends": {"antigravity_cli": {"enabled": False}, "xai_cli": {"enabled": False}}},
+            {
+                # Not a sandbox test: outer none keeps the provider state-root
+                # check from making the row states depend on this host's home.
+                "system": {"sandbox_default": "none"},
+                "backends": {"antigravity_cli": {"enabled": False}, "xai_cli": {"enabled": False}},
+            },
         )
         config.agents["claude-copy"] = AgentConfig(
             id="claude-copy", type="claude", command="claude", enabled=True

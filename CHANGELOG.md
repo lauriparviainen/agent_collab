@@ -13,6 +13,12 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Report provider state directories in the install readiness table (#43). Outer
+  read-only makes the provider's own state directory the writable exception and
+  will not create it, so a backend that has never been signed in cannot start.
+  Install now shows a `state dir` column and names the directory to create by
+  signing in; it never creates one itself, and reports without blocking when
+  `sandbox_default = "none"`.
 - Contain Grok's ambient vendor compatibility under outer read-only instead of
   refusing to start (#43, stage 3). `xai_cli` previously failed closed whenever
   `~/.claude`, `~/.claude.json`, or `~/.cursor` existed, which made read-only

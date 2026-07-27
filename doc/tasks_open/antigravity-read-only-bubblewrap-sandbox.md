@@ -22,13 +22,15 @@
 >    See "CI hermeticity" below. Reproduce the CI environment locally with
 >    `HOME=$(mktemp -d) python3 -m unittest discover -s tests -t .` — the
 >    normal gates cannot see these failures on a developer host.
-> 3. **Watch during soak: a backend whose state root does not exist yet.**
->    Under `read-only` the provider state root must already exist, so a backend
->    that is enabled but has never been run (no `~/.grok`, `~/.codex`, …) fails
->    the start with "<provider> state must already exist" rather than a message
->    that says to run the provider once first. In practice an authenticated
->    provider always has its directory, so this may never surface; if it does,
->    decide between a clearer remediation string and creating the declared root.
+> 3. **Done — install reports missing provider state directories.** Under
+>    `read-only` the provider state root is the writable exception and the
+>    sandbox will not create it, so a backend that is enabled but never signed
+>    in cannot start. Install shows a `state dir` column (`ok` / `missing` /
+>    `—` for backends with no host-persistent root) and names the directory to
+>    create by signing in. Deliberately warn rather than create: the directory
+>    belongs to the provider, an empty one would only trade a sandbox error for
+>    an auth error, and first-run flows should happen unsandboxed. Under
+>    `sandbox_default = "none"` the fact is reported without blocking.
 > 4. **`xai_cli` read-only changes what Grok sees.** Ambient Claude/Cursor
 >    skills, rules, project `.claude/` memory, `~/.claude.json` MCP servers,
 >    and vendor hooks are not discovered under read-only. Generic top-level
