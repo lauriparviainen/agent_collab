@@ -48,11 +48,15 @@
 >
 > ### Next agent checklist
 >
-> 1. Free gate green + Stage 8 commit applied with `Refs #43`.
+> 1. **Done:** Stage 8 dual-review loop 11 same-loop clean; free gate green
+>    (1,372 hermetic tests, 1 skip); commit `6004e41` with `Refs #43`; public
+>    comment on #43.
 > 2. Product gate remains: no outer default flip, no install, no merge to
 >    `main`, leave #43 open until release readiness decides.
 > 3. All backend stages 1–8 are implemented or positively audited on this
 >    branch; merge blocked only on default-policy / release decision.
+> 4. Optional: push `design/bubblewrap-implementation` when the operator wants
+>    the remote branch updated (local is ahead by the Stage 8 commit(s)).
 >
 > ### Key paths
 >
