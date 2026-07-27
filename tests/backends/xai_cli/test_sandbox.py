@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import os
 from pathlib import Path
 import subprocess
@@ -928,15 +929,25 @@ hooks = [{ command = "hooks/notify.sh payload/input.json" }]
             "[compat.windsurf]\nskills = true\n",
             "[compat.claude]\nmemories = true\n",
             "[compat]\nclaude = true\n",
+            "[compat.claude]\nmemories = false\n",
         )
-        for contents in configurations:
-            with self.subTest(config=contents), tempfile.TemporaryDirectory() as raw:
+        locations = ("state", "project")
+        for contents, location in itertools.product(configurations, locations):
+            with (
+                self.subTest(config=contents, location=location),
+                tempfile.TemporaryDirectory() as raw,
+            ):
                 root = Path(raw).resolve()
                 workspace = root / "workspace"
                 workspace.mkdir()
                 state = root / ".grok"
                 state.mkdir()
-                (state / "config.toml").write_text(contents, encoding="utf-8")
+                if location == "state":
+                    config = state / "config.toml"
+                else:
+                    config = workspace / ".grok" / "config.toml"
+                    config.parent.mkdir()
+                config.write_text(contents, encoding="utf-8")
                 plan = self._plan(
                     SandboxPolicy.READ_ONLY,
                     state,
@@ -986,6 +997,14 @@ hooks = [{ command = "hooks/notify.sh payload/input.json" }]
             captured["env"] = dict(kwargs["env"])
             raise FileNotFoundError("stop before launch")
 
+        # Scrub the host environment so the assertion means "the none path added
+        # nothing", not "this host happens to export no compat names".
+        host_environment = {
+            name: value
+            for name, value in os.environ.items()
+            if not (name.startswith("GROK_") and name.endswith("_ENABLED"))
+        }
+
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve()
             state = root / ".grok"
@@ -1001,9 +1020,12 @@ hooks = [{ command = "hooks/notify.sh payload/input.json" }]
             async def emit(event):
                 return None
 
-            with mock.patch(
-                "agent_collab.runners.asyncio.create_subprocess_exec",
-                side_effect=fake_exec,
+            with (
+                mock.patch.dict(os.environ, host_environment, clear=True),
+                mock.patch(
+                    "agent_collab.runners.asyncio.create_subprocess_exec",
+                    side_effect=fake_exec,
+                ),
             ):
                 asyncio.run(runner.run_turn("prompt", root, emit))
 
