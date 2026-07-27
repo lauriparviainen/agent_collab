@@ -24,7 +24,7 @@ invalid disposable model name. It contains no provider ID.
 ## xAI SDK 1.17.0
 
 `sdk-introspection.json` records non-secret public facts captured after
-installing `xai-sdk>=1.17,<2` into the project Python environment. `python -m
+installing `xai-sdk>=1.17,<1.18` into the project Python environment. `python -m
 pip check` reported no broken requirements. Signatures were inspected without a
 model call by constructing `AsyncClient` with a fixture API key and closing it.
 

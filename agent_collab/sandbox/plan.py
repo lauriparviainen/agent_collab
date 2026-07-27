@@ -48,6 +48,34 @@ class SandboxOperatorConfig:
     agent_collab_home: Optional[Path] = None
 
 
+def remove_created_session_private_roots(paths: Sequence[Path]) -> None:
+    """Best-effort removal of CREATE_PRIVATE_DIRECTORY trees and empty parents."""
+
+    import shutil
+    import stat as stat_mod
+
+    def _onerror(func: Any, target: str, _exc_info: Any) -> None:
+        try:
+            os.chmod(target, stat_mod.S_IRWXU)
+            func(target)
+        except Exception:
+            pass
+
+    parents: set[Path] = set()
+    for path in paths:
+        try:
+            shutil.rmtree(path, onerror=_onerror)
+        except Exception:
+            pass
+        parents.add(path.parent)
+    for parent in parents:
+        try:
+            if parent.exists() and parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+        except OSError:
+            pass
+
+
 @dataclass(frozen=True)
 class ResolvedSandboxPlan:
     policy: ResolvedSandboxPolicy
@@ -62,6 +90,13 @@ class ResolvedSandboxPlan:
     git_metadata_scope: str = "session_root"
     alias_audit_max_entries: int = 1_000_000
     alias_audit_timeout_seconds: int = 10
+    # Session-private roots created during plan resolve (CREATE_PRIVATE_DIRECTORY).
+    created_session_private_roots: Tuple[Path, ...] = ()
+
+    def cleanup_created_session_private_roots(self) -> None:
+        """Best-effort removal of session-private directories this plan created."""
+
+        remove_created_session_private_roots(self.created_session_private_roots)
 
     def prepare_inner(self, command: Sequence[str]) -> Tuple[str, ...]:
         return self.adapter.prepare_inner(self, command)
@@ -138,6 +173,10 @@ class ResolvedSandboxSessionPlan:
             "establishment": self.establishment,
         }
 
+    def cleanup_created_session_private_roots(self) -> None:
+        for plan in self.agents.values():
+            plan.cleanup_created_session_private_roots()
+
 
 def resolve_session_plan(
     *,
@@ -151,125 +190,146 @@ def resolve_session_plan(
     workspace = resolve_workspace(workspace_path)
     previews = command_previews or {}
     resolved: dict[str, ResolvedSandboxPlan] = {}
-    for agent_id, (configured_cwd, environment, adapter) in agents.items():
-        cwd = resolve_effective_cwd(workspace, configured_cwd)
-        inherited = os.environ.copy()
-        inherited.update(environment)
-        context = SandboxContext(
-            workspace.destination,
-            cwd,
-            inherited,
-            tuple(previews.get(agent_id, ())),
-        )
-        spec = adapter.describe(context)
-        if policy.effective not in spec.policies:
-            raise SandboxFailure(
-                "outer_sandbox_unsupported",
-                f"agent {agent_id!r} does not support outer sandbox policy "
-                f"{policy.effective.value!r}",
-                remediation=("Select sandbox='none' only when installation policy permits it.",),
+    # Paths created for the agent currently being resolved (not yet owned by a plan).
+    in_progress_created: list[Path] = []
+    try:
+        for agent_id, (configured_cwd, environment, adapter) in agents.items():
+            in_progress_created = []
+            cwd = resolve_effective_cwd(workspace, configured_cwd)
+            inherited = os.environ.copy()
+            inherited.update(environment)
+            context = SandboxContext(
+                workspace.destination,
+                cwd,
+                inherited,
+                tuple(previews.get(agent_id, ())),
             )
-        if policy.effective is SandboxPolicy.NONE:
-            resolved[agent_id] = ResolvedSandboxPlan(
-                policy=policy,
-                support=spec.support,
-                enforcement=SandboxEnforcement.DISABLED,
-                context=context,
-                spec=spec,
-                adapter=adapter,
-            )
-            continue
-        if spec.support is SandboxSupport.UNSUPPORTED:
-            raise SandboxFailure(
-                "outer_sandbox_unsupported",
-                f"agent {agent_id!r} has no Stage 1 read-only sandbox adapter",
-            )
-        if spec.support is SandboxSupport.NO_LOCAL_EFFECTS:
-            resolved[agent_id] = ResolvedSandboxPlan(
-                policy=policy,
-                support=spec.support,
-                enforcement=SandboxEnforcement.NOT_APPLICABLE_NO_LOCAL_EFFECTS,
-                context=context,
-                spec=spec,
-                adapter=adapter,
-            )
-            continue
-
-        for check in spec.compatibility:
-            try:
-                check.check()
-            except SandboxFailure:
-                raise
-            except Exception as exc:
+            spec = adapter.describe(context)
+            if policy.effective not in spec.policies:
                 raise SandboxFailure(
-                    "outer_sandbox_backend_incompatible",
-                    f"backend compatibility check {check.name!r} failed",
-                ) from exc
+                    "outer_sandbox_unsupported",
+                    f"agent {agent_id!r} does not support outer sandbox policy "
+                    f"{policy.effective.value!r}",
+                    remediation=(
+                        "Select sandbox='none' only when installation policy permits it.",
+                    ),
+                )
+            if policy.effective is SandboxPolicy.NONE:
+                resolved[agent_id] = ResolvedSandboxPlan(
+                    policy=policy,
+                    support=spec.support,
+                    enforcement=SandboxEnforcement.DISABLED,
+                    context=context,
+                    spec=spec,
+                    adapter=adapter,
+                )
+                continue
+            if spec.support is SandboxSupport.UNSUPPORTED:
+                raise SandboxFailure(
+                    "outer_sandbox_unsupported",
+                    f"agent {agent_id!r} has no Stage 1 read-only sandbox adapter",
+                )
+            if spec.support is SandboxSupport.NO_LOCAL_EFFECTS:
+                resolved[agent_id] = ResolvedSandboxPlan(
+                    policy=policy,
+                    support=spec.support,
+                    enforcement=SandboxEnforcement.NOT_APPLICABLE_NO_LOCAL_EFFECTS,
+                    context=context,
+                    spec=spec,
+                    adapter=adapter,
+                )
+                continue
 
-        declarations: list[ResolvedSandboxPath] = []
-        for state_spec in spec.state_roots:
-            declarations.append(resolve_state_root(state_spec))
-        for visible_spec in spec.provider_visible_paths:
-            declarations.append(resolve_state_root(visible_spec))
-        for label, access, paths in (
-            ("Operator readable", PathAccess.READ_ONLY, operator.extra_readable_dirs),
-            ("Operator writable", PathAccess.WRITABLE, operator.extra_writable_dirs),
-        ):
-            for path in paths:
-                declarations.append(
-                    resolve_state_root(
-                        StateRootSpec(
-                            label=label,
-                            destination=path,
-                            access=access,
-                            persistence=Persistence.HOST,
-                            creation=CreationPolicy.MUST_EXIST,
-                            origin=PathOrigin.OPERATOR,
+            for check in spec.compatibility:
+                try:
+                    check.check()
+                except SandboxFailure:
+                    raise
+                except Exception as exc:
+                    raise SandboxFailure(
+                        "outer_sandbox_backend_incompatible",
+                        f"backend compatibility check {check.name!r} failed",
+                    ) from exc
+
+            declarations: list[ResolvedSandboxPath] = []
+            for state_spec in spec.state_roots:
+                resolved_path = resolve_state_root(state_spec)
+                declarations.append(resolved_path)
+                if resolved_path.created and resolved_path.persistence is Persistence.SESSION:
+                    in_progress_created.append(resolved_path.destination)
+            for visible_spec in spec.provider_visible_paths:
+                declarations.append(resolve_state_root(visible_spec))
+            for label, access, paths in (
+                ("Operator readable", PathAccess.READ_ONLY, operator.extra_readable_dirs),
+                ("Operator writable", PathAccess.WRITABLE, operator.extra_writable_dirs),
+            ):
+                for path in paths:
+                    declarations.append(
+                        resolve_state_root(
+                            StateRootSpec(
+                                label=label,
+                                destination=path,
+                                access=access,
+                                persistence=Persistence.HOST,
+                                creation=CreationPolicy.MUST_EXIST,
+                                origin=PathOrigin.OPERATOR,
+                            )
                         )
                     )
-                )
-        git = discover_session_git(workspace)
-        operations = normalize_mounts(workspace, declarations, git.records)
-        scratch_anchor = resolve_scratch_anchor(
-            operator,
-            workspace=workspace.destination,
-            overmounts=tuple(item.destination for item in operations),
-        )
-        if audit:
-            audit_aliases(
-                operations,
-                git.records,
-                max_entries=operator.alias_audit_max_entries,
-                timeout_seconds=operator.alias_audit_timeout_seconds,
+            git = discover_session_git(workspace)
+            operations = normalize_mounts(workspace, declarations, git.records)
+            scratch_anchor = resolve_scratch_anchor(
+                operator,
+                workspace=workspace.destination,
+                overmounts=tuple(item.destination for item in operations),
             )
-        resolved[agent_id] = ResolvedSandboxPlan(
-            policy=policy,
-            support=spec.support,
-            enforcement=SandboxEnforcement.OS_ENFORCED,
-            context=context,
-            spec=spec,
-            adapter=adapter,
-            operations=operations,
-            git_records=git.records,
-            scratch_anchor=scratch_anchor,
-            alias_audit_max_entries=operator.alias_audit_max_entries,
-            alias_audit_timeout_seconds=operator.alias_audit_timeout_seconds,
-        )
+            if audit:
+                audit_aliases(
+                    operations,
+                    git.records,
+                    max_entries=operator.alias_audit_max_entries,
+                    timeout_seconds=operator.alias_audit_timeout_seconds,
+                )
+            resolved[agent_id] = ResolvedSandboxPlan(
+                policy=policy,
+                support=spec.support,
+                enforcement=SandboxEnforcement.OS_ENFORCED,
+                context=context,
+                spec=spec,
+                adapter=adapter,
+                operations=operations,
+                git_records=git.records,
+                scratch_anchor=scratch_anchor,
+                alias_audit_max_entries=operator.alias_audit_max_entries,
+                alias_audit_timeout_seconds=operator.alias_audit_timeout_seconds,
+                created_session_private_roots=tuple(in_progress_created),
+            )
+            # Ownership transferred to the plan; do not double-clean on later
+            # agents' failures via in_progress_created.
+            in_progress_created = []
 
-    enforcement = {item.enforcement for item in resolved.values()}
-    if policy.effective is SandboxPolicy.NONE:
-        engine = "none"
-        establishment = "disabled"
-    elif enforcement == {SandboxEnforcement.NOT_APPLICABLE_NO_LOCAL_EFFECTS}:
-        engine = "not_applicable"
-        establishment = "not_applicable"
-    elif SandboxEnforcement.NOT_APPLICABLE_NO_LOCAL_EFFECTS in enforcement:
-        engine = "mixed"
-        establishment = "required"
-    else:
-        engine = "bubblewrap"
-        establishment = "required"
-    return ResolvedSandboxSessionPlan(policy, engine, establishment, resolved)
+        enforcement = {item.enforcement for item in resolved.values()}
+        if policy.effective is SandboxPolicy.NONE:
+            engine = "none"
+            establishment = "disabled"
+        elif enforcement == {SandboxEnforcement.NOT_APPLICABLE_NO_LOCAL_EFFECTS}:
+            engine = "not_applicable"
+            establishment = "not_applicable"
+        elif SandboxEnforcement.NOT_APPLICABLE_NO_LOCAL_EFFECTS in enforcement:
+            engine = "mixed"
+            establishment = "required"
+        else:
+            engine = "bubblewrap"
+            establishment = "required"
+        return ResolvedSandboxSessionPlan(policy, engine, establishment, resolved)
+    except Exception:
+        # Roll back roots already owned by successfully resolved earlier agents,
+        # plus any in-progress CREATE_PRIVATE dirs for the failing agent
+        # (including empty shared random parents).
+        for plan in resolved.values():
+            plan.cleanup_created_session_private_roots()
+        remove_created_session_private_roots(in_progress_created)
+        raise
 
 
 def resolve_scratch_anchor(

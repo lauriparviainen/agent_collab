@@ -575,7 +575,11 @@ class AntigravityConversationLifecycleTests(unittest.TestCase):
             *,
             conversation_id=None,
             save_dir=None,
+            app_data_dir=None,
+            allow_all_policy=False,
+            extra_workspaces=None,
         ):
+            del app_data_dir, allow_all_policy, extra_workspaces
             factory_calls.append((conversation_id, save_dir))
             return _FakeAgent(
                 _FakeResponse({"chunks": [{"type": "Text", "step_index": 0, "text": "ok"}]}),

@@ -119,20 +119,30 @@ pip install '.[claude]'       # claude_sdk
 pip install '.[codex]'        # codex_sdk
 pip install '.[antigravity]'  # antigravity_sdk + its protobuf 7 runtime
 pip install '.[xai]'          # xai_sdk
-pip install '.[all]'          # everything
+pip install '.[all]'          # metadata only; see coexistence note below
 ```
 
-> **Current Antigravity/xAI version conflict.** `google-antigravity` 0.1.8
-> generates code for protobuf 7.35+, while `xai-sdk` 1.17 requires protobuf
-> `<7`. The provider-specific `antigravity` extra pins its working protobuf
-> runtime, but the shared `all` extra intentionally omits that incompatible
-> floor so it remains installable with xAI; Antigravity then fails its
-> import-time protobuf check in that shared environment. Until their published
-> constraints become compatible, install those two SDK backends in separate
-> environments and verify each with `pip check` plus an SDK import. The backend
-> health check reports the incompatible Antigravity runtime unavailable.
-> Do not replace system libraries to work around this Python dependency
-> conflict. See the
+> **Antigravity/xAI protobuf coexistence (resolved 2026-07-27).**
+> `google-antigravity` 0.1.8 generates code for protobuf 7.35+, while
+> `xai-sdk` 1.17 declares protobuf `<7` — so one pip resolver transaction
+> cannot install both, and `pip install '.[antigravity,xai]'` fails by design.
+> The `[all]` extra deliberately omits the Antigravity protobuf floor for the
+> same reason: bare `pip install '.[all]'` / `pipx install '.[all]'` resolves
+> protobuf 6.x and leaves `antigravity_sdk` unusable. Both SDKs nevertheless
+> run in **one** environment when install is two-phase: xai-sdk ships
+> protobuf-6 generated code that protobuf's one-major-back runtime guarantee
+> covers on the 7.x line, and only xai-sdk's own import-time version gate
+> rejects it. **Prefer `./agent_collab.sh install`**, which installs `[all]`
+> first and then upgrades protobuf to the Antigravity floor in a second phase;
+> the xai_sdk backend defeats the gate through a small import shim
+> ([compat.py](agent_collab/backends/xai_sdk/compat.py)). Two consequences to
+> know about: `pip check` in the durable venv reports the xai-sdk metadata
+> conflict (expected), and ad-hoc `pip install` runs in that venv can resolve
+> protobuf back down — upgrade through the install script only. **When
+> upgrading `xai-sdk`, check whether upstream accepts protobuf 7** (watch
+> `xai_sdk/proto/__init__.py` and the `protobuf<7` pin); once it does, retire
+> the shim and the second install phase. See the
+> [xAI SDK backend notes](agent_collab/backends/xai_sdk/README.md) and the
 > [Antigravity SDK backend notes](agent_collab/backends/antigravity_sdk/README.md).
 
 > **This package is not on PyPI.** `pip install agent-collab` currently
@@ -267,9 +277,11 @@ delete it yourself if you want everything gone. Installed
 [review skills](#install-the-review-skills) are also kept; remove them first
 with `./agent_collab.sh skills uninstall` while the checkout still works.
 
-As a standard packaging alternative, `pipx install '.[all]'` also installs
-the declared console commands in an isolated environment. A Docker image is
-planned but not available yet.
+As a packaging alternative, `pipx install '.[all]'` installs the declared
+console commands in an isolated environment, but **does not** run the
+protobuf second-phase alignment that `./agent_collab.sh install` performs —
+use the install script when you need Antigravity SDK + xAI SDK together. A
+Docker image is planned but not available yet.
 
 ## Give your coding agent a second opinion
 

@@ -55,10 +55,12 @@ BackendFactory = Callable[[], WorkerBackend]
 
 def _registry() -> Dict[str, BackendFactory]:
     # Lazy imports keep unsupported backends out of the worker until requested.
+    from ..backends.antigravity_sdk.worker import AntigravitySdkWorkerBackend
     from ..backends.claude_sdk.worker import ClaudeSdkWorkerBackend
     from ..backends.codex_sdk.worker import CodexSdkWorkerBackend
 
     return {
+        "antigravity_sdk": AntigravitySdkWorkerBackend,
         "claude_sdk": ClaudeSdkWorkerBackend,
         "codex_sdk": CodexSdkWorkerBackend,
     }
@@ -80,8 +82,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     if channel <= 2:
         print("worker-fd must be greater than 2", file=sys.stderr)
         return 2
+    # The control socket was inherited into this process only. Clear the
+    # inheritable flag so allow-all provider shells / localharness children
+    # cannot retain the daemon full-duplex channel.
     try:
-        os.set_inheritable(channel, True)
+        os.set_inheritable(channel, False)
     except OSError:
         pass
     try:

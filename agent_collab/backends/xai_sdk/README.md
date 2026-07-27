@@ -1,9 +1,36 @@
 # xAI SDK backend
 
 Registered as `xai_sdk` (`type="xai"`, `backend="sdk"`). This is the remote xAI
-chat API, not the local Grok Build coding runtime. It requires `xai-sdk>=1.17,<2`
+chat API, not the local Grok Build coding runtime. It requires `xai-sdk>=1.17,<1.18`
 and `XAI_API_KEY`; imports are lazy and the async client is closed
 deterministically when the runner/session closes.
+
+## Protobuf 7 import shim (deliberate hack — read before upgrading xai-sdk)
+
+All `xai_sdk` imports in this codebase go through
+[`compat.py`](compat.py)'s `import_xai_sdk()` — never `import xai_sdk`
+directly. xai-sdk 1.17 ships two generated-proto trees (`proto/v5`,
+`proto/v6`) and selects one at import time by the protobuf runtime's major
+version, raising `ValueError("Unsupported protobuf version: ...")` for
+protobuf 7+. The durable environment runs protobuf 7.35+ (required by
+`google-antigravity`'s generated code), which is inside protobuf's official
+one-major-back runtime guarantee for xai-sdk's v6 gencode — only that gate
+blocks it. The shim tries a plain import first and, only on that exact
+`ValueError`, retries the import while `google.protobuf.__version__` is
+temporarily spoofed to a 6.x string, then restores it. Verified end to end
+2026-07-27 (imports, proto round-trips, and `google.antigravity` importing in
+the same process); `conditional_tests/test_protobuf_coexistence.py` re-proves
+it wherever the real SDKs are installed, and
+`tests/backends/xai_sdk/test_compat.py` covers the shim logic without them.
+
+**On every xai-sdk upgrade, check whether upstream resolved this**: look for
+a protobuf 7 branch (or relaxed gate) in `xai_sdk/proto/__init__.py` and a
+lifted `protobuf<7` dependency cap
+(https://github.com/xai-org/xai-sdk-python). The shim self-retires — the
+plain import succeeds and the spoof branch becomes dead code — but once
+upstream is fixed, remove `compat.py`, its call sites (backend and
+`common/model_discovery.py`), and the second-phase protobuf alignment in
+`user_install.py`, and fold the protobuf pin back into the extras.
 
 Dynamic model discovery uses
 `AsyncClient.models.list_language_models()` and includes canonical names plus

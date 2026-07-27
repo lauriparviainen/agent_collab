@@ -37,6 +37,17 @@ INSTALL_LOG_NAME = "install.log"
 # see install_readiness/model_catalog) so degradation stays the helper's
 # non-fatal warning, not a hard subprocess kill.
 READINESS_TIMEOUT_SECONDS = 60
+# Shared protobuf runtime for the durable environment; must match the pin in
+# pyproject's `antigravity` extra (asserted by tests/test_ci_tooling.py).
+# `xai-sdk` 1.17 caps protobuf below 7 while `google-antigravity` 0.1.8 needs
+# the 7.35+ runtime, so a single resolver transaction cannot install both; the
+# `[all]` install resolves to protobuf 6 and this second phase upgrades it.
+# xai-sdk's shipped 6.x gencode stays inside protobuf's one-major-back runtime
+# guarantee, and backends/xai_sdk/compat.py defeats the SDK's import-time
+# version gate. pip warns about the xai-sdk metadata conflict during this
+# phase (and `pip check` keeps reporting it); that is expected until xAI lifts
+# the cap upstream.
+PROTOBUF_COEXISTENCE_PIN = "protobuf>=7.35,<8"
 
 
 def install_user_command(
@@ -87,6 +98,14 @@ def install_user_command(
     _run_logged(install_args, log_path or _default_log_path(), action="package installation")
     _remove_obsolete_entrypoints(venv)
     ok(f"Installed agent-collab {__version__}" + (" (editable)" if editable else ""))
+
+    step("Aligning the shared protobuf runtime for xAI + Antigravity coexistence")
+    _run_logged(
+        [str(venv_python), "-m", "pip", "install", PROTOBUF_COEXISTENCE_PIN],
+        log_path or _default_log_path(),
+        action="protobuf alignment",
+    )
+    ok(f"protobuf aligned to {PROTOBUF_COEXISTENCE_PIN}")
 
     step("Exposing the agent-collab command")
     if not entrypoint.exists():

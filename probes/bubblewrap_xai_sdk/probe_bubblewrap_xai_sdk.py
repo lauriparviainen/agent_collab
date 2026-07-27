@@ -166,7 +166,10 @@ async def structural_worker(args: argparse.Namespace, paths: dict[str, Path]) ->
     sys.addaudithook(audit)
 
     from agent_collab.backends.xai_sdk.backend import _map_sdk_options
-    from xai_sdk import AsyncClient
+    from agent_collab.backends.xai_sdk.compat import import_xai_sdk
+
+    xai_sdk = import_xai_sdk()
+    AsyncClient = xai_sdk.AsyncClient
     from xai_sdk.chat import user
 
     mapped = _map_sdk_options({"model": args.model, "thinking_level": "low"})

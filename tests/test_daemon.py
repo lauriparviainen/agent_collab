@@ -2470,6 +2470,45 @@ sequence = ["claude_cli.a", "claude_cli.b"]
             for agent_id, answer in agents.items():
                 self.assertTrue(answer["text"].startswith(f"Mock {agent_id} response for:"))
 
+    async def test_cancelled_prepare_still_cleans_session_private_roots(self):
+        """Shielded prepare + cancel callback must reclaim private roots."""
+        from types import SimpleNamespace
+
+        cleaned: list[str] = []
+        released = asyncio.Event()
+
+        class _Prepared:
+            def __init__(self):
+                self.sandbox_plan = SimpleNamespace(
+                    cleanup_created_session_private_roots=lambda: cleaned.append("ok")
+                )
+
+        async def _slow_prepare():
+            await released.wait()
+            return _Prepared()
+
+        manager = SessionManager()
+        prepare_task = asyncio.create_task(_slow_prepare())
+
+        async def _cancelled_start():
+            try:
+                await asyncio.shield(prepare_task)
+            except asyncio.CancelledError:
+                manager._cleanup_prepare_task_on_cancel(prepare_task)
+                raise
+
+        start_task = asyncio.create_task(_cancelled_start())
+        await asyncio.sleep(0)
+        start_task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await start_task
+        self.assertEqual(cleaned, [])
+        released.set()
+        await prepare_task
+        await asyncio.sleep(0)
+        self.assertEqual(cleaned, ["ok"])
+        self.assertFalse(prepare_task.cancelled())
+
 
 class SessionManagerPruneTests(unittest.IsolatedAsyncioTestCase):
     NOW = datetime(2026, 7, 12, 12, 0, 0, tzinfo=timezone.utc)

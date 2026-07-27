@@ -49,6 +49,9 @@ class XaiSdkLiveTests(LiveBackendTestCase):
         self.assertIn("grok-4.5", observation.models)
 
     def test_provider_memory_across_stored_response_chain(self):
+        from agent_collab.backends.xai_sdk.compat import import_xai_sdk
+
+        import_xai_sdk()
         from xai_sdk.aio.chat import Chat
 
         codeword = f"SABLE-{secrets.token_hex(4).upper()}"

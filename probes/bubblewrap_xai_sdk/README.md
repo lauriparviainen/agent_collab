@@ -30,7 +30,7 @@ which performs network I/O and no exposed local tool effects.
 ## Requirements and commands
 
 - Linux with `bwrap` on `PATH` and usable user namespaces.
-- A Python environment containing `xai-sdk>=1.17,<2`.
+- A Python environment containing `xai-sdk>=1.17,<1.18`.
 - For the optional live comparison, `XAI_API_KEY` and network access.
 
 The structural check constructs the exact production-mapped request against a

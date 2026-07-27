@@ -31,6 +31,9 @@ from .terminal import print_event
 
 WORKFLOWS = set(builtin_config().workflows)
 RUNNER_CLEANUP_GRACE_SECONDS = 2.0
+# Extra time after the close bound for adopted close reapers (worker CLOSE
+# protocol can take longer than the 2s grace) before plan private roots go.
+REAPER_DRAIN_SECONDS = 8.0
 
 EventAppender = Callable[[Event], Awaitable[int]]
 OutcomeCommitter = Callable[[TurnOutcomeRecord, Event], Awaitable[None]]
@@ -866,16 +869,85 @@ class Referee:
             ),
         )
 
+    def _cleanup_sandbox_plan_private_roots(self) -> None:
+        """Best-effort cleanup for CREATE_PRIVATE_DIRECTORY roots on the plan.
+
+        Daemon sessions already clean on dry-run / prepare-fail / session end.
+        Direct CLI Referee paths (including dry-run BackendDryRunRunner) must
+        reclaim plan-owned roots here when no runtime runner owns them.
+        """
+
+        plan = self.sandbox_plan
+        cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
+        if callable(cleanup):
+            try:
+                cleanup()
+            except Exception:
+                pass
+
+    async def _drain_close_reapers(self) -> None:
+        """Wait briefly for adopted close reapers before plan private-root rmtree."""
+
+        pending = [task for task in self._reaper_tasks if not task.done()]
+        if not pending:
+            return
+        try:
+            await asyncio.wait(pending, timeout=REAPER_DRAIN_SECONDS)
+        except Exception:
+            pass
+
+    async def _await_task_until(self, task: "asyncio.Task[Any]", timeout: float) -> None:
+        """Wait for *task* until it finishes or *timeout* elapses.
+
+        CancelledError at any await must not end the wait early: concurrent
+        ``stop_session()`` calls each ``task.cancel()`` the referee run, and an
+        unshielded fallback would let the third cancel skip straight to plan
+        private-root rmtree while close/drain is still mid-flight. Always use
+        ``asyncio.shield`` and loop until done or the deadline.
+
+        Reuse one ``asyncio.wait`` task across cancels. A fresh
+        ``shield(wait(...))`` each iteration would orphan the previous wait
+        until its timeout, so a cancel storm fans out unbounded waiters.
+        """
+
+        if task.done() or timeout <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        waiter: Optional[asyncio.Task[Any]] = None
+        try:
+            while not task.done():
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return
+                if waiter is None or waiter.done():
+                    waiter = asyncio.create_task(
+                        asyncio.wait({task}, timeout=remaining),
+                        name="agent-collab-await-task-until",
+                    )
+                try:
+                    await asyncio.shield(waiter)
+                except asyncio.CancelledError:
+                    continue
+        finally:
+            if waiter is not None and not waiter.done():
+                waiter.cancel()
+                try:
+                    await waiter
+                except (asyncio.CancelledError, Exception):
+                    pass
+
     async def run(self, task: str) -> Dict[str, str]:
         validate_workflow(self.collab_config, self.config.workflow)
         if not self.workdir.exists() or not self.workdir.is_dir():
             raise ValueError(f"workdir does not exist or is not a directory: {self.workdir}")
 
         transcript: List[Event] = []
-        runners = self._runners()
+        runners: Dict[str, AgentRunner] = {}
         stages = self._stages()[: max(0, self.config.max_turns)]
 
         try:
+            runners = self._runners()
             return await self._run_stages(task, transcript, runners, stages)
         finally:
             # Close every runner within a bound, shielded so it runs on normal
@@ -887,10 +959,36 @@ class Referee:
             # The shielded close keeps running/adopted in the background. A
             # genuine mid-stage stop still propagates — that CancelledError comes
             # from the body, not from this await.
+            # Track close/drain as tasks so cancel of a shielded await cannot
+            # proceed to plan rmtree while those coroutines are still mid-flight
+            # (shield alone continues them but resumes this finally immediately).
+            # _await_task_until keeps waiting through repeated cancels until the
+            # bound elapses — no unshielded fallback that a third cancel can skip.
+            close_task = asyncio.create_task(
+                self._close_runners_bounded(runners),
+                name="agent-collab-close-runners",
+            )
             try:
-                await asyncio.shield(self._close_runners_bounded(runners))
+                await asyncio.shield(close_task)
             except asyncio.CancelledError:
                 pass
+            if not close_task.done():
+                await self._await_task_until(
+                    close_task,
+                    RUNNER_CLEANUP_GRACE_SECONDS + REAPER_DRAIN_SECONDS,
+                )
+            # Drain any per-runner close reapers adopted inside the bound wait.
+            drain_task = asyncio.create_task(
+                self._drain_close_reapers(),
+                name="agent-collab-drain-close-reapers",
+            )
+            try:
+                await asyncio.shield(drain_task)
+            except asyncio.CancelledError:
+                pass
+            if not drain_task.done():
+                await self._await_task_until(drain_task, REAPER_DRAIN_SECONDS)
+            self._cleanup_sandbox_plan_private_roots()
 
     async def _run_stages(
         self,

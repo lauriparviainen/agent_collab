@@ -1,34 +1,63 @@
 # Design the common Bubblewrap workspace sandbox
 
-> **Continuation status (2026-07-26):** Complete Round 11 feedback was
-> retrieved from agent-collab session `daemon-06219f667ad44f0e`. Its one
-> unresolved Medium finding is reconciled below by the normative Git protection
-> record, coverage-mount normalization, ordering, and establishment-proof
-> contract. Four additional design-review loops converged in session
-> `daemon-0173bb7e678046d9`: both independent reviewers reported no confirmed
-> High/Medium findings. Stage 1 production implementation review has used
-> all six permitted parallel sessions. The latest was
-> `daemon-675a2f82d8de4bc7`; its two confirmed findings are fixed and locally
-> verified. There are no unresolved confirmed findings or disagreements.
-> Formal review convergence is not claimed because the sixth-session diff
-> changed after adjudication and the explicit limit forbids a seventh session.
-> Stage 2 now implements the `claude_cli` adapter on the same branch without
-> changing that historical Stage 1 record. Its first independent production
-> review session, `daemon-624f7a278c604d10`, found one confirmed Medium
-> command-event projection defect; the fix and regression test are locally
-> green. Post-fix session `daemon-0bac6b95c4344bb3` converged: both independent
-> reviewers rechecked the closeout and reported no High/Medium findings.
-> Stage 4 now implements the canonical `antigravity_cli` slice without
-> changing either historical implementation record. Its first review session
-> produced one clean report and one timeout; fresh session
-> `daemon-8b4c9140eaae44ea` converged with both reviewers reporting no
-> High/Medium findings. Stage 3 now implements the canonical `xai_cli` slice
-> without changing the completed Stage 1, Stage 2, or Stage 4 records. Its
-> six permitted independent production-review loops found and closed the
-> confirmed findings recorded below. There are no unresolved confirmed
-> findings or disagreements. Formal Stage 3 convergence is not claimed because
-> the sixth-loop High finding required a post-review fix and the explicit limit
-> forbids a seventh frozen recheck.
+> **Handoff / continue here (2026-07-27, Stage 7 dual-review converged):** Work
+> on branch `design/bubblewrap-implementation`. **Do not merge, install, or
+> flip the outer default.** Issue #43 stays open. Stage 8 (`xai_sdk`
+> `no_local_effects`) remains later.
+>
+> ### Deliverable (one commit, Stage 7 + protobuf coexistence)
+>
+> 1. **Stage 7 — `antigravity_sdk` Bubblewrap outer-sandbox worker** (framed
+>    SDK-worker pattern like Stages 5–6).
+> 2. **Protobuf coexistence for `xai-sdk` + `google-antigravity`** (settled
+>    product intent — no dual venvs; shim + two-phase install).
+>
+> ### Dual-review status — same-loop clean on loop 10
+>
+> Review recipe: `workflow=dual-review`, `sandbox=none`, `interactive=false`,
+> `antigravity_cli`/`gemini-3.1-pro-high`/`mode=plan` +
+> `codex_cli`/`gpt-5.6-sol`/`thinking_level=high`/`sandbox=read-only`.
+> Owner lifted the 6-loop cap and authorized remaining dual-review starts.
+>
+> | Loop | Session | Gemini | Codex | Result |
+> | --- | --- | --- | --- | --- |
+> | 1 | `daemon-c6ef7dac2c6e48de` | clean | Medium (doc pin) | fixed |
+> | 2 | `daemon-2d16794ee67449fe` | clean | Mediums (external cwd; pipx docs) | fixed |
+> | 3 | `daemon-54be140e6bdd44fe` | clean | Medium (plan cleanup vs close reaper) | fixed |
+> | 4 | `daemon-9ba7b8c14a984ffe` | clean | Medium (daemon rmtree races reaper) | fixed via reaper drain |
+> | 5 | `daemon-618a11d1b1234bd9` | clean | Mediums (cancel during close; live/probe bypass shim) | fixed |
+> | 6 | `daemon-c4e4ff79e349431e` | clean | Medium (cancel during drain still races cleanup) | fixed (close+drain as tasks) |
+> | 7 | `daemon-f1a116f2959d403f` | clean | Medium (CancelledError is BaseException on waits) | fixed |
+> | 8 | `daemon-82e5efce73b64e2e` | garbled | Medium (unshielded fallback still skips wait) | fixed via `_await_task_until` |
+> | 9 | `daemon-70f76806c0d94698` | clean | Medium (shield(wait) fan-out under cancel storm) | fixed (reuse one waiter) |
+> | **10** | `daemon-33de04f4c541485b` | **clean** | **clean** | **same-loop convergence** |
+>
+> ### Teardown fixes retained after convergence
+>
+> - Plan multi-agent rollback + empty parent rmdir; daemon prepare cancel
+>   shield + cleanup; session finally cleanup
+> - Worker control fd `set_inheritable(False)`; external cwd as
+>   `LocalAgentConfig` extra workspace
+> - Referee: close/drain as tasks; `_await_task_until` reuses one shielded
+>   waiter across cancels, then plan private-root cleanup
+> - Compat: exact gate, major 7, series `1.17.x`; `pyproject` `xai-sdk>=1.17,<1.18`
+> - Live test + xAI bwrap probe use `import_xai_sdk()`; README pipx/all caveats
+>
+> ### Next agent checklist
+>
+> 1. Free gate if not just re-run; Stage 7 commit applied with `Refs #43`.
+> 2. Stage 8 (`xai_sdk` `no_local_effects`) — design/implement next; no merge.
+> 3. Still no outer default flip, no install, no close of #43 until SDK stages done.
+>
+> ### Key paths
+>
+> `agent_collab/backends/antigravity_sdk/{sandbox,worker}.py`,
+> `agent_collab/backends/xai_sdk/compat.py`,
+> `tests/backends/antigravity_sdk/test_sandbox.py`,
+> `tests/backends/xai_sdk/test_compat.py`,
+> `conditional_tests/test_protobuf_coexistence.py`; plus edits to
+> `daemon.py`, `referee.py`, `sandbox/plan.py`, `sdk_worker.py`,
+> `user_install.py`, `pyproject.toml`, docs, tests.
 
 **Status:** CLI product slice stabilized on
 `design/bubblewrap-implementation`. Stages 1–4 are implemented; free gates and
@@ -36,14 +65,16 @@ all four paid CLI outer-sandbox acceptances pass. Stage 5 implements the
 generic framed SDK worker plus `codex_sdk` outer `read-only`; dual production
 review loop 6 converged (both reviewers: no High/Medium findings). Stage 6
 adds `claude_sdk` on the same worker transport; dual production review loop 8
-converged (both reviewers: no High/Medium findings). Stage 2 and
-Stage 4 production reviews converged; Stage 1 and Stage 3 exhausted their
-six-loop limits without formal same-loop convergence and have no unresolved
-confirmed findings. **Do not merge this branch to `main` until every remaining
-SDK backend stage is implemented** (or positively audited `no_local_effects`
-where applicable). The shipped outer default remains `none`. Issue #43 stays
-open.
-
+converged (both reviewers: no High/Medium findings). Stage 7
+`antigravity_sdk` worker + protobuf coexistence for shared xAI/Antigravity
+install are implemented; dual-review loop 10 converged (both reviewers: no
+High/Medium findings) after cancel-safe close/drain teardown fixes.
+Stage 2 and Stage 4 production reviews converged; Stage 1 and Stage 3
+exhausted their six-loop limits without formal same-loop convergence and have
+no unresolved confirmed findings. **Do not merge this branch to `main` until
+every remaining SDK backend stage is implemented** (or positively audited
+`no_local_effects` where applicable). The shipped outer default remains
+`none`. Issue #43 stays open.
 **Created:** 2026-07-25.
 
 **Issue:** [#43](https://github.com/lauriparviainen/agent_collab/issues/43)
@@ -115,13 +146,14 @@ Operator preconditions for re-running any acceptance:
 - Merge of `design/bubblewrap-implementation` to `main`
 - Built-in/default outer `sandbox = "read-only"` for shipped agents/workflows
 - Closing issue #43
-- Remaining SDK outer support (`antigravity_sdk` worker; `xai_sdk`
-  `no_local_effects` audit). Stages 5–6 (`codex_sdk`, `claude_sdk`) are
-  implemented on this branch with dual-review convergence.
+- Remaining SDK outer support (`xai_sdk` `no_local_effects` audit). Stages
+  5–7 (`codex_sdk`, `claude_sdk`, `antigravity_sdk`) are implemented on this
+  branch; Stage 7 dual-review closeout may still be in progress.
 - Non-Linux engines, network/IPC/keyring isolation, resource/seccomp limits
 
-Next implementation work on this branch is Stages 7–8 (`antigravity_sdk`,
-`xai_sdk`), not further CLI feature expansion or a merge.
+Next implementation work on this branch is dual-review closeout for Stage 7
+when needed, then Stage 8 (`xai_sdk`), not further CLI feature expansion or a
+merge.
 
 ## Stage 5 implementation review reconciliation (2026-07-26)
 
@@ -1016,10 +1048,29 @@ provider built-ins or client-executed function tools.
 
 The source trace and probe used Bubblewrap 0.6.3 and
 `google-antigravity` 0.1.8 in an isolated Python environment with protobuf
-7.35.1. The shared all-provider environment was deliberately not modified:
-`xai-sdk` 1.17.0 requires protobuf below 7, while the generated Antigravity
-0.1.8 code requires protobuf 7.35 or newer despite looser published base
-metadata.
+7.35.1. The shared all-provider environment was deliberately not modified at
+probe time: `xai-sdk` 1.17.0 declares protobuf below 7, while the generated
+Antigravity 0.1.8 code requires protobuf 7.35 or newer despite looser
+published base metadata.
+
+**Update 2026-07-27 — the shared-environment conflict is resolved; no
+isolated provider environment is needed.** The isolated-environment
+workaround above is superseded: both SDKs now run in the one durable venv on
+protobuf 7.35+. Verified on the installed daemon venv: xai-sdk 1.17 ships a
+protobuf-6 generated-proto tree (`xai_sdk/proto/v6`, gencode 6.30.0) that
+protobuf's one-major-back runtime guarantee covers on the 7.x line, and the
+only obstacle is xai-sdk's own import-time major-version gate
+(`xai_sdk/proto/__init__.py` rejects majors outside 5/6). Production now
+defeats that gate with the deliberate import shim in
+`agent_collab/backends/xai_sdk/compat.py` (spoof-and-restore of
+`google.protobuf.__version__` during one import, engaged only on the gate's
+exact `ValueError`), and `user_install.py` upgrades protobuf to the
+`antigravity` extra's floor in a second install phase because one pip
+resolver transaction still cannot satisfy both declared constraints.
+Coverage: `tests/backends/xai_sdk/test_compat.py` (shim logic, no vendor
+SDKs) and `conditional_tests/test_protobuf_coexistence.py` (real SDKs, same
+process). Re-check on every xai-sdk upgrade whether upstream accepts
+protobuf 7 so the shim and second install phase can be retired.
 
 The current call path is:
 

@@ -462,7 +462,20 @@ class SessionManager:
             self._log_lifecycle(f"failed to persist session index for {state.session_id}: {exc}")
 
     async def start_session(self, request: StartSessionRequest) -> SessionState:
-        prepared = await asyncio.to_thread(self._prepare_session_start, request)
+        # Preparation may create session-private roots. Run it as a child task
+        # shielded from parent cancellation so a cancelled start_session still
+        # owns cleanup when the thread finishes (bare await would cancel the
+        # child task and make result() unavailable).
+        prepare_task = asyncio.create_task(
+            asyncio.to_thread(self._prepare_session_start, request),
+            name="agent-collab-prepare-session-start",
+        )
+        try:
+            prepared = await asyncio.shield(prepare_task)
+        except asyncio.CancelledError:
+            self._cleanup_prepare_task_on_cancel(prepare_task)
+            raise
+
         workdir = prepared.workdir
         log_dir = prepared.log_dir
         request.backend_options = prepared.normalized_options
@@ -474,7 +487,19 @@ class SessionManager:
         request.interactive_idle_timeout = prepared.interactive_idle_timeout
 
         session_id = request.session_id or self._new_session_id()
-        self._validate_new_session_id(session_id)
+        try:
+            self._validate_new_session_id(session_id)
+        except Exception:
+            # Plan resolve can create session-private roots before a managed
+            # session exists to own cleanup (duplicate/invalid session_id).
+            plan = prepared.sandbox_plan
+            cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
+            if callable(cleanup):
+                try:
+                    cleanup()
+                except Exception:
+                    pass
+            raise
 
         created_at = utc_timestamp()
         state = SessionState(
@@ -606,6 +631,7 @@ class SessionManager:
         except ConfigError as exc:
             raise SessionRequestError(str(exc)) from exc
         normalized_options = normalized.backend_options
+        sandbox_plan = None
         try:
             sandbox_plan = self._resolve_sandbox_plan(
                 request,
@@ -614,7 +640,45 @@ class SessionManager:
                 selection.agent_backends,
                 normalized.agent_options,
             )
+            interactive = bool(request.interactive)
+            interactive_idle_timeout = self._normalize_idle_timeout(
+                request.interactive_idle_timeout
+            )
+            catalog_warnings = self._model_catalog_warnings(request, collab_config, selection)
+            settings = build_session_settings(
+                collab_config,
+                request.workflow,
+                normalized_options,
+                agent_backends=selection.agent_backends,
+                agent_options=normalized.agent_options,
+                warnings=[*collab_config.warnings, *selection.warnings, *catalog_warnings],
+                interactive=interactive,
+                interactive_idle_timeout=interactive_idle_timeout,
+                turn_timeout=int(request.timeout),
+                workdir=workdir,
+                sandbox_plan=sandbox_plan,
+            )
+            capabilities = self._session_capabilities(collab_config, selection.agent_backends)
+            return _PreparedSessionStart(
+                workdir=workdir,
+                log_dir=log_dir,
+                collab_config=collab_config,
+                normalized_options=normalized_options,
+                agent_options=dict(normalized.agent_options),
+                agent_backends=dict(selection.agent_backends),
+                settings=settings,
+                capabilities=capabilities,
+                interactive_idle_timeout=interactive_idle_timeout,
+                sandbox_plan=sandbox_plan,
+            )
         except Exception as exc:
+            if sandbox_plan is not None:
+                cleanup = getattr(sandbox_plan, "cleanup_created_session_private_roots", None)
+                if callable(cleanup):
+                    try:
+                        cleanup()
+                    except Exception:
+                        pass
             from .sandbox.specs import SandboxFailure
 
             if isinstance(exc, SandboxFailure):
@@ -622,35 +686,6 @@ class SessionManager:
                     [{"path": "sandbox", "message": str(exc), "code": exc.code}]
                 ) from exc
             raise
-        interactive = bool(request.interactive)
-        interactive_idle_timeout = self._normalize_idle_timeout(request.interactive_idle_timeout)
-        catalog_warnings = self._model_catalog_warnings(request, collab_config, selection)
-        settings = build_session_settings(
-            collab_config,
-            request.workflow,
-            normalized_options,
-            agent_backends=selection.agent_backends,
-            agent_options=normalized.agent_options,
-            warnings=[*collab_config.warnings, *selection.warnings, *catalog_warnings],
-            interactive=interactive,
-            interactive_idle_timeout=interactive_idle_timeout,
-            turn_timeout=int(request.timeout),
-            workdir=workdir,
-            sandbox_plan=sandbox_plan,
-        )
-        capabilities = self._session_capabilities(collab_config, selection.agent_backends)
-        return _PreparedSessionStart(
-            workdir=workdir,
-            log_dir=log_dir,
-            collab_config=collab_config,
-            normalized_options=normalized_options,
-            agent_options=dict(normalized.agent_options),
-            agent_backends=dict(selection.agent_backends),
-            settings=settings,
-            capabilities=capabilities,
-            interactive_idle_timeout=interactive_idle_timeout,
-            sandbox_plan=sandbox_plan,
-        )
 
     def _resolve_sandbox_plan(
         self,
@@ -714,18 +749,26 @@ class SessionManager:
             operator=operator,
             command_previews=command_previews,
         )
-        enforced = [
-            item
-            for item in plan.agents.values()
-            if item.enforcement is SandboxEnforcement.OS_ENFORCED
-        ]
-        if enforced:
-            installation = discover_bubblewrap()
-            if not request.dry_run:
-                supervisor = SandboxSupervisor(installation)
-                for item in enforced:
-                    asyncio.run(supervisor.preflight(item))
-        return plan
+        try:
+            enforced = [
+                item
+                for item in plan.agents.values()
+                if item.enforcement is SandboxEnforcement.OS_ENFORCED
+            ]
+            if enforced:
+                installation = discover_bubblewrap()
+                if not request.dry_run:
+                    supervisor = SandboxSupervisor(installation)
+                    for item in enforced:
+                        asyncio.run(supervisor.preflight(item))
+                else:
+                    # Dry-run never launches a runner that would clean session-
+                    # private roots created at plan resolve.
+                    plan.cleanup_created_session_private_roots()
+            return plan
+        except Exception:
+            plan.cleanup_created_session_private_roots()
+            raise
 
     def _model_catalog_warnings(
         self,
@@ -1382,6 +1425,14 @@ class SessionManager:
             await self._set_status(managed, FAILED, failure=failure)
         finally:
             managed.referee = None
+            plan = getattr(managed.request, "sandbox_plan", None) if managed.request else None
+            if plan is not None:
+                cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
+                if callable(cleanup):
+                    try:
+                        cleanup()
+                    except Exception:
+                        pass
 
     def _record_event(self, managed: _ManagedSession, event: Event) -> None:
         managed.events.append(event.to_dict())
@@ -1565,6 +1616,38 @@ class SessionManager:
             raise SessionRequestError(f"invalid session_id {session_id!r}")
         if session_id in self._sessions:
             raise SessionRequestError(f"session_id already exists: {session_id}")
+
+    @staticmethod
+    def _cleanup_prepared_session_private_roots(prepared: Any) -> None:
+        plan = getattr(prepared, "sandbox_plan", None)
+        cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
+        if callable(cleanup):
+            try:
+                cleanup()
+            except Exception:
+                pass
+
+    def _cleanup_prepare_task_on_cancel(self, prepare_task: "asyncio.Task[Any]") -> None:
+        """Best-effort cleanup if preparation finishes after start_session is cancelled.
+
+        ``prepare_task`` must be shielded from parent cancellation so it can still
+        complete with a prepared plan (and created private roots) after the
+        caller is cancelled.
+        """
+
+        def _on_done(task: "asyncio.Task[Any]") -> None:
+            if task.cancelled():
+                return
+            try:
+                prepared = task.result()
+            except Exception:
+                return
+            self._cleanup_prepared_session_private_roots(prepared)
+
+        if prepare_task.done():
+            _on_done(prepare_task)
+            return
+        prepare_task.add_done_callback(_on_done)
 
     def _new_session_id(self) -> str:
         return f"daemon-{uuid.uuid4().hex[:16]}"

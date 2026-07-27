@@ -73,11 +73,11 @@ Termination owns the Bubblewrap process group and exact wait; completion waits
 for every pinned namespace pidfd (not the first ready one) so detached
 descendants cannot outlive teardown. Private scratch is removed after
 completion. The CLI product slice (Stages 1–4) is acceptance-verified on the
-design branch. Stages 5–6 add a backend-neutral framed SDK worker transport and
-move `codex_sdk` and `claude_sdk` into a supervised Bubblewrap worker for outer
-`read-only`; `sandbox = "none"` retains the in-daemon SDK runners. Remaining
-SDK backends stay unsupported until their stages land; do not merge to `main`
-until that gate is complete.
+design branch. Stages 5–7 add a backend-neutral framed SDK worker transport and
+move `codex_sdk`, `claude_sdk`, and `antigravity_sdk` into a supervised
+Bubblewrap worker for outer `read-only`; `sandbox = "none"` retains the
+in-daemon SDK runners. Remaining SDK backends stay unsupported until their
+stages land; do not merge to `main` until that gate is complete.
 
 The Claude Stage 2 adapter keeps the complete effective `CLAUDE_CONFIG_DIR`
 persistent and writable, leaves legacy `~/.claude.json` read-only, maps
@@ -190,7 +190,7 @@ The original Stage 5.1 A1 spike resolved all SDKs together under Python
 - `openai-codex==0.1.0b3` with
   `openai-codex-cli-bin==0.137.0a4`,
 - `google-antigravity==0.1.5`.
-- `xai-sdk==1.17.0` (bounded by the project to `>=1.17,<2`).
+- `xai-sdk==1.17.0` (bounded by the project to `>=1.17,<1.18`).
 
 The 2026-07-24 Stage 6 refresh leaves the active verified floors at:
 
@@ -235,14 +235,20 @@ shapes:
 - `BuiltinTools`
 - strict `conversation_id` + `SessionContinuationMode.RESUME` reconnect
 
-The 0.1.8 generated protobuf code requires protobuf 7.35+, which conflicts with
-xAI SDK 1.17's protobuf `<7` constraint in one shared environment; the backend
-probe reports that state unavailable and the credentialed Antigravity fixture
-uses an isolated provider environment. Missing SDK distribution-version
-metadata is unavailable too because the runtime compatibility cannot be
-verified. The `antigravity` extra pins protobuf 7.35+, while `all` deliberately
-omits that conflicting runtime constraint so the shared xAI environment
-remains installable and health-gated. The
+The 0.1.8 generated protobuf code requires protobuf 7.35+, which xAI SDK
+1.17's declared protobuf `<7` cap blocks from resolving in one pip
+transaction; the backend probe reports a protobuf-6 environment unavailable.
+Missing SDK distribution-version metadata is unavailable too because the
+runtime compatibility cannot be verified. The `antigravity` extra pins
+protobuf 7.35+, while `all` deliberately omits that runtime constraint so it
+stays resolvable; the durable install then upgrades protobuf to the 7.35 floor
+in a second phase. Coexistence in that one environment was verified
+2026-07-27: xai-sdk ships protobuf-6 gencode covered by protobuf's
+one-major-back runtime guarantee, and only its import-time major-version gate
+rejects the 7.x runtime — `backends/xai_sdk/compat.py` defeats the gate with a
+spoof-and-restore import shim (self-retiring once upstream accepts protobuf 7;
+re-check on every xai-sdk upgrade). `pip check` in the durable venv reports
+the xai-sdk metadata conflict by design. The
 credentialed two-turn Vertex provider-memory fixture passed with
 `gemini-2.5-flash`, a stable native conversation id, and a Stage 3 delta prompt
 that omitted the original task and codeword. Strict reconnect also retains one

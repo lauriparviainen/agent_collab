@@ -584,6 +584,13 @@ async def _run_codex_sdk_catalog(agent_config: Any) -> Any:
 
 async def _run_xai_sdk_catalog(agent_config: Any, timeout: float) -> Any:
     try:
+        # HACK, deliberate: never `import xai_sdk` directly anywhere in this
+        # codebase. The shim defeats xai-sdk's import-time protobuf-major gate
+        # under the protobuf 7 runtime that google-antigravity requires — see
+        # backends/xai_sdk/compat.py for the full story.
+        from ..xai_sdk.compat import import_xai_sdk
+
+        import_xai_sdk()
         from xai_sdk import AsyncClient  # type: ignore
     except ImportError as exc:
         raise SdkUnavailableError("xai_sdk is not importable") from exc

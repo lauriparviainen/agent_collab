@@ -38,6 +38,7 @@ from ..common.sdk import (
     sdk_settings_summary,
     stringify,
 )
+from .compat import import_xai_sdk
 
 MODULE_NAME = "xai_sdk"
 PACKAGE_NAME = "xai-sdk"
@@ -268,6 +269,11 @@ def _default_conversation(
 ) -> XaiConversation:
     del workdir
     try:
+        # HACK, deliberate: never `import xai_sdk` directly anywhere in this
+        # codebase. The shim defeats xai-sdk's import-time protobuf-major gate
+        # so the shared venv can run the protobuf 7 runtime that
+        # google-antigravity requires — see compat.py for the full story.
+        import_xai_sdk()
         from xai_sdk import AsyncClient  # type: ignore
         from xai_sdk.chat import user  # type: ignore
     except ImportError as exc:

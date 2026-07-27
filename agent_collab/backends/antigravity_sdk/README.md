@@ -15,12 +15,19 @@ suggestions remain static.
 The 0.1.8 wheel's generated protobuf code requires protobuf 7.35+, but its
 published dependency currently permits older runtimes. The provider-specific
 `antigravity` extra adds `protobuf>=7.35,<8`. Agent-collab's `all` environment
-also includes `xai-sdk` 1.17, which requires protobuf `<7`, so `all`
-intentionally omits the conflicting Antigravity runtime floor and the health
-probe reports Antigravity unavailable there. Until the providers publish
-compatible constraints, use separate provider environments when both SDKs are
-needed and verify each with `pip check` plus an import. Do not work around this
-by changing system libraries. The probe also reports unavailable when installed
+also includes `xai-sdk` 1.17, which declares protobuf `<7`, so `all`
+intentionally omits the Antigravity runtime floor and a plain `pip install
+'.[all]'` resolves to protobuf 6, where the health probe reports Antigravity
+unavailable. The durable install (`./agent_collab.sh install`) resolves this:
+it upgrades protobuf to the 7.35+ floor in a second phase, which is safe for
+xai-sdk because its shipped protobuf-6 gencode is inside protobuf's
+one-major-back runtime guarantee — only xai-sdk's own import-time version
+gate objects, and the xai_sdk backend defeats it with a deliberate import
+shim (see [`../xai_sdk/compat.py`](../xai_sdk/compat.py) and the
+[xai_sdk README](../xai_sdk/README.md), verified 2026-07-27). When upgrading
+either SDK, re-check whether xai-sdk accepts protobuf 7 upstream so the shim
+and second install phase can be retired. Do not work around any of this by
+changing system libraries. The probe also reports unavailable when installed
 SDK distribution-version metadata is missing, because it cannot verify the
 runtime compatibility contract.
 
@@ -80,6 +87,22 @@ delta prompt omitted the original task and generated codeword, the response
 recalled the codeword, and both turns reported one stable conversation id.
 `resume`, `interrupt`, and `tool_gate` remain false.
 `LocalAgentConfig(workspaces=[...])` receives only the resolved workspace.
+
+## Outer filesystem sandbox
+
+Stage 7 advertises outer `sandbox = "read-only"` as an `sdk_worker` backend.
+Agent-collab launches a supervised Bubblewrap namespace, proves establishment,
+then runs `python -I -m agent_collab.sandbox.sdk_worker`. The worker owns the
+complete Antigravity SDK client, callbacks, and bundled `localharness` plus
+tool descendants. Session-private trajectory and app-data directories are created
+for the session; configured Application Default Credentials are mounted
+read-only. After outer proof, the worker applies the allow-all SDK policy and
+default capabilities profile. Protobuf and glibc floors fail closed when
+incompatible. OS keyring use remains an external service outside the filesystem
+guarantee.
+
+`sandbox = "none"` (the default) keeps the historical in-process daemon runner
+and does not start Bubblewrap. Explicit outer `none` is the rollback path.
 
 ## Testing
 

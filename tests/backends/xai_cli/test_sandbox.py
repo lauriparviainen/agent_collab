@@ -73,6 +73,7 @@ class XaiCliSandboxAdapterTests(unittest.TestCase):
         self.assertIsInstance(adapter, XaiCliSandboxAdapter)
         supported = {
             ("antigravity", "cli"),
+            ("antigravity", "sdk"),
             ("claude", "cli"),
             ("claude", "sdk"),
             ("codex", "cli"),

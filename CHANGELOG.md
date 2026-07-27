@@ -13,6 +13,19 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add outer read-only Bubblewrap support for `antigravity_sdk` on the framed
+  SDK-worker transport (#43, stage 7). Session-private roots, cancel-safe
+  runner close/reaper drain before plan cleanup, and dual-review
+  convergence on teardown races.
+- Run the xAI and Antigravity SDK backends from one durable environment.
+  The install upgrades protobuf to the Antigravity 7.35+ floor in a second
+  phase, and a deliberate import shim
+  (`agent_collab/backends/xai_sdk/compat.py`) defeats xai-sdk 1.17's
+  import-time protobuf-major gate — its shipped protobuf-6 gencode is inside
+  protobuf's one-major-back runtime guarantee. `pip check` reports the
+  xai-sdk metadata conflict by design; re-check on every xai-sdk upgrade
+  whether upstream accepts protobuf 7 so the shim can be retired.
+
 ## [0.12.1] - 2026-07-25 - SSE evaluation and MCP Tasks probe
 
 - Close the non-blocking wake-path evaluation without implementation (#49).

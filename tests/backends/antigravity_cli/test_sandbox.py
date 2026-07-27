@@ -64,6 +64,7 @@ class AntigravityCliSandboxAdapterTests(unittest.TestCase):
         self.assertIsInstance(adapter, AntigravityCliSandboxAdapter)
         supported = {
             ("antigravity", "cli"),
+            ("antigravity", "sdk"),
             ("claude", "cli"),
             ("claude", "sdk"),
             ("codex", "cli"),

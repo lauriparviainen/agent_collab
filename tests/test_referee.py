@@ -1209,6 +1209,69 @@ class RunnerCloseLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(result, dict)
         self.assertIn("session_id", result)
 
+    async def test_repeated_cancel_during_close_defers_private_root_cleanup(self):
+        # Concurrent stop_session() can cancel the run task multiple times while
+        # close is mid-flight. Private-root rmtree must not run until close
+        # finishes (or the grace bound elapses) — no unshielded fallback that a
+        # third cancel can skip.
+        from types import SimpleNamespace
+
+        close_started = asyncio.Event()
+        release_close = asyncio.Event()
+        order: list[str] = []
+
+        class SlowCloseRunner(AgentRunner):
+            async def run_turn(self, prompt, workdir, emit):
+                await emit(Event.create("claude", "message", "done"))
+                return TurnOutcome("completed")
+
+            async def close(self):
+                close_started.set()
+                order.append("close-start")
+                await release_close.wait()
+                order.append("close-end")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee = self._referee(Path(tmp), ["claude"], {"claude": SlowCloseRunner()})
+            referee.sandbox_plan = SimpleNamespace(
+                cleanup_created_session_private_roots=lambda: order.append("cleanup-roots")
+            )
+            with mock.patch("agent_collab.referee.RUNNER_CLEANUP_GRACE_SECONDS", 0.5):
+                with mock.patch("agent_collab.referee.REAPER_DRAIN_SECONDS", 0.5):
+                    task = asyncio.create_task(referee.run("task"))
+                    await asyncio.wait_for(close_started.wait(), timeout=1.0)
+                    # Three cancels: shield(close), first await_until wait, and a
+                    # second await_until wait — previously the third hit an
+                    # unshielded wait and fell through to rmtree early.
+                    for _ in range(3):
+                        task.cancel()
+                        await asyncio.sleep(0)
+                    self.assertNotIn("cleanup-roots", order)
+                    release_close.set()
+                    result = await asyncio.wait_for(task, timeout=2.0)
+        self.assertIsInstance(result, dict)
+        self.assertEqual(order, ["close-start", "close-end", "cleanup-roots"])
+
+    async def test_await_task_until_reuses_waiter_under_cancel_storm(self):
+        # shield(wait(...)) each loop iteration orphans the prior wait until its
+        # timeout; a cancel storm must not fan out unbounded waiters.
+        blocker = asyncio.create_task(asyncio.sleep(5.0))
+        owner = Referee.__new__(Referee)
+        waiter = asyncio.create_task(owner._await_task_until(blocker, 1.0))
+        await asyncio.sleep(0)
+        for _ in range(50):
+            waiter.cancel()
+            await asyncio.sleep(0)
+        pending_named = [
+            task
+            for task in asyncio.all_tasks()
+            if task.get_name() == "agent-collab-await-task-until" and not task.done()
+        ]
+        self.assertLessEqual(len(pending_named), 1, pending_named)
+        self.assertFalse(waiter.done())
+        blocker.cancel()
+        await asyncio.gather(blocker, waiter, *pending_named, return_exceptions=True)
+
 
 if __name__ == "__main__":
     unittest.main()

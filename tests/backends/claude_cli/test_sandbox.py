@@ -74,6 +74,7 @@ class ClaudeCliSandboxAdapterTests(unittest.TestCase):
     def test_every_backend_outside_completed_cli_stages_remains_fail_closed(self):
         supported = {
             ("antigravity", "cli"),
+            ("antigravity", "sdk"),
             ("claude", "cli"),
             ("claude", "sdk"),
             ("codex", "cli"),

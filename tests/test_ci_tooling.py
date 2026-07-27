@@ -98,6 +98,18 @@ class StaticToolingContractTests(unittest.TestCase):
             provider_pins - antigravity_runtime,
         )
 
+    def test_install_protobuf_alignment_matches_the_antigravity_extra(self):
+        """The durable install's second-phase protobuf upgrade must track the
+        pyproject `antigravity` extra pin exactly; a drift would ship a venv
+        whose runtime no longer matches the verified coexistence contract
+        (see agent_collab/backends/xai_sdk/compat.py)."""
+        from agent_collab.user_install import PROTOBUF_COEXISTENCE_PIN
+
+        extras = self._toml_table(
+            PYPROJECT_PATH.read_text(encoding="utf-8"), "project.optional-dependencies"
+        )
+        self.assertIn(PROTOBUF_COEXISTENCE_PIN, self._extra_requirements(extras, "antigravity"))
+
     def test_ci_runs_every_required_gate_with_pinned_actions(self):
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 

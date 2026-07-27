@@ -11,6 +11,7 @@ from agent_collab.user_install import (
     UserInstallError,
     _collect_backend_readiness,
     _migrate_user_config,
+    PROTOBUF_COEXISTENCE_PIN,
     install_user_command,
     main,
     uninstall_user_command,
@@ -109,11 +110,25 @@ class UserInstallTests(unittest.TestCase):
                 calls[1],
                 [str(venv / "bin" / "python"), "-m", "pip", "install", f"{repo}[all]"],
             )
+            # The second install phase upgrades protobuf past xai-sdk's
+            # declared cap so google-antigravity's runtime floor is met; see
+            # backends/xai_sdk/compat.py for the coexistence contract.
+            self.assertEqual(
+                calls[2],
+                [
+                    str(venv / "bin" / "python"),
+                    "-m",
+                    "pip",
+                    "install",
+                    PROTOBUF_COEXISTENCE_PIN,
+                ],
+            )
             self.assertTrue(link.is_symlink())
             self.assertEqual(link.resolve(), (venv / "bin" / "agent-collab").resolve())
             output = stdout.getvalue()
             self.assertIn("▶ Preparing durable environment", output)
             self.assertIn("▶ Installing agent-collab", output)
+            self.assertIn("▶ Aligning the shared protobuf runtime", output)
             self.assertIn("✓ Command available:", output)
 
     def test_editable_reinstall_is_idempotent(self):
@@ -147,7 +162,7 @@ class UserInstallTests(unittest.TestCase):
             self.assertEqual(result, link)
             self.assertFalse(obsolete.exists())
             self.assertEqual(
-                run.call_args.args[0],
+                run.call_args_list[0].args[0],
                 [
                     str(venv / "bin" / "python"),
                     "-m",
@@ -155,6 +170,16 @@ class UserInstallTests(unittest.TestCase):
                     "install",
                     "--editable",
                     f"{repo}[all]",
+                ],
+            )
+            self.assertEqual(
+                run.call_args_list[1].args[0],
+                [
+                    str(venv / "bin" / "python"),
+                    "-m",
+                    "pip",
+                    "install",
+                    PROTOBUF_COEXISTENCE_PIN,
                 ],
             )
 

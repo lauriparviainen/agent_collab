@@ -28,9 +28,14 @@ dependencies = [
 # 3.12.13. The 2026-07-24 refresh covers Claude 0.2.126, Codex 0.144.4,
 # Antigravity 0.1.8, and xAI 1.17.0, including the Codex/xAI model-list APIs.
 # The Antigravity-only extra adds its verified protobuf runtime floor. `all`
-# intentionally omits that one runtime constraint because xAI 1.17 requires
-# protobuf <7; the health probe and install docs expose the shared-environment
-# conflict instead of making every `all` installation unsatisfiable.
+# intentionally omits that one runtime constraint because xAI 1.17 declares
+# protobuf <7, so one resolver transaction cannot satisfy both; the durable
+# install (user_install.py) upgrades protobuf to the Antigravity floor in a
+# second phase, and backends/xai_sdk/compat.py defeats xai-sdk's import-time
+# protobuf-major gate under that runtime (verified: its shipped 6.x gencode is
+# inside protobuf's one-major-back guarantee). Installing `.[antigravity,xai]`
+# from a checkout in a single pip run still fails resolution by design — use
+# the install script or mirror its two-phase order.
 [project.optional-dependencies]
 claude = [
     "claude-agent-sdk>=0.2.126,<0.3.0",
@@ -43,13 +48,15 @@ antigravity = [
     "protobuf>=7.35,<8",
 ]
 xai = [
-    "xai-sdk>=1.17,<2",
+    # Bound to the series verified by backends/xai_sdk/compat.py (protobuf-7
+    # import spoof). Widen only after re-verifying the dual gencode trees.
+    "xai-sdk>=1.17,<1.18",
 ]
 all = [
     "claude-agent-sdk>=0.2.126,<0.3.0",
     "openai-codex>=0.144.4,<0.145.0",
     "google-antigravity>=0.1.8,<0.2.0",
-    "xai-sdk>=1.17,<2",
+    "xai-sdk>=1.17,<1.18",
 ]
 dev = [
     "ruff==0.15.20",
