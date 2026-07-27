@@ -1,8 +1,9 @@
 # Design the common Bubblewrap workspace sandbox
 
-> **Handoff / continue here (2026-07-27, Stage 8 dual-review converged):** Work
-> on branch `design/bubblewrap-implementation`. **Do not merge, install, or
-> flip the outer default.** Issue #43 stays open.
+> **Handoff / continue here (2026-07-27, outer default `read-only`):** Work on
+> branch `design/bubblewrap-implementation`. Stages 1–8 are implemented; the
+> built-in `sandbox_default` is now `read-only`. Issue #43 stays open until
+> release/merge readiness.
 >
 > ### Deliverable (one commit, Stage 8 — `xai_sdk` `no_local_effects`)
 >
@@ -48,15 +49,11 @@
 >
 > ### Next agent checklist
 >
-> 1. **Done:** Stage 8 dual-review loop 11 same-loop clean; free gate green
->    (1,372 hermetic tests, 1 skip); commit `6004e41` with `Refs #43`; public
->    comment on #43.
-> 2. Product gate remains: no outer default flip, no install, no merge to
->    `main`, leave #43 open until release readiness decides.
-> 3. All backend stages 1–8 are implemented or positively audited on this
->    branch; merge blocked only on default-policy / release decision.
-> 4. Optional: push `design/bubblewrap-implementation` when the operator wants
->    the remote branch updated (local is ahead by the Stage 8 commit(s)).
+> 1. **Done:** Stage 8 dual-review loop 11 same-loop clean; free gate green;
+>    commit `6004e41` with `Refs #43`.
+> 2. **Done:** built-in `sandbox_default = "read-only"` (code + docs).
+> 3. Leave #43 open until release/merge readiness; push branch when desired.
+> 4. Explicit `sandbox = "none"` remains the documented opt-out.
 >
 > ### Key paths
 >
@@ -80,9 +77,9 @@ implements the `xai_sdk` `no_local_effects` audit and adapter; dual-review
 loop 11 converged (both reviewers: no High/Medium findings). Stage 2 and
 Stage 4 production reviews converged; Stage 1 and Stage 3 exhausted their
 six-loop limits without formal same-loop convergence and have no unresolved
-confirmed findings. **Do not merge this branch to `main` until the product
-readiness/default-policy gate is met.** The shipped outer default remains
-`none`. Issue #43 stays open.
+confirmed findings. The shipped outer default is now `read-only`. **Merge to
+`main` remains an operator release decision.** Issue #43 stays open until
+closeout.
 **Created:** 2026-07-25.
 
 **Issue:** [#43](https://github.com/lauriparviainen/agent_collab/issues/43)

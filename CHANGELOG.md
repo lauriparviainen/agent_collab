@@ -13,11 +13,14 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Ship outer filesystem `sandbox_default = "read-only"` after Stages 1–8 (#43).
+  Omitting the start `sandbox` field now establishes the outer boundary for
+  every supported backend; explicit `sandbox = "none"` remains the opt-out.
 - Audit `xai_sdk` as outer-sandbox `no_local_effects` (#43, stage 8). Read-only
   starts report `not_applicable_no_local_effects` without Bubblewrap; the
   capability is pinned to the audited `xai-sdk` 1.17.x series and exact remote
   chat request surface (revoked on drift). Mixed sessions still OS-enforce
-  other members. The shipped outer default remains `none`.
+  other members.
 - Add outer read-only Bubblewrap support for `antigravity_sdk` on the framed
   SDK-worker transport (#43, stage 7). Session-private roots, cancel-safe
   runner close/reaper drain before plan cleanup, and dual-review

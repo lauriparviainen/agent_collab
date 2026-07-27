@@ -64,7 +64,7 @@ writable state root (same contract as `codex_cli`). After outer proof, the
 worker forces SDK `danger-full-access` for non-interactive tool use; that is
 not OS isolation.
 
-`sandbox = "none"` (the default) keeps the historical in-process daemon runner
+`sandbox = "none"` keeps the historical in-process daemon runner
 and does not start Bubblewrap. Explicit outer `none` is the rollback path.
 
 ## Testing

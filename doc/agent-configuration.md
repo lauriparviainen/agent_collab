@@ -381,11 +381,10 @@ historical in-daemon SDK runners. Stage 8 positively audits `xai_sdk` as
 `not_applicable_no_local_effects` (no Bubblewrap) while the production path
 remains remote gRPC chat only. That is a versioned software capability pinned
 to the audited `xai-sdk` 1.17.x series and exact request surface — not an OS
-isolation claim. The shipped default remains `none` until the complete backend
-readiness gate and product decision to flip the default are met, so omitting
-this field preserves existing execution. Explicit `none` also leaves the
-provider command and its native controls unchanged. Paid CLI outer-sandbox
-acceptance env vars and path shapes are documented in
+isolation claim. The shipped default is `read-only` (omit the start field to
+use it). Explicit `none` leaves the provider command and its native controls
+unchanged and is the visible opt-out. Paid CLI outer-sandbox acceptance env
+vars and path shapes are documented in
 [integration_tests/README.md](../integration_tests/README.md).
 
 On Linux, a supported CLI read-only start:
@@ -462,14 +461,15 @@ Current staged readiness and rollback are:
 | `codex_sdk` | OS-enforced SDK worker (Stage 5) | explicit/configured `none` (in-process) |
 | `claude_sdk` | OS-enforced SDK worker (Stage 6) | explicit/configured `none` (in-process) |
 | `antigravity_sdk` | OS-enforced SDK worker (Stage 7) | explicit/configured `none` (in-process) |
-| remaining SDK backends | unsupported; start rejected | no implicit fallback |
+| `xai_sdk` | audited no-local-effects (Stage 8) | explicit/configured `none` |
 | in-memory mock | audited no-local-effects | `none` disables the policy label |
 
 Only global user config may set outer-sandbox operator policy:
 
 ```toml
 [system]
-sandbox_default = "none"              # "read-only" stays opt-in during staged rollout
+sandbox_default = "read-only"         # shipped default after Stages 1–8
+# sandbox_default = "none"            # explicit opt-out of the outer boundary
 # sandbox_override = "read-only"      # installation-wide, callers cannot conflict
 sandbox_extra_readable_dirs = []
 sandbox_extra_writable_dirs = []

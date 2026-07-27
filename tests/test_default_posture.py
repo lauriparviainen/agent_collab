@@ -44,6 +44,10 @@ def _normalized_defaults(canonical: str):
 
 
 class ShippedWritePostureTests(unittest.TestCase):
+    def test_outer_sandbox_default_is_read_only(self):
+        config = builtin_config()
+        self.assertEqual(config.system.sandbox_default.value, "read-only")
+
     def test_claude_cli_defaults_to_permission_mode_default(self):
         backend, agent, options = _normalized_defaults("claude_cli")
         self.assertEqual(options["permission_mode"], "default")

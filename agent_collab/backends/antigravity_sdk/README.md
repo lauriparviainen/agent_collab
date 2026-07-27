@@ -101,7 +101,7 @@ default capabilities profile. Protobuf and glibc floors fail closed when
 incompatible. OS keyring use remains an external service outside the filesystem
 guarantee.
 
-`sandbox = "none"` (the default) keeps the historical in-process daemon runner
+`sandbox = "none"` keeps the historical in-process daemon runner
 and does not start Bubblewrap. Explicit outer `none` is the rollback path.
 
 ## Testing

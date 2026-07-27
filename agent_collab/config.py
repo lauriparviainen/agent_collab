@@ -134,7 +134,7 @@ class WorkTimeConfig:
 @dataclass
 class SystemConfig:
     timezone: str = "local"
-    sandbox_default: SandboxPolicy = SandboxPolicy.NONE
+    sandbox_default: SandboxPolicy = SandboxPolicy.READ_ONLY
     sandbox_override: Optional[SandboxPolicy] = None
     sandbox_extra_readable_dirs: List[Path] = field(default_factory=list)
     sandbox_extra_writable_dirs: List[Path] = field(default_factory=list)
@@ -1222,10 +1222,10 @@ def render_user_config(token: Optional[str] = None) -> str:
     )
     lines.extend(
         (
-            "# Agent-collab outer filesystem policy. Stage 1 keeps the default inactive;",
-            '# set sandbox_default = "read-only" only for supported selections.',
+            "# Agent-collab outer filesystem policy. Built-in default is read-only;",
+            '# set sandbox_default = "none" only when an opt-out is required.',
             "[system]",
-            'sandbox_default = "none"',
+            'sandbox_default = "read-only"',
             "sandbox_extra_readable_dirs = []",
             "sandbox_extra_writable_dirs = []",
             "sandbox_alias_audit_max_entries = 1000000",

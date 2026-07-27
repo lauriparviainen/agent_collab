@@ -301,6 +301,8 @@ sequence = ["xai_cli"]
                 collab_config=config,
                 agent_backends={"xai_cli": "cli"},
                 agent_options={"xai_cli": dict(options)},
+                # Avoid host ambient GROK_HOME validation for a dry-run unit check.
+                sandbox="none",
                 color=False,
             ),
             printer=lambda event: None,

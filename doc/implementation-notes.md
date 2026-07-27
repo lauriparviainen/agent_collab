@@ -55,10 +55,10 @@ catch-up. The scheduler's isolated workdir exemption is an internal-only
 `StartSessionRequest` field absent from the wire DTO.
 
 Schema 11 adds the typed outer-sandbox policy and operator controls. The
-built-in default remains `none`. Policy resolution, backend capability, path
-and Git discovery, normalized mounts, and alias auditing happen before session
-state is created. Each backend registry entry owns a typed `sandbox_adapter`;
-common sandbox code must not branch on backend ids.
+built-in default is `read-only` after Stages 1–8. Policy resolution, backend
+capability, path and Git discovery, normalized mounts, and alias auditing
+happen before session creation. Each backend registry entry owns a typed
+`sandbox_adapter`; common sandbox code must not branch on backend ids.
 
 Stages 1 through 4 implement `read-only` for `codex_cli`, `claude_cli`,
 `xai_cli`, and `antigravity_cli` through
@@ -80,8 +80,7 @@ in-daemon SDK runners. Stage 8 audits `xai_sdk` as `no_local_effects` (remote
 gRPC only; no Bubblewrap worker): outer `read-only` reports
 `not_applicable_no_local_effects` when every selected member qualifies, and
 mixed sessions still OS-enforce members that require Bubblewrap. The shipped
-outer default remains `none`. Do not merge to `main` until the design branch
-gate and default-policy decision are complete.
+outer default is `read-only`; explicit `sandbox = "none"` remains the opt-out.
 
 The Claude Stage 2 adapter keeps the complete effective `CLAUDE_CONFIG_DIR`
 persistent and writable, leaves legacy `~/.claude.json` read-only, maps

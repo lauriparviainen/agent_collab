@@ -2,8 +2,8 @@
 
 The new fields have complete built-in defaults and are intentionally not
 written into user configuration.  This migration is therefore a stamp-only
-shape migration: omitted values inherit the inactive Stage 1 built-in
-``sandbox_default = "none"``.
+shape migration: omitted values inherit the built-in ``sandbox_default``
+(currently ``"read-only"``).
 """
 
 from __future__ import annotations

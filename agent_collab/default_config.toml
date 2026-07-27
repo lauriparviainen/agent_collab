@@ -7,10 +7,10 @@ schema_version = 11
 
 [system]
 timezone = "local"
-# The completed CLI stages intentionally keep the production default inactive. Linux may
-# move this to "read-only" only after the complete shipped-backend readiness
-# gate.
-sandbox_default = "none"
+# Outer filesystem policy for starts that omit `sandbox`. All shipped backends
+# accept read-only (CLI direct process, SDK worker, or xai_sdk no_local_effects).
+# Explicit `sandbox = "none"` remains the opt-out.
+sandbox_default = "read-only"
 sandbox_extra_readable_dirs = []
 sandbox_extra_writable_dirs = []
 sandbox_alias_audit_max_entries = 1000000

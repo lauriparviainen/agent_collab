@@ -73,7 +73,7 @@ Admin-managed settings under `/etc/claude-code` fail closed. Legacy
 `~/.claude.json` remains outside the writable state mount when using the
 default config location.
 
-`sandbox = "none"` (the default) keeps the historical in-process daemon runner
+`sandbox = "none"` keeps the historical in-process daemon runner
 and does not start Bubblewrap. Explicit outer `none` is the rollback path.
 
 ## Testing

@@ -276,6 +276,8 @@ class OverrideReachesExecutionTests(unittest.TestCase):
                             workdir=Path(tmp),
                             collab_config=config,
                             agent_backends={"claude_cli": "special"},
+                            # Not an outer-sandbox test; fake backend has no adapter.
+                            sandbox="none",
                             color=False,
                         ),
                         printer=lambda event: None,
