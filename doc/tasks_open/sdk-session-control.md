@@ -389,6 +389,42 @@ gates satisfied, `continuity=true` and the settings summary reports
 `conversation="persistent"`; `resume`, `interrupt`, and `tool_gate` remain
 false.
 
+#### Restart-safe resume needs a durable trajectory root (open)
+
+The adapter's "one trajectory directory across fresh and resumed `Agent`
+objects" guarantee is scoped to a single live agent-collab session. Both paths
+that supply it destroy it at session end:
+
+- sandboxed, the outer sandbox sets `ANTIGRAVITY_SAVE_DIR`
+  (`agent_collab/backends/antigravity_sdk/sandbox.py`) to
+  `<daemon runtime base>/<random hex>/trajectory`, freshly randomized per
+  `describe()`, declared `Persistence.SESSION` +
+  `CreationPolicy.CREATE_PRIVATE_DIRECTORY`, and removed by
+  `cleanup_created_session_private_roots`;
+- unsandboxed, `save_dir` falls back to a process-lifetime
+  `tempfile.TemporaryDirectory` (`backend.py`).
+
+`SessionContinuationMode.RESUME` needs the *same* `save_dir` back, so the
+captured `conversation_id` alone is not sufficient to reopen after a daemon
+reload. Stage 4 must therefore give this backend a host-persistent,
+agent-collab-owned trajectory root keyed to the agent-collab session, which
+pulls in three consequences the other backends do not have:
+
+1. it becomes a writable exception the outer read-only sandbox mounts rather
+   than a directory it discards, so it needs the same ownership and overlap
+   validation `_select_session_state_base` already applies;
+2. it becomes reportable state: install readiness prints `—` in its `state dir`
+   column today precisely because nothing here is host-persistent, and it is
+   agent-collab's directory to create, unlike the provider homes that column
+   reports for `claude_cli`/`codex_cli`;
+3. provider chat trajectories then outlive the session on disk, so retention
+   has to cover them the way it covers transcripts — reopen must not become an
+   unbounded, unswept chat archive.
+
+`xai_sdk` is unaffected: its continuity is a remote conversation handle with no
+local surface (`state_roots=()`), so restart-safe resume there needs no
+directory at all.
+
 ## Runner / adapter contract
 
 The provider mapping lives inside each backend's conversation adapter, reached
@@ -435,6 +471,13 @@ On daemon restart:
   settings, or does not advertise restart-safe resume;
 - append to the existing event cursor and transcript so the audit trail stays
   continuous.
+
+A provider session id is not always the whole of what resume needs. Where the
+SDK reopens against local provider artifacts as well — Antigravity's `save_dir`
+trajectory storage is the known case — those artifacts must survive the daemon
+reload too, which makes them host-persistent state with sandbox, install
+readiness, and retention consequences. See the Antigravity SDK note above
+before flipping `resume` for such a backend.
 
 Add a shared resume operation only after this validation is defined, for
 example `POST /sessions/{id}/resume`, `agent_collab_resume`, and
@@ -589,7 +632,10 @@ The shared control/state contract for continuity is done (#47). What remains:
 4. **Restart-safe resume and public surfaces.** Land explicit resume and
    approval operations across REST/MCP/CLI/TUI once persistence and
    authorization semantics are stable. This is the half of `resume` that
-   in-session `continuity` does not cover.
+   in-session `continuity` does not cover. For Antigravity it also means
+   promoting the trajectory `save_dir` to a durable agent-collab-owned root
+   with sandbox, install-readiness, and retention handling — see the note in
+   the Antigravity SDK section.
 
 Each stage must be independently shippable and must not make existing CLI or
 message-first SDK workflows less reliable.
