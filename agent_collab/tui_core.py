@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
@@ -171,6 +172,124 @@ def ascii_fallback(text: str) -> str:
     return str(text).translate(ASCII_FALLBACKS)
 
 
+# --- terminal cells vs Python characters -------------------------------------
+#
+# ncurses paints in terminal *cells* and wraps whatever overflows a row onto
+# column 0 of the next one. Body rows draw their text at x=1, so an overflow
+# from the row above stays visible as a stray character in the left margin.
+# Every width decision below therefore counts cells, not ``len()``.
+#
+# Tabs are the dominant real-world source: tool digests of file-reading tools
+# have the shape ``<lineno>\t<code>``, one character that paints up to eight
+# cells. Wide characters (CJK, most emoji) paint two, and control characters
+# render as ``^X``. Text is sanitized so that only the wide/narrow distinction
+# is left to measure.
+DISPLAY_TAB_WIDTH = 4
+
+
+def sanitize_display_text(text: str, *, collapse_tabs: bool = False) -> str:
+    """Return ``text`` with tabs expanded and control characters neutralized.
+
+    ``collapse_tabs`` turns each tab into a single space instead of padding to
+    the next tab stop: one-line digests are summaries where column alignment
+    carries no meaning, so the compact form shows more of the payload.
+    Zero-width formatting characters (joiners, variation selectors) are kept —
+    they paint nothing and dropping them would split emoji sequences.
+    """
+    value = str(text)
+    if collapse_tabs:
+        value = value.replace("\t", " ")
+    elif "\t" in value:
+        value = value.expandtabs(DISPLAY_TAB_WIDTH)
+    if any(unicodedata.category(char) == "Cc" for char in value):
+        value = "".join(" " if unicodedata.category(char) == "Cc" else char for char in value)
+    return value
+
+
+# U+FE0F asks for emoji presentation, which paints two cells even when the base
+# character's East Asian Width is narrow (``❤️``, ``⚠️``). Ambiguous-width
+# characters stay one cell: the calm chrome is built from them (``─ │ · …``),
+# and they only widen in CJK-ambiguous locales, where counting them as two
+# would double every hairline instead of fixing anything.
+VARIATION_SELECTOR_16 = "️"
+# The one family with an ASCII base that still takes emoji presentation:
+# ``[0-9#*] + U+FE0F + U+20E3`` (``1️⃣``, ``#️⃣``) paints two cells.
+ENCLOSING_KEYCAP = "⃣"
+KEYCAP_BASES = "0123456789#*"
+
+
+def _char_cells(char: str) -> int:
+    """Cells one character paints (over-estimating is safe, under is the bug)."""
+    if unicodedata.category(char) in ("Mn", "Me", "Cf"):
+        return 0
+    if unicodedata.east_asian_width(char) in ("W", "F"):
+        return 2
+    return 1
+
+
+def _iter_cells(text: str):
+    """Yield ``(character, cells)`` pairs, honoring the emoji presentation mark.
+
+    Only a non-ASCII base widens on the selector alone: terminals give emoji
+    presentation to symbols, not to the space or letter that happens to sit
+    before a stray selector, and counting a padding space as two cells would
+    push its own line over budget. Keycap sequences are the exception — they
+    have an ASCII base and are recognized by their enclosing mark.
+    """
+    value = str(text)
+    for index, char in enumerate(value):
+        cells = _char_cells(char)
+        if cells == 1:
+            following = value[index + 1 : index + 3]
+            # The selector is optional in a keycap sequence; the enclosing mark
+            # is what makes it one.
+            keycap = (
+                char in KEYCAP_BASES
+                and following.lstrip(VARIATION_SELECTOR_16)[:1] == ENCLOSING_KEYCAP
+            )
+            if keycap or (not char.isascii() and following[:1] == VARIATION_SELECTOR_16):
+                cells = 2
+        yield char, cells
+
+
+def cell_width(text: str) -> int:
+    """Terminal cells ``text`` paints, assuming it is already sanitized."""
+    return sum(cells for _, cells in _iter_cells(text))
+
+
+def split_display_cells(text: str, width: int) -> Tuple[str, str]:
+    """Split ``text`` at the last character that still fits in ``width`` cells.
+
+    A wide character straddling the boundary goes entirely to the remainder, so
+    the head never paints more cells than it was given. That can leave the head
+    empty (width 1 against a wide character); callers decide whether to drop the
+    character or force it, which is why this helper does neither.
+    """
+    if width <= 0:
+        return "", str(text)
+    used = 0
+    for index, (_, cells) in enumerate(_iter_cells(text)):
+        if used + cells > width:
+            return text[:index], text[index:]
+        used += cells
+    return str(text), ""
+
+
+def fit_display_text(text: str, width: int) -> str:
+    """Sanitize ``text`` and truncate it to at most ``width`` painted cells."""
+    if width <= 0:
+        return ""
+    value = sanitize_display_text(text)
+    if cell_width(value) <= width:
+        return value
+    return split_display_cells(value, width)[0]
+
+
+def pad_display_text(text: str, width: int) -> str:
+    """Right-pad ``text`` with spaces to ``width`` cells (``{:<N}`` by cells)."""
+    return str(text) + " " * max(0, width - cell_width(text))
+
+
 def format_slash_completion_lines(
     state: SlashCompletionState, max_items: int = 6
 ) -> Tuple[str, ...]:
@@ -238,10 +357,10 @@ def gutter_label(source: str) -> str:
     only pads to a *minimum*, so a long source would push its rows out of
     column with everyone else's. Keep the gutter fixed and mark the cut.
     """
-    label = str(source or "").lower()
-    if len(label) <= GUTTER_WIDTH:
+    label = sanitize_display_text(str(source or "").lower(), collapse_tabs=True)
+    if cell_width(label) <= GUTTER_WIDTH:
         return label
-    return label[: GUTTER_WIDTH - 1] + "…"
+    return split_display_cells(label, GUTTER_WIDTH - 1)[0] + "…"
 
 
 def short_time(timestamp: Any) -> str:
@@ -286,16 +405,21 @@ def format_transcript_event(event: Any) -> Tuple[TranscriptLine, ...]:
 
     if source == "tool":
         raw_lines = text.splitlines()
-        first = raw_lines[0].strip() if raw_lines else ""
+        first = sanitize_display_text(raw_lines[0], collapse_tabs=True).strip() if raw_lines else ""
         extra = max(0, len(raw_lines) - 1)
         digest = first
         if extra > 0:
             digest = f"{first} · +{extra} lines" if first else f"+{extra} lines"
-        return (TranscriptLine(source=source, text=f"{label:<{GUTTER_WIDTH}} {digest}".rstrip()),)
+        return (
+            TranscriptLine(
+                source=source, text=f"{pad_display_text(label, GUTTER_WIDTH)} {digest}".rstrip()
+            ),
+        )
 
     result = []
-    for index, line in enumerate(text.splitlines() or [""]):
-        prefix = f"{label:<{GUTTER_WIDTH}}" if index == 0 else f"{'':<{GUTTER_WIDTH}}"
+    for index, raw_line in enumerate(text.splitlines() or [""]):
+        line = sanitize_display_text(raw_line)
+        prefix = pad_display_text(label if index == 0 else "", GUTTER_WIDTH)
         result.append(
             TranscriptLine(
                 source=source,
@@ -568,16 +692,23 @@ def format_session_picker_lines(picker: SessionPickerState, width: int = 0) -> T
     header = ("session", "status", "workflow", "backends", "updated")
     rows = []
     for session in picker.sessions:
+        # Session fields are free-form (custom workflow names, workdirs from
+        # any filesystem), so they are sanitized here and measured in cells
+        # below: columns padded by character count drift apart the moment a
+        # value carries a wide glyph or a tab.
         rows.append(
-            (
-                str(_value(session, "session_id", None) or ""),
-                str(_value(session, "status", None) or ""),
-                session_workflow_name(session),
-                session_backends_summary(session),
-                _picker_timestamp(
-                    _value(session, "updated_at", None) or _value(session, "created_at", None)
-                ),
-                str(_value(session, "workdir", None) or ""),
+            tuple(
+                sanitize_display_text(field, collapse_tabs=True)
+                for field in (
+                    str(_value(session, "session_id", None) or ""),
+                    str(_value(session, "status", None) or ""),
+                    session_workflow_name(session),
+                    session_backends_summary(session),
+                    _picker_timestamp(
+                        _value(session, "updated_at", None) or _value(session, "created_at", None)
+                    ),
+                    str(_value(session, "workdir", None) or ""),
+                )
             )
         )
     # Reserved floors keep the columns from shifting between session lists:
@@ -594,21 +725,24 @@ def format_session_picker_lines(picker: SessionPickerState, width: int = 0) -> T
         len("2026-07-13 20:38"),
     )
     widths = [
-        max(floors[column], len(title), max(len(row[column]) for row in rows))
+        max(floors[column], len(title), max(cell_width(row[column]) for row in rows))
         for column, title in enumerate(header)
     ]
     header_line = (
-        "    " + " ".join(f"{title:<{widths[i]}}" for i, title in enumerate(header)) + " workdir"
+        "    "
+        + " ".join(pad_display_text(title, widths[i]) for i, title in enumerate(header))
+        + " workdir"
     )
-    if width > 0 and len(header_line) + 2 + len(PICKER_HEADER_HINTS) <= width:
-        padding = width - len(header_line) - len(PICKER_HEADER_HINTS)
+    hint_width = cell_width(PICKER_HEADER_HINTS)
+    if width > 0 and cell_width(header_line) + 2 + hint_width <= width:
+        padding = width - cell_width(header_line) - hint_width
         header_line += " " * padding + PICKER_HEADER_HINTS
     lines = [header_line]
     for index, row in enumerate(rows):
         marker = SLASH_SELECTED_MARKER if index == picker.index else " "
         lines.append(
             f"{marker}   "
-            + " ".join(f"{row[i]:<{widths[i]}}" for i in range(len(header)))
+            + " ".join(pad_display_text(row[i], widths[i]) for i in range(len(header)))
             + f" {row[5]}"
         )
     return tuple(lines)
@@ -965,15 +1099,16 @@ def info_agents_from_session(session: Any) -> Tuple[AgentInfo, ...]:
 def _ellipsize(text: str, width: int) -> str:
     if width <= 0:
         return ""
-    if len(text) <= width:
+    text = sanitize_display_text(text, collapse_tabs=True)
+    if cell_width(text) <= width:
         return text
     if width == 1:
         return "…"
-    return text[: width - 1] + "…"
+    return split_display_cells(text, width - 1)[0] + "…"
 
 
 def _segments_width(segments: Sequence[InfoSegment]) -> int:
-    return sum(len(segment.text) for segment in segments)
+    return sum(cell_width(segment.text) for segment in segments)
 
 
 def _agent_chip_segments(agent: AgentInfo) -> Tuple[InfoSegment, ...]:
@@ -986,18 +1121,26 @@ def _agent_chip_segments(agent: AgentInfo) -> Tuple[InfoSegment, ...]:
     itself (an ``antigravity_cli`` agent id would print twice); agents without
     a backend (mock) fall back to the bare id.
     """
+    # Ids, backends, and model names are free-form configuration strings, so
+    # they get the same one-line chrome sanitize as the task and the workdir:
+    # the cluster is right-aligned from its measured width, and a tab measured
+    # narrower than it paints would drop the chips onto the context text.
+    name = sanitize_display_text(agent.name, collapse_tabs=True)
+    kind = sanitize_display_text(agent.type, collapse_tabs=True)
+    backend = sanitize_display_text(agent.backend, collapse_tabs=True)
+    model = sanitize_display_text(agent.model, collapse_tabs=True)
     segments: list = []
-    if agent.type and agent.backend:
-        canonical = f"{agent.type}_{agent.backend}"
-        if agent.name and agent.name not in (agent.type, canonical):
-            segments.append(InfoSegment(agent.name, "agent", agent.brand_color))
+    if kind and backend:
+        canonical = f"{kind}_{backend}"
+        if name and name not in (kind, canonical):
+            segments.append(InfoSegment(name, "agent", agent.brand_color))
             segments.append(InfoSegment(f" {canonical}", "backend"))
         else:
             segments.append(InfoSegment(canonical, "agent", agent.brand_color))
     else:
-        segments.append(InfoSegment(agent.name, "agent", agent.brand_color))
-    if agent.model:
-        segments.append(InfoSegment(f": {agent.model}", "model"))
+        segments.append(InfoSegment(name, "agent", agent.brand_color))
+    if model:
+        segments.append(InfoSegment(f": {model}", "model"))
     return tuple(segments)
 
 
@@ -1038,8 +1181,12 @@ def build_info_line_segments(
     overflow the workflow drops first, then the task ellipsizes (never
     dropped). Workdir/project lives on the context line and is truncated there.
     """
-    task = str(task or "")
-    workflow = str(workflow or "")
+    # Sanitize before measuring, not only on the ellipsize path: the draw
+    # funnel expands tabs, so a raw task that "fits" can paint wider than its
+    # budget and shove the workflow over the text it was measured against. A
+    # task is a whole prompt, newlines and all, collapsed into one chrome row.
+    task = sanitize_display_text(task or "", collapse_tabs=True)
+    workflow = sanitize_display_text(workflow or "", collapse_tabs=True)
     if not task and not workflow:
         return (InfoSegment("no active session", "placeholder"),)
 
@@ -1300,23 +1447,63 @@ def _value(event: Any, key: str, default: Any) -> Any:
 
 
 def _wrap_display_text(text: str, width: int, *, continuation_indent: str) -> Tuple[str, ...]:
+    """Wrap ``text`` into chunks of at most ``width`` painted cells.
+
+    ``width`` is a cell budget, not a character count: a chunk that satisfies
+    ``len(chunk) <= width`` can still paint past the end of its row and spill
+    into the next row's left margin.
+    """
     if width <= 0:
         return ()
-    text = str(text)
+    text = sanitize_display_text(text)
     if text == "":
         return ("",)
-    if len(text) <= width:
+    if cell_width(text) <= width:
         return (text,)
-    if width <= len(continuation_indent):
-        return tuple(text[index : index + width] for index in range(0, len(text), width))
+    if width <= cell_width(continuation_indent):
+        chunks = []
+        rest = text
+        while rest:
+            chunk, rest = _take_cells(rest, width)
+            chunks.append(chunk)
+        return tuple(chunks)
 
+    # Each pass consumes at least one character of the *remaining text*, never
+    # merely the indent it just prepended: taking cells from
+    # ``continuation_indent + remainder`` can stop inside the indent (17 spaces
+    # of gutter against an 18-cell row leave no room for a two-cell glyph) and
+    # rebuild the same line forever.
     chunks = []
-    current = text
-    while len(current) > width:
-        chunks.append(current[:width])
-        remainder = current[width:].lstrip()
-        if not remainder:
-            return tuple(chunks)
-        current = continuation_indent + remainder
-    chunks.append(current)
+    head, rest = _take_cells(text, width)
+    chunks.append(head)
+    remainder = rest.lstrip()
+    body_width = width - cell_width(continuation_indent)
+    while remainder:
+        head, rest = _take_cells(remainder, body_width)
+        # A glyph too wide for the body budget is forced through so the loop
+        # advances; it then gives up the indent rather than the row, because
+        # indent + glyph would paint past the row and spill into the next
+        # margin — the artifact this whole layer exists to prevent.
+        prefix = continuation_indent if cell_width(head) <= body_width else ""
+        chunks.append(prefix + head)
+        remainder = rest.lstrip()
     return tuple(chunks)
+
+
+def _take_cells(text: str, width: int) -> Tuple[str, str]:
+    """``split_display_cells`` that always consumes at least one character.
+
+    A single character wider than the whole budget (a two-cell glyph against a
+    one-cell body) would otherwise stall. It is emitted on its own line and the
+    draw funnel drops what does not fit, which costs one short row instead of
+    hanging the interface. The zero-width marks that belong to it travel with
+    it: an orphaned emoji presentation selector would otherwise open the next
+    line and widen the character in front of it.
+    """
+    head, rest = split_display_cells(text, width)
+    if head:
+        return head, rest
+    index = 1
+    while index < len(text) and _char_cells(text[index]) == 0:
+        index += 1
+    return text[:index], text[index:]

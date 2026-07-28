@@ -13,6 +13,16 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Stop the TUI painting stray characters in the left margin (#54). Text was
+  measured in Python characters while ncurses paints in terminal cells, so a
+  line carrying a tab, a wide character, or a control character overflowed its
+  row and wrapped onto column 0 of the next one. Transcript text now expands
+  tabs and neutralizes control characters; wrapping, truncation, padding, and
+  every chrome placement (info line, context line, agent chips, session picker
+  columns, input box, status line) budget terminal cells against the same
+  sanitized string the draw funnel paints. The funnel fits each string to its
+  cell budget and lets ncurses paint all of it, so zero-width marks are no
+  longer cut off.
 - Report provider state directories in the install readiness table (#43). Outer
   read-only makes the provider's own state directory the writable exception and
   will not create it, so a backend that has never been signed in cannot start.

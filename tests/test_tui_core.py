@@ -1,5 +1,6 @@
 import asyncio
 import os
+import threading
 from pathlib import Path
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from agent_collab import cli
 from agent_collab.daemon import SessionManager, StartSessionRequest
 from agent_collab.events import Event
 from agent_collab.tui_core import (
+    GUTTER_WIDTH,
     MENU_ROW_SOURCE,
     MENU_SELECTED_SOURCE,
     MENU_TITLE_SOURCE,
@@ -18,8 +20,15 @@ from agent_collab.tui_core import (
     accept_slash_completion,
     advance_cursor_state,
     build_new_session_payload,
+    cell_width,
     clamp_scroll,
     ensure_scroll_visible,
+    fit_display_text,
+    gutter_label,
+    sanitize_display_text,
+    split_display_cells,
+    VARIATION_SELECTOR_16,
+    wrap_plain_lines,
     filter_slash_commands,
     format_activity_indicator,
     follow_scroll,
@@ -643,6 +652,168 @@ class TuiCoreTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         run_tui.assert_called_once_with(session_id="s1", server_url="http://127.0.0.1:9999")
+
+
+class DisplayCellWidthTests(unittest.TestCase):
+    """Text is measured in terminal cells, not Python characters (issue #54).
+
+    ncurses wraps whatever overflows a row onto column 0 of the next one, where
+    body rows (text at x=1) leave it visible as a stray character in the left
+    margin. Tabs, wide characters, and control characters are the ways a line
+    can pass a ``len()`` budget and still paint too many cells.
+    """
+
+    OVERFLOWING = (
+        "12\tif value:",  # file-reading tool digest: one tab, up to four cells
+        "done ✅ shipped",  # emoji, two cells
+        "日本語のテキストです",  # fullwidth CJK, two cells each
+        "carriage\rreturn\x07bell",  # control characters, painted as ^X
+        "mixed\t日本 ✅\x0btail",  # all three at once
+        "⚠️ warn ❤️ heart",  # base + U+FE0F: two code points, two cells
+        "1️⃣ then 2⃣ keycaps",  # ASCII base that still paints two cells
+    )
+
+    def test_cell_width_counts_wide_characters_as_two(self):
+        self.assertEqual(cell_width("abc"), 3)
+        self.assertEqual(cell_width("日本語"), 6)
+        self.assertEqual(cell_width("✅"), 2)
+        # Zero-width joiners and combining marks paint nothing.
+        self.assertEqual(cell_width("é"), 1)
+        self.assertEqual(cell_width("a‍b"), 2)
+        # U+FE0F asks for emoji presentation: a narrow base then paints two.
+        self.assertEqual(cell_width("⚠"), 1)
+        self.assertEqual(cell_width("⚠️"), 2)
+        self.assertEqual(split_display_cells("⚠️x", 1), ("", "⚠️x"))
+        # Only a symbol takes emoji presentation; a padding space never does.
+        self.assertEqual(cell_width(" " + VARIATION_SELECTOR_16), 1)
+        # Keycaps are the one ASCII base that does — their enclosing mark says
+        # so. Counted by hand rather than by the helper under test: base, the
+        # selector, and the keycap paint two cells together.
+        self.assertEqual(cell_width("1️⃣"), 2)
+        self.assertEqual(cell_width("#️⃣"), 2)
+        self.assertEqual(cell_width("1" + VARIATION_SELECTOR_16), 1)  # no keycap mark
+        # The selector is optional: the enclosing mark alone makes a keycap.
+        self.assertEqual(cell_width("1⃣"), 2)
+        self.assertEqual(cell_width("#⃣"), 2)
+        self.assertEqual(fit_display_text("1️⃣x", 2), "1️⃣")
+        self.assertEqual(fit_display_text("y" * 39 + "1⃣", 40), "y" * 39)
+
+    def test_sanitize_expands_tabs_and_neutralizes_control_characters(self):
+        self.assertEqual(sanitize_display_text("12\tif x:"), "12  if x:")
+        self.assertEqual(sanitize_display_text("12\tif x:", collapse_tabs=True), "12 if x:")
+        self.assertEqual(sanitize_display_text("a\rb\x07c"), "a b c")
+        # Zero-width formatting characters survive: dropping a joiner would
+        # split an emoji sequence into wider components.
+        self.assertEqual(sanitize_display_text("a‍b"), "a‍b")
+
+    def test_split_and_fit_never_exceed_the_cell_budget(self):
+        head, rest = split_display_cells("日本語", 3)
+        self.assertEqual((head, rest), ("日", "本語"))  # the straddling glyph moves down
+        self.assertEqual(split_display_cells("日", 1), ("", "日"))
+        self.assertEqual(fit_display_text("12\tif x:", 4), "12  ")
+        self.assertEqual(fit_display_text("日本語", 5), "日本")
+        self.assertEqual(fit_display_text("anything", 0), "")
+
+    def test_transcript_wrapping_keeps_every_chunk_inside_its_row(self):
+        for text in self.OVERFLOWING:
+            for width in (12, 17, 18, 19, 22, 39, 99):
+                event = Event.create("claude", "message", text)
+                wrapped = wrap_transcript_lines(format_transcript_event(event), width)
+                self.assertTrue(wrapped)
+                for line in wrapped:
+                    self.assertLessEqual(
+                        cell_width(line.text), width, f"{text!r} at width {width}: {line.text!r}"
+                    )
+
+    def test_details_wrapping_keeps_every_line_inside_the_panel(self):
+        for text in self.OVERFLOWING:
+            for width in (3, 4, 10, 30, 46):
+                for line in wrap_plain_lines((f"workdir: {text}",), width):
+                    self.assertLessEqual(cell_width(line), width, f"{text!r} at width {width}")
+
+    def test_tool_digest_collapses_tabs_and_drops_control_characters(self):
+        event = Event.create("tool", "tool_call", "  12\tif value:\x07\nmore\nlines")
+        (line,) = format_transcript_event(event)
+
+        self.assertEqual(line.text, "tool             12 if value: · +2 lines")
+        self.assertNotIn("\t", line.text)
+
+    def test_body_rows_expand_tabs_so_the_gutter_stays_aligned(self):
+        event = Event.create("claude", "message", "12\tif value:\nplain")
+        lines = format_transcript_event(event)
+
+        self.assertEqual(lines[0].text, f"{'claude':<{GUTTER_WIDTH}} 12  if value:")
+        self.assertEqual(cell_width(lines[1].text.split("plain")[0]), GUTTER_WIDTH + 1)
+
+    def test_gutter_label_ellipsizes_by_cells(self):
+        label = gutter_label("日本語エージェント識別子")
+
+        self.assertLessEqual(cell_width(label), GUTTER_WIDTH)
+        self.assertTrue(label.endswith("…"))
+
+    def test_narrow_width_terminates_even_when_a_glyph_cannot_fit(self):
+        wrapped = self._within_a_second(
+            wrap_transcript_lines,
+            format_transcript_event(Event.create("claude", "message", "日本語")),
+            1,
+        )
+
+        self.assertTrue(wrapped)  # forward progress rather than an infinite loop
+
+    def test_wide_glyph_after_the_gutter_indent_still_makes_progress(self):
+        """Dual review, round 1: both reviewers caught this hang.
+
+        At width 18 the 17-cell continuation indent leaves one cell, which no
+        two-cell glyph fits. Re-taking cells from ``indent + remainder`` then
+        peeled off only the indent and rebuilt the same line forever, freezing
+        the interface on a 19-column terminal. ``wrap_plain_lines`` has the
+        same shape at width 3 against its two-space indent.
+        """
+        wrapped = self._within_a_second(
+            wrap_transcript_lines,
+            format_transcript_event(Event.create("claude", "message", "hello world and 日本語")),
+            18,
+        )
+        self.assertTrue(wrapped)
+        self.assertIn("日", "".join(line.text for line in wrapped))  # content kept
+        for line in wrapped:
+            self.assertLessEqual(cell_width(line.text), 18, line.text)
+
+        plain = self._within_a_second(wrap_plain_lines, ("workdir: 日本語です",), 3)
+        self.assertTrue(plain)
+        for line in plain:
+            self.assertLessEqual(cell_width(line), 3, line)
+
+    def test_presentation_selector_travels_with_its_base(self):
+        """Round 5: an orphaned U+FE0F widened the space in front of it.
+
+        Forced through a one-cell body budget, the base was emitted alone and
+        the selector opened the next chunk, where the continuation indent's
+        last space then measured two cells and pushed the row over budget.
+        """
+        wrapped = self._within_a_second(
+            wrap_transcript_lines,
+            format_transcript_event(Event.create("claude", "message", "⚠️warn")),
+            18,
+        )
+        for line in wrapped:
+            self.assertLessEqual(cell_width(line.text), 18, line.text)
+            self.assertFalse(line.text.lstrip().startswith(VARIATION_SELECTOR_16), line.text)
+
+        plain = self._within_a_second(wrap_plain_lines, ("note: ⚠️ see log",), 3)
+        for line in plain:
+            self.assertLessEqual(cell_width(line), 3, line)
+
+    def _within_a_second(self, func, *args):
+        """Run ``func`` on a worker so a wrapping hang fails instead of freezing."""
+        outcome = {}
+        worker = threading.Thread(
+            target=lambda: outcome.setdefault("value", func(*args)), daemon=True
+        )
+        worker.start()
+        worker.join(5.0)
+        self.assertFalse(worker.is_alive(), f"{func.__name__} did not terminate")
+        return outcome["value"]
 
 
 class TuiCoreMockDaemonTests(unittest.IsolatedAsyncioTestCase):

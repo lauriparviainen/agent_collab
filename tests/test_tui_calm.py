@@ -7,6 +7,8 @@ Pure-function tests plus two behaviour checks on ``TuiApp._handle_key`` that do
 not touch a real curses screen (the Esc key paths render nothing).
 """
 
+import curses
+import threading
 import unittest
 from unittest import mock
 
@@ -20,6 +22,7 @@ from agent_collab.tui_core import (
     ascii_fallback,
     build_context_agent_segments,
     build_info_line_segments,
+    cell_width,
     classify_message,
     clip_with_marker,
     compose_status_right,
@@ -151,6 +154,45 @@ class ContextAgentClusterTests(unittest.TestCase):
         )
         # No room for even the lead: the cluster disappears, never ellipsizes.
         self.assertEqual(build_context_agent_segments([CLAUDE, CODEX_SDK], 10), ())
+
+    def test_picker_columns_are_padded_in_cells(self):
+        # Picker columns are padded to a measured width; padding by character
+        # count let a wide workdir or workflow name shear the columns apart.
+        sessions = [
+            {
+                "session_id": "daemon-1",
+                "status": "running",
+                "workflow": "日本語",
+                "updated_at": "2026-07-13T20:38:00+00:00",
+                "workdir": "/w\tide",
+            },
+            {
+                "session_id": "daemon-2",
+                "status": "done",
+                "workflow": "solo",
+                "updated_at": "2026-07-13T20:39:00+00:00",
+                "workdir": "/plain",
+            },
+        ]
+        lines = format_session_picker_lines(make_session_picker(sessions), 200)
+
+        self.assertFalse(any("\t" in line for line in lines))
+        # Every row's workdir starts in the same painted column, wide names
+        # included — the character offsets differ, the cell offsets must not.
+        starts = {cell_width(line[: line.index("/")]) for line in lines[1:]}
+        self.assertEqual(len(starts), 1, lines)
+
+    def test_tabbed_agent_chip_is_measured_the_way_it_is_painted(self):
+        # Agent ids and model names are free-form config strings; a tab counted
+        # as one cell but painted as several would push the right-aligned
+        # cluster onto the context text and cut the model name short.
+        tabbed = AgentInfo("r\tv", "codex", "gpt\t5", "cli", "#10A37F")
+        segments = build_context_agent_segments([tabbed], 100)
+        text = _info_text(segments)
+
+        self.assertNotIn("\t", text)
+        self.assertIn("5", text)  # the model survives instead of being cut
+        self.assertEqual(cell_width(text), sum(cell_width(seg.text) for seg in segments))
 
     def test_no_agents_yields_empty_cluster(self):
         self.assertEqual(build_context_agent_segments([], 40), ())
@@ -958,6 +1000,17 @@ class AsciiFallbackTests(unittest.TestCase):
 
 
 class InfoLineWidthTests(unittest.TestCase):
+    def test_tabbed_task_is_measured_the_way_it_is_painted(self):
+        # The draw funnel expands tabs, so measuring the raw task let a line
+        # that "fit" paint past its budget: the payload was then cut away with
+        # no ellipsis, and the workflow started on top of the task text.
+        segments = build_info_line_segments("\t\t\tDONE", "", 10)
+        text = _info_text(segments)
+
+        self.assertNotIn("\t", text)
+        self.assertLessEqual(cell_width(text), 10)
+        self.assertIn("DONE", text)
+
     def test_ellipsized_info_line_keeps_its_last_character(self):
         # At narrow widths the task ellipsizes; the trailing char (often the
         # ellipsis itself) must survive the x=1 draw offset (review finding).
@@ -965,6 +1018,180 @@ class InfoLineWidthTests(unittest.TestCase):
         app._render()
         info_row = screen.text().splitlines()[1]
         self.assertIn("…", info_row)
+
+
+class CellBudgetRenderTests(unittest.TestCase):
+    """No draw may paint past its row (issue #54).
+
+    ``_FakeScreen`` counts characters, so it cannot show the ncurses spill
+    itself: this records every draw and checks the cells it would paint against
+    the budget it was given and against the right edge of the screen. Anything
+    over either one is what ncurses wraps into the next row's left margin.
+    """
+
+    class _RecordingScreen(_FakeScreen):
+        def __init__(self, height, width):
+            super().__init__(height, width)
+            self.painted = []
+            self.draws = []
+
+        def addnstr(self, y, x, text, n, attr=0):
+            # ``n`` caps code points (verified against real ncurses), not
+            # cells; record what survives it. The cell budget is recorded
+            # around ``_add`` instead.
+            self.painted.append((y, x, str(text)[:n]))
+            super().addnstr(y, x, text, n, attr)
+
+    def setUp(self):
+        # Record each draw against the cell budget its ``_add`` call was given.
+        original = TuiApp._add
+
+        def recording_add(app, y, x, text, width, attr=0):
+            screen = app.stdscr
+            start = len(screen.painted)
+            original(app, y, x, text, width, attr)
+            for entry in screen.painted[start:]:
+                screen.draws.append(entry + (width,))
+
+        patcher = mock.patch.object(TuiApp, "_add", recording_add)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    TROUBLE = "12\tif value:\t# 日本語 ✅ tail\x07more"
+
+    def _render(self, height, width, transcript_text):
+        from agent_collab.tui_core import follow_scroll
+
+        screen = self._RecordingScreen(height, width)
+        app = TuiApp(screen, _DummyClient(), initial_session_id=None)
+        app.session = _session()
+        app.session_id = "daemon-1"
+        app.branch = "main"
+        app.styles = {}
+        app.utf8 = True
+        app.transcript_lines = format_transcript_event(
+            Event.create("claude", "message", transcript_text)
+        ) + format_transcript_event(Event.create("tool", "tool_call", transcript_text))
+        app.scroll = follow_scroll(len(app.transcript_lines), app._body_height())
+        app._render()
+        return screen
+
+    def _assert_draws_fit(self, screen):
+        self.assertTrue(screen.draws)
+        for y, x, text, budget in screen.draws:
+            cells = cell_width(text)
+            self.assertLessEqual(cells, budget, f"row {y}: {text!r} exceeds its {budget}-cell box")
+            self.assertLessEqual(
+                x + cells, screen.width, f"row {y}: {text!r} at x={x} runs off the screen"
+            )
+
+    def test_transcript_rows_stay_inside_their_row_at_every_width(self):
+        for width in (40, 80, 100, 121):
+            self._assert_draws_fit(self._render(24, width, self.TROUBLE))
+
+    def test_scrolling_a_19_column_terminal_does_not_hang(self):
+        # Below the 20-column chrome minimum the body still wraps on key
+        # handling, at a text width of 18 — one cell past the gutter indent,
+        # where a two-cell glyph used to spin the wrap loop forever.
+        screen = self._RecordingScreen(24, 19)
+        app = TuiApp(screen, _DummyClient(), initial_session_id=None)
+        app.session = _session()
+        app.session_id = "daemon-1"
+        app.branch = "main"
+        app.styles = {}
+        app.utf8 = True
+        app.transcript_lines = format_transcript_event(
+            Event.create("claude", "message", "hello world and 日本語 ✅ tail")
+        )
+
+        worker = threading.Thread(target=lambda: app._handle_key(curses.KEY_UP), daemon=True)
+        worker.start()
+        worker.join(5.0)
+
+        self.assertFalse(worker.is_alive(), "scrolling a 19-column terminal hung")
+
+    def test_details_panel_cannot_wrap_into_the_transcript_margin(self):
+        screen = self._RecordingScreen(24, 120)
+        app = TuiApp(screen, _DummyClient(), initial_session_id=None)
+        session = _session().to_dict()
+        session["task"] = self.TROUBLE
+        app.session = SessionStateModel.from_dict(session)
+        app.session_id = "daemon-1"
+        app.branch = "main"
+        app.styles = {}
+        app.utf8 = True
+        app.details_visible = True
+        app._render()
+
+        self._assert_draws_fit(screen)
+
+    def test_zero_width_marks_are_painted_not_truncated(self):
+        # Combining accents cost a code point but no cell, so capping ncurses
+        # by the cell budget cut the tail off a line that fit its row exactly.
+        accented = "e\u0301" * 6  # 12 code points, 6 cells
+        screen = self._RecordingScreen(6, 20)
+        app = TuiApp(screen, _DummyClient(), initial_session_id=None)
+        app.styles = {}
+        app.utf8 = True
+
+        app._add(0, 0, accented, 6)
+
+        self.assertEqual("".join(text for _, _, text in screen.painted), accented)
+
+    def test_tabbed_workdir_keeps_the_agent_cluster_off_the_context_text(self):
+        # The cluster is right-aligned against the measured context text; a tab
+        # under-measured it and the agent chips landed on the workdir.
+        screen = self._RecordingScreen(24, 86)
+        app = TuiApp(screen, _DummyClient(), initial_session_id=None)
+        session = _session().to_dict()
+        session["workdir"] = "/home/dev/a\t\t\t\tb"
+        app.session = SessionStateModel.from_dict(session)
+        app.session_id = "daemon-1"
+        app.branch = "main"
+        app.styles = {}
+        app.utf8 = True
+        app._render()
+
+        self._assert_draws_fit(screen)
+        spans = sorted(
+            (x, x + cell_width(text)) for y, x, text in screen.painted if y == 0 and text.strip()
+        )
+        for (_, end), (start, _) in zip(spans, spans[1:]):
+            self.assertLessEqual(end, start, f"context row draws overlap: {spans}")
+
+    def test_typed_input_with_wide_characters_stays_in_its_box(self):
+        screen = self._render(24, 80, "plain body")
+        # Re-render with wide input text typed into the box.
+        app = TuiApp(screen, _DummyClient(), initial_session_id=None)
+        app.session = _session()
+        app.session_id = "daemon-1"
+        app.branch = "main"
+        app.styles = {}
+        app.utf8 = True
+        app.input_text = "日本語" * 30
+        screen.draws.clear()
+        screen.painted.clear()
+        app._render()
+
+        self._assert_draws_fit(screen)
+
+    def test_tabbed_input_is_measured_as_it_is_painted(self):
+        screen = self._RecordingScreen(24, 80)
+        app = TuiApp(screen, _DummyClient(), initial_session_id=None)
+        app.session = _session()
+        app.session_id = "daemon-1"
+        app.branch = "main"
+        app.styles = {}
+        app.utf8 = True
+        app.input_text = "\tab"
+        app._render()
+
+        self._assert_draws_fit(screen)
+        mid = screen.height - 3
+        typed = next(text for y, x, text in screen.painted if y == mid and x == 2)
+        cursor_y, cursor_x = screen.moved
+        self.assertEqual(cursor_y, mid)
+        self.assertEqual(cursor_x, 2 + cell_width(typed))
 
 
 class QKeyBehaviourTests(unittest.TestCase):

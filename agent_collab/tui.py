@@ -26,10 +26,12 @@ from .tui_core import (
     build_context_agent_segments,
     build_info_line_segments,
     build_new_session_payload,
+    cell_width,
     clamp_scroll,
     classify_message,
     clip_with_marker,
     compose_status_right,
+    fit_display_text,
     format_activity_indicator,
     format_context_line,
     format_details_overlay_lines,
@@ -58,6 +60,7 @@ from .tui_core import (
     picker_menu_lines,
     picker_scroll,
     reset_cursor_state,
+    sanitize_display_text,
     scroll_by,
     select_hint,
     select_latest_session_id,
@@ -68,6 +71,7 @@ from .tui_core import (
     session_workflow_name,
     should_start_poller,
     slash_completion_matches_input,
+    split_display_cells,
     visible_scroll_top,
     wizard_menu_lines,
     workflow_ids_from_options,
@@ -1204,19 +1208,23 @@ class TuiApp:
             return
 
         attr = self._style_for_source(line.source)
-        if len(line.text) <= SOURCE_LABEL_WIDTH:
+        if cell_width(line.text) <= SOURCE_LABEL_WIDTH:
             self._add(row, 1, line.text, text_width, attr)
             return
+        # Split by cells, not characters: the body half is drawn at a fixed
+        # column, so a character-based cut would leave the two halves out of
+        # step once the gutter carries a wide glyph.
         label_width = min(text_width, SOURCE_LABEL_WIDTH)
-        self._add(row, 1, line.text[:label_width], label_width, attr)
+        label_text, body_text = split_display_cells(line.text, label_width)
+        self._add(row, 1, label_text, label_width, attr)
         if text_width > SOURCE_LABEL_WIDTH:
             # Tool summaries stay dim across the whole row; other bodies read in text.
             body_attr = self._style("dim") if line.source == "tool" else self._style("text")
             self._add(
                 row,
-                1 + SOURCE_LABEL_WIDTH,
-                line.text[SOURCE_LABEL_WIDTH:],
-                text_width - SOURCE_LABEL_WIDTH,
+                1 + label_width,
+                body_text,
+                text_width - label_width,
                 body_attr,
             )
 
@@ -1248,14 +1256,19 @@ class TuiApp:
     def _render_context_line(self, y: int, width: int) -> None:
         workdir = self.session.workdir if self.session else ""
         sandbox = session_sandbox_policy(self.session) if self.session else "none"
-        text = format_context_line(workdir, self.branch, sandbox)
+        # Sanitized here so the cluster is placed against the cells the funnel
+        # will actually paint; a tab in the workdir would otherwise let the
+        # agent chips land on top of the workdir text.
+        text = sanitize_display_text(
+            format_context_line(workdir, self.branch, sandbox), collapse_tabs=True
+        )
         self._add(y, 1, text, max(0, width - 1), self._style("dim"))
         # Agent cluster right-aligned into the otherwise-empty context row,
         # with a 2-cell gap so it never crowds the branch/workdir text.
         agents = info_agents_from_session(self.session) if self.session else ()
-        available = width - 1 - (1 + len(text) + 2)
+        available = width - 1 - (1 + cell_width(text) + 2)
         segments = build_context_agent_segments(agents, max(0, available))
-        cluster = sum(len(segment.text) for segment in segments)
+        cluster = sum(cell_width(segment.text) for segment in segments)
         self._render_info_segments(y, width - 1 - cluster, width, segments)
 
     def _render_info_line(self, y: int, width: int) -> None:
@@ -1282,7 +1295,7 @@ class TuiApp:
             else:
                 attr = self._info_segment_style(segment.role, segment.brand_color)
             self._add(y, x, segment.text, width - 1 - x, attr)
-            x += len(segment.text)
+            x += cell_width(segment.text)
 
     def _info_segment_style(self, role: str, brand_color: Optional[str]) -> int:
         if role == "agent":
@@ -1309,16 +1322,23 @@ class TuiApp:
         chip = self._input_chip()
         chip_style = self._chip_style(chip)
         prompt = "> "
-        typed = prompt + self.input_text
+        # Sanitize once, here: the draw funnel expands tabs on its way to the
+        # screen, so measuring the raw text would place the chip and the cursor
+        # against a narrower line than the one actually painted.
+        typed = sanitize_display_text(prompt + self.input_text)
         # Right-aligned chip inside the box; keep room between text and chip.
-        chip_x = width - 2 - len(chip)
-        if chip and chip_x > content_x + len(typed):
-            self._add(mid, chip_x, chip, len(chip), chip_style)
+        # Positions are cell counts: pasted wide characters would otherwise
+        # push the typed text under the chip and strand the cursor.
+        typed_cells = cell_width(typed)
+        chip_cells = cell_width(chip)
+        chip_x = width - 2 - chip_cells
+        if chip and chip_x > content_x + typed_cells:
+            self._add(mid, chip_x, chip, chip_cells, chip_style)
             text_width = chip_x - content_x - 1
         else:
             text_width = content_width
         self._add(mid, content_x, typed, max(0, text_width), self._style("text"))
-        cursor_x = min(content_x + max(0, text_width), content_x + len(typed))
+        cursor_x = min(content_x + max(0, text_width), content_x + typed_cells)
         return mid, max(content_x, min(width - 2, cursor_x))
 
     def _input_chip(self) -> str:
@@ -1345,9 +1365,13 @@ class TuiApp:
             else ""
         )
         hint = self._select_hint(width)
-        right = compose_status_right(activity, hint)
+        # Status text carries a session status straight off the wire and the
+        # message carries exception text, so both are sanitized before the
+        # right-hand block is placed — measure has to equal paint here too.
+        right = sanitize_display_text(compose_status_right(activity, hint), collapse_tabs=True)
+        message = sanitize_display_text(message, collapse_tabs=True)
 
-        right_x = max(1, width - len(right) - 1)
+        right_x = max(1, width - cell_width(right) - 1)
         self._add(y, right_x, right, width - right_x, self._style("dim"))
         self._add(y, 1, message, max(0, right_x - 2), message_style)
 
@@ -1451,8 +1475,18 @@ class TuiApp:
             return
         if not self.utf8:
             text = ascii_fallback(text)
+        # ``width`` is a cell budget. ``addnstr``'s own n caps the code points it
+        # consumes, not the cells it paints, so a tab or a wide glyph would run
+        # past the row and wrap into column 0 of the next one — the stray
+        # character in the left margin. Fit the text in cells first, then let
+        # ncurses paint all of it: passing the cell budget as n would truncate
+        # any text carrying zero-width code points (combining accents, joiners,
+        # the emoji presentation mark), which cost characters but no cells.
+        text = fit_display_text(text, width)
+        if not text:
+            return
         try:
-            self.stdscr.addnstr(y, x, text, width, attr)
+            self.stdscr.addnstr(y, x, text, len(text), attr)
         except curses.error:
             pass
 
