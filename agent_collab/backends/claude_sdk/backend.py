@@ -189,6 +189,7 @@ class ClaudeSdkRunner(AgentRunner):
         # Provider continuity is established only after a captured session id,
         # not merely because a Bubblewrap worker process is still alive.
         self._worker_provider_active = False
+        self._worker_soft_drop_cancelled = False
 
     def conversation_active(self) -> bool:
         if self._worker_terminal:
@@ -208,6 +209,12 @@ class ClaudeSdkRunner(AgentRunner):
             self._worker_provider_active = False
             try:
                 await session.close()  # type: ignore[union-attr]
+            except asyncio.CancelledError:
+                try:
+                    await session.force_teardown()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                raise
             except Exception:
                 try:
                     await session.force_teardown()  # type: ignore[union-attr]
@@ -261,13 +268,11 @@ class ClaudeSdkRunner(AgentRunner):
                 await emit(event)
 
             _buffered, outcome = await session.run(effective_prompt, emit=tracking_emit)
-            # If the worker never established a provider session, drop it after a
-            # non-completed turn. The in-process conversation may retain an
-            # undelivered prompt; with conversation_active false the referee
-            # re-issues the full task, and a live worker would join that onto
-            # the retained prompt and duplicate the turn. Soft-drop keeps the
-            # runner eligible to launch a fresh worker on the next turn.
-            if outcome.outcome != "completed" and not self._worker_provider_active:
+            # Without a captured provider session, conversation_active is false
+            # and the referee re-issues a full task. Drop the live worker so
+            # hidden client context or an undelivered prompt cannot join that
+            # full task. Soft-drop keeps the runner eligible for a fresh worker.
+            if not self._worker_provider_active:
                 await self._drop_worker_session()
             return outcome
         except asyncio.CancelledError:
@@ -316,19 +321,31 @@ class ClaudeSdkRunner(AgentRunner):
         if session is None:
             return
         try:
-            session.kill()  # type: ignore[union-attr]
+            await session.force_teardown()  # type: ignore[union-attr]
+        except asyncio.CancelledError:
+            self._worker_soft_drop_cancelled = True
+            raise
         except Exception:
             try:
-                session.terminate()  # type: ignore[union-attr]
+                session.kill()  # type: ignore[union-attr]
+            except Exception:
+                try:
+                    session.terminate()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+            try:
+                await asyncio.shield(session.wait())  # type: ignore[union-attr]
+            except asyncio.CancelledError:
+                self._worker_soft_drop_cancelled = True
+                raise
             except Exception:
                 pass
-        try:
-            await asyncio.shield(session.wait())  # type: ignore[union-attr]
-        except Exception:
-            pass
 
     async def _terminate_worker_session(self) -> None:
         session = self._worker_session
+        if session is None and self._worker_soft_drop_cancelled:
+            self._worker_soft_drop_cancelled = False
+            return
         if session is not None:
             try:
                 session.kill()  # type: ignore[union-attr]
@@ -340,6 +357,7 @@ class ClaudeSdkRunner(AgentRunner):
         self._worker_session = None
         self._worker_terminal = True
         self._worker_provider_active = False
+        self._worker_soft_drop_cancelled = False
         if session is None:
             return
         try:

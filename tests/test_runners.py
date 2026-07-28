@@ -6,12 +6,13 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
+from agent_collab.config import AgentConfig, ConfigError
 from agent_collab.events import Event
 from agent_collab.backends.claude_cli.parser import ClaudeStreamingParser
 from agent_collab.backends.codex_cli.parser import CodexStreamingParser
 from agent_collab.backends.antigravity_cli import parse_antigravity_line
 from agent_collab.backends.xai_cli.parser import XaiStreamingParser
-from agent_collab.runners import SubprocessRunner
+from agent_collab.runners import SubprocessRunner, configured_runner
 from agent_collab.sandbox.specs import SandboxFailure, SandboxPolicy
 
 
@@ -330,6 +331,143 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=2.0)
+
+    async def test_repeated_cancel_still_escalates_to_kill(self):
+        runner = SubprocessRunner(
+            "cancel-storm",
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import signal, time; "
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                    "time.sleep(60)"
+                ),
+            ],
+            _json_message_parser,
+        )
+        original_create = asyncio.create_subprocess_exec
+        process_holder = {}
+
+        async def capture_process(*args, **kwargs):
+            process = await original_create(*args, **kwargs)
+            process_holder["process"] = process
+            return process
+
+        async def collect():
+            async def emit(_event):
+                return None
+
+            await runner.run_turn("prompt", Path("."), emit)
+
+        process = None
+        try:
+            with mock.patch(
+                "agent_collab.runners.asyncio.create_subprocess_exec",
+                side_effect=capture_process,
+            ):
+                task = asyncio.create_task(collect())
+                for _ in range(100):
+                    process = process_holder.get("process")
+                    if process is not None:
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertIsNotNone(process)
+                await asyncio.sleep(0.1)
+                task.cancel()
+                await asyncio.sleep(0.05)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=3.0)
+                await asyncio.wait_for(process.wait(), timeout=2.0)
+                self.assertIsNotNone(process.returncode)
+        finally:
+            if process is not None and process.returncode is None:
+                process.kill()
+                await process.wait()
+
+    async def test_post_kill_cancel_adopts_final_process_wait(self):
+        wait_started = [asyncio.Event() for _ in range(3)]
+        adopted = asyncio.Event()
+
+        class Process:
+            def __init__(self):
+                self.stdout = asyncio.StreamReader()
+                self.stderr = asyncio.StreamReader()
+                self.returncode = None
+                self.pid = 12345
+                self.wait_calls = 0
+                self.terminated = False
+                self.killed = False
+
+            async def wait(self):
+                self.wait_calls += 1
+                call = self.wait_calls
+                if call <= 3:
+                    wait_started[call - 1].set()
+                    await asyncio.Event().wait()
+                self.returncode = -9
+                self.stdout.feed_eof()
+                self.stderr.feed_eof()
+                adopted.set()
+                return self.returncode
+
+            def terminate(self):
+                self.terminated = True
+
+            def kill(self):
+                self.killed = True
+
+        process = Process()
+        runner = SubprocessRunner(
+            "cancel-storm",
+            ["provider"],
+            _json_message_parser,
+        )
+
+        async def collect():
+            async def emit(_event):
+                return None
+
+            await runner.run_turn("prompt", Path("."), emit)
+
+        with mock.patch(
+            "agent_collab.runners.asyncio.create_subprocess_exec",
+            return_value=process,
+        ):
+            task = asyncio.create_task(collect())
+            await asyncio.wait_for(wait_started[0].wait(), timeout=1.0)
+            task.cancel()
+            await asyncio.wait_for(wait_started[1].wait(), timeout=1.0)
+            task.cancel()
+            await asyncio.wait_for(wait_started[2].wait(), timeout=1.0)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            await asyncio.wait_for(adopted.wait(), timeout=1.0)
+
+        self.assertTrue(process.terminated)
+        self.assertTrue(process.killed)
+        self.assertGreaterEqual(process.wait_calls, 4)
+
+    def test_configured_runner_rejects_missing_resolved_sandbox_plan(self):
+        backend = mock.Mock()
+        backend.normalize_options.return_value = {}
+        backend.create_runner.return_value = SubprocessRunner(
+            "provider",
+            [sys.executable, "-c", "pass"],
+            _json_message_parser,
+        )
+        agent = AgentConfig(id="provider", type="claude", command="provider")
+
+        with (
+            mock.patch("agent_collab.backends.get_backend", return_value=backend),
+            self.assertRaisesRegex(
+                ConfigError,
+                "runner requires a resolved sandbox plan",
+            ),
+        ):
+            configured_runner(agent, backend_id="cli")
 
     async def test_fixture_backed_marker_contracts(self):
         fixture_root = Path(__file__).parent / "fixtures"

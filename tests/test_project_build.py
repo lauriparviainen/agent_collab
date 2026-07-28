@@ -44,6 +44,16 @@ class OpenApiGenerationTests(unittest.TestCase):
         self.assertEqual(parameters["cursor"]["schema"]["minimum"], 0)
         self.assertEqual(parameters["limit"]["schema"]["minimum"], 1)
         self.assertEqual(parameters["tool_output"]["schema"]["enum"], ["summary", "full"])
+        sandbox_schema = schema["components"]["schemas"]["StartSessionRequestModel"]["properties"][
+            "sandbox"
+        ]
+        self.assertEqual(
+            sandbox_schema["anyOf"],
+            [
+                {"type": "string", "enum": ["read-only", "none"]},
+                {"type": "null"},
+            ],
+        )
 
     def test_checked_in_artifacts_are_current(self):
         schema = generate_openapi()

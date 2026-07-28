@@ -23,17 +23,20 @@ intentional override.
 
 ## Events and identity
 
-Every non-empty stdout line becomes `antigravity/message`. Tool structure and provider conversation identity cannot be recovered from print mode.
+Every substantive stdout line becomes `antigravity/message`. Blank and
+structural-only lines are ignored; explicit tool-failure markers become fatal
+error events. Tool structure and provider conversation identity cannot be
+recovered from print mode.
 
 ## Turn outcome
 
 This message-only transport has the one provisional clean-EOF fallback: exit
-zero plus at least one non-empty stdout message completes; empty output,
-nonzero exit, or output/transport failure fails. Explicit Antigravity
-`TOOL_ERROR`/tool-action failure status lines are retained as private terminal
-evidence, so a provider exit of zero cannot turn a reported action failure into
-a successful turn. Ordinary response prose is not classified as a provider
-cancellation or refusal.
+zero plus at least one substantive stdout message completes; empty or
+structural-only output, nonzero exit, or output/transport failure fails.
+Explicit Antigravity `TOOL_ERROR:`/tool-action failure status lines are
+retained as private terminal evidence, so a provider exit of zero cannot turn a
+reported action failure into a successful turn. Ordinary response prose is not
+classified as a provider cancellation or refusal.
 
 ## Capabilities and security
 

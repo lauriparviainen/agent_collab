@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from agent_collab.backends.claude_sdk.backend import ClaudeSdkRunner
 from agent_collab.backends.claude_sdk import sandbox as claude_sdk_sandbox
 from agent_collab.backends.claude_sdk.sandbox import ClaudeSdkSandboxAdapter
 from agent_collab.backends.claude_sdk.worker import ClaudeSdkWorkerBackend
+from agent_collab.config import AgentConfig
+from agent_collab.outcomes import TurnOutcome
 from agent_collab.sandbox.specs import (
     SandboxContext,
     SandboxFailure,
@@ -212,6 +217,128 @@ class ClaudeSdkWorkerBackendTests(unittest.IsolatedAsyncioTestCase):
             == "sess-1"
         ]
         self.assertEqual(len(session_events), 1)
+
+    async def test_runner_close_force_tears_down_worker_when_cancelled(self) -> None:
+        runner = ClaudeSdkRunner(
+            AgentConfig(id="claude", type="claude", backend="sdk"),
+            False,
+            {},
+            lambda _options, _workdir: None,
+        )
+
+        class _Session:
+            def __init__(self) -> None:
+                self.close_started = asyncio.Event()
+                self.force_teardowns = 0
+
+            async def close(self) -> None:
+                self.close_started.set()
+                await asyncio.Event().wait()
+
+            async def force_teardown(self) -> None:
+                self.force_teardowns += 1
+
+        session = _Session()
+        runner._worker_session = session
+        task = asyncio.create_task(runner.close())
+        await session.close_started.wait()
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertEqual(session.force_teardowns, 1)
+        self.assertIsNone(runner._worker_session)
+
+    async def test_completed_turn_without_session_id_soft_drops_worker(self) -> None:
+        runner = ClaudeSdkRunner(
+            AgentConfig(id="claude", type="claude", backend="sdk"),
+            False,
+            {},
+            lambda _options, _workdir: None,
+        )
+        runner.sandbox_plan = SimpleNamespace(
+            policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+            render_prompt=lambda prompt, _scratch: prompt,
+        )
+
+        class _Session:
+            terminal = False
+            _scratch = None
+
+            def __init__(self) -> None:
+                self.force_teardowns = 0
+
+            async def run(self, _prompt, emit=None):
+                del emit
+                return [], TurnOutcome("completed")
+
+            async def force_teardown(self) -> None:
+                self.force_teardowns += 1
+
+        session = _Session()
+
+        async def worker_for(_workdir):
+            runner._worker_session = session
+            return session
+
+        runner._worker_for = worker_for
+
+        async def emit(_event) -> None:
+            return None
+
+        outcome = await runner.run_turn("prompt", Path("/workspace"), emit)
+
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertEqual(session.force_teardowns, 1)
+        self.assertIsNone(runner._worker_session)
+        self.assertFalse(runner._worker_terminal)
+
+    async def test_cancel_during_soft_drop_preserves_relaunch_eligibility(self) -> None:
+        runner = ClaudeSdkRunner(
+            AgentConfig(id="claude", type="claude", backend="sdk"),
+            False,
+            {},
+            lambda _options, _workdir: None,
+        )
+        runner.sandbox_plan = SimpleNamespace(
+            policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+            render_prompt=lambda prompt, _scratch: prompt,
+        )
+
+        class _Session:
+            terminal = False
+            _scratch = None
+
+            def __init__(self) -> None:
+                self.drop_started = asyncio.Event()
+
+            async def run(self, _prompt, emit=None):
+                del emit
+                return [], TurnOutcome("failed", "provider_empty_response")
+
+            async def force_teardown(self) -> None:
+                self.drop_started.set()
+                await asyncio.Event().wait()
+
+        session = _Session()
+
+        async def worker_for(_workdir):
+            runner._worker_session = session
+            return session
+
+        runner._worker_for = worker_for
+
+        async def emit(_event) -> None:
+            return None
+
+        task = asyncio.create_task(runner.run_turn("prompt", Path("/workspace"), emit))
+        await session.drop_started.wait()
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertIsNone(runner._worker_session)
+        self.assertFalse(runner._worker_terminal)
 
 
 if __name__ == "__main__":

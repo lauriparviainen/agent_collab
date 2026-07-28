@@ -411,6 +411,7 @@ class AntigravitySdkRunner(AgentRunner):
         self._worker_provider_active = False
         # Daemon-side mirror of in-worker resume_missing_id after soft-drop.
         self._worker_resume_blocked = False
+        self._worker_soft_drop_cancelled = False
 
     def conversation_active(self) -> bool:
         if self._worker_terminal or self._worker_resume_blocked:
@@ -616,19 +617,31 @@ class AntigravitySdkRunner(AgentRunner):
         if session is None:
             return
         try:
-            session.kill()  # type: ignore[union-attr]
+            await session.force_teardown()  # type: ignore[union-attr]
+        except asyncio.CancelledError:
+            self._worker_soft_drop_cancelled = True
+            raise
         except Exception:
             try:
-                session.terminate()  # type: ignore[union-attr]
+                session.kill()  # type: ignore[union-attr]
+            except Exception:
+                try:
+                    session.terminate()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+            try:
+                await asyncio.shield(session.wait())  # type: ignore[union-attr]
+            except asyncio.CancelledError:
+                self._worker_soft_drop_cancelled = True
+                raise
             except Exception:
                 pass
-        try:
-            await asyncio.shield(session.wait())  # type: ignore[union-attr]
-        except Exception:
-            pass
 
     async def _terminate_worker_session(self) -> None:
         session = self._worker_session
+        if session is None and self._worker_soft_drop_cancelled:
+            self._worker_soft_drop_cancelled = False
+            return
         if session is not None:
             try:
                 session.kill()  # type: ignore[union-attr]
@@ -641,6 +654,7 @@ class AntigravitySdkRunner(AgentRunner):
         self._worker_terminal = True
         self._worker_provider_active = False
         self._worker_resume_blocked = False
+        self._worker_soft_drop_cancelled = False
         if session is None:
             self._cleanup_session_state()
             return

@@ -561,7 +561,7 @@ class PersistentXaiConversationTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_close_serializes_against_cancellation_ignoring_sample(self):
+    def test_close_serializes_against_repeated_cancellation_ignoring_sample(self):
         async def scenario():
             entered = asyncio.Event()
             release = asyncio.Event()
@@ -598,6 +598,8 @@ class PersistentXaiConversationTests(unittest.TestCase):
             )
             run_task = asyncio.create_task(conversation.run("prompt"))
             await entered.wait()
+            run_task.cancel()
+            await asyncio.sleep(0)
             run_task.cancel()
             close_task = asyncio.create_task(conversation.close())
             await asyncio.sleep(0)

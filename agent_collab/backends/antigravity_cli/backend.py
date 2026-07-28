@@ -25,6 +25,28 @@ from .sandbox import AntigravityCliSandboxAdapter
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
 
+_TRUE_BOOLEAN_VALUES = frozenset({"1", "t", "true"})
+_FALSE_BOOLEAN_VALUES = frozenset({"0", "f", "false"})
+
+
+def _sandbox_flag_value(args: list[str]) -> Optional[bool]:
+    """Return the last valid Go-style boolean value supplied for --sandbox."""
+
+    result: Optional[bool] = None
+    prefix = "--sandbox="
+    for item in args:
+        if item == "--sandbox":
+            result = True
+        elif item.startswith(prefix):
+            value = item[len(prefix) :].lower()
+            if value in _TRUE_BOOLEAN_VALUES:
+                result = True
+            elif value in _FALSE_BOOLEAN_VALUES:
+                result = False
+            else:
+                return None
+    return result
+
 
 class AntigravityCliBackend:
     id = "cli"
@@ -64,8 +86,9 @@ class AntigravityCliBackend:
             value = flag_value(agent.args, flag)
             if value is not None:
                 inferred[field] = value
-        if has_flag(agent.args, "--sandbox"):
-            inferred["sandbox"] = True
+        sandbox = _sandbox_flag_value(agent.args)
+        if sandbox is not None:
+            inferred["sandbox"] = sandbox
         return normalize_declared_options(
             requested,
             self.option_schema(agent),

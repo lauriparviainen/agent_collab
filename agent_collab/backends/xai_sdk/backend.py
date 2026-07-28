@@ -369,9 +369,17 @@ class _PersistentXaiConversation:
             except asyncio.CancelledError:
                 # Own the in-flight RPC until it settles so close/reset cannot
                 # race the gRPC channel. Capture a response id if the request
-                # completed despite local cancellation, then re-raise.
+                # completed despite local cancellation, then re-raise. Repeated
+                # cancellation must not abandon the provider RPC.
+                while not sample_task.done():
+                    try:
+                        await asyncio.shield(sample_task)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:
+                        break
                 try:
-                    response = await asyncio.shield(sample_task)
+                    response = sample_task.result()
                     self._capture_response_id(stringify(getattr(response, "id", None)))
                 except BaseException:
                     pass

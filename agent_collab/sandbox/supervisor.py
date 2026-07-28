@@ -521,23 +521,13 @@ class SandboxSupervisor:
             if worker_child is not None:
                 worker_child.close()
             if process is not None:
-                _signal_group(process.pid, signal.SIGTERM)
-                try:
-                    await asyncio.wait_for(process.wait(), TERMINATE_GRACE_SECONDS)
-                except asyncio.TimeoutError:
-                    _signal_group(process.pid, signal.SIGKILL)
-                    try:
-                        await asyncio.wait_for(process.wait(), KILL_GRACE_SECONDS)
-                    except asyncio.TimeoutError:
-                        asyncio.create_task(process.wait())
+                await _terminate_failed_launch(process)
             if status_task is not None:
                 if not status_task.done():
                     status_task.cancel()
-                await asyncio.gather(status_task, return_exceptions=True)
             for task in diagnostic_tasks:
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(*diagnostic_tasks, return_exceptions=True)
             for pin in pins:
                 pin.close()
             for file_object in scratch_files:
@@ -545,6 +535,15 @@ class SandboxSupervisor:
                     file_object.close()
                 except Exception:
                     pass
+            if status_task is not None:
+                try:
+                    await asyncio.gather(status_task, return_exceptions=True)
+                except BaseException:
+                    pass
+            try:
+                await asyncio.gather(*diagnostic_tasks, return_exceptions=True)
+            except BaseException:
+                pass
             raise
         finally:
             for descriptor in parent_close:
@@ -552,6 +551,39 @@ class SandboxSupervisor:
                     os.close(descriptor)
                 except OSError:
                     pass
+
+
+def _adopt_process_wait(process: asyncio.subprocess.Process) -> None:
+    """Own a final process wait after cancellation interrupts bounded cleanup."""
+
+    async def reap() -> None:
+        try:
+            await process.wait()
+        except BaseException:
+            pass
+
+    asyncio.create_task(reap())
+
+
+async def _terminate_failed_launch(process: asyncio.subprocess.Process) -> None:
+    """Escalate and retain wait ownership despite repeated cancellation."""
+
+    _signal_group(process.pid, signal.SIGTERM)
+    try:
+        await asyncio.wait_for(process.wait(), TERMINATE_GRACE_SECONDS)
+    except asyncio.TimeoutError:
+        pass
+    except BaseException:
+        pass
+    if process.returncode is not None:
+        return
+    _signal_group(process.pid, signal.SIGKILL)
+    try:
+        await asyncio.wait_for(process.wait(), KILL_GRACE_SECONDS)
+    except asyncio.TimeoutError:
+        _adopt_process_wait(process)
+    except BaseException:
+        _adopt_process_wait(process)
 
 
 def _allocate_scratch(plan: ResolvedSandboxPlan) -> Path:

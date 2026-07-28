@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from agent_collab.referee import ParallelStageFailed, Referee, RefereeConfig, RefereeInput
@@ -12,9 +13,113 @@ from agent_collab.events import Event
 from agent_collab.logging import SessionLogger
 from agent_collab.outcomes import TurnOutcome
 from agent_collab.referee import RequiredTurnFailed
+from agent_collab.sandbox.specs import SandboxEnforcement
 
 
 class RefereeTests(unittest.TestCase):
+    def test_runner_construction_is_limited_to_workflow_members(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = CollaborationConfig(
+                agents={
+                    name: AgentConfig(
+                        id=name,
+                        type=name,
+                        command=name,
+                        backend="cli",
+                    )
+                    for name in ("claude", "codex")
+                },
+                workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+            )
+            claude_plan = object()
+            session_plan = SimpleNamespace(agents={"claude": claude_plan})
+            runner = mock.Mock(spec=AgentRunner)
+
+            referee = Referee(
+                RefereeConfig(
+                    sandbox="read-only",
+                    sandbox_plan=session_plan,
+                    workflow="solo",
+                    collab_config=config,
+                    workdir=root,
+                    log_dir=root,
+                    color=False,
+                ),
+                printer=lambda event: None,
+            )
+            with mock.patch(
+                "agent_collab.referee.configured_runner",
+                return_value=runner,
+            ) as build:
+                runners = referee._runners()
+
+            self.assertEqual(runners, {"claude": runner})
+            build.assert_called_once()
+            self.assertEqual(build.call_args.args[-1], claude_plan)
+
+    def test_direct_read_only_plan_runs_engine_preflight_before_runners(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = CollaborationConfig(
+                agents={
+                    "claude": AgentConfig(
+                        id="claude",
+                        type="claude",
+                        command="claude",
+                        backend="cli",
+                    )
+                },
+                workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+            )
+            agent_plan = SimpleNamespace(
+                enforcement=SandboxEnforcement.OS_ENFORCED,
+            )
+            session_plan = SimpleNamespace(
+                agents={"claude": agent_plan},
+                cleanup_created_session_private_roots=mock.Mock(),
+            )
+            supervisor = mock.Mock()
+            supervisor.preflight = mock.AsyncMock()
+
+            with (
+                mock.patch.object(
+                    Referee,
+                    "_resolve_direct_sandbox_plan",
+                    return_value=session_plan,
+                ),
+                mock.patch(
+                    "agent_collab.sandbox.bubblewrap.discover_bubblewrap",
+                    return_value=object(),
+                ),
+                mock.patch(
+                    "agent_collab.sandbox.supervisor.SandboxSupervisor",
+                    return_value=supervisor,
+                ),
+            ):
+                referee = Referee(
+                    RefereeConfig(
+                        sandbox="read-only",
+                        workflow="solo",
+                        collab_config=config,
+                        workdir=root,
+                        log_dir=root,
+                        color=False,
+                    ),
+                    printer=lambda event: None,
+                )
+                referee._runners = mock.Mock(
+                    side_effect=RuntimeError("runner construction reached")
+                )
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "runner construction reached",
+                ):
+                    asyncio.run(referee.run("task"))
+
+            supervisor.preflight.assert_awaited_once_with(agent_plan)
+            session_plan.cleanup_created_session_private_roots.assert_called_once_with()
+
     def test_mock_loop_writes_logs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

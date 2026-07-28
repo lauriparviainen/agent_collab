@@ -160,6 +160,7 @@ class Referee:
         # transcript[watermark:] minus the agent's own events. Never advanced to
         # completion-time length, so peer events emitted mid-turn stay in the delta.
         self._agent_watermarks: Dict[str, int] = {}
+        self._direct_sandbox_plan = config.sandbox_plan is None
         self.sandbox_plan = config.sandbox_plan
         if self.sandbox_plan is None:
             self.sandbox_plan = self._resolve_direct_sandbox_plan()
@@ -219,10 +220,40 @@ class Referee:
     def request_policy_cancel(self) -> None:
         self._policy_cancel.request()
 
+    async def _preflight_direct_sandbox_plan(self) -> None:
+        """Run the engine control omitted by daemon-owned prepared starts.
+
+        SessionManager preflights every OS-enforced agent while preparing a
+        daemon start. A directly constructed Referee resolves its own plan and
+        therefore must perform the same recursive-read-only control before it
+        builds or launches any runner.
+        """
+
+        if not self._direct_sandbox_plan or self.config.mock or self.config.dry_run:
+            return
+
+        from .sandbox.bubblewrap import discover_bubblewrap
+        from .sandbox.specs import SandboxEnforcement
+        from .sandbox.supervisor import SandboxSupervisor
+
+        plans = getattr(self.sandbox_plan, "agents", None)
+        if plans is None:
+            return
+        enforced = [
+            plan for plan in plans.values() if plan.enforcement is SandboxEnforcement.OS_ENFORCED
+        ]
+        if not enforced:
+            return
+        installation = await asyncio.to_thread(discover_bubblewrap)
+        supervisor = SandboxSupervisor(installation)
+        for plan in enforced:
+            await supervisor.preflight(plan)
+
     def _runners(self) -> Dict[str, AgentRunner]:
         runners: Dict[str, AgentRunner] = {}
+        selected = set(workflow_members(self.collab_config.workflows[self.config.workflow]))
         for agent_id, agent in self.collab_config.agents.items():
-            if not agent.enabled:
+            if not agent.enabled or agent_id not in selected:
                 continue
             # Carry the session's authoritative per-turn deadline into backend
             # command construction. Most backends do not need it, but provider
@@ -947,6 +978,7 @@ class Referee:
         stages = self._stages()[: max(0, self.config.max_turns)]
 
         try:
+            await self._preflight_direct_sandbox_plan()
             runners = self._runners()
             return await self._run_stages(task, transcript, runners, stages)
         finally:

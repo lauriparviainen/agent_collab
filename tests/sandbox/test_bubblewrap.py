@@ -5,6 +5,7 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
+import signal
 import socket
 import struct
 import subprocess
@@ -48,6 +49,7 @@ from agent_collab.sandbox.supervisor import (
     _PinnedProcess,
     _allocate_scratch,
     _resolve_inner_executable,
+    _terminate_failed_launch,
     _wait_pins,
     _verify_recursive_read_only_control,
     _verify_coverage_plan,
@@ -204,6 +206,40 @@ class PinnedProcessWaitTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RecursiveReadOnlyControlTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_launch_cancel_still_escalates_to_kill(self):
+        started = asyncio.Event()
+
+        class Process:
+            pid = 12345
+            returncode = None
+
+            async def wait(self):
+                if not started.is_set():
+                    started.set()
+                    await asyncio.Event().wait()
+                self.returncode = -signal.SIGKILL
+                return self.returncode
+
+        process = Process()
+        signals = []
+        with mock.patch(
+            "agent_collab.sandbox.supervisor._signal_group",
+            side_effect=lambda pid, sig: signals.append((pid, sig)),
+        ):
+            task = asyncio.create_task(_terminate_failed_launch(process))
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            task.cancel()
+            await asyncio.wait_for(task, timeout=1.0)
+
+        self.assertEqual(
+            signals,
+            [
+                (process.pid, signal.SIGTERM),
+                (process.pid, signal.SIGKILL),
+            ],
+        )
+        self.assertEqual(process.returncode, -signal.SIGKILL)
+
     async def test_establishment_timeout_has_a_stable_sandbox_failure(self):
         with tempfile.TemporaryDirectory() as raw:
             plan = mock.Mock()

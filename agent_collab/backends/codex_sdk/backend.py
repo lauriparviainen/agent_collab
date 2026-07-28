@@ -195,6 +195,12 @@ class CodexSdkRunner(AgentRunner):
             self._worker_terminal = True
             try:
                 await session.close()  # type: ignore[union-attr]
+            except asyncio.CancelledError:
+                try:
+                    await session.force_teardown()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                raise
             except Exception:
                 try:
                     await session.force_teardown()  # type: ignore[union-attr]

@@ -53,6 +53,7 @@ class SupervisedWorkerSession:
         self._active_run: Optional[str] = None
         self._cancel_run_id: Optional[str] = None
         self._scratch = getattr(process, "_scratch", None)
+        self._hard_cleanup_task: Optional[asyncio.Task[None]] = None
         # Drain provider/worker stdio so a chatty SDK cannot fill the pipes and
         # deadlock the control socket. These are the bootstrap-transferred fds,
         # not Bubblewrap's diagnostic pipes.
@@ -198,9 +199,7 @@ class SupervisedWorkerSession:
                     raise WorkerProtocolError(f"unexpected worker frame {frame_type!r}")
             except asyncio.CancelledError:
                 # Sticky cancellation must still deliver SIGKILL before re-raise.
-                self._signal_kill_unlocked()
-                self._terminal = True
-                self._closed = True
+                self._begin_hard_teardown_unlocked()
                 raise
             except WorkerProtocolError:
                 await self._force_teardown_locked()
@@ -219,26 +218,11 @@ class SupervisedWorkerSession:
         lock is not required for kill: SIGKILL is safe while ``run`` holds it.
         """
 
-        run_id = self._active_run or getattr(self, "_cancel_run_id", None)
-        self._signal_kill_unlocked()
-        self._terminal = True
-        self._closed = True
-        self._active_run = None
-        try:
-            self._writer.close()
-        except Exception:
-            pass
+        task = self._begin_hard_teardown_unlocked()
         # Best-effort framed cancel is intentionally omitted under sticky
         # cancel: writing can await and re-raise before reap. Hard kill is the
         # ownership contract.
-        del run_id
-        try:
-            await asyncio.shield(asyncio.wait_for(self._process.wait(), WORKER_KILL_GRACE_SECONDS))
-        except asyncio.CancelledError:
-            asyncio.create_task(self._process.wait())
-            raise
-        except Exception:
-            pass
+        await self._join_hard_cleanup(task)
 
     async def reset(self) -> None:
         async with self._lock:
@@ -264,6 +248,8 @@ class SupervisedWorkerSession:
     async def close(self) -> None:
         async with self._lock:
             if self._closed:
+                if self._hard_cleanup_task is not None:
+                    await self._join_hard_cleanup(self._hard_cleanup_task)
                 return
             self._closed = True
             try:
@@ -284,11 +270,18 @@ class SupervisedWorkerSession:
                     await self._reap_process_locked()
                 else:
                     await self._process.wait()
+                await self._finish_drain_tasks()
                 self._terminal = True
 
     async def force_teardown(self) -> None:
         # Kill without the session lock first so concurrent run() holders cannot
         # block process-group teardown under sticky cancellation.
+        task = self._begin_hard_teardown_unlocked()
+        await self._join_hard_cleanup(task)
+
+    def _begin_hard_teardown_unlocked(self) -> asyncio.Task[None]:
+        """Synchronously revoke the worker, then own asynchronous cleanup."""
+
         self._signal_kill_unlocked()
         self._terminal = True
         self._closed = True
@@ -297,13 +290,39 @@ class SupervisedWorkerSession:
             self._writer.close()
         except Exception:
             pass
+        task = self._hard_cleanup_task
+        if task is None:
+            task = asyncio.create_task(
+                self._finish_hard_teardown(),
+                name="sdk-worker-hard-cleanup",
+            )
+            self._hard_cleanup_task = task
+        return task
+
+    async def _finish_hard_teardown(self) -> None:
         try:
-            await asyncio.shield(asyncio.wait_for(self._process.wait(), WORKER_KILL_GRACE_SECONDS))
-        except asyncio.CancelledError:
+            await asyncio.wait_for(self._process.wait(), WORKER_KILL_GRACE_SECONDS)
+        except asyncio.TimeoutError:
             asyncio.create_task(self._process.wait())
-            raise
         except Exception:
             pass
+        finally:
+            await self._close_streams()
+            await self._finish_drain_tasks()
+
+    async def _join_hard_cleanup(self, task: asyncio.Task[None]) -> None:
+        """Wait through repeated caller cancellation, then preserve cancellation."""
+
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+                continue
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError()
 
     def _signal_kill_unlocked(self) -> None:
         """Deliver SIGKILL without awaiting; safe under sticky cancellation."""
@@ -318,21 +337,8 @@ class SupervisedWorkerSession:
                 pass
 
     async def _force_teardown_locked(self) -> None:
-        self._terminal = True
-        self._closed = True
-        self._active_run = None
-        self._signal_kill_unlocked()
-        try:
-            self._writer.close()
-        except Exception:
-            pass
-        try:
-            await asyncio.shield(asyncio.wait_for(self._process.wait(), WORKER_KILL_GRACE_SECONDS))
-        except asyncio.CancelledError:
-            asyncio.create_task(self._process.wait())
-            raise
-        except Exception:
-            pass
+        task = self._begin_hard_teardown_unlocked()
+        await self._join_hard_cleanup(task)
 
     async def _reap_process_locked(self) -> None:
         if self._process.returncode is not None:
@@ -360,6 +366,12 @@ class SupervisedWorkerSession:
             await self._writer.wait_closed()
         except Exception:
             pass
+
+    async def _finish_drain_tasks(self) -> None:
+        for task in self._drain_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*self._drain_tasks, return_exceptions=True)
 
     def _ensure_openable(self) -> None:
         if self._closed or self._terminal:

@@ -51,16 +51,27 @@ class IntegrationHarnessOptionTests(unittest.TestCase):
             harness.missing_reason("claude", "sdk", "missing").startswith("[strict-missing]")
         )
 
-    def test_live_agent_resolves_canonical_cli_source_without_provider_branch(self):
+    def test_live_agent_resolves_enabled_and_disabled_canonical_backend_sources(self):
         for provider in ("claude", "codex", "antigravity", "xai"):
-            with self.subTest(provider=provider):
-                case = LiveBackendTestCase(methodName="runTest")
-                case.provider = provider
-                case.backend_id = "cli"
-                agent = case.live_agent()
-                self.assertEqual(agent.id, f"{provider}_cli")
-                self.assertEqual(agent.type, provider)
-                self.assertEqual(agent.backend, "cli")
+            for backend_id in ("cli", "sdk"):
+                with self.subTest(provider=provider, backend_id=backend_id):
+                    case = LiveBackendTestCase(methodName="runTest")
+                    case.provider = provider
+                    case.backend_id = backend_id
+                    agent = case.live_agent()
+                    canonical = f"{provider}_{backend_id}"
+                    section = harness.builtin_config().backends[canonical]
+                    self.assertEqual(agent.id, canonical)
+                    self.assertEqual(agent.type, provider)
+                    self.assertEqual(agent.backend, backend_id)
+                    self.assertEqual(agent.command, section.command)
+                    self.assertEqual(agent.args, section.args)
+                    self.assertEqual(agent.env, section.env)
+                    self.assertEqual(agent.cwd, section.cwd)
+                    self.assertEqual(agent.timeout, section.timeout)
+                    self.assertEqual(agent.backend_config, section.backend_config)
+                    self.assertEqual(agent.options, section.options)
+                    self.assertEqual(agent.default_options, section.default_options)
 
 
 if __name__ == "__main__":

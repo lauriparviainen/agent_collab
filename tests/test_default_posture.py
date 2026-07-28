@@ -48,6 +48,14 @@ class ShippedWritePostureTests(unittest.TestCase):
         config = builtin_config()
         self.assertEqual(config.system.sandbox_default.value, "read-only")
 
+    def test_served_guidance_matches_outer_sandbox_default(self):
+        guidance = (Path(__file__).parents[1] / "agent_collab" / "mcp-guidance.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("default is `read-only`", guidance)
+        self.assertIn('explicit `sandbox: "none"`', guidance)
+        self.assertNotIn("currently `none`", guidance)
+
     def test_claude_cli_defaults_to_permission_mode_default(self):
         backend, agent, options = _normalized_defaults("claude_cli")
         self.assertEqual(options["permission_mode"], "default")

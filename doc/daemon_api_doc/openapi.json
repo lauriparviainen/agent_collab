@@ -802,6 +802,10 @@
           "sandbox": {
             "anyOf": [
               {
+                "enum": [
+                  "read-only",
+                  "none"
+                ],
                 "type": "string"
               },
               {

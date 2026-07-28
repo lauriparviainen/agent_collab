@@ -22,6 +22,7 @@ from agent_collab.options import StartOptionsError
 from agent_collab.paths import GlobalDataPaths
 from agent_collab.referee import Referee
 from agent_collab.runners import AgentRunner
+from agent_collab.sandbox.specs import SandboxFailure
 from agent_collab.session_index import SessionIndex
 
 
@@ -1031,6 +1032,32 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 manager.describe_options(root / "missing")
             with self.assertRaisesRegex(SessionRequestError, "not a directory"):
                 manager.describe_options(regular_file)
+
+    def test_describe_reports_actual_platform_when_sandbox_discovery_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            failure = SandboxFailure(
+                "outer_sandbox_platform_unsupported",
+                "Bubblewrap is only supported on Linux",
+            )
+            with (
+                mock.patch(
+                    "agent_collab.sandbox.bubblewrap.discover_bubblewrap",
+                    side_effect=failure,
+                ),
+                mock.patch("agent_collab.options.platform.system", return_value="Darwin"),
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}),
+            ):
+                described = manager.describe_options(root)
+
+            engine = described["outer_sandbox"]["engine"]
+            self.assertEqual(engine["status"], "unavailable")
+            self.assertEqual(engine["platform"], "darwin")
+            self.assertEqual(
+                engine["reason_code"],
+                "outer_sandbox_platform_unsupported",
+            )
 
     async def test_start_and_describe_reject_workdirs_outside_user_restrict_workdir_roots(
         self,

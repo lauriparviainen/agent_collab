@@ -714,6 +714,67 @@ class AntigravitySdkRunnerWorkerPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(runner._worker_terminal)
         self.assertIsNone(runner._worker_session)
 
+    async def test_cancel_during_soft_drop_preserves_state_and_resume_block(self) -> None:
+        import asyncio
+
+        from agent_collab.backends.antigravity_sdk.backend import AntigravitySdkRunner
+
+        cleanups = 0
+
+        def cleanup() -> None:
+            nonlocal cleanups
+            cleanups += 1
+
+        runner = AntigravitySdkRunner(
+            AgentConfig(id="ag", type="antigravity", backend="sdk"),
+            False,
+            {},
+            conversation_factory=self._unused_conversation_factory,
+        )
+        runner.sandbox_plan = SimpleNamespace(
+            policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+            render_prompt=lambda prompt, _scratch: prompt,
+            created_session_private_roots=(),
+            cleanup_created_session_private_roots=cleanup,
+        )
+
+        class _Session:
+            terminal = False
+            _scratch = None
+
+            def __init__(self) -> None:
+                self.drop_started = asyncio.Event()
+
+            async def run(self, _prompt, emit=None):
+                del emit
+                return [], TurnOutcome("failed", "provider_empty_response")
+
+            async def force_teardown(self) -> None:
+                self.drop_started.set()
+                await asyncio.Event().wait()
+
+        session = _Session()
+
+        async def worker_for(_workdir):
+            runner._worker_session = session
+            return session
+
+        runner._worker_for = worker_for
+
+        async def emit(_event) -> None:
+            return None
+
+        task = asyncio.create_task(runner.run_turn("prompt", Path("/workspace"), emit))
+        await session.drop_started.wait()
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertIsNone(runner._worker_session)
+        self.assertFalse(runner._worker_terminal)
+        self.assertTrue(runner._worker_resume_blocked)
+        self.assertEqual(cleanups, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1162,6 +1162,18 @@ def _reopen_pinned_relative_directory(
                 "a declared directory changed identity during its pinned alias audit",
             )
         return descriptor
+    except OSError as exc:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise SandboxFailure(
+            "outer_sandbox_alias_audit_failed",
+            "a declared tree changed during its pinned alias audit",
+        ) from exc
     except BaseException:
-        os.close(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
         raise

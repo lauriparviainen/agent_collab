@@ -480,9 +480,12 @@ sandbox_alias_audit_timeout_seconds = 10
 
 Project `[system]` tables are ignored. Operator paths and a scratch root must
 be absolute and pass strict ownership, symlink, overlap, filesystem, and alias
-checks. The engine is Linux-only; an explicit `read-only` request
-fails before provider execution when Bubblewrap or compatible user namespaces
-are unavailable.
+checks. The engine is Linux-only. Whenever the effective policy is
+`read-only`—whether selected by a request, the configured default, or an
+installation override—a session containing an OS-enforced backend fails
+before provider execution if Bubblewrap or compatible user namespaces are
+unavailable. A session made only of audited no-local-effects members such as
+`xai_sdk` does not require Bubblewrap.
 
 ```bash
 agent-collab start --sandbox read-only --workflow solo \

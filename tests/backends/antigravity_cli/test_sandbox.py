@@ -381,6 +381,41 @@ class AntigravityCliSandboxAdapterTests(unittest.TestCase):
 
 
 class AntigravityCliSandboxRunnerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_zero_exit_structural_fragment_is_not_a_completed_turn(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            executable = root / "fake-agy"
+            executable.write_text(
+                "#!/usr/bin/env python3\nprint('}')\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o700)
+            backend = AntigravityCliBackend()
+            runner = backend.create_runner(
+                AgentConfig(
+                    id="antigravity",
+                    type="antigravity",
+                    command=str(executable),
+                    args=["-p"],
+                ),
+                False,
+                {},
+            )
+            events = []
+
+            async def emit(event):
+                events.append(event)
+
+            outcome = await runner.run_turn("prompt", root, emit)
+
+        self.assertEqual(
+            (outcome.outcome, outcome.code, outcome.process_exit_code),
+            ("failed", "provider_empty_response", 0),
+        )
+        self.assertFalse(
+            any(event.source == "antigravity" and event.type == "message" for event in events)
+        )
+
     async def test_zero_exit_reported_tool_failure_remains_failed_turn(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

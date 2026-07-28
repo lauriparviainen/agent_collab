@@ -23,6 +23,7 @@ from .config import (
 )
 from .options import assess_backend
 from .sandbox.paths import resolve_state_root
+from .sandbox.policy import resolve_sandbox_policy
 from .sandbox.specs import (
     CreationPolicy,
     Persistence,
@@ -93,7 +94,14 @@ def collect_install_readiness(
         _group(groups, ("probe", *probe_key), fact, agent.id)
 
     health_results = _probe_selected_backends(pending, health)
-    outer_read_only = effective.system.sandbox_default is SandboxPolicy.READ_ONLY
+    outer_read_only = (
+        resolve_sandbox_policy(
+            None,
+            effective.system.sandbox_default,
+            effective.system.sandbox_override,
+        ).effective
+        is SandboxPolicy.READ_ONLY
+    )
     rows: List[Dict[str, Any]] = []
     attention_count = 0
     for group in groups.values():

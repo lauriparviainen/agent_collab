@@ -163,10 +163,10 @@ Optional fields: `max_turns`, `timeout`, `mock`, `dry_run`, `interactive`,
 `interactive_idle_timeout`, `backend_options`, `backend`, `members`, `sandbox`.
 The top-level `sandbox` is agent-collab's outer filesystem policy and accepts
 `read-only` or `none`; it is distinct from provider-native values inside
-`backend_options`. Stage 1 supports outer `read-only` for `codex_cli` and mock
-only, and fails closed for other selected backends. The shipped default is
-currently `none`. For a
-quick smoke test without provider calls, start
+`backend_options`. All shipped backends support outer `read-only`; configured
+backends that cannot establish the requested boundary fail closed. The shipped
+default is `read-only`, and disabling it requires an explicit `sandbox: "none"`.
+For a quick smoke test without provider calls, start
 `{"task": "...", "mock": true, "max_turns": 1}`.
 
 `members` runs a named workflow shape with different agents: it maps a slot

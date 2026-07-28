@@ -560,15 +560,16 @@ See [agent configuration](doc/agent-configuration.md) for provider setup,
 backend selection, typed options, custom agents, and custom workflows. Each
 backend also documents itself in `agent_collab/backends/<provider>_<backend>/README.md`.
 
-Stages 1 through 4 of the Linux outer filesystem sandbox are available as an
-explicit top-level `sandbox=read-only` start policy for `codex_cli`,
-`claude_cli`, `xai_cli`, and `antigravity_cli`.
-They prove one common Bubblewrap namespace before the provider executes,
-protect the workspace and resolved Git storage, and keep that provider's
-complete effective state root writable. The shipped outer default remains
-`none`; every SDK backend still fails closed when read-only is requested. This
-policy is separate from each provider's own
-`backend_options.*.sandbox`, mode, or permission controls. See
+Stages 1 through 8 of the Linux outer filesystem sandbox cover all eight
+shipped CLI and SDK backends. The shipped effective default is `read-only`;
+set an explicit top-level `sandbox=none` to opt out when the installation
+policy permits it. CLI backends and the Codex, Claude, and Antigravity SDK
+workers prove a Bubblewrap boundary before provider execution, protect the
+workspace and resolved Git storage, and keep only validated provider state
+writable. The audited `xai_sdk` remote-chat surface has no local effects and
+therefore reports that OS enforcement is not applicable. This policy is
+separate from each provider's own `backend_options.*.sandbox`, mode, or
+permission controls. See
 [Outer filesystem sandbox](doc/agent-configuration.md#outer-filesystem-sandbox)
 for configuration, limitations, reporting, and rollback.
 

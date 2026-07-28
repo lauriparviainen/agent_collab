@@ -228,12 +228,21 @@ class InstallReadinessCollectionTests(unittest.TestCase):
         self.assertEqual(rows["claude_cli"]["credentials"], "not checked")
         self.assertEqual(rows["codex_cli"]["dependency"], "codex missing")
 
-    def _state_root_payload(self, home, *, sandbox_default="read-only"):
+    def _state_root_payload(
+        self,
+        home,
+        *,
+        sandbox_default="read-only",
+        sandbox_override=None,
+    ):
         config = builtin_config()
+        system = {"sandbox_default": sandbox_default}
+        if sandbox_override is not None:
+            system["sandbox_override"] = sandbox_override
         merge_config_data(
             config,
             {
-                "system": {"sandbox_default": sandbox_default},
+                "system": system,
                 "backends": {
                     "antigravity_cli": {"enabled": False},
                     "codex_cli": {"enabled": False},
@@ -289,6 +298,36 @@ class InstallReadinessCollectionTests(unittest.TestCase):
                     if item.get("code") == "initialize_provider_state"
                 ],
                 [],
+            )
+
+    def test_state_directory_blocking_uses_installation_override(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            forced_read_only = self._state_root_payload(
+                home,
+                sandbox_default="none",
+                sandbox_override="read-only",
+            )
+            forced_none = self._state_root_payload(
+                home,
+                sandbox_default="read-only",
+                sandbox_override="none",
+            )
+
+            read_only_row = {row["backend"]: row for row in forced_read_only["rows"]}["claude_cli"]
+            self.assertEqual(read_only_row["state_root"], "missing")
+            self.assertEqual(read_only_row["state"], "unavailable")
+            self.assertIn(
+                "initialize_provider_state",
+                [item.get("code") for item in read_only_row["remediation"]],
+            )
+
+            none_row = {row["backend"]: row for row in forced_none["rows"]}["claude_cli"]
+            self.assertEqual(none_row["state_root"], "missing")
+            self.assertEqual(none_row["state"], "usable")
+            self.assertNotIn(
+                "initialize_provider_state",
+                [item.get("code") for item in none_row["remediation"]],
             )
 
     def test_state_directory_the_plan_resolver_would_refuse_reports_invalid(self):

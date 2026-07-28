@@ -8,18 +8,52 @@ from ...events import Event
 from ...outcomes import TerminalEvidence
 
 
-_TOOL_FAILURE_PREFIXES = (
-    "TOOL_ERROR",
-    "Tool execution failed:",
-    "Tool action failed:",
-    "Failed to execute tool:",
-    "Error executing tool:",
-)
+_TOOL_FAILURE_PREFIXES = ("TOOL_ERROR:",)
+
+
+def _failure_event() -> Event:
+    return Event.create(
+        "error",
+        "error",
+        "Antigravity reported a tool/action failure",
+        {
+            "code": "provider_terminal_failure",
+            "fatal": True,
+        },
+    )
+
+
+def _substantive_text(line: str) -> Optional[str]:
+    """Return message text only when stdout contains actual answer content.
+
+    ``agy -p`` is message-only and exposes no structured success marker, so a
+    clean exit plus output remains provisional success. Structural fragments
+    such as a lone ``}`` must not satisfy that contract.
+    """
+
+    text = line.strip()
+    if not text or not any(character.isalnum() for character in text):
+        return None
+    return text
 
 
 def parse_antigravity_line(line: str, verbose: bool = False) -> Optional[Event]:
+    """Map one plain-text record without retaining turn-level evidence.
+
+    The production runner uses :class:`AntigravityParser`; this stateless
+    helper remains the fixture-level event mapper.
+    """
+
+    del verbose
     text = line.strip()
-    return Event.create("antigravity", "message", text, {"line": line}) if text else None
+    if not text:
+        return None
+    if text.startswith(_TOOL_FAILURE_PREFIXES):
+        return _failure_event()
+    substantive = _substantive_text(line)
+    if substantive is None:
+        return None
+    return Event.create("antigravity", "message", substantive, {"line": line})
 
 
 class AntigravityParser:
@@ -35,16 +69,11 @@ class AntigravityParser:
             return None
         if text.startswith(_TOOL_FAILURE_PREFIXES):
             self._terminal_evidence.append(TerminalEvidence("failed", "provider_terminal_failure"))
-            return Event.create(
-                "error",
-                "error",
-                "Antigravity reported a tool/action failure",
-                {
-                    "code": "provider_terminal_failure",
-                    "fatal": True,
-                },
-            )
-        return Event.create("antigravity", "message", text, {"line": line})
+            return _failure_event()
+        substantive = _substantive_text(line)
+        if substantive is None:
+            return None
+        return Event.create("antigravity", "message", substantive, {"line": line})
 
     def take_terminal_evidence(self) -> List[TerminalEvidence]:
         evidence = self._terminal_evidence

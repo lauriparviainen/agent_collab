@@ -1,6 +1,36 @@
 # Design the common Bubblewrap workspace sandbox
 
-> **Handoff / continue here (2026-07-27, all eight backends live-verified):**
+## Pre-merge review outcome (2026-07-28)
+
+The bounded Grok 4.5 High and Gemini 3.1 Pro High review covered the shared
+Bubblewrap orchestration, all four CLI backends, all four SDK backends,
+cross-cutting runtime/config/API policy, install/readiness, the integration
+harness, tests, and public documentation. No backend was found to be
+fundamentally non-working. The review did find reliability and contract defects
+in sandbox preflight and teardown, runner selection, CLI parsing and state
+containment, SDK worker teardown, readiness override handling, integration
+harness construction, and public API/documentation; all confirmed High and
+Medium findings were fixed before both reviewers returned clean on the same
+snapshots.
+
+The live calls made by this particular review loop used `xai_cli` with Grok and
+`antigravity_cli` with Gemini as the two reviewer processes. Their inspection
+scope covered all eight backend implementations, but the loop did not repeat a
+fresh paid end-to-end model call through every SDK backend. Separately, all
+eight enabled backends had already completed live MCP turns under the shipped
+outer-`read-only` default on this host.
+
+Final local validation passed: Ruff plus 1,409 hermetic tests with one expected
+skip, 10 real Bubblewrap acceptance tests, a clean-HOME replay with the same
+1,409/1 result, 57 focused API/build tests, generated API verification, and
+`git diff --check`. Every paid reviewer turn also successfully ran under the
+required OS-enforced outer-`read-only` boundary.
+
+The technical pre-merge review is complete. No merge or issue close was
+performed; issue #43 remains open for owner soak, and release remains blocked
+until the owner accepts that soak.
+>
+> **Historical all-backend live-verification record (2026-07-27):**
 > Work on branch `design/bubblewrap-implementation`. Stages 1–8 are
 > implemented, the built-in `sandbox_default` is `read-only`, and all eight
 > enabled backends have completed live MCP turns under that default on this

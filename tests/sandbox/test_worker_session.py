@@ -76,25 +76,27 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         async def bad_worker(sock: socket.socket) -> None:
             reader, writer = await asyncio.open_connection(sock=sock)
-            await send_frame(writer, make_frame("hello", instance="x", worker_pid=1))
-            open_frame = await recv_frame(reader)
-            await send_frame(
-                writer,
-                make_frame("ready", request_id=open_frame["request_id"], instance="x"),
-            )
-            await recv_frame(reader)
-            await send_frame(
-                writer,
-                make_frame(
-                    "result",
-                    run_id="not-the-run",
-                    sequence=1,
-                    outcome=TurnOutcome("completed").to_dict(),
-                ),
-            )
-            await asyncio.sleep(0.05)
-            writer.close()
-            await writer.wait_closed()
+            try:
+                await send_frame(writer, make_frame("hello", instance="x", worker_pid=1))
+                open_frame = await recv_frame(reader)
+                await send_frame(
+                    writer,
+                    make_frame("ready", request_id=open_frame["request_id"], instance="x"),
+                )
+                await recv_frame(reader)
+                await send_frame(
+                    writer,
+                    make_frame(
+                        "result",
+                        run_id="not-the-run",
+                        sequence=1,
+                        outcome=TurnOutcome("completed").to_dict(),
+                    ),
+                )
+                await asyncio.sleep(0.05)
+            finally:
+                writer.close()
+                await writer.wait_closed()
 
         worker_task = asyncio.create_task(bad_worker(worker))
         try:
@@ -161,6 +163,7 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await session.force_teardown()
         self.assertTrue(session.terminal)
         self.assertTrue(process.terminated or process.killed)
+        self.assertTrue(writer.is_closing())
 
     async def test_cancel_active_kills_without_framed_cancel(self) -> None:
         process = _FakeProcess()
@@ -175,6 +178,42 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await session.cancel_active()
         self.assertTrue(session.terminal)
         self.assertTrue(process.killed)
+        self.assertTrue(writer.is_closing())
+
+    async def test_force_teardown_waits_through_repeated_cancellation(self) -> None:
+        release = asyncio.Event()
+        wait_started = asyncio.Event()
+
+        class _SlowProcess(_FakeProcess):
+            def kill(self) -> None:
+                self.killed = True
+                self.returncode = -9
+
+            async def wait(self) -> int:
+                wait_started.set()
+                await release.wait()
+                return -9
+
+        process = _SlowProcess()
+        daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        daemon.setblocking(False)
+        worker.close()
+        reader, writer = await asyncio.open_connection(sock=daemon)
+        session = SupervisedWorkerSession(process, reader, writer, instance="x")
+        task = asyncio.create_task(session.force_teardown())
+        await wait_started.wait()
+
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(task.done())
+        release.set()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(process.killed)
+        self.assertTrue(writer.is_closing())
 
     async def test_run_cancelled_kills_process_group(self) -> None:
         process = _FakeProcess()
@@ -184,14 +223,18 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         async def hang_worker(sock: socket.socket) -> None:
             reader, writer = await asyncio.open_connection(sock=sock)
-            await send_frame(writer, make_frame("hello", instance="x", worker_pid=1))
-            open_frame = await recv_frame(reader)
-            await send_frame(
-                writer,
-                make_frame("ready", request_id=open_frame["request_id"], instance="x"),
-            )
-            await recv_frame(reader)
-            await asyncio.sleep(60)
+            try:
+                await send_frame(writer, make_frame("hello", instance="x", worker_pid=1))
+                open_frame = await recv_frame(reader)
+                await send_frame(
+                    writer,
+                    make_frame("ready", request_id=open_frame["request_id"], instance="x"),
+                )
+                await recv_frame(reader)
+                await asyncio.sleep(60)
+            finally:
+                writer.close()
+                await writer.wait_closed()
 
         worker_task = asyncio.create_task(hang_worker(worker))
         try:
@@ -204,8 +247,10 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
             run_task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await run_task
+            await session.close()
             self.assertTrue(process.killed)
             self.assertTrue(session.terminal)
+            self.assertTrue(writer.is_closing())
         finally:
             worker_task.cancel()
             await asyncio.gather(worker_task, return_exceptions=True)

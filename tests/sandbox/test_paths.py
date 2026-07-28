@@ -17,6 +17,7 @@ from agent_collab.sandbox.paths import (
     discover_session_git,
     normalize_mounts,
     parse_mountinfo,
+    _reopen_pinned_relative_directory,
     resolve_workspace,
 )
 from agent_collab.sandbox.specs import (
@@ -232,6 +233,26 @@ class AliasAuditTests(unittest.TestCase):
             Persistence.HOST,
             (origin,),
             (origin.value,),
+        )
+
+    def test_relative_directory_reopen_wraps_filesystem_races(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            try:
+                expected = PinnedIdentity.from_stat(os.fstat(root_fd))
+                with self.assertRaises(SandboxFailure) as raised:
+                    _reopen_pinned_relative_directory(
+                        root_fd,
+                        ("removed-before-reopen",),
+                        expected,
+                    )
+            finally:
+                os.close(root_fd)
+
+        self.assertEqual(
+            raised.exception.code,
+            "outer_sandbox_alias_audit_failed",
         )
 
     def test_unsupported_filesystem_fails_with_stable_code(self):

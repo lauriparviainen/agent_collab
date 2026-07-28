@@ -121,19 +121,24 @@ class LiveBackendTestCase(unittest.TestCase):
 
     def live_agent(self) -> AgentConfig:
         config = builtin_config()
-        source = config.agents[f"{self.provider}_{self.backend_id}"]
-        backend_config = dict(source.backend_config)
+        canonical = f"{self.provider}_{self.backend_id}"
+        section = config.backends[canonical]
+        backend_config = dict(section.backend_config)
         backend_config.update(self.agent_backend_config())
         return AgentConfig(
-            id=source.id,
-            type=source.type,
-            command=source.command,
-            args=list(source.args),
+            id=canonical,
+            type=self.provider,
+            command=section.command,
+            args=list(section.args),
             enabled=True,
-            env=dict(source.env),
-            cwd=source.cwd,
+            name=section.name,
+            env=dict(section.env),
+            cwd=section.cwd,
+            timeout=section.timeout,
             backend=self.backend_id,
             backend_config=backend_config,
+            options=dict(section.options),
+            default_options=dict(section.default_options),
         )
 
     def run_live(self, prompt: Optional[str] = None) -> list:

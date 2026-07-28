@@ -101,6 +101,12 @@ _FIELD_SCHEMAS: Dict[Tuple[type, str], Dict[str, Any]] = {
     (WaitResultRequestModel, "timeout_ms"): {"minimum": 0, "maximum": 600000},
     (StartSessionRequestModel, "task"): {"minLength": 1, "pattern": r".*\S.*"},
     (StartSessionRequestModel, "workdir"): {"minLength": 1, "pattern": r".*\S.*"},
+    (StartSessionRequestModel, "sandbox"): {
+        "anyOf": [
+            {"type": "string", "enum": ["read-only", "none"]},
+            {"type": "null"},
+        ]
+    },
     (OptionsRequestModel, "workdir"): {"minLength": 1, "pattern": r".*\S.*"},
     (OptionsRequestModel, "health_refresh"): {"enum": ["cached", "fresh"]},
     (OptionsRequestModel, "model_refresh"): {"enum": ["none", "cached", "fresh"]},

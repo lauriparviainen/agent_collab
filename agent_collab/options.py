@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
-import os
 from pathlib import Path
+import platform
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from .config import (
@@ -694,7 +694,7 @@ def _describe_outer_sandbox(config: CollaborationConfig) -> Dict[str, Any]:
     except SandboxFailure as exc:
         engine = {
             "status": "unavailable",
-            "platform": "linux" if os.name == "posix" else os.name,
+            "platform": platform.system().lower(),
             "executable": None,
             "version": None,
             "namespace_control": "not_run",

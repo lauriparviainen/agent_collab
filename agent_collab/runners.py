@@ -23,6 +23,18 @@ SUBPROCESS_TERMINATE_GRACE_SECONDS = 1.0
 SUBPROCESS_KILL_GRACE_SECONDS = 1.0
 
 
+def _adopt_process_wait(process: object) -> None:
+    """Own a final process wait after cancellation interrupts bounded cleanup."""
+
+    async def reap() -> None:
+        try:
+            await process.wait()  # type: ignore[attr-defined]
+        except BaseException:
+            pass
+
+    asyncio.create_task(reap())
+
+
 class AgentRunner:
     name = "agent"
 
@@ -332,10 +344,11 @@ class SubprocessRunner(AgentRunner):
                 return
             except asyncio.TimeoutError:
                 pass
-            except Exception:
+            except BaseException:
                 # wait_done records the owned completion task's original
-                # failure; cleanup must not replace it with a second wait.
-                return
+                # failure; cancellation during cleanup must still reach the
+                # uninterruptible SIGKILL escalation below.
+                pass
             if process.returncode is None:
                 try:
                     process.kill()
@@ -348,8 +361,9 @@ class SubprocessRunner(AgentRunner):
             except asyncio.TimeoutError:
                 # Ownership transfers to the loop; do not let an anomalous
                 # platform wait prevent timeout/interruption recording.
-                asyncio.create_task(process.wait())
-            except Exception:
+                _adopt_process_wait(process)
+            except BaseException:
+                _adopt_process_wait(process)
                 return
 
         async def wait_done() -> None:
@@ -511,6 +525,8 @@ def configured_runner(
     normalized = dict(backend.normalize_options(agent, dict(options or {})))
     runner = backend.create_runner(agent, verbose, normalized)
     if hasattr(runner, "sandbox_plan"):
+        if sandbox_plan is None:
+            raise ConfigError(f"agents.{agent.id} runner requires a resolved sandbox plan")
         runner.sandbox_plan = sandbox_plan
     return runner
 
