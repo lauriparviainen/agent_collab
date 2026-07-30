@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-30 - Outer read-only sandbox by default
+
 - Remove the referee's unreachable policy-cancellation path and eight other
   dead declarations. `Referee.request_policy_cancel` never had a caller, so its
   signal could never be set: every turn still created a `_policy_cancel` wait
