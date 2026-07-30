@@ -32,7 +32,6 @@ CANONICAL_MESSAGES: Dict[str, str] = {
     "provider_empty_response": "The provider returned no usable response",
     "local_turn_timed_out": "The turn exceeded its local deadline",
     "local_turn_interrupted": "The turn was interrupted by an explicit session stop",
-    "referee_turn_cancelled": "The referee cancelled the turn",
     "referee_cancelled_unexpected": "The turn supervisor was cancelled unexpectedly",
     "subprocess_exit_nonzero": "The provider subprocess exited unsuccessfully",
     "parallel_stage_no_accepted_member": "No parallel reviewer produced an accepted review",
@@ -394,9 +393,3 @@ class TerminalEvidenceAccumulator:
         return TurnOutcome(
             "failed", "provider_output_incomplete", process_exit_code=process_exit_code
         )
-
-
-def outcome_from_exception(code: str = "provider_transport_failed") -> TurnOutcome:
-    """Reduce any exception to a canonical safe outcome without retaining text."""
-
-    return TurnOutcome("failed", code)

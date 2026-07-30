@@ -85,7 +85,6 @@ class CatalogView:
 
     canonical_backend: str
     supported: bool
-    refresh_request: str
     observation: Optional[ModelCatalogObservation]
     stale: bool
     served_from: str  # "fresh_probe" | "cache" | "static"
@@ -304,7 +303,6 @@ class ModelCatalogService:
             return CatalogView(
                 canonical_backend,
                 False,
-                refresh,
                 None,
                 stale=False,
                 served_from="static",
@@ -333,7 +331,6 @@ class ModelCatalogService:
                     return CatalogView(
                         canonical_backend,
                         supported,
-                        refresh,
                         observation,
                         stale=False,
                         served_from="fresh_probe",
@@ -353,7 +350,6 @@ class ModelCatalogService:
             return CatalogView(
                 canonical_backend,
                 supported,
-                refresh,
                 served.observation,
                 stale=stale,
                 served_from=served_from,
@@ -365,7 +361,6 @@ class ModelCatalogService:
             return CatalogView(
                 canonical_backend,
                 supported,
-                refresh,
                 observation,
                 stale=False,
                 served_from="fresh_probe",
@@ -375,7 +370,6 @@ class ModelCatalogService:
         return CatalogView(
             canonical_backend,
             supported,
-            refresh,
             None,
             stale=False,
             served_from="static",
@@ -633,13 +627,10 @@ class ModelCatalogRefresher:
 
 def _view_from_served(canonical: str, served: Optional[ServedCatalog]) -> CatalogView:
     if served is None:
-        return CatalogView(
-            canonical, True, "cached", None, stale=False, served_from="static", probed=False
-        )
+        return CatalogView(canonical, True, None, stale=False, served_from="static", probed=False)
     return CatalogView(
         canonical,
         True,
-        "cached",
         served.observation,
         stale=served.stale,
         served_from="cache",
@@ -717,7 +708,6 @@ def run_install_discovery(
             view = CatalogView(
                 canonical,
                 True,
-                "fresh",
                 observation,
                 stale=False,
                 served_from="fresh_probe",

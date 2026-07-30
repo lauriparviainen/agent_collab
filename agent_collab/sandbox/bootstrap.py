@@ -10,13 +10,6 @@ import sys
 
 PROTOCOL_VERSION = 1
 FRAME_LIMIT = 16 * 1024
-ROLE_NAMES = (
-    "proof",
-    "worker",
-    "provider_stdin",
-    "provider_stdout",
-    "provider_stderr",
-)
 
 
 class ProtocolError(RuntimeError):

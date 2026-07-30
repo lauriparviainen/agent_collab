@@ -389,14 +389,6 @@ SDK_DISCOVERY: Dict[str, SdkDiscoverySpec] = {
 DISCOVERABLE_BACKENDS = tuple(sorted((*CLI_DISCOVERY, *SDK_DISCOVERY)))
 
 
-def cli_discovery_spec(canonical_backend: str) -> Optional[CliDiscoverySpec]:
-    return CLI_DISCOVERY.get(canonical_backend)
-
-
-def sdk_discovery_spec(canonical_backend: str) -> Optional[SdkDiscoverySpec]:
-    return SDK_DISCOVERY.get(canonical_backend)
-
-
 def discovery_source(canonical_backend: str) -> Optional[str]:
     if canonical_backend in CLI_DISCOVERY:
         return "cli"

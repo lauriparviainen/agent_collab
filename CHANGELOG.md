@@ -13,6 +13,20 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Remove the referee's unreachable policy-cancellation path and eight other
+  dead declarations. `Referee.request_policy_cancel` never had a caller, so its
+  signal could never be set: every turn still created a `_policy_cancel` wait
+  task that could not fire, and both arbitration branches behind it — plus the
+  `referee_turn_cancelled` outcome code they were the only producers of — were
+  unreachable. The signal, the per-turn task, the branches, and the code are
+  gone; turn arbitration is unchanged for every reachable cause. Also removed:
+  `outcome_from_exception`, `watch.iter_jsonl_events` (a duplicate of the
+  replay loop inlined in `watch_jsonl`), `cli_discovery_spec`,
+  `sdk_discovery_spec`, `config_search_paths`, `describe_options_for_workdir`,
+  `SandboxEnforcement.UNAVAILABLE`, the write-only `CatalogView.refresh_request`
+  field, and `bootstrap.ROLE_NAMES` (a third, unread copy of the fd-role list
+  that `_parse_args` already spells out twice). No behavior change.
+
 - Stop the TUI painting stray characters in the left margin (#54). Text was
   measured in Python characters while ncurses paints in terminal cells, so a
   line carrying a tab, a wide character, or a control character overflowed its

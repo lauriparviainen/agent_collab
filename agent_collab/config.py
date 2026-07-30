@@ -460,18 +460,6 @@ def _raise_builtin_config_error(
     raise ConfigError(f"{source}: {message}") from exc
 
 
-def config_search_paths(
-    workdir: Path,
-    home: Optional[AgentCollabHome] = None,
-    env: Optional[Mapping[str, str]] = None,
-) -> List[Path]:
-    resolved_home = home or AgentCollabHome.resolve(env)
-    return [
-        project_config_path(workdir),
-        user_config_path(resolved_home),
-    ]
-
-
 def load_config(
     workdir: Path,
     home: Optional[AgentCollabHome] = None,

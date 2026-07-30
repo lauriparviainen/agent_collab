@@ -10,7 +10,6 @@ from .config import (
     AgentConfig,
     CollaborationConfig,
     WorkflowConfig,
-    load_config,
     validate_workflow,
     workflow_member_state,
     workflow_members,
@@ -720,17 +719,6 @@ def _describe_outer_sandbox(config: CollaborationConfig) -> Dict[str, Any]:
         ),
         "engine": engine,
     }
-
-
-def describe_options_for_workdir(
-    workdir: Path, *, health_refresh: str = "cached", model_refresh: str = "cached"
-) -> Dict[str, Any]:
-    from .config import resolve_existing_workdir
-
-    root = resolve_existing_workdir(workdir)
-    return describe_options(
-        load_config(root), root, health_refresh=health_refresh, model_refresh=model_refresh
-    )
 
 
 def _describe_backends(

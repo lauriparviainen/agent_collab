@@ -34,7 +34,6 @@ class SandboxEnforcement(str, Enum):
     OS_ENFORCED = "os_enforced"
     NOT_APPLICABLE_NO_LOCAL_EFFECTS = "not_applicable_no_local_effects"
     DISABLED = "disabled"
-    UNAVAILABLE = "unavailable"
 
 
 class PathAccess(str, Enum):

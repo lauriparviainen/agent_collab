@@ -151,7 +151,6 @@ class Referee:
             validate_config(self.collab_config)
         self._emit_lock: Optional[asyncio.Lock] = None
         self.stop_signal = config.stop_signal or RefereeStopSignal()
-        self._policy_cancel = RefereeStopSignal()
         self._next_turn_number = 1
         self._committed_turn_ids: set[str] = set()
         self._reaper_tasks: set[asyncio.Task] = set()
@@ -216,9 +215,6 @@ class Referee:
 
     def request_stop(self) -> None:
         self.stop_signal.request()
-
-    def request_policy_cancel(self) -> None:
-        self._policy_cancel.request()
 
     async def _preflight_direct_sandbox_plan(self) -> None:
         """Run the engine control omitted by daemon-owned prepared starts.
@@ -606,7 +602,6 @@ class Referee:
         )
         deadline_task = asyncio.create_task(asyncio.sleep(max(0, self.config.timeout)))
         stop_task = asyncio.create_task(self.stop_signal.wait())
-        policy_task = asyncio.create_task(self._policy_cancel.wait())
         local_outcome: Optional[TurnOutcome] = None
         unexpected_cancel = False
 
@@ -615,7 +610,7 @@ class Referee:
         try:
             try:
                 await asyncio.wait(
-                    {runner_task, deadline_task, stop_task, policy_task},
+                    {runner_task, deadline_task, stop_task},
                     return_when=asyncio.FIRST_COMPLETED,
                 )
             except asyncio.CancelledError:
@@ -623,8 +618,6 @@ class Referee:
                     pass
                 elif self.stop_signal.is_set():
                     local_outcome = TurnOutcome("interrupted", "local_turn_interrupted")
-                elif self._policy_cancel.is_set():
-                    local_outcome = TurnOutcome("interrupted", "referee_turn_cancelled")
                 else:
                     local_outcome = TurnOutcome("failed", "referee_cancelled_unexpected")
                     unexpected_cancel = True
@@ -642,8 +635,6 @@ class Referee:
                         local_outcome = TurnOutcome("timed_out", "local_turn_timed_out")
                     elif stop_task.done():
                         local_outcome = TurnOutcome("interrupted", "local_turn_interrupted")
-                    elif policy_task.done():
-                        local_outcome = TurnOutcome("interrupted", "referee_turn_cancelled")
                     else:
                         local_outcome = TurnOutcome("failed", "referee_cancelled_unexpected")
                 await asyncio.shield(self._cancel_runner_bounded(runner_task))
@@ -677,10 +668,10 @@ class Referee:
                 raise RequiredTurnFailed(record)
             return record
         finally:
-            for task in (deadline_task, stop_task, policy_task):
+            for task in (deadline_task, stop_task):
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(deadline_task, stop_task, policy_task, return_exceptions=True)
+            await asyncio.gather(deadline_task, stop_task, return_exceptions=True)
             if manage_turn_active:
                 await self._set_turn_active(False)
 

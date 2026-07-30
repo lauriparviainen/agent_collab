@@ -114,17 +114,6 @@ def event_from_jsonl_line(line: str, line_number: int) -> Optional[Event]:
     )
 
 
-def iter_jsonl_events(path: Path, start_cursor: int = 0) -> Iterable[Event]:
-    cursor = max(0, start_cursor)
-    with path.open("r", encoding="utf-8") as file_obj:
-        for line_number, line in enumerate(file_obj, start=1):
-            if line_number <= cursor:
-                continue
-            event = event_from_jsonl_line(line, line_number)
-            if event is not None:
-                yield event
-
-
 def watch_jsonl(
     path: Path,
     follow: bool = True,

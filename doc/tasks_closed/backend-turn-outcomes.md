@@ -2,6 +2,15 @@
 
 **Status:** Complete — closed 2026-07-13 after installed-daemon acceptance.
 
+**Amended 2026-07-30:** the third local control cause, "explicit referee policy
+cancellation" (`referee_turn_cancelled`), shipped as a signal and an
+arbitration branch but never gained a caller — nothing in the daemon or the
+CLI could set it, so the code was unreachable from the day it landed. The
+signal, its per-turn wait task, both arbitration branches, and the outcome code
+were removed. The arbitration rule below is therefore two local causes plus the
+unexpected-cancellation fallback. Re-adding a policy-cancellation cause means
+adding the producer and the code together.
+
 **Created:** 2026-07-13.
 
 **Last refined:** 2026-07-13.
@@ -272,8 +281,9 @@ deterministic arbitration rule is:
 2. otherwise the first registered local control cause wins:
    - deadline -> `timed_out` / `local_turn_timed_out`;
    - explicit session stop -> `interrupted` / `local_turn_interrupted`;
-   - explicit referee policy cancellation -> `interrupted` /
-     `referee_turn_cancelled`;
+   - ~~explicit referee policy cancellation -> `interrupted` /
+     `referee_turn_cancelled`~~ (removed 2026-07-30, never had a producer —
+     see the amendment at the top);
 3. cancel the runner, perform bounded cleanup, then record the one local
    outcome;
 4. an unexpected bare cancellation without a registered control cause is
@@ -399,7 +409,7 @@ Initial backend-neutral codes:
 - `provider_empty_response`
 - `local_turn_timed_out`
 - `local_turn_interrupted`
-- `referee_turn_cancelled`
+- ~~`referee_turn_cancelled`~~ (removed 2026-07-30, never had a producer)
 - `referee_cancelled_unexpected`
 - `subprocess_exit_nonzero`
 - `parallel_stage_no_accepted_member` (stage-level orchestration failure for

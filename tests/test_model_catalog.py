@@ -320,7 +320,6 @@ class WarningTests(unittest.TestCase):
         return CatalogView(
             "antigravity_cli",
             True,
-            "cached",
             observation,
             stale=stale,
             served_from="cache" if observation is not None else "static",
