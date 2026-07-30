@@ -1,5 +1,13 @@
 # Design the common Bubblewrap workspace sandbox
 
+## Closed (2026-07-30)
+
+The owner completed the real-world soak and accepted the shipped
+`sandbox_default = "read-only"` posture. The final short pass found no new
+blocking issues, so the implementation was approved for merge to `main` and
+issue #43 closeout. The pre-merge review and historical implementation record
+below are retained as the durable design and verification history.
+
 ## Pre-merge review outcome (2026-07-28)
 
 The bounded Grok 4.5 High and Gemini 3.1 Pro High review covered the shared
@@ -211,27 +219,9 @@ until the owner accepts that soak.
 > docs (`agent-configuration`, `implementation-notes`, xai_sdk README),
 > CHANGELOG [Unreleased].
 
-**Status:** CLI product slice stabilized on
-`design/bubblewrap-implementation`. Stages 1–4 are implemented; free gates and
-all four paid CLI outer-sandbox acceptances pass. Stage 5 implements the
-generic framed SDK worker plus `codex_sdk` outer `read-only`; dual production
-review loop 6 converged (both reviewers: no High/Medium findings). Stage 6
-adds `claude_sdk` on the same worker transport; dual production review loop 8
-converged (both reviewers: no High/Medium findings). Stage 7
-`antigravity_sdk` worker + protobuf coexistence for shared xAI/Antigravity
-install are implemented; dual-review loop 10 converged (both reviewers: no
-High/Medium findings) after cancel-safe close/drain teardown fixes. Stage 8
-implements the `xai_sdk` `no_local_effects` audit and adapter; dual-review
-loop 11 converged (both reviewers: no High/Medium findings). Stage 2 and
-Stage 4 production reviews converged; Stage 1 exhausted its six-loop limit
-without formal same-loop convergence and has no unresolved confirmed findings.
-Stage 3 later converged on its own dual-review loop when the ambient
-vendor-compatibility rejection was replaced with environment containment
-(round 3 clean from both reviewers). The shipped outer default is now
-`read-only`, and all eight enabled backends have completed live turns under it
-on this host. Implementation is complete; the remaining work is owner soak in
-real daily use. **Merge to `main` remains an operator release decision.**
-Issue #43 stays open until that soak confirms the default is comfortable.
+**Status:** Closed after implementation, converged review, all-backend live
+verification under the outer `read-only` default, and owner soak acceptance.
+The detailed stage status and review history remain below.
 **Created:** 2026-07-25.
 
 **Issue:** [#43](https://github.com/lauriparviainen/agent_collab/issues/43)
@@ -466,7 +456,7 @@ The frozen scope was the same 21 paths in every loop:
 `agent_collab/backends/xai_cli/sandbox.py`,
 `conditional_tests/test_bubblewrap.py`, `doc/agent-configuration.md`,
 `doc/implementation-notes.md`,
-`doc/tasks_open/antigravity-read-only-bubblewrap-sandbox.md`,
+`doc/tasks_closed/antigravity-read-only-bubblewrap-sandbox.md`,
 `integration_tests/README.md`,
 `integration_tests/backends/antigravity_cli/test_live.py`,
 `integration_tests/backends/claude_cli/test_live.py`,
