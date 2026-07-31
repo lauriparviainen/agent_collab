@@ -748,6 +748,7 @@ class SessionManager:
             agents=agents,
             operator=operator,
             command_previews=command_previews,
+            alias_audit_log=self._log_lifecycle,
         )
         try:
             enforced = [

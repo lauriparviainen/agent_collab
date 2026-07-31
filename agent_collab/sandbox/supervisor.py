@@ -339,8 +339,10 @@ class SandboxSupervisor:
             audit_aliases,
             plan.operations,
             plan.git_records,
+            accounting_peer_roots=plan.accounting_peer_roots,
             max_entries=plan.alias_audit_max_entries,
             timeout_seconds=plan.alias_audit_timeout_seconds,
+            log=plan.alias_audit_log,
         )
         status_read, status_write = os.pipe2(os.O_CLOEXEC)
         proof_parent, proof_child = socket.socketpair(

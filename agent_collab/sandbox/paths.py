@@ -10,7 +10,7 @@ import re
 import stat
 import subprocess
 import time
-from typing import Dict, Iterator, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterator, Optional, Sequence, Tuple
 
 from .specs import (
     CreationPolicy,
@@ -831,9 +831,11 @@ def audit_aliases(
     operations: Sequence[MountOperation],
     git_records: Sequence[GitProtectionRecord],
     *,
+    accounting_peer_roots: Sequence[Path] = (),
     max_entries: int,
     timeout_seconds: int,
     mount_entries: Optional[Sequence[MountInfoEntry]] = None,
+    log: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Reject unsupported filesystems, mount aliases, and hard-link aliases."""
 
@@ -844,6 +846,7 @@ def audit_aliases(
         if PathOrigin.WORKSPACE in item.origins or PathOrigin.GIT_METADATA in item.origins
     ]
     writable = [item for item in operations if item.access is PathAccess.WRITABLE]
+    peer_roots = resolve_accounting_peer_roots(accounting_peer_roots, operations)
     deadline = time.monotonic() + timeout_seconds
     visited = [0]
     for operation in operations:
@@ -935,21 +938,37 @@ def audit_aliases(
                         "outer_sandbox_mount_alias",
                         "a writable mount or nested mount aliases protected storage",
                     )
-    protected_inodes = _collect_protected_inodes(
-        protected,
-        deadline=deadline,
-        max_entries=max_entries,
-        visited=visited,
-    )
-    for writable_op in writable:
-        _audit_writable_hardlinks(
+    try:
+        candidates = _collect_writable_candidates(
             protected,
-            protected_inodes,
-            writable_op,
+            writable,
+            entries,
             deadline=deadline,
             max_entries=max_entries,
             visited=visited,
         )
+        _collect_accounting_peer_names(
+            candidates,
+            peer_roots,
+            (*protected, *writable),
+            entries,
+            deadline=deadline,
+            max_entries=max_entries,
+            visited=visited,
+            log=log,
+        )
+        _search_protected_candidates(
+            protected,
+            entries,
+            _revalidate_writable_candidates(candidates),
+            deadline=deadline,
+            max_entries=max_entries,
+            visited=visited,
+            log=log,
+        )
+    except SandboxFailure as exc:
+        _log_traversal_failure(log, exc, disposition="aborted")
+        raise
 
     # Logical roots remain pinned even though containment comparisons use only
     # coverage sides.
@@ -973,50 +992,130 @@ def _identity_paths_overlap(left: Tuple[str, Path], right: Tuple[str, Path]) -> 
     return component_contains(left[1], right[1]) or component_contains(right[1], left[1])
 
 
-def _collect_protected_inodes(
-    protected: Sequence[MountOperation],
-    *,
-    deadline: float,
-    max_entries: int,
-    visited: list[int],
-) -> set[Tuple[int, int, int]]:
-    roots: list[Path] = []
-    for candidate in sorted(
-        (item.destination for item in protected),
-        key=lambda item: (path_depth(item), str(item)),
-    ):
-        if not any(component_contains(parent, candidate) for parent in roots):
-            roots.append(candidate)
+def _coverage_sides(
+    root: Path,
+    entries: Sequence[MountInfoEntry],
+) -> Tuple[Tuple[Path, Tuple[str, Path]], ...]:
+    enclosing = enclosing_mount(root, entries)
+    sides = [(root, _underlying_identity(root, enclosing))]
+    sides.extend(
+        (nested.mountpoint, _underlying_identity(nested.mountpoint, nested))
+        for nested in entries
+        if nested.mountpoint != enclosing.mountpoint and component_contains(root, nested.mountpoint)
+    )
+    return tuple(sides)
 
-    protected_inodes: set[Tuple[int, int, int]] = set()
+
+def _mapped_backing_overlap(
+    visible: Path,
+    identity: Tuple[str, Path],
+    excluded: Tuple[str, Path],
+) -> Optional[Path]:
+    device, underlying = identity
+    excluded_device, excluded_underlying = excluded
+    if device != excluded_device:
+        return None
+    if component_contains(excluded_underlying, underlying):
+        return visible
+    if component_contains(underlying, excluded_underlying):
+        return visible / excluded_underlying.relative_to(underlying)
+    return None
+
+
+def _minimal_prune_paths(paths: Sequence[Path]) -> Tuple[Path, ...]:
+    prune: list[Path] = []
+    for candidate in sorted(set(paths), key=lambda item: (path_depth(item), str(item))):
+        if not any(component_contains(parent, candidate) for parent in prune):
+            prune.append(candidate)
+    return tuple(prune)
+
+
+def _canonical_mount_prunes(
+    roots: Sequence[Path],
+    excluded_operations: Sequence[MountOperation],
+    entries: Sequence[MountInfoEntry],
+    *,
+    lexical_exclusions_pruned: bool = False,
+) -> Dict[Path, Tuple[Path, ...]]:
+    """Exclude declared and duplicate mount views from name accounting."""
+
+    excluded_sides = tuple(
+        (visible, identity)
+        for operation in excluded_operations
+        for visible, identity in _coverage_sides(operation.destination, entries)
+    )
+    canonical_sides: list[Tuple[str, Path]] = []
+    result: Dict[Path, Tuple[Path, ...]] = {}
     for root in roots:
-        for _path, value in _walk_no_symlinks(
-            root,
-            (),
-            deadline=deadline,
-            budget=max_entries,
-            visited_start=visited[0],
+        peer_sides = sorted(
+            _coverage_sides(root, entries),
+            key=lambda item: (path_depth(item[0]), str(item[0])),
+        )
+        candidates = [
+            mapped
+            for visible, identity in peer_sides
+            for excluded_visible, excluded in excluded_sides
+            if (mapped := _mapped_backing_overlap(visible, identity, excluded)) is not None
+            and not (
+                lexical_exclusions_pruned
+                and component_contains(root, excluded_visible)
+                and mapped == excluded_visible
+            )
+        ]
+        prune = _minimal_prune_paths(candidates)
+        for visible, identity in peer_sides:
+            if any(component_contains(parent, visible) for parent in prune):
+                continue
+            candidates.extend(
+                mapped
+                for excluded in canonical_sides
+                if (mapped := _mapped_backing_overlap(visible, identity, excluded)) is not None
+            )
+            prune = _minimal_prune_paths(candidates)
+            if any(component_contains(parent, visible) for parent in prune):
+                continue
+            canonical_sides.append(identity)
+        result[root] = prune
+    return result
+
+
+def resolve_accounting_peer_roots(
+    peer_roots: Sequence[Path],
+    operations: Sequence[MountOperation],
+) -> Tuple[Path, ...]:
+    """Resolve lenient, non-mounted accounting roots and reject double coverage."""
+
+    writable = [item.destination for item in operations if item.access is PathAccess.WRITABLE]
+    resolved: list[Path] = []
+    for configured in peer_roots:
+        candidate = Path(os.path.abspath(configured.expanduser()))
+        if candidate in resolved:
+            continue
+        if any(
+            component_contains(candidate, writable_root)
+            or component_contains(writable_root, candidate)
+            for writable_root in writable
         ):
-            visited[0] += 1
-            if not stat.S_ISDIR(value.st_mode):
-                protected_inodes.add((value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode)))
-    return protected_inodes
+            raise SandboxFailure(
+                "outer_sandbox_accounting_peer_overlap",
+                "an accounting-only peer root overlaps writable sandbox state",
+            )
+        resolved.append(candidate)
+    return tuple(resolved)
 
 
-def _audit_writable_hardlinks(
+HardlinkIdentity = Tuple[int, int, int]
+
+
+def _protected_below_prune(
     protected: Sequence[MountOperation],
-    protected_inodes: set[Tuple[int, int, int]],
-    writable: MountOperation,
-    *,
-    deadline: float,
-    max_entries: int,
-    visited: list[int],
-) -> None:
+    writable_root: Path,
+) -> Tuple[Path, ...]:
     protected_below = sorted(
         (
             item.destination
             for item in protected
-            if component_contains(writable.destination, item.destination)
+            if component_contains(writable_root, item.destination)
         ),
         key=lambda item: (path_depth(item), str(item)),
     )
@@ -1024,23 +1123,277 @@ def _audit_writable_hardlinks(
     for candidate in protected_below:
         if not any(component_contains(parent, candidate) for parent in prune):
             prune.append(candidate)
+    return tuple(prune)
 
-    for _path, value in _walk_no_symlinks(
-        writable.destination,
-        tuple(prune),
-        deadline=deadline,
-        budget=max_entries,
-        visited_start=visited[0],
-    ):
-        visited[0] += 1
-        if stat.S_ISDIR(value.st_mode):
+
+def _collect_writable_candidates(
+    protected: Sequence[MountOperation],
+    writable: Sequence[MountOperation],
+    mount_entries: Sequence[MountInfoEntry],
+    *,
+    deadline: float,
+    max_entries: int,
+    visited: list[int],
+) -> Dict[HardlinkIdentity, list[Path]]:
+    candidates: Dict[HardlinkIdentity, list[Path]] = {}
+    writable_prunes = _canonical_mount_prunes(
+        tuple(operation.destination for operation in writable),
+        protected,
+        mount_entries,
+        lexical_exclusions_pruned=True,
+    )
+    for operation in writable:
+        prune = _minimal_prune_paths(
+            (
+                *_protected_below_prune(protected, operation.destination),
+                *writable_prunes[operation.destination],
+            )
+        )
+        for path, value in _walk_no_symlinks(
+            operation.destination,
+            prune,
+            deadline=deadline,
+            budget=max_entries,
+            visited_start=visited[0],
+        ):
+            visited[0] += 1
+            if stat.S_ISDIR(value.st_mode):
+                continue
+            identity = (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode))
+            candidates.setdefault(identity, []).append(path)
+    return candidates
+
+
+def _collect_accounting_peer_names(
+    candidates: Dict[HardlinkIdentity, list[Path]],
+    peer_roots: Sequence[Path],
+    declared: Sequence[MountOperation],
+    mount_entries: Sequence[MountInfoEntry],
+    *,
+    deadline: float,
+    max_entries: int,
+    visited: list[int],
+    log: Optional[Callable[[str], None]],
+) -> None:
+    if not candidates:
+        return
+    available_roots: list[Path] = []
+    for root in peer_roots:
+        try:
+            os.lstat(root)
+        except FileNotFoundError:
             continue
-        identity = (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode))
-        if identity in protected_inodes:
+        except OSError as exc:
+            failure = _alias_audit_traversal_failure(
+                "an accounting-only peer root was unavailable",
+                root,
+                exc,
+            )
+            _log_traversal_failure(log, failure, disposition="peer-skipped")
+            continue
+        available_roots.append(root)
+    peer_prunes = _canonical_mount_prunes(available_roots, declared, mount_entries)
+    for root in available_roots:
+        # A bind or other multipath view of a declared writable/protected name
+        # or of an already-counted peer side is not another hard-link name.
+        prune = peer_prunes[root]
+        if any(item == root for item in prune):
+            continue
+        for path, value in _walk_no_symlinks(
+            root,
+            prune,
+            deadline=deadline,
+            budget=max_entries,
+            visited_start=visited[0],
+            best_effort=True,
+            on_error=lambda failure: _log_traversal_failure(
+                log,
+                failure,
+                disposition="peer-skipped",
+            ),
+        ):
+            visited[0] += 1
+            if stat.S_ISDIR(value.st_mode):
+                continue
+            identity = (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode))
+            if identity in candidates:
+                candidates[identity].append(path)
+
+
+def _revalidate_writable_candidates(
+    candidates: Dict[HardlinkIdentity, list[Path]],
+) -> set[HardlinkIdentity]:
+    unaccounted: set[HardlinkIdentity] = set()
+    for identity, counted_paths in candidates.items():
+        distinct_paths = tuple(dict.fromkeys(counted_paths))
+        names_found = 0
+        sampled_nlinks: set[int] = set()
+        directory_entries: set[tuple[int, int, str]] = set()
+        stable = True
+        for path in distinct_paths:
+            revalidated = _revalidate_counted_name(path)
+            if revalidated is None:
+                stable = False
+                continue
+            value, parent_identity = revalidated
+            current = (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode))
+            if current != identity:
+                stable = False
+                continue
+            directory_entry = (parent_identity.device, parent_identity.inode, path.name)
+            if directory_entry in directory_entries:
+                stable = False
+                continue
+            directory_entries.add(directory_entry)
+            names_found += 1
+            sampled_nlinks.add(value.st_nlink)
+        if (
+            not stable
+            or names_found != len(distinct_paths)
+            or len(sampled_nlinks) != 1
+            or names_found != next(iter(sampled_nlinks))
+        ):
+            unaccounted.add(identity)
+    return unaccounted
+
+
+def _revalidate_counted_name(
+    path: Path,
+) -> Optional[tuple[os.stat_result, PinnedIdentity]]:
+    parent_fd: Optional[int] = None
+    child_fd: Optional[int] = None
+    try:
+        parent_fd = _open_pinned_directory(path.parent)
+        parent_identity = PinnedIdentity.from_stat(os.fstat(parent_fd))
+        child_fd = os.open(
+            path.name,
+            getattr(os, "O_PATH", os.O_RDONLY) | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+        return os.fstat(child_fd), parent_identity
+    except (OSError, SandboxFailure):
+        return None
+    finally:
+        if child_fd is not None:
+            os.close(child_fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
+def _search_protected_candidates(
+    protected: Sequence[MountOperation],
+    mount_entries: Sequence[MountInfoEntry],
+    candidates: set[HardlinkIdentity],
+    *,
+    deadline: float,
+    max_entries: int,
+    visited: list[int],
+    log: Optional[Callable[[str], None]],
+) -> None:
+    if not candidates:
+        return
+    devices = {identity[0] for identity in candidates}
+    _emit_alias_audit_log(
+        log,
+        "sandbox alias audit protected-search "
+        f"candidates={len(candidates)} devices={','.join(str(item) for item in sorted(devices))}",
+    )
+    roots = _protected_coverage_roots(protected, mount_entries)
+    for root in roots:
+        try:
+            root_value = os.stat(root, follow_symlinks=False)
+        except OSError as exc:
+            raise _alias_audit_traversal_failure(
+                "a protected audit root became unavailable",
+                root,
+                exc,
+            ) from exc
+        if root_value.st_dev not in devices:
+            continue
+        nested = tuple(item for item in roots if item != root and component_contains(root, item))
+        for path, value in _walk_no_symlinks(
+            root,
+            nested,
+            deadline=deadline,
+            budget=max_entries,
+            visited_start=visited[0],
+        ):
+            visited[0] += 1
+            if stat.S_ISDIR(value.st_mode):
+                continue
+            identity = (value.st_dev, value.st_ino, stat.S_IFMT(value.st_mode))
+            if identity not in candidates:
+                continue
+            _emit_alias_audit_log(
+                log,
+                f"sandbox alias audit hard-link-match path={path} device={identity[0]}",
+            )
             raise SandboxFailure(
                 "outer_sandbox_hardlink_alias",
                 "a protected inode is reachable through writable remainder",
             )
+
+
+def _protected_coverage_roots(
+    protected: Sequence[MountOperation],
+    mount_entries: Sequence[MountInfoEntry],
+) -> Tuple[Path, ...]:
+    roots: list[Path] = []
+    for candidate in sorted(
+        (item.destination for item in protected),
+        key=lambda item: (path_depth(item), str(item)),
+    ):
+        if not any(component_contains(parent, candidate) for parent in roots):
+            roots.append(candidate)
+    nested_mounts = sorted(
+        {
+            entry.mountpoint
+            for root in roots
+            for entry in mount_entries
+            if entry.mountpoint != root and component_contains(root, entry.mountpoint)
+        },
+        key=lambda item: (path_depth(item), str(item)),
+    )
+    return tuple([*roots, *nested_mounts])
+
+
+def _alias_audit_traversal_failure(
+    message: str,
+    path: Path,
+    exc: OSError,
+) -> SandboxFailure:
+    failure = SandboxFailure("outer_sandbox_alias_audit_failed", message)
+    failure.audit_path = path
+    failure.audit_errno = exc.errno
+    return failure
+
+
+def _log_traversal_failure(
+    log: Optional[Callable[[str], None]],
+    failure: SandboxFailure,
+    *,
+    disposition: str,
+) -> None:
+    path = getattr(failure, "audit_path", None)
+    if path is None:
+        return
+    error_number = getattr(failure, "audit_errno", None)
+    _emit_alias_audit_log(
+        log,
+        f"sandbox alias audit {disposition} path={path} errno={error_number}",
+    )
+
+
+def _emit_alias_audit_log(
+    log: Optional[Callable[[str], None]],
+    message: str,
+) -> None:
+    if log is None:
+        return
+    try:
+        log(message)
+    except Exception:
+        pass
 
 
 def _walk_no_symlinks(
@@ -1050,16 +1403,32 @@ def _walk_no_symlinks(
     deadline: float,
     budget: int,
     visited_start: int,
+    best_effort: bool = False,
+    on_error: Optional[Callable[[SandboxFailure], None]] = None,
 ) -> Iterator[Tuple[Path, os.stat_result]]:
     visited = visited_start
-    root_fd = _open_pinned_directory(root)
+    try:
+        root_fd = _open_pinned_directory(root)
+    except SandboxFailure as exc:
+        _attach_alias_audit_diagnostic(exc, root)
+        if not best_effort:
+            raise
+        _report_best_effort_walk_error(on_error, exc)
+        return
     root_identity = PinnedIdentity.from_stat(os.fstat(root_fd))
     stack: list[tuple[Tuple[str, ...], PinnedIdentity]] = [((), root_identity)]
     try:
         while stack:
             relative, expected = stack.pop()
             path = root.joinpath(*relative)
-            directory_fd = _reopen_pinned_relative_directory(root_fd, relative, expected)
+            try:
+                directory_fd = _reopen_pinned_relative_directory(root_fd, relative, expected)
+            except SandboxFailure as exc:
+                _attach_alias_audit_diagnostic(exc, path)
+                if not best_effort:
+                    raise
+                _report_best_effort_walk_error(on_error, exc)
+                continue
             try:
                 value = os.fstat(directory_fd)
                 _check_alias_audit_limit(visited, budget, deadline)
@@ -1070,10 +1439,15 @@ def _walk_no_symlinks(
                 try:
                     names = sorted(os.listdir(directory_fd), reverse=True)
                 except OSError as exc:
-                    raise SandboxFailure(
-                        "outer_sandbox_alias_audit_failed",
+                    failure = _alias_audit_traversal_failure(
                         "the alias audit could not enumerate a declared tree",
-                    ) from exc
+                        path,
+                        exc,
+                    )
+                    if not best_effort:
+                        raise failure from exc
+                    _report_best_effort_walk_error(on_error, failure)
+                    continue
                 pending_directories: list[tuple[Tuple[str, ...], PinnedIdentity]] = []
                 for name in names:
                     child_path = path / name
@@ -1089,10 +1463,15 @@ def _walk_no_symlinks(
                         )
                         child_value = os.fstat(child_fd)
                     except OSError as exc:
-                        raise SandboxFailure(
-                            "outer_sandbox_alias_audit_failed",
+                        failure = _alias_audit_traversal_failure(
                             "a declared tree changed during its pinned alias audit",
-                        ) from exc
+                            child_path,
+                            exc,
+                        )
+                        if not best_effort:
+                            raise failure from exc
+                        _report_best_effort_walk_error(on_error, failure)
+                        continue
                     finally:
                         if child_fd is not None:
                             os.close(child_fd)
@@ -1107,6 +1486,26 @@ def _walk_no_symlinks(
                 os.close(directory_fd)
     finally:
         os.close(root_fd)
+
+
+def _report_best_effort_walk_error(
+    on_error: Optional[Callable[[SandboxFailure], None]],
+    failure: SandboxFailure,
+) -> None:
+    if on_error is None:
+        return
+    try:
+        on_error(failure)
+    except Exception:
+        pass
+
+
+def _attach_alias_audit_diagnostic(failure: SandboxFailure, path: Path) -> None:
+    if getattr(failure, "audit_path", None) is not None:
+        return
+    cause = failure.__cause__
+    failure.audit_path = path
+    failure.audit_errno = cause.errno if isinstance(cause, OSError) else None
 
 
 def _check_alias_audit_limit(visited: int, budget: int, deadline: float) -> None:

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
 from .paths import (
     GitProtectionRecord,
@@ -17,6 +17,7 @@ from .paths import (
     create_private_directory,
     discover_session_git,
     normalize_mounts,
+    resolve_accounting_peer_roots,
     resolve_effective_cwd,
     resolve_state_root,
     resolve_workspace,
@@ -86,12 +87,18 @@ class ResolvedSandboxPlan:
     adapter: SandboxAdapter
     operations: Tuple[MountOperation, ...] = ()
     git_records: Tuple[GitProtectionRecord, ...] = ()
+    accounting_peer_roots: Tuple[Path, ...] = ()
     scratch_anchor: Optional[Path] = None
     git_metadata_scope: str = "session_root"
     alias_audit_max_entries: int = 1_000_000
     alias_audit_timeout_seconds: int = 10
     # Session-private roots created during plan resolve (CREATE_PRIVATE_DIRECTORY).
     created_session_private_roots: Tuple[Path, ...] = ()
+    alias_audit_log: Optional[Callable[[str], None]] = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
     def cleanup_created_session_private_roots(self) -> None:
         """Best-effort removal of session-private directories this plan created."""
@@ -186,6 +193,7 @@ def resolve_session_plan(
     operator: SandboxOperatorConfig,
     command_previews: Optional[Mapping[str, Sequence[str]]] = None,
     audit: bool = True,
+    alias_audit_log: Optional[Callable[[str], None]] = None,
 ) -> ResolvedSandboxSessionPlan:
     workspace = resolve_workspace(workspace_path)
     previews = command_previews or {}
@@ -289,6 +297,10 @@ def resolve_session_plan(
                     )
             git = discover_session_git(workspace)
             operations = normalize_mounts(workspace, declarations, git.records)
+            accounting_peer_roots = resolve_accounting_peer_roots(
+                spec.accounting_peer_roots,
+                operations,
+            )
             scratch_anchor = resolve_scratch_anchor(
                 operator,
                 workspace=workspace.destination,
@@ -298,8 +310,10 @@ def resolve_session_plan(
                 audit_aliases(
                     operations,
                     git.records,
+                    accounting_peer_roots=accounting_peer_roots,
                     max_entries=operator.alias_audit_max_entries,
                     timeout_seconds=operator.alias_audit_timeout_seconds,
+                    log=alias_audit_log,
                 )
             resolved[agent_id] = ResolvedSandboxPlan(
                 policy=policy,
@@ -310,10 +324,12 @@ def resolve_session_plan(
                 adapter=adapter,
                 operations=operations,
                 git_records=git.records,
+                accounting_peer_roots=accounting_peer_roots,
                 scratch_anchor=scratch_anchor,
                 alias_audit_max_entries=operator.alias_audit_max_entries,
                 alias_audit_timeout_seconds=operator.alias_audit_timeout_seconds,
                 created_session_private_roots=tuple(in_progress_created),
+                alias_audit_log=alias_audit_log,
             )
             # Ownership transferred to the plan; do not double-clean on later
             # agents' failures via in_progress_created.

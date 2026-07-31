@@ -1,10 +1,14 @@
 # Sandbox alias audit under concurrent workspace writers
 
-**Status:** Design settled and reviewed; ready to implement. D2's completeness
-rule was tightened after a document review found the first formulation
-fail-open under concurrent rename — read D2 in full before implementing it. The
-peer-root derivation in "Open questions" must be re-verified against the shipped
-Claude CLI before that part is written.
+**Status:** Implemented and verified on 2026-07-31. The two-phase audit,
+revalidation discipline, accounting-only peer roots, same-device protected
+search, and operational diagnostics are shipped in the working tree. A
+post-implementation review sequence found and closed a peer-path aliasing
+fail-open, an all-or-nothing peer-walk availability regression, a mount-
+multipath peer alias, missing Claude SDK peer accounting, and the dual
+writable-file-bind peer alias. A final independent review also closed duplicate
+mount views within and across accounting peer roots, then the same class within
+writable remainders.
 
 **Created:** 2026-07-30
 
@@ -98,11 +102,12 @@ So:
    distinct names found across the **union** of all writable remainders (not per
    root — a file linked only between two state roots must not stay unaccounted
    forever).
-3. An inode with `names_found >= st_nlink` has every link accounted for inside
-   writable state; no protected alias is possible for it — **but only if the
-   counted names and the `st_nlink` sample coexisted**, see D2a.
-4. Only inodes with `names_found < st_nlink` are unaccounted candidates. Search
-   protected coverage for those alone, only on those candidates' devices,
+3. An inode with exact `names_found == st_nlink` has every link accounted for
+   inside writable state; no protected alias is possible for it — **but only if
+   the counted names and the `st_nlink` sample coexisted**, see D2a. Either
+   fewer or more names is an incomplete/unstable observation.
+4. Every inode without exact equality remains an unaccounted candidate. Search
+   protected coverage for those candidates alone, only on their devices,
    raising `outer_sandbox_hardlink_alias` at the first match.
 5. With no unaccounted candidates the protected tree is not walked at all.
 
@@ -119,7 +124,7 @@ Two concrete fail-open sequences, both verified on ext4:
   `workspace/secret`, so `st_nlink == 2` and the walk counts one name. A
   concurrent `rename` to `state/d2/b` — which never changes `st_nlink` — lets the
   same walk count the same inode a second time under its new path.
-  `names_found == 2 >= st_nlink == 2`, the inode is declared accounted, the
+  `names_found == 2 == st_nlink`, the inode is declared accounted, the
   protected walk is skipped, and `workspace/secret` still exists.
 - **Link-count deflation.** With the same starting state, unlinking
   `workspace/secret` mid-walk drops `st_nlink` to 1, so one counted writable name
@@ -178,6 +183,11 @@ race.
 If a provider later invents a new external link location, the set goes
 unaccounted again and the walk returns: fail-closed, not a silent hole.
 
+The Claude SDK worker uses the same persistent Claude state contract as the CLI
+adapter, so both adapters declare the same host temp peer. The SDK worker's
+session-private `CLAUDE_CODE_TMPDIR` applies only after the pre-launch audit and
+does not account for persistent state links created by earlier Claude sessions.
+
 These peer names are not themselves a threat. Host `/tmp` is over-mounted by a
 session-private scratch directory (`agent_collab/sandbox/bubblewrap.py:250`,
 `286-288`), so it is not visible inside the sandbox at all. They matter only for
@@ -204,13 +214,12 @@ sentence as written. Replace it with wording along these lines:
 > substitutes link count for an inode intersection check. On allowlisted local
 > filesystems, after the writable remainder has been walked without following
 > symlinks, the audit may use `st_nlink` only as a negative completeness check:
-> for each non-directory `(st_dev, st_ino, file type)`, if the number of names
-> observed across the union of all writable remainders and declared
-> accounting-only peer roots is at least `st_nlink`, every hard-link name of
-> that inode is already accounted for and no same-device protected search is
-> required for it. If fewer names are observed, the inode remains an unaccounted
-> candidate: the audit walks protected coverage on that device, fails closed on
-> the first match, and never treats mid-walk `ENOENT`/`ESTALE` as proof of
+> for each non-directory `(st_dev, st_ino, file type)`, only an exact equality
+> between the revalidated name count across the union of all writable
+> remainders and declared accounting-only peer roots and `st_nlink` proves that
+> every hard-link name is accounted for. Any mismatch keeps the inode
+> unaccounted: the audit walks protected coverage on that device, fails closed
+> on the first match, and never treats mid-walk `ENOENT`/`ESTALE` as proof of
 > absence.
 
 ## Follow-ups, deliberately out of scope here
@@ -261,11 +270,11 @@ Primary file: `agent_collab/sandbox/paths.py`.
 
 Wiring, which ripples further than it looks:
 
-- `BackendSandboxSpec` grows an accounting-only peer-root field and `claude_cli`
-  declares its temp tree; `ResolvedSandboxPlan` (`agent_collab/sandbox/plan.py`)
-  is a frozen dataclass that must carry the resolved peer roots so the
-  pre-launch re-audit in `SandboxSupervisor._launch` uses the same set as plan
-  resolution.
+- `BackendSandboxSpec` grows an accounting-only peer-root field and both Claude
+  adapters declare the shared Claude Code temp tree; `ResolvedSandboxPlan`
+  (`agent_collab/sandbox/plan.py`) is a frozen dataclass that must carry the
+  resolved peer roots so the pre-launch re-audit in
+  `SandboxSupervisor._launch` uses the same set as plan resolution.
 - `audit_aliases` grows a peer-roots parameter defaulting to `()`, and both call
   sites (`plan.py:298` and `supervisor.py:339`) pass it. The default keeps the
   existing hermetic tests calling the old signature.
@@ -322,20 +331,42 @@ tool-result hard links in `~/.claude` and a concurrently written gitignored
 subtree in the workspace. Remember that the daemon runs the installed package:
 `./agent_collab.sh install` and restart before verifying.
 
-## Open questions
+## Resolved questions
 
-- Exact derivation of the Claude peer root. Observed as `/tmp/claude-<uid>/...`,
-  which is inference from one host; confirm against the shipped CLI version and
-  decide how `TMPDIR` and `CLAUDE_CONFIG_DIR` interact with it before writing
-  the declaration. A wrong path is not unsafe — it just leaves candidates
-  unaccounted — but it silently removes the benefit.
-- Whether the session-private scratch anchor should join the writable union for
-  accounting. Inside the sandbox the provider's `TMPDIR` is private scratch, so
-  links created during a session land there; it is freshly created per session,
-  so it is empty at audit time and changes nothing today.
-- Whether other shipped backends have external hard-link factories comparable to
-  Claude's. Measured clean on this host: `~/.grok`, `~/.gemini`, `~/.codex` had
-  zero multiply-linked files.
+- Claude Code 2.1.219's shipped binary was inspected before implementation. It
+  uses non-empty `CLAUDE_CODE_TMPDIR`, otherwise Node's OS temp directory
+  (`TMPDIR`/`TMP`/`TEMP` on Linux), and appends `claude-<uid>`.
+  `CLAUDE_CONFIG_DIR` does not participate, and a literal `~` in a temp
+  environment value remains an unexpanded relative path under the provider
+  cwd, matching Node rather than shell expansion. Existing tool-result hard
+  links on the verification host matched the derived tree.
+- The session-private scratch anchor does not join the writable union. It is
+  fresh and empty when the pre-launch audit runs, so it contributes no names.
+- No comparable external hard-link factory was found in the shipped Grok,
+  Gemini, or Codex state trees on the verification host.
+
+## Implementation record
+
+- Writable remainders are walked as one union with protected anchors pruned.
+  Counted names are reopened without following symlinks, checked against their
+  original inode identity, and deduplicated by parent directory identity plus
+  basename before an exact `names_found == st_nlink` completeness decision.
+  Mount backing sides are canonicalized within and across writable roots so
+  bind views cannot inflate that count; ordinary protected descendants still
+  use the dedicated load-bearing lexical prune.
+- Peer roots are lexically normalized, rejected when they overlap writable
+  state, pruned against every declared writable/protected operation by
+  mount-table backing identity, canonicalized against earlier peer mount sides,
+  and walked best-effort. An individual traversal error leaves only that entry
+  or subtree uncounted; successfully observed peer names remain subject to the
+  full revalidation pass. Claude CLI and SDK share the shipped runtime's temp
+  derivation.
+- Residual candidates search only protected coverage on matching devices.
+  Forced searches and hard-link matches have distinct daemon diagnostics;
+  traversal aborts log the failing path and errno without changing the stable
+  client-facing outcome.
+- Verification passed Ruff, 1,448 hermetic unit tests, and 10 Linux Bubblewrap
+  acceptance tests. The installed daemon and provider readiness checks passed.
 
 ## Review record
 
@@ -345,3 +376,14 @@ subtree in the workspace. Remember that the daemon runs the installed package:
 | 2 | Same | Converged on dropping the softening and on the accounting gate. Disagreed on severity: Gemini called it categorical, Grok called it window-widening. Adjudicated to window-widening — the adversary must already be able to write the daemon-private state root — with the conclusion unchanged. Gemini's proposal to ignore `ENOENT` on "unrelated" files during a targeted search was rejected as unsound by both the judge and Grok. |
 | 3 | Same | Both accepted the shape after the `~/.claude` measurement showed the accounting gate alone never fires for `claude_cli`, and both landed on accounting-only peer roots as the companion. Grok's stated reason for rejecting per-file masking — that the sandbox RW-binds host `/tmp` — is factually wrong (`bubblewrap.py:286-288` binds a session-private scratch directory over `/tmp`); masking is rejected on the grounds recorded above instead. |
 | 4 | Same, reviewing this document | Both found the D2 monotone-safety claim false. Grok supplied the sharper counterexample (rename inflation, which leaves `st_nlink` untouched) and identified that the document gave the wrong reason for the protected-below prune, hiding a fail-open if an implementer dropped it. Both counterexamples were reproduced on ext4 before the document was corrected; D2a and the prune warning are the result. Grok additionally caught that peer roots must not be resolved as state roots. Its turn was recorded as `provider_terminal_failure` after emitting a complete review — the outcome is a stop-reason artifact, not lost work. |
+| 5 | Same, reviewing the implementation | Split. Grok reproduced a fail-open in which lexical `..` components let a peer root reopen protected or writable storage under a second path and inflate the completeness count. Gemini's nested-writable-mount and tilde-expansion findings were rejected: the unchanged mount-alias gate rejects the former before hard-link search, and the shipped CLI treats literal `~` as a relative path. Peer roots were normalized, and revalidation was strengthened to count unique parent-dirent identities. |
+| 6 | Same, after the fix | Converged with no high- or medium-severity findings. Grok again emitted a complete review before its CLI labeled `end_turn` as `provider_terminal_failure`; the full attributed answer was retained and adjudicated. |
+| 7 | Same, reviewing the closed-task diff | Inconclusive pair, with one actionable finding. Gemini returned an invalid one-line payload and was not counted. Grok found that one unrelated peer traversal race discarded the entire peer root's successful counts, re-forcing the protected walk under the exact multi-session workload D3 targets. Peer traversal was changed to skip errors per entry/subtree while retaining successfully opened names for strict revalidation. |
+| 8 | Same, final-scope review | Inconclusive. Gemini reported no qualifying finding; Grok exceeded the 900-second local turn deadline without an answer. |
+| 9 | Same, repeated final-scope review | Split. Gemini's high-severity writable-workspace premise was rejected because resolved workspace coverage is always read-only and any overlapping writable declaration fails before audit. Grok reproduced a mount-multipath peer fail-open and identified that Claude SDK shared the persistent state contract without declaring the corresponding host temp peer. Both medium findings were confirmed and fixed; Grok's complete answer was retained despite the known `end_turn` wrapper artifact. |
+| 10 | Same, after the mount/SDK fixes | Split. Gemini repeated the rejected tilde-expansion premise; literal `~` remains relative in the shipped Node runtime, so Python `expanduser()` would audit the wrong tree. Grok found the dual mount-multipath case: a writable file bind below a peer was counted as a second hard-link name. Peer pruning was generalized to every declared writable/protected backing identity and exact link-count equality was made explicit in the docs. |
+| 11 | Same, after the generalized multipath fix | Converged with no high- or medium-severity findings. Both reviewers accepted exact link-count equality, declared-operation mount pruning (including nested file binds), Claude CLI/SDK peer wiring, and the audited literal-tilde behavior. Grok again emitted a complete clean review before the CLI labeled `end_turn` as `provider_terminal_failure`; the full answer was retained and adjudicated. |
+| 12 | Independent subagent after convergence | Found one medium fail-open missed by both provider reviewers: a file bind of a legitimate peer hard-link below the same or another peer root could still inflate the revalidated name count without increasing `st_nlink`. Peer mount sides are now canonicalized in deterministic order, duplicate backing views are pruned, and the reproduced self-peer file-bind case is covered hermetically. |
+| 13 | Same subagent, reviewing the peer canonicalization fix | Found the dual medium fail-open in writable collection: a nested file bind of a writable hard-link name could inflate the count without increasing `st_nlink`. The same deterministic mount-side canonicalization now applies within/across writable roots, non-lexical protected aliases are pruned, and the ordinary protected-below prune remains the explicit lexical security mechanism. |
+| 14 | Same subagent, after writable/peer canonicalization | Converged with no high- or medium-severity findings. The reviewer confirmed duplicate mount views are excluded within/across writable and peer roots, genuine hard-link names remain countable, and the dedicated lexical protected-below prune remains intact and load-bearing. |
+| 15 | Grok 4.5 (high), Gemini 3.1 Pro (high), final frozen-diff review | Converged with no high- or medium-severity findings. Both reviewers independently accepted writable-first discovery, exact descriptor-based revalidation, peer best-effort handling, mount-view canonicalization, Claude CLI/SDK peer wiring, and the regression coverage. Grok's complete clean answer was retained despite the known `end_turn` wrapper artifact. |

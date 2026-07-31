@@ -87,8 +87,23 @@ persistent and writable, leaves legacy `~/.claude.json` read-only, maps
 `CLAUDE_CODE_TMPDIR` to private scratch, rejects admin-managed configuration,
 and replaces ambient MCP/permission/native-sandbox arguments with the strict
 empty-MCP, skip-permissions, transient-sandbox-disabled profile only after the
-outer proof gate. The common command context and dry-run projection remain
-backend-neutral.
+outer proof gate. Both Claude adapters declare an accounting-only peer root
+following the shipped runtime's ambient temp derivation
+(`CLAUDE_CODE_TMPDIR`, otherwise the OS temp directory, then
+`claude-<uid>`) so persisted tool-result hard links do not force a workspace
+walk. The common command context and dry-run projection remain backend-neutral.
+
+The hard-link alias audit walks writable remainders first and revalidates every
+counted name before using `st_nlink` as a negative completeness proof. Fully
+accounted writable/peer inodes skip protected coverage; residual candidates
+search only same-device protected coverage and keep every traversal error
+fail-closed. Accounting-only peer walks are best-effort, are never mounted, and
+can only widen the residual protected search when they fail. Mount-table
+backing identities prune declared writable/protected bind and multipath views
+from peer accounting. Writable and peer mount sides are canonicalized across
+and within their respective roots so a bind view cannot count as another
+hard-link name; the dedicated lexical protected-below prune remains
+security-critical for ordinary descendants of writable roots.
 
 The Antigravity Stage 4 adapter keeps the complete `~/.gemini` tree persistent
 and writable, validates its basename and maps `HOME` to its parent, checks the

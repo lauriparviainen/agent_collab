@@ -13,6 +13,16 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-07-31 - Concurrent-writer alias audit
+
+- Avoid full workspace alias walks when provider state is fully accounted
+  (#55). The hard-link audit now walks and revalidates writable names first,
+  uses backend-declared accounting-only peer roots for Claude CLI and SDK
+  persisted tool-result links, rejects lexical and mount-multipath peer aliases,
+  and searches only same-device protected coverage for residual candidates.
+  Protected-tree races remain fail-closed, while ordinary continuously written
+  gitignored workspace data is not touched when no candidate can alias it.
+
 ## [0.13.0] - 2026-07-30 - Outer read-only sandbox by default
 
 - Remove the referee's unreachable policy-cancellation path and eight other

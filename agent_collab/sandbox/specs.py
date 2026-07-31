@@ -132,6 +132,7 @@ class BackendSandboxSpec:
     support: SandboxSupport
     policies: frozenset[SandboxPolicy]
     state_roots: Tuple[StateRootSpec, ...] = ()
+    accounting_peer_roots: Tuple[Path, ...] = ()
     provider_visible_paths: Tuple[StateRootSpec, ...] = ()
     environment: EnvironmentSpec = field(default_factory=EnvironmentSpec)
     native_profile: NativeSandboxProfile = field(default_factory=NativeSandboxProfile)
@@ -142,6 +143,7 @@ class BackendSandboxSpec:
     def __post_init__(self) -> None:
         object.__setattr__(self, "policies", frozenset(self.policies))
         object.__setattr__(self, "state_roots", tuple(self.state_roots))
+        object.__setattr__(self, "accounting_peer_roots", tuple(self.accounting_peer_roots))
         object.__setattr__(self, "provider_visible_paths", tuple(self.provider_visible_paths))
         object.__setattr__(self, "compatibility", tuple(self.compatibility))
         object.__setattr__(self, "external_services", tuple(self.external_services))

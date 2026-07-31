@@ -2101,11 +2101,17 @@ Rules are:
    algorithm and positive conditional fixtures; parsing mount options alone is
    insufficient.
 
-   For each writable/protected relation whose enclosing entries report the same
-   supported `st_dev`, the audit walks without following symlinks and rejects
-   the precise intersection of all non-directory `(st_dev, st_ino, file type)`
-   entries between protected coverage and genuinely writable remainder. It
-   never uses `st_nlink` as a security filter.
+   The audit never treats `st_nlink` as a positive hard-link detector and never
+   substitutes link count for an inode intersection check. On allowlisted local
+   filesystems, after the writable remainder has been walked without following
+   symlinks, the audit may use `st_nlink` only as a negative completeness check:
+   for each non-directory `(st_dev, st_ino, file type)`, only exact equality
+   between the revalidated name count across the union of all writable
+   remainders and declared accounting-only peer roots and `st_nlink` proves
+   every hard-link name is accounted for. Any mismatch leaves the inode
+   unaccounted: the audit walks protected coverage on that device, fails closed
+   on the first match, and never treats mid-walk `ENOENT`/`ESTALE` as proof of
+   absence.
 
    One writable root may contain several protected coverage sides. The audit
    collects all such sides first, sorts them by depth then lexical path, and

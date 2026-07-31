@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Iterable, Sequence, Tuple
 
+from ..claude_common import claude_accounting_peer_root
 from ...sandbox.plan import ResolvedSandboxPlan
 from ...sandbox.specs import (
     BackendSandboxSpec,
@@ -41,7 +42,6 @@ class ClaudeCliSandboxAdapter:
         state = (
             Path(configured).expanduser() if configured is not None else default_home / ".claude"
         )
-
         environment = {
             "DISABLE_AUTOUPDATER": "1",
         }
@@ -76,6 +76,7 @@ class ClaudeCliSandboxAdapter:
                     creation=CreationPolicy.MUST_EXIST,
                 ),
             ),
+            accounting_peer_roots=(claude_accounting_peer_root(context),),
             provider_visible_paths=tuple(_additional_directories(context)),
             environment=EnvironmentSpec(
                 set_values=environment,

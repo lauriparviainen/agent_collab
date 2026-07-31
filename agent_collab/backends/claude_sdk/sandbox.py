@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence, Tuple
 
+from ..claude_common import claude_accounting_peer_root
 from ...sandbox.plan import ResolvedSandboxPlan
 from ...sandbox.specs import (
     BackendSandboxSpec,
@@ -62,6 +63,7 @@ class ClaudeSdkSandboxAdapter:
                     creation=CreationPolicy.MUST_EXIST,
                 ),
             ),
+            accounting_peer_roots=(claude_accounting_peer_root(context),),
             environment=EnvironmentSpec(
                 set_values=environment,
                 unset_names=unset_names,

@@ -71,7 +71,9 @@ inherited on the worker path. Outer `sandbox = "none"` keeps historical
 in-process behavior (including ambient MCP when the SDK would load it).
 Admin-managed settings under `/etc/claude-code` fail closed. Legacy
 `~/.claude.json` remains outside the writable state mount when using the
-default config location.
+default config location. The pre-launch alias audit accounts persisted Claude
+tool-result hard links through the same derived host temp peer as `claude_cli`;
+that peer is never mounted into the worker.
 
 `sandbox = "none"` keeps the historical in-process daemon runner
 and does not start Bubblewrap. Explicit outer `none` is the rollback path.

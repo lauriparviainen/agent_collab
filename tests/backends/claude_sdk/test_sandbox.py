@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -36,7 +37,11 @@ class ClaudeSdkSandboxAdapterTests(unittest.TestCase):
                 SandboxContext(
                     workspace,
                     workspace,
-                    {"CLAUDE_CONFIG_DIR": str(state), "HOME": str(root)},
+                    {
+                        "CLAUDE_CONFIG_DIR": str(state),
+                        "CLAUDE_CODE_TMPDIR": "claude-temp",
+                        "HOME": str(root),
+                    },
                 )
             )
             self.assertIs(spec.support, SandboxSupport.SDK_WORKER)
@@ -47,6 +52,10 @@ class ClaudeSdkSandboxAdapterTests(unittest.TestCase):
             )
             self.assertEqual(spec.environment.set_values["DISABLE_AUTOUPDATER"], "1")
             self.assertIn("CLAUDE_CODE_TMPDIR", spec.environment.private_tmp_names)
+            self.assertEqual(
+                spec.accounting_peer_roots,
+                (workspace / "claude-temp" / f"claude-{os.getuid()}",),
+            )
             self.assertEqual(
                 dict(spec.native_profile.sdk_options).get("permission_mode"),
                 "bypassPermissions",

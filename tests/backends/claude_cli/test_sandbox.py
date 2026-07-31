@@ -135,6 +135,62 @@ class ClaudeCliSandboxAdapterTests(unittest.TestCase):
         self.assertIn("CLAUDE_CONFIG_DIR", spec.environment.unset_names)
         self.assertNotIn(home / ".claude.json", [item.destination for item in spec.state_roots])
 
+    def test_accounting_peer_root_matches_shipped_claude_temp_derivation(self):
+        adapter = ClaudeCliSandboxAdapter()
+        context = SandboxContext(
+            Path("/workspace"),
+            Path("/workspace/project"),
+            {
+                "CLAUDE_CONFIG_DIR": "/state/custom-claude",
+                "CLAUDE_CODE_TMPDIR": "/provider-temp",
+                "TMPDIR": "/ignored-os-temp",
+            },
+        )
+        spec = adapter.describe(context)
+        self.assertEqual(
+            spec.accounting_peer_roots,
+            (Path(f"/provider-temp/claude-{os.getuid()}"),),
+        )
+
+        os_temp_spec = adapter.describe(
+            SandboxContext(
+                Path("/workspace"),
+                Path("/workspace/project"),
+                {
+                    "CLAUDE_CONFIG_DIR": "/different-state",
+                    "TMPDIR": "relative-temp",
+                },
+            )
+        )
+        self.assertEqual(
+            os_temp_spec.accounting_peer_roots,
+            (Path(f"/workspace/project/relative-temp/claude-{os.getuid()}"),),
+        )
+
+        normalized_spec = adapter.describe(
+            SandboxContext(
+                Path("/workspace"),
+                Path("/workspace/project"),
+                {"CLAUDE_CODE_TMPDIR": "/provider-temp/../normalized-temp"},
+            )
+        )
+        self.assertEqual(
+            normalized_spec.accounting_peer_roots,
+            (Path(f"/normalized-temp/claude-{os.getuid()}"),),
+        )
+
+        literal_tilde_spec = adapter.describe(
+            SandboxContext(
+                Path("/workspace"),
+                Path("/workspace/project"),
+                {"CLAUDE_CODE_TMPDIR": "~/literal-node-path"},
+            )
+        )
+        self.assertEqual(
+            literal_tilde_spec.accounting_peer_roots,
+            (Path(f"/workspace/project/~/literal-node-path/claude-{os.getuid()}"),),
+        )
+
     def test_state_mount_covers_session_env_but_not_legacy_claude_json(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve()
@@ -168,6 +224,17 @@ class ClaudeCliSandboxAdapterTests(unittest.TestCase):
         self.assertEqual([item.destination for item in writable], [state])
         self.assertTrue((state / "session-env").is_relative_to(writable[0].destination))
         self.assertFalse(legacy.is_relative_to(writable[0].destination))
+        ambient_temp = (
+            os.environ.get("CLAUDE_CODE_TMPDIR")
+            or os.environ.get("TMPDIR")
+            or os.environ.get("TMP")
+            or os.environ.get("TEMP")
+            or "/tmp"
+        )
+        self.assertEqual(
+            plan.accounting_peer_roots,
+            (Path(ambient_temp).absolute() / f"claude-{os.getuid()}",),
+        )
 
     def test_common_path_contract_rejects_missing_symlink_permissions_and_ownership(self):
         adapter = ClaudeCliSandboxAdapter()
