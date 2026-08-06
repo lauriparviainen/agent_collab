@@ -5,8 +5,8 @@
 which made the outer read-only Bubblewrap worker the default execution path and
 so relocated where the SDK controls have to be built. Resume scope was widened
 the same day after re-verifying the installed provider CLIs: Claude, Codex, and
-Grok expose strict headless resume-by-id surfaces, while Antigravity exposes
-resume-by-id. Agent-collab's current Antigravity parser is still plain text and
+Grok expose strict headless resume-by-id surfaces, as does Antigravity.
+Agent-collab's current Antigravity parser is still plain text and
 captures no conversation id, but installed CLI 1.1.8 now offers structured
 `json`/`stream-json`; its root identity payload must be checked before declaring
 that backend blocked. Staging therefore separates the shared SDK control
@@ -19,6 +19,49 @@ and SDK backends.
 **Predecessor:** [subagent-delegation-and-thread-continuity.md](../tasks_closed/subagent-delegation-and-thread-continuity.md)
 (#47) built the substrate. [antigravity-read-only-bubblewrap-sandbox.md](../tasks_closed/antigravity-read-only-bubblewrap-sandbox.md)
 (#43) built the worker boundary.
+
+## Next work — pick up here (2026-08-06)
+
+This design has been through multi-round adversarial review (three internal
+rounds plus eleven cross-vendor dual-review rounds against the shipped code on
+that date); treat the body below as settled and implement against it rather
+than re-deriving it. The outstanding work, in the order the next agent should
+take it:
+
+1. **Fix the shipped `codex_sdk` continuity gate first.** Its
+   `conversation_active()` keys on worker liveness alone — no
+   `_worker_provider_active` gate, no soft-drop — deviating from the #47
+   contract the other two worker SDKs implement (see transport property 4).
+   This is a live defect independent of the stages: a worker turn ending
+   without a `thread_id` feeds hidden context into the next delta prompt.
+   File it as a discrete issue and land the fix plus its hermetic test before
+   or with stage 1.
+2. **Stage 1 — shared control plane.** Protocol v2 frames (`approval_request`
+   is a first-class frame emitted through the serve loop's single writer; a
+   late `approval_decision` is a no-op, never fatal); the event/status
+   vocabulary work (`VALID_TYPES`, `LIVE_WAIT_STATUSES`, every hard-coded
+   status enum surface); the registry-keyed settle arm of `_result_settled`;
+   the approval registry and decision operation with deny-by-default —
+   including turn-deadline deny, the `abandoned` outcome, and deny-before-
+   interrupt/close ordering on the stop path.
+3. **Capability projection wiring.** `summarize_session_capabilities`'
+   production call site passes no capture/eligibility set and freezes
+   capabilities at start; the projection must be re-evaluated after capture,
+   turn commit, and restore (see *Aggregation*). Without this every later
+   capability flip projects wrongly.
+4. **Stage 2 — Claude SDK interrupt + tool gating**, including the clocks
+   design (re-armed remaining-budget loop, per-park and per-turn caps) and
+   resolving open questions 9–10 (provider-side decision deadlines, callback
+   concurrency) for this backend.
+5. **Stage 3 — Codex, Antigravity, and xAI SDK controls** (open questions
+   1–2; record negatives explicitly).
+6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
+   five increments. Mind the pieces added in review: keyed-merge identity
+   capture (the shipped capture write full-replaces the descriptor), the
+   session-level workflow-phase record (no stage replay on resume), the
+   atomic per-session resume claim, the `interrupt_acknowledged` eligibility
+   marker, the `xai_sdk` close-deletes-resume-material conflict, and the
+   durable Antigravity trajectory root.
 
 ## Purpose and scope
 
@@ -105,12 +148,28 @@ Everything backend-agnostic, in one hermetic stage:
   with no producer yet, so provider stages only wire a producer and flip a
   flag. (Shipping the decision surface *after* the first gated provider would
   leave approvals with no answer path but deny-timeout.)
+- **The event and status vocabulary:** `approval_request` and
+  `approval_resolved` become first-class members of the event `type`
+  vocabulary. Today `Event.create` coerces an unknown type to `status`
+  (logging only a warning) and `worker_codec.event_from_payload` rejects it
+  outright, so this
+  is a deliberate, wire-visible change to the `read_events`/`wait_events`
+  `types` filter contract and the digest projection — not a free-form `raw`
+  payload. Likewise `awaiting_approval` must be added everywhere the status
+  set is hard-coded — `LIVE_WAIT_STATUSES` (`retention.py`), both
+  `project_build.py` status-enum schemas, the `api_schema` settled contract,
+  and the TUI/CLI status renderings — so `wait_events` keeps blocking while
+  parked (instead of returning instantly in a busy spin) and every surface can
+  display the state. `_result_settled` gains a **new** registry-keyed arm
+  rather than joining the `awaiting_input` one (see *Status and settle*).
 
 No backend flips a capability; no provider SDK is touched.
 
 *Done when:* the frames and the decision operation round-trip under the
 hermetic worker harness; a v2 daemon with a worker that requests nothing new
-behaves byte-for-byte as v1 does today; any protocol-version-skewed pairing
+behaves byte-for-byte as v1 does today on turn traffic and emitted events (the
+status-enum and filter-vocabulary additions are the one deliberate exception);
+any protocol-version-skewed pairing
 fails at the `hello` handshake rather than running ungated.
 
 ### Stage 2 — Claude SDK interrupt + tool gating
@@ -123,7 +182,7 @@ so this stage wires the provider and flips the flag.
 hermetic plus credentialed coverage on both execution paths, or a negative
 finding is recorded in Appendix A.
 
-### Stage 3 — Codex and Antigravity controls
+### Stage 3 — Codex, Antigravity, and xAI SDK controls
 
 Confirm the Codex app-server's turn-cancellation and approval surfaces, and
 whether an Antigravity conversation is still usable after `ChatResponse.cancel()`
@@ -170,10 +229,12 @@ For Antigravity SDK this also means promoting the trajectory `save_dir` to a
 durable agent-collab-owned root — see *Durable trajectory root* under the resume
 design.
 
-Ship the stage in four independently testable increments: the Antigravity
+Ship the stage in five independently testable increments: the Antigravity
 structured transport and version floor; live CLI continuation by exact captured
-id; persisted explicit resume plus its public operation; and the turn-level
-interrupt operation once the provider abort mappings from stages 2–3 are ready.
+id; the durable Antigravity trajectory root and SDK resume establishment;
+persisted explicit resume plus its public operation; and the turn-level
+interrupt operation once the first provider abort mapping from stages 2–3 is
+verified.
 A CLI may flip `continuity` after its two-turn live path passes both launch
 modes; it flips `resume` only after reload, fingerprint validation, and the
 explicit resume operation pass. Turn-level interrupt can ship before or after
@@ -184,7 +245,11 @@ stricter restart-safe definition.
 fingerprint, addresses providers by captured id rather than "last session," and
 never silently starts fresh; every CLI with verified exact identity capture
 either flips each completed capability after both subprocess launch paths pass
-or records a verified negative; each public operation is identical across all
+or records a verified negative; every SDK backend with a verified reopen path
+flips `resume` only after every production path for that backend passes —
+worker plus in-process for worker-backed SDKs, the in-process path alone for
+`xai_sdk`, which never takes the worker path — or records a verified negative;
+each public operation is identical across all
 four surfaces when that operation ships, without blocking another operation.
 
 Each stage must be independently shippable and must not make existing CLI or
@@ -262,10 +327,18 @@ Four properties of that transport decide the designs below:
    any await, because under sticky cancellation an await before the kill can
    orphan Bubblewrap descendants. This is the teardown contract and must not be
    weakened.
-4. **Continuity is gated on a captured provider id.** `conversation_active()`
-   is true only when the worker is live *and* a provider-session event set
-   `_worker_provider_active`. A turn that ends without a captured id soft-drops
-   the worker so hidden client context cannot join the next full task.
+4. **Continuity is gated on a captured provider id — with one shipped gap.**
+   In `claude_sdk` and `antigravity_sdk`, `conversation_active()` is true only
+   when the worker is live *and* a provider-session event set
+   `_worker_provider_active`; a turn that ends without a captured id
+   soft-drops the worker so hidden client context cannot join the next full
+   task. `codex_sdk` deviates today: its `conversation_active()` keys on
+   worker liveness alone, with no provider-id gate and no soft-drop, so a
+   worker turn that ends without a `thread_id` can feed hidden context into
+   the next delta prompt. Stage 2–4 work must not assume this property for
+   `codex_sdk`; closing the gap to match the other two backends is the
+   expected outcome, and its hermetic test lands with the first stage that
+   relies on the gate.
 
 ### What is persisted today
 
@@ -334,13 +407,39 @@ roots pass through the outer sandbox adapter.
 ### Aggregation
 
 Capabilities remain facts declared by each concrete backend; the reducer
-(`summarize_session_capabilities`) is already written and tested against the
-all-false reality and needs no change when inputs flip. Session `resume` requires
-every selected non-mock backend to support resume *and* every required descriptor
-to contain a captured provider id, eligible `last_turn_status`, valid
-`prompt_event_cursor`, and compatible fingerprint. Capture alone is not
-readiness. Session `interrupt` requires every active backend turn to support
-reliable interrupt; session `continuity` requires every selected backend to have
+(`summarize_session_capabilities`) keeps its conservative AND shape when
+inputs flip, but its shipped second input is capture alone
+(`captured_session_ids`) — and the sole production call site
+(`SessionManager._session_capabilities`) does not pass it at all, so live
+sessions always reduce over an empty capture set today. Stage 4 must wire
+that call site to supply, per agent, "holds a fully eligible resume
+descriptor" — captured id, eligible `last_turn_status`, valid
+`prompt_event_cursor`, compatible fingerprint, not quarantined, mock agents
+excluded — not merely reinterpret an argument that is never provided, or the
+projection will report `resumable` wrongly in both directions: stuck false
+because nothing is wired, or true for sessions the operation must reject.
+Wiring the start-time call site alone is still wrong, because
+`_session_capabilities` runs during start preparation and freezes
+`SessionState.capabilities` — at that moment no descriptor can exist, so the
+frozen value would pin `resumable` false for the session's life and survive
+reload stale. The projection must be re-evaluated through the same reducer
+after every identity capture and turn commit and when a persisted session is
+restored, so the projected fact always matches what the operation would
+decide. Session `resume` requires every selected non-mock
+backend to support resume *and* every required descriptor to be eligible in
+exactly that sense. Capture alone is not readiness. One consequence stated plainly rather than left to be derived from
+three sections: with rebind out of scope, a single quarantined agent (see
+*CLI establishment*) makes the whole session's `resume` permanently
+unavailable — a new session is the only
+recovery — and the projection must say so before the operation is attempted.
+`interrupt` has a static and a dynamic face, and they must not be conflated:
+the static `interruptible` projection keeps the reducer's conservative AND
+over every *selected* backend, while the turn-level interrupt *operation* is
+judged dynamically against the active turn — it succeeds only when every
+backend currently in flight supports reliable interrupt, so a mixed-roster
+session can be statically `interruptible=false` while a specific turn is
+still interruptible, and the operation's structured error names the backend
+that blocked it. Session `continuity` requires every selected backend to have
 it. Tool approval is reported per agent/backend — never imply a workflow-wide
 gate when one agent supports it.
 `agent_collab_describe_options`, start settings, session status, and the TUI must
@@ -357,10 +456,10 @@ different semantics:
 | | `cancel` (shipped) | `interrupt` (proposed) |
 |---|---|---|
 | daemon action | SIGKILL process group first | write frame, wait bounded |
-| worker action | cancel run task, exit process | ask the SDK to abort the turn |
+| worker action | none — SIGKILLed before any frame (its `cancel` frame handler exists but the daemon never exercises it) | ask the SDK to abort the turn |
 | worker afterwards | gone | alive, conversation retained |
 | run outcome | transport torn down | `result` with an `interrupted` outcome |
-| fallback | — | `cancel` after the deadline |
+| fallback | — | `cancel_active` kill-first teardown after the deadline |
 
 Why the split matters: interrupt then becomes useful *during* a session rather
 than only at its end. An interactive session that can stop a runaway turn, keep
@@ -386,22 +485,86 @@ the adapter's held client, and the default returns not-supported. CLI and mock
 runners therefore remain non-interruptible even when a CLI runner separately
 implements resume, and `SessionManager` stays free of provider-specific types.
 
-**Stop-path integration.** `SessionManager.stop_session` and the referee ask the
-active turn to interrupt first, wait a short bounded acknowledgement, then fall
-back to local task cancellation and the shipped runner-close / `cancel_active`
-teardown. Record sanitized detail:
+**Stop-path integration.** `SessionManager.stop_session` and the referee first
+deny every pending approval — releasing any parked callback and, on the
+in-process path, the adapter lock it holds (see *In-process path* under tool
+gating) — then ask the active turn to interrupt, wait a short bounded
+acknowledgement, and fall back to local task cancellation and the shipped
+runner-close / `cancel_active` teardown. The deny precedes the interrupt
+request because an interrupt delivered while the SDK is blocked in a
+permission callback may not release that callback. Record sanitized detail:
 
 ```json
-{"requested": true, "provider_acknowledged": true, "fallback_cancelled": false}
+{"requested": true, "provider_acknowledged": true, "fallback_cancelled": false,
+ "approvals_denied": 0}
 ```
 
+`approvals_denied` counts the pending approvals the stop released; omitting it
+would hide a side effect the operation itself caused.
+
 Do not report `stopped` until cleanup finishes or the fallback deadline expires.
-A provider completion that wins the race stays `done`; a stop that wins stays
-`stopped`. Exactly one terminal transition is persisted.
+The completion race is decided at the *turn* level, not the session level: a
+provider completion that wins commits its `completed` turn outcome and is
+never rewritten as interrupted, while a stop that wins commits `interrupted`
+— but a session with a stop requested terminates `stopped` either way, never
+`done`, because planned stages remain abandoned regardless of how the last
+turn ended. Exactly one turn outcome and one terminal session transition are
+persisted.
 
 **Turn-level interrupt** (stop this turn, keep the session alive) runs on the
 same machinery and is the more valuable half, but it is a distinct public
 surface: it belongs in stage 4 with the other surfaces, not smuggled into `stop`.
+It also needs a referee contract the shipped code does not have: today any
+non-`completed` required-turn outcome raises `RequiredTurnFailed` and the
+daemon maps that to session `failed`, which would burn down exactly the
+session the operation exists to keep alive. An operator-requested turn-level
+interrupt is therefore exempt from every failure mapping a non-`completed`
+outcome triggers today — `RequiredTurnFailed` on the planned stage loop and
+on directed turns, *and* the parallel accept filter: a multi-member stage
+whose members ended `interrupted` at the operator's request is an abandoned
+stage, never `ParallelStageFailed` — and the exemption alone is not enough:
+skipping the raise inside the stage loop would simply start the next planned
+stage. The operation makes the referee abandon the remaining planned stages
+for the current prompt as well — the turn commits its `interrupted` outcome,
+the provider thread and runner are retained, and the interactive session
+drops directly into its input loop, parking at `awaiting_input` so the next
+`post_message` steers on the shipped delta prompt. An interrupted directed
+turn returns to `awaiting_input` the same way; it never fails the session.
+The completion race follows the stop rule at the turn level — a provider
+completion that wins stays `completed` and is never rewritten — but the
+abandonment and the park are effects of the *operation*, not of the turn
+outcome: the remaining stages are still abandoned and the session still
+parks, and the operator simply steers from a completed turn instead of an
+interrupted one.
+Once the persisted-resume increment ships, the interrupt path also writes the
+session-level phase record (planned stages abandoned, parked in the input
+loop) in the same transition that parks the session — otherwise a reload
+while parked would resume a referee that re-runs the abandoned stages.
+Two consequences must be stated rather than discovered. First, the fallback
+degrades the contract, not the session: if the provider misses the bounded
+acknowledgement and the `cancel_active` kill runs, the session still parks at
+`awaiting_input`, but the worker is gone — `conversation_active()` is false,
+the next prompt re-establishes through the #47 adapter contract (native
+resume or structural failure, never a silent fresh thread), and the
+operation's detail records `provider_acknowledged: false,
+fallback_cancelled: true` so the caller knows continuity was lost. Second,
+the persisted `last_turn_status` distinguishes the two: a provider-
+*acknowledged* interrupt persists `interrupted` with an
+`interrupt_acknowledged` marker, and a backend with verified `interrupt` may
+include that state in its restart-eligible set from the outset — the
+acknowledged abort is itself the "no provider work believed to be running"
+proof the widening rule demands. An unacknowledged or fallback-killed
+interrupt stays ineligible, so a reload while parked right after one forfeits
+restart-safe resume — the same honestly-recorded cost as a *crash* landing on
+a parked approval (a clean shutdown may fare better; see *Persistence*). On a non-interactive session the
+operation is rejected with a structured conflict — there is no input loop to
+continue into, and `stop` already covers ending the work.
+Stage 4 owns its surface conventions, but the increment is deliberately
+independent of the resume increments: it may land as soon as the first provider
+abort mapping from stages 2–3 is verified. It does not ship earlier than that — a
+public operation whose only possible answer is not-supported freezes its
+response shape (sync/async, completion-race outcome) before the stage 2–3
+findings that must inform it.
 
 ## Design: tool gating
 
@@ -411,8 +574,21 @@ the bounded out-of-band control writer from interrupt; it never parks that loop
 or the turn lock on a human decision.
 
 **Worker side.** When the SDK invokes the permission callback, the worker backend
-mints a request id, puts an `approval_request` frame on the same sequenced run
-stream, and awaits a future in a `pending_approvals` map. The serve loop is
+mints a request id, enqueues an `approval_request` payload onto the same
+serve-loop queue that carries mid-run `event` payloads, and awaits a future in
+a `pending_approvals` map. The wire shape is one thing, stated once: on the
+run stream it is a first-class protocol v2 **frame type** — a peer of `event`,
+carrying the same `run_id`/`sequence` discipline — not an `event` frame with a
+special inner type; the v2 `SupervisedWorkerSession` receive loop accepts it
+and dispatches `on_approval`, while today's loop would reject it as an
+unexpected frame, which is exactly the version-skew failure the `hello` gate
+catches first. The session-level `approval_request` *event* (the transcript
+vocabulary from stage 1) is minted by the daemon when it registers the
+request — the wire frame and the transcript event are distinct layers that
+share a name. The callback never writes the socket itself: the serve loop
+remains the single writer that assigns `sequence` and sends, exactly as
+shipped — a direct send from the run task would race the serve loop's framing
+and sequence numbering and tear the worker down on a corrupt stream. The serve loop is
 already polling the control socket at 50 ms (transport property 2), so it
 receives the `approval_decision` frame and resolves the future. The callback
 returns the SDK's approve/deny result type and the turn continues — no restart,
@@ -432,16 +608,60 @@ time, but no lock is held across human latency.
 
 **In-process path.** Under `sandbox = "none"` the SDK callback runs in the
 daemon and calls the same approval registry directly — same event, same status,
-same operation, no frames.
+same operation, no frames. One asymmetry must be designed for, not discovered
+at implementation time: all four SDK adapters serialize run/reset/close under a
+single lock, and the in-process callback parks *inside* `adapter.run()`, so
+that lock is held across human latency and a concurrent `runner.close()`
+blocks on it. The stop path therefore denies pending registry entries
+**before** closing runners — the deny releases the callback, lets `run()`
+unwind, and frees the lock — and only a provider that then fails to unwind
+promptly takes the bounded-close reaper path.
 
 **Status and settle.** `awaiting_approval` is a live, non-terminal status
-distinct from `awaiting_input`, reusing the machinery `wait_result` already
-relies on: `post_message` enqueues onto `managed.input_queue` before returning,
-`_process_pending_inputs` / `_await_interactive_input` call `queue.task_done()`
-in `finally`, so the queue's unfinished-task count is a clean settled signal. An
-ordinary `post_message` must never satisfy an approval.
+distinct from `awaiting_input`, and it needs its own settle predicate. The
+`awaiting_input` arm of `_result_settled` cannot be reused: it requires
+`input_accepting`, which only the interactive between-turns input loop sets —
+an approval parks *mid-turn*, and in the primary `interactive=false` review
+workflows that flag is never set at all — and it requires an empty
+`input_queue.unfinished`, while `post_message` legitimately queues during an
+active turn. Approval settle is keyed on the approval registry alone: the
+session is settled while its status is `awaiting_approval` and the registry
+holds at least one unresolved request, and the registry notifies waiters on
+register and on resolve the way the input queue's task-done hook does today.
+An ordinary `post_message` must never satisfy an approval; symmetrically, a
+queued `post_message` must never block the approval park from settling — it
+stays deferred on `input_queue` until the next input boundary, exactly as it
+does during any other active turn. The status itself exists only while the
+registry holds an unresolved request: resolving the last one returns the
+session to its running state as the turn continues, and a terminal result
+exits it through the normal turn transition.
 
-**The event.** A first-class event, not prose:
+**Clocks.** While a turn is parked on approval, the referee's per-turn timeout
+must not keep running, or human latency silently converts gated turns into
+`timed_out` outcomes — which, once persisted, forfeit the session's
+restart-safe resume under the initial `completed`-only contract. The shipped
+deadline is a single fire-and-forget `asyncio.sleep` in `_run_agent_turn`; it
+cannot be paused, so it becomes a re-armed remaining-budget loop that excludes
+parked intervals. The exclusion is fail-closed: excluded time is hard-capped
+at one approval deadline per parked request and by a bounded per-turn total
+across all parks, and any ambiguity — registry entry gone, worker lost,
+unknown request id — resumes the clock rather than extending it.
+The approval deadline itself is a bounded, configurable start setting with a
+conservative default; expiry denies. The interactive idle timeout does not run
+during a mid-turn park (the referee is not in its input loop). And the
+exclusion covers only agent-collab's local deadline: agent-collab also
+propagates the same configured timeout into some provider argv (Antigravity's
+`--print-timeout`), and a provider SDK may hold its own decision deadline on a
+pending callback — a per-backend fact stages 2–3 must record in Appendix A
+(open question 9). Recording is not the whole obligation: if a backend's
+provider-side decision deadline cannot be disabled or proven longer than the
+configured approval deadline, that backend's `tool_gate` stays false — or the
+effective approval deadline is clamped strictly below the provider's — because
+a gate the provider can time out from under does not own the complete
+lifecycle.
+
+**The events.** First-class typed events, not prose (see the stage-1
+vocabulary change):
 
 ```json
 {
@@ -452,25 +672,66 @@ ordinary `post_message` must never satisfy an approval.
     "agent_id": "claude",
     "tool_name": "Bash",
     "summary": "python -m unittest discover -s tests",
+    "summary_truncated": false,
     "decision_options": ["approve", "deny"]
   }
 }
 ```
 
+The summary is built at the source by middle-elision — head and tail kept, the
+elided span marked — because the tail of a long command is exactly what naive
+head-truncation hides; `summary_truncated` says whether elision occurred. Full
+tool input is not a new payload tier: it is available only through the
+existing raw event view under the shipped `tool_output="full"` projection and
+its `MAX_FULL_TOOL_BYTES` budget.
+
+Every resolution emits a matching digest-sized `approval_resolved` event —
+request id, outcome, and resolution reason, never tool input. Outcomes are
+`approved` and `denied` (an authorized decision, recording the deciding
+surface), `auto_denied` (timeout, stop, shutdown, worker loss, protocol error,
+version skew, or callback failure — the reason is recorded), and `abandoned`
+(the provider finished or dropped the turn while the request was pending;
+nothing executed and no decider acted).
+
 **Requirements.**
 
 - Expose an explicit approval response operation over REST, MCP, CLI, and TUI.
+  Authorization is the daemon's single shared bearer token — the same bar as
+  `post_message` and stop. Agent-collab has no per-caller principal anywhere,
+  so "authorized" means exactly token possession or in-process access, and the
+  audit record carries only transport-verified attributes (surface, request
+  id, outcome); it must not invent a client-supplied principal field.
 - Bind every response to session ID, request ID, active agent turn, and — on the
-  worker path — the worker `instance` id, so a decision cannot be applied to a
-  relaunched worker.
+  worker path — the worker's per-launch `instance` identifier carried in its
+  `hello` frame, so a decision cannot be applied to a relaunched worker.
 - Accept one decision; duplicates are idempotent or rejected with a structured
-  conflict.
+  conflict. A decision arriving after its turn's terminal result is stale and
+  rejected the same way as a post-stop response — and the same rule holds
+  inside the worker: an `approval_decision` frame for an unknown request id or
+  a cleared run is a no-op, mirroring interrupt on an unknown `run_id`. It
+  must never take the fatal unknown-frame path that tears the worker down;
+  otherwise a decision racing the provider's own turn completion kills a
+  healthy worker.
 - **Deny by default** on timeout, stop, daemon shutdown, worker loss, protocol
   error, version skew, and callback failure. A worker that never receives a
   decision must not execute the tool; a daemon that loses the worker must not
   report an approval as delivered.
-- An interrupt or stop that lands while an approval is pending denies the
-  approval, releases the callback, and yields one terminal outcome.
+- A turn `result` that arrives while requests are still pending retracts them
+  as `abandoned`: the worker resolves every pending future to the SDK's deny
+  result **before** publishing the `result` — never a bare drop or
+  cancellation, so a callback task the SDK abandoned internally still unwinds
+  with a definite answer instead of hanging on a dead future — then the
+  daemon removes the registry entries, exits `awaiting_approval` (the
+  arriving result drives the normal turn-status transition), and notifies the
+  settle machinery. Without this, a provider that abandons a tool call (model
+  changed course, SDK errored out of the tool) pins the session parked
+  forever.
+- An interrupt or stop that lands while approvals are pending denies every
+  pending approval, releases the callbacks, and yields one terminal outcome;
+  the stop detail reports how many it denied. A local *turn-deadline* expiry
+  behaves the same way: deny and release every registry entry for that turn
+  before the runner is cancelled, so `awaiting_approval` cannot outlive its
+  turn and no close path waits on a still-parked callback.
 - Sanitize tool input at the source. The codec's secret scrubbing covers error
   text, not tool arguments.
 
@@ -493,8 +754,10 @@ A CLI resume launches another one-shot process. A resume-aware CLI runner:
    use strict resume-by-id argv plus the referee's delta prompt;
 3. after daemon reload, receives the same id only through the validated
    persisted resume descriptor;
-4. treats every non-completed, uncertain, conflicting-id, provider-rejected, or
-   missing-local-state exit while `pending` or `active` as `quarantined` and
+4. treats every exit outside the backend's verified eligible-outcome set
+   (default `{completed}`; see *One eligibility vocabulary, two proof bars*
+   below), and every uncertain, conflicting-id, provider-rejected, or
+   missing-local-state exit, while `pending` or `active` as `quarantined` and
    never retries the ordinary start command.
 
 `SubprocessRunner` learns the id from the normalized `Event.provider_session`
@@ -508,17 +771,53 @@ Its post-capture state machine has four states:
   active yet;
 - `active`: the pending id reached an eligible terminal outcome; every later
   provider call must use strict resume-by-id;
-- `quarantined`: a turn with a pending or active id ended non-completed, emitted
-  conflicting ids, or had a rejected/uncertain resume.
+- `quarantined`: a turn with a pending or active id ended outside the backend's
+  verified eligible-outcome set, emitted conflicting ids, had a
+  rejected/uncertain resume, or lost required local state.
 
 Only `active` makes `conversation_active()` true. `empty` may run the ordinary
 full-prompt command. `pending` exists in memory only inside `run_turn`, but the
 same observed id is already in the persisted `in_flight` descriptor.
 The runner sets an irreversible in-memory `id_seen` bit on the first valid id;
 one `finally` transition covers normal return, timeout, stop, cancellation,
-parser/transport exception, and conflicting identity: only an eligible
-completed outcome becomes `active`, and every other id-bearing exit becomes
-`quarantined`. No cleanup path may clear the bit or return to `empty`.
+parser/transport exception, and conflicting identity: only an outcome inside
+that backend's verified eligible-outcome set becomes `active`, and every other
+id-bearing exit becomes `quarantined`. No cleanup path may clear the bit or
+return to `empty`.
+
+**One eligibility vocabulary, two proof bars.** Each backend has one verified
+eligible-outcome vocabulary, recorded in Appendix A, from which two sets are
+drawn: a restart-eligible set and an in-session-eligible set, both defaulting
+to `{completed}`, with the in-session set always a subset of the restart set.
+References to "the backend's verified eligible-outcome set" in this state
+machine and its tests mean the in-session set. A credentialed partial-turn
+proof is evaluated against both gates rather than only the restart one — the
+appendix already records one
+such tension: Claude sessions are resumable from the first delivered user
+message, not the first terminal result. But the two gates do not carry the
+same risk, so widening is asymmetric. Restart validation runs when the
+previous local writer process is definitively dead; in-session promotion runs
+in the runner's `finally`, when a locally-abandoned provider may still be
+executing remotely — issuing the next strict resume-by-id turn against a
+thread a live provider process is concurrently appending to. Widening the
+*in-session* set beyond `completed` therefore additionally requires that
+backend to hold a verified `interrupt` capability ("no provider work believed
+to be running"), and `timed_out` — a local deadline expiry that aborted
+nothing provider-side — is never in-session-eligible for any backend.
+`interrupted` may enter an in-session set only bearing the same per-turn
+`interrupt_acknowledged` marker restart eligibility requires; an
+unacknowledged or fallback-killed interrupt is never in-session-eligible,
+exactly like `timed_out`. Stated
+plainly: one-shot CLI backends keep `interrupt=false` permanently, so their
+in-session set is frozen at `{completed}`, and since SDK backends do not use
+this state machine at all — their in-session continuity is the #47 adapter
+contract (reconnect through native resume or fail structurally) — the
+in-session set is in practice constant today. The verified-`interrupt` bar
+above is written for the first real consumer: a future bidirectional CLI
+transport, should one ship. Only
+outcome classes are widenable at all: conflicting ids, provider-rejected or
+uncertain resume, and missing local state are identity-integrity failures and
+quarantine unconditionally regardless of any credentialed proof.
 `quarantined` makes `conversation_active()` false **and** makes every later
 `run_turn` return the stable structured failure without launching a subprocess.
 It never transitions back to `empty`; a new agent-collab session is the only
@@ -613,8 +912,14 @@ reopens strictly against the provider, or fails `open` — which the daemon
 already surfaces as a structured `outer_sandbox_backend_incompatible` failure
 and never retries as a fresh start.
 
-**In-process**, resume goes through the adapter's existing reconnect code; only
-the persistence and validation layer above it is new.
+**In-process**, resume goes through the adapter's existing reconnect code; for
+most backends only the persistence and validation layer above it is new. Not
+for `xai_sdk`: its shipped adapter best-effort deletes captured stored
+completions on final close (Appendix A), which destroys exactly the
+provider-side material a later `previous_response_id` resume needs — a
+validated descriptor would still meet `NOT_FOUND`. Before that backend can
+flip `resume`, close must retain the stored-response chain and retention must
+own its lifetime; the "persistence layer only" shape does not hold there.
 
 ### Persistence
 
@@ -638,14 +943,47 @@ backend, binary/SDK identity and version, model, workdir, permission/sandbox
 posture and execution path, provider state-root identity, and normalized
 backend-owned static configuration. It must not contain secrets.
 
+Identity capture must become a keyed merge before these fields land:
+`_maybe_capture_provider_session` today builds a fresh three-key entry and
+assigns it over `agent_sessions[agent_id]`, which is correct for the shipped
+schema but would silently drop `prompt_event_cursor`, `last_turn_status`,
+`resume_fingerprint`, and `backend_version` the moment a mid-turn provider
+event fires after the handoff persist. Stage 4 changes that write to merge
+into the existing descriptor, and a hermetic test proves a mid-turn capture
+preserves every handoff-persisted field.
+
 Before invoking the runner, persist the new `prompt_event_cursor` and
 `last_turn_status = "in_flight"` together. After the committed `TurnOutcome`,
 the status uses that outcome vocabulary; strict reopen failures use
 `resume_rejected` or `resume_uncertain`. The initial restart-safe contract
 accepts only `completed`. `in_flight`, `interrupted`, `timed_out`, `failed`,
-missing, and resume-failure states reject explicit resume. A backend may widen
+missing, and resume-failure states reject explicit resume — with one designed
+exception: an `interrupted` status carrying the `interrupt_acknowledged`
+marker (see *Turn-level interrupt*) may be restart-eligible for a backend with
+verified `interrupt`, because the acknowledged abort is itself the proof that
+no provider work was left running. A backend may widen
 that set only after a credentialed test proves its exact partial-turn contract
-and the appendix records it.
+and the appendix records it. That proof must cover the remote side, not merely
+the local exit: for any status whose turn may still be executing
+provider-side after the local process died — `timed_out` above all — widening
+requires demonstrating that the provider thread can no longer be receiving
+that turn's output at resume time, or that the provider's reopen API fences
+or rejects a concurrent writer. Local process death proves only that the
+local writer is gone. This is the restart half of the per-backend
+eligible-outcome vocabulary that also governs in-session promotion (see *One
+eligibility vocabulary, two proof bars* under CLI establishment), with the
+in-session gate holding the strictly stronger proof bar. One composition to
+record honestly: a daemon *crash* landing on a parked approval leaves the
+handoff-persisted `in_flight` turn status, which the initial contract rejects
+— the restore path marks the *session* interrupted but does not rewrite the
+turn record. A *clean* shutdown that runs the stop path first denies the
+approvals and, on a backend with verified `interrupt`, can commit an
+acknowledged interrupt that remains restart-eligible. The resume cost of tool
+gating therefore falls on crashes and on backends without verified interrupt
+— still worth recording, because a long-parked approval is the likeliest
+thing for either to catch. A plain deny is expected to be benign — the SDK turn typically
+completes with a tool-denied result and persists `completed` — but that is a
+per-backend fact to verify, not assume.
 
 `prompt_event_cursor` is the referee's prompt-snapshot transcript length for
 that agent. Persist it whenever a prompt is handed to the runner and restore it
@@ -653,6 +991,19 @@ into the new `Referee` before the first resumed prompt. Missing, negative, or
 past-end cursors fail resume instead of defaulting to zero. This is distinct
 from an MCP client's read cursor: it prevents a native provider thread from
 receiving transcript events it already saw before reload.
+
+Resume must also restore the *workflow phase*, or a resumed `Referee` replays
+work: a freshly constructed referee runs its planned stages from the
+beginning, so a session that completed stage 0 before the reload would
+re-execute it — as a cheap delta turn, but still redoing provider work and
+side effects — and a session parked at `awaiting_input` could not return to
+its input loop. Persist alongside the per-agent descriptors a session-level
+phase record (count of completed planned stages, and whether the session was
+parked in its input loop); validate it with the descriptors; the resumed
+referee starts at the recorded phase and never re-executes a completed stage.
+An interactive session parked at `awaiting_input` resumes directly into the
+input loop. A non-interactive session whose planned stages all completed is
+terminal `done` and is not resumable — there is nothing to continue.
 
 On daemon restart: keep the current behavior that an in-flight session becomes
 `interrupted` and never auto-resume a paid or side-effecting operation; reload
@@ -671,7 +1022,19 @@ separate in-place reset/rebind operation is out of scope.
 
 Add the shared operation only after this validation is defined — for example
 `POST /sessions/{id}/resume`, `agent_collab_resume`, and
-`agent-collab resume SESSION_ID`.
+`agent-collab resume SESSION_ID`. The operation completes the design's race
+set (interrupt on an unknown or finished `run_id` is a no-op; duplicate
+approval decisions are idempotent or structured conflicts): concurrent resume
+calls on one session admit exactly one, through an atomic per-session claim
+held from the start of descriptor validation through task assignment (the
+shipped precedent is `managed.post_lock`); the loser receives a structured
+conflict. The claim must span the whole check-validate-start sequence because
+validation is multi-step and awaits — a bare check of `managed.task` before
+starting races, and `managed.task` is a single slot, so two unserialized
+resumes would orphan one referee while double-driving the same provider
+thread and cursor. Resume is likewise rejected with a structured conflict
+while the session is live rather than reloaded/terminal, and a stop racing a
+resume yields one winner and one persisted terminal state.
 
 ### Durable trajectory root (Antigravity only)
 
@@ -710,27 +1073,54 @@ The primary consumer of these controls is a delegating MCP agent driving the
 documented loop (`start` → `wait_events` digest → `wait_result`). Design the
 surfaces so that loop gains capability without gaining shape or cost:
 
-- **Park-state parity.** `awaiting_approval` behaves exactly like
-  `awaiting_input` for `wait_events` and `wait_result`: same settle machinery,
-  same park-and-return. An agent learns one new status value, not a new polling
-  pattern. `agent_collab/mcp-guidance.md` and the delegate-flow guidance add
-  `awaiting_approval` to the stop states in the same change that ships the
-  status.
+- **Park-state parity — of polling shape, not mechanics.** For the agent,
+  `awaiting_approval` parks and returns the way `awaiting_input` does: one new
+  status value, not a new polling pattern. Internally it is *not* the same
+  machinery — settle is registry-keyed and mid-turn (see *Status and settle*)
+  — and `awaiting_approval` must join `LIVE_WAIT_STATUSES` so `wait_events`
+  keeps blocking instead of busy-spinning. The approval events must also join
+  the documented digest filter: today's guidance polls
+  `types=['message','error']`, which would never surface them.
+  `agent_collab/mcp-guidance.md` and the delegate-flow guidance add
+  `awaiting_approval` to the stop states, add the approval types to the
+  documented filter, and state that an empty batch while parked is normal and
+  that `timeout_ms` is unrelated to the approval deadline — all in the same
+  change that ships the status.
 - **Decide from the park payload alone.** The `wait_result`/status response for
-  a parked approval carries a `pending_approval` block (request id, agent id,
-  tool name, bounded summary, decision options) — everything needed to decide.
-  The common flow is exactly two calls: the wait that parked and the decision
-  operation. No `read_events` round trip.
-- **Bounded summaries.** The approval `summary` is truncated at the source to a
-  small fixed budget; full tool input is available only through the raw event
-  view on demand. #50/#51 showed collection-loop payload size is the dominant
-  delegate cost — approval events must not regress it, and the digest view
-  carries the summary, never the full input.
+  a parked approval carries `pending_approvals` — a list, because parallel
+  turns (and, where open question 10 confirms it, parallel tool calls within
+  one SDK turn) may hold several requests open at once — of blocks (request
+  id, agent id, tool name, bounded elided summary, truncation flag, decision
+  options), in event order under one documented total park-payload budget: the
+  first blocks carry their summaries, any overflow is counted rather than
+  silently dropped. The common flow stays one wait, plus one decision per
+  request — a single park can carry several requests, so a multi-request park
+  costs one wait, not one wait per request. Deciding one
+  request while others remain unresolved leaves the session parked with the
+  remainder; auto-denies and abandonments show up as `approval_resolved`
+  events and in the shrinking list and overflow count, so the agent is never
+  left inferring an invisible outcome. No `read_events` round trip for the
+  un-elided common case.
+- **Bounded summaries.** The approval `summary` is middle-elided at the source
+  to a small fixed budget with an explicit truncation flag; full tool input is
+  available only through the raw event view's existing `tool_output="full"`
+  projection and `MAX_FULL_TOOL_BYTES` budget — no third payload tier. #50/#51
+  showed collection-loop payload size is the dominant delegate cost — approval
+  events must not regress it, and the digest view carries the summary, never
+  the full input.
+- **Gating is for exceptions, not throughput.** Preconfigured permission
+  posture at start is the throughput path — the capability definition already
+  classes it as policy, not a tool gate — and a gated turn pays one
+  park/decide round trip per park, so an agent that wants every call gated
+  is choosing that cost. The same guidance change says so.
 - **Three operations, total.** One approval decision operation (approve/deny as
   a parameter), one turn-level interrupt, one resume — each mirrored across
   REST, MCP, CLI, and TUI. No per-provider or per-capability operation
-  families, and no new required fields in the hot loop: capability flags ride
-  the existing `describe_options`/settings payloads unchanged.
+  families. The decision operation stays single-request (idempotent
+  duplicates), not a batch family. The approval deadline is one new *optional*
+  start setting projected through `describe_options` like any other; nothing
+  new is required in the hot loop, and capability flags ride the existing
+  `describe_options`/settings payloads unchanged.
 - **Resume preserves the agent's cursors.** Resume keeps the session id and
   appends to the existing event cursor and transcript, so a delegating agent
   re-attaches with its stored cursor instead of re-reading the session.
@@ -775,12 +1165,20 @@ Transport coverage belongs with the shipped protocol tests
 (`tests/sandbox/test_worker_codec.py`, `tests/sandbox/test_worker_session.py`):
 an interrupt frame written while `run()` holds the lock is delivered and does not
 interleave; an interrupt for an unknown or finished `run_id` is a no-op;
-acknowledgement, deadline expiry, and `cancel` fallback each produce exactly one
-terminal outcome; an `approval_request` parks the turn and one decision resumes
+acknowledgement, deadline expiry, and the `cancel_active` fallback each produce
+exactly one terminal outcome; an `approval_request` parks the turn and one
+decision resumes
 it without holding `_lock` across the registry wait; concurrent close, interrupt,
-and stop do not deadlock; a lost, oversized, or duplicate decision denies; an
-interrupt or stop landing while an approval is pending denies it and yields one
-terminal outcome;
+and stop do not deadlock; a lost or oversized decision denies, while a
+duplicate decision is idempotent or a structured conflict; an
+interrupt or stop landing while approvals are pending denies them all and yields
+one terminal outcome; a `result` arriving with unresolved requests retracts
+them as `abandoned` and releases the park; a decision arriving after the
+terminal result is rejected as stale; the approval settle predicate is
+registry-keyed — an `interactive=false` session parks and settles, and a
+queued `post_message` neither satisfies nor blocks the park; the turn deadline
+excludes the parked interval, re-arms on decision, is hard-capped per park and
+per turn, and resumes counting on any registry ambiguity;
 any daemon/worker protocol-version skew fails at the `hello` handshake rather
 than running ungated.
 
@@ -792,14 +1190,18 @@ persisted identity is restored after a simulated daemon restart on **every**
 production path; incompatible fingerprints and rejected/expired sessions fail
 without creating a fresh provider session; tool requests enter
 `awaiting_approval`, emit sanitized correlated events, park `wait_result` with
-the `pending_approval` block, and resume on approve or deny; duplicate, stale,
-cross-session, cross-worker-instance, and post-stop
-responses are rejected; approval timeout and daemon shutdown deny and release the
-callback; mixed workflows aggregate flags honestly; session-index round trips
+the `pending_approvals` list under its total budget, and resume on approve or
+deny; duplicate, stale, cross-session, cross-worker-instance, post-stop, and
+post-completion responses are rejected; approval timeout and daemon shutdown
+deny and release the callback; on the in-process path a stop landing on a
+parked callback denies registry entries before runner close and unwinds
+without exceeding the bounded close; mixed workflows aggregate flags honestly;
+session-index round trips
 preserve only the sanitized resume descriptor; prompt handoff atomically
 persists `in_flight` plus the per-agent cursor, turn commit persists the terminal
-status, only `completed` is initially eligible, and reload restores the cursor
-before constructing the first delta; REST, direct MCP,
+status, only `completed` is initially eligible — plus `interrupted` bearing the
+`interrupt_acknowledged` marker on a backend with verified `interrupt` — and
+reload restores the cursor before constructing the first delta; REST, direct MCP,
 stdio-via-REST, CLI, and TUI share the same behavior.
 
 CLI resume coverage additionally proves:
@@ -808,12 +1210,13 @@ CLI resume coverage additionally proves:
   unchanged, and the next argv is the provider's exact resume-by-id shape;
 - only the delta continuation prompt is sent after promotion to `active`; a turn
   with no captured id stays `empty` and receives the full prompt next time,
-  while an id-bearing non-completed turn becomes quarantined and receives no
-  next provider prompt;
+  while an id-bearing turn outside the eligible-outcome set becomes quarantined
+  and receives no next provider prompt;
 - an id becomes active only at an eligible turn boundary; missing, conflicting,
   failed-turn, and ineligible persisted identities never trigger resume argv;
-  once an id is pending or active, every non-completed/uncertain outcome
-  quarantines the runner and later turns invoke no provider command;
+  once an id is pending or active, every outcome outside the backend's verified
+  eligible-outcome set — and every uncertain one — quarantines the runner and
+  later turns invoke no provider command;
 - direct and outer-sandbox launch preserve the same id, workdir, state root,
   and model/config posture;
 - the shared preparation helper calls `prepare_inner` and the finalizer exactly
@@ -857,7 +1260,10 @@ plus direct subprocess for CLIs:
 - interrupt a harmless long-running response, verify provider/client cleanup,
   then verify the conversation is still usable if the backend claims it;
 - gate a harmless tool, deny once, then approve once, verifying no execution
-  occurs before approval;
+  occurs before approval; verify a decision slower than the ordinary per-turn
+  timeout still completes the turn (the excluded parked interval), and that a
+  plain deny lets the turn run to a `completed` terminal outcome that remains
+  resume-eligible;
 - explicit resume after a simulated reload continues a captured codeword or
   other low-cost provider-held fact without transcript replay, and asserts that
   the first resumed prompt starts at the persisted per-agent
@@ -876,20 +1282,31 @@ the feature. A skipped provider keeps the production capability false.
   every execution path that pair can take.
 - Explicit resume after daemon restart reloads config/policy, validates a
   sanitized fingerprint, and never silently starts fresh.
-- Once a CLI runner observes a provider id, any non-completed, conflicting, or
-  uncertain turn quarantines it; no later turn may use ordinary establishment
-  inside that agent-collab session.
+- Once a CLI runner observes a provider id, any turn whose outcome falls
+  outside that backend's verified eligible-outcome set (default `{completed}`),
+  or that is conflicting or uncertain, quarantines it; no later turn may use
+  ordinary establishment inside that agent-collab session, and a session
+  containing a quarantined agent projects `resume` unavailable before the
+  operation is called.
 - Stop invokes verified provider cancellation when interrupt is advertised, and
   has a bounded fallback that still kills first when it must.
-- Tool approval pauses before execution, is visible through all session surfaces,
-  accepts one correlated response, and defaults to deny on failure — including
-  worker loss and protocol-version skew.
+- Tool approval pauses before execution, is visible through all session surfaces
+  — including the plural pending list and every resolution, auto-denies and
+  abandonments included — accepts one correlated response, and defaults to deny
+  on failure, including worker loss and protocol-version skew; a stop denies
+  every pending approval and reports the count.
+- `approval_request` and `approval_resolved` are typed events that pass the
+  `types` filter and appear in the documented digest filter; `awaiting_approval`
+  joins `LIVE_WAIT_STATUSES` and every hard-coded status enum and rendering
+  surface.
 - Session IDs, controller state, callbacks, and approval events expose no
   credentials or raw provider objects.
 - Mixed workflows and persisted sessions report conservative, accurate
   capabilities.
 - The MCP delegate loop absorbs approvals with one new status and one operation;
-  digest and status payload budgets do not regress.
+  digest payload budgets do not regress, and the park payload's
+  `pending_approvals` list rides under a documented total budget with counted
+  (never silent) overflow.
 - `claude_cli`, `codex_cli`, and `xai_cli` may advertise `continuity` and
   `resume` independently: `continuity` requires two live turns through both
   launch paths, while `resume` additionally requires persisted cursor and
@@ -940,6 +1357,16 @@ the feature. A skipped provider keeps the production capability false.
    installed 0.2.112 help, which says it creates a new session and must not
    already exist. Re-verify on upgrade; use explicit `--resume`, never
    `--session-id`, for the current pin. (Stage 4)
+9. Do the provider SDKs or their bundled CLIs hold their own decision deadline
+   on a pending permission callback? If one does, excluding parked time from
+   agent-collab's turn clock is cosmetic beyond that bound; each SDK
+   subsection must record the fact, and a deadline that can be neither
+   disabled nor out-waited gates `tool_gate` or clamps the approval deadline
+   (see *Clocks*). (Stages 2–3)
+10. Can each SDK fire multiple permission callbacks concurrently within one
+    turn, or are they serialized? The plural `pending_approvals` surface
+    assumes concurrency is possible; the per-backend fact is unverified.
+    (Stages 2–3)
 
 ---
 
@@ -1077,7 +1504,8 @@ the tests, not this document, are their guarantee.
   escalation).
 - *[tool_gate]* The persistent client is the precondition for `can_use_tool`;
   the gate cannot exist on a one-shot `query()`. Request id, tool input shape,
-  and result types are unverified.
+  and result types are unverified — as are callback concurrency within one
+  turn and any SDK/CLI-side decision deadline (open questions 9–10).
 - *[all]* The client is loop-scoped but usable across tasks in one loop (its
   reader is detached via `spawn_detached` -> `loop.create_task`); an `atexit`
   child killer reaps orphaned CLI subprocesses. `disconnect()` is idempotent,
@@ -1106,7 +1534,8 @@ the tests, not this document, are their guarantee.
   app-server transport. No turn-cancellation API has been located — see open
   question 1.
 - *[tool_gate]* Command/file-change approval notifications and response methods
-  on the app-server are unverified.
+  on the app-server are unverified — including callback concurrency and any
+  provider-side decision deadline (open questions 9–10).
 - *[all]* Note the two-pin ambiguity above: the bundled CLI binary and the
   configured local CLI differ. Re-verification must state which one it exercised.
 
@@ -1157,6 +1586,9 @@ the tests, not this document, are their guarantee.
 - *[resume]* `save_dir` maps to the localharness trajectory `storage_directory`.
   Letting each `Agent` synthesize a new temporary directory breaks reopen — see
   *Durable trajectory root*.
+- *[tool_gate]* No permission-callback surface has been verified for the
+  localharness connection; callback concurrency and any provider-side decision
+  deadline are likewise unrecorded (open questions 9–10).
 - *[interrupt]* `Agent.chat()` returns a lazy `ChatResponse`; cancelling a local
   `resolve()` consumer does not invoke provider cancellation, while
   `ChatResponse.cancel()` delegates to `Conversation.cancel()` (local
