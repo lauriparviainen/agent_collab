@@ -1111,8 +1111,7 @@ class XaiCliSandboxRunnerTests(unittest.IsolatedAsyncioTestCase):
                 events, outcome = await self._run_records(
                     (
                         '{"type":"text","data":"ready"}',
-                        f'{{"type":"end","stopReason":"{stop_reason}",'
-                        f'"sessionId":"session-ok"}}',
+                        f'{{"type":"end","stopReason":"{stop_reason}","sessionId":"session-ok"}}',
                     )
                 )
                 self.assertEqual(outcome.outcome, "completed")
