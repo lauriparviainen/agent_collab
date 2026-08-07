@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ...events import Event, compact_json, parse_json_line
-from ...outcomes import TerminalEvidence
+from ...outcomes import TerminalEvidence, TurnOutcomeKind
 from ..common.sdk import provider_session_event
 
 
-SUCCESS_STOP_REASON = "EndTurn"
+# Current Grok streaming-json / ACP tokens are snake_case. Legacy PascalCase
+# values (Grok <=0.2.x fixtures) remain accepted so old captures still resolve.
+SUCCESS_STOP_REASONS = frozenset({"end_turn", "EndTurn"})
+CANCELLED_STOP_REASONS = frozenset({"cancelled", "Cancelled"})
+INCOMPLETE_STOP_REASONS = frozenset({"max_tokens", "max_turn_requests"})
+REFUSAL_STOP_REASONS = frozenset({"refusal"})
+
+# Backward-compatible name used by older docs/tests; prefer SUCCESS_STOP_REASONS.
+SUCCESS_STOP_REASON = "end_turn"
 
 
 def _event_text(raw: Dict[str, Any]) -> str:
@@ -18,6 +26,54 @@ def _event_text(raw: Dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return compact_json(raw)
+
+
+def _normalize_stop_reason(value: Any) -> Optional[str]:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _classify_end_reason(
+    stop_reason: Any,
+) -> Tuple[TurnOutcomeKind, Optional[str], Optional[str], str]:
+    """Map a Grok ``end.stopReason`` to outcome evidence plus error copy.
+
+    Returns ``(outcome, code, provider_stop_reason, error_text)``. Success uses
+    ``code=None`` and empty ``error_text``.
+    """
+
+    reason = _normalize_stop_reason(stop_reason)
+    if reason in SUCCESS_STOP_REASONS:
+        return ("completed", None, reason, "")
+    if reason in CANCELLED_STOP_REASONS:
+        return (
+            "cancelled",
+            "provider_turn_cancelled",
+            reason,
+            "Grok ended the turn before producing a response",
+        )
+    if reason in INCOMPLETE_STOP_REASONS:
+        return (
+            "failed",
+            "provider_output_incomplete",
+            reason,
+            f"Grok turn ended incompletely with stop reason {reason!r}",
+        )
+    if reason in REFUSAL_STOP_REASONS:
+        return (
+            "refused",
+            "provider_turn_refused",
+            reason,
+            f"Grok refused the turn ({reason})",
+        )
+    label = reason if reason is not None else "unknown"
+    return (
+        "failed",
+        "provider_terminal_failure",
+        reason,
+        f"Grok turn ended with unsuccessful stop reason {label!r}",
+    )
 
 
 def parse_xai_line(
@@ -46,17 +102,8 @@ def parse_xai_line(
     if event_type == "error":
         return Event.create("error", "error", _event_text(raw), raw)
     if event_type == "end":
-        stop_reason = raw.get("stopReason")
-        if stop_reason != SUCCESS_STOP_REASON:
-            reason = stop_reason if isinstance(stop_reason, str) and stop_reason else "unknown"
-            code = (
-                "provider_turn_cancelled" if reason == "Cancelled" else "provider_terminal_failure"
-            )
-            text = (
-                "Grok ended the turn before producing a response"
-                if reason == "Cancelled"
-                else f"Grok turn ended with unsuccessful stop reason {reason!r}"
-            )
+        outcome, code, reason, text = _classify_end_reason(raw.get("stopReason"))
+        if outcome != "completed":
             return Event.create(
                 "error",
                 "error",
@@ -65,7 +112,7 @@ def parse_xai_line(
                     **raw,
                     "code": code,
                     "fatal": True,
-                    "provider_stop_reason": reason,
+                    "provider_stop_reason": reason if reason is not None else "unknown",
                 },
             )
         session_id = raw.get("sessionId")
@@ -104,39 +151,26 @@ class XaiStreamingParser:
 
         event = parse_xai_line(line, verbose, agent_id=self.agent_id)
         if isinstance(raw, dict) and raw.get("type") == "end":
-            reason = raw.get("stopReason")
-            if reason == SUCCESS_STOP_REASON:
-                self._terminal_evidence.append(
-                    TerminalEvidence("completed", provider_stop_reason=SUCCESS_STOP_REASON)
-                )
-            elif reason == "Cancelled":
-                self._terminal_evidence.append(
-                    TerminalEvidence(
-                        "cancelled",
-                        "provider_turn_cancelled",
-                        provider_stop_reason="Cancelled",
-                    )
-                )
-            else:
-                self._terminal_evidence.append(
-                    TerminalEvidence(
-                        "failed",
-                        "provider_terminal_failure",
-                        provider_stop_reason=reason if isinstance(reason, str) else None,
-                    )
-                )
+            outcome, code, reason, _text = _classify_end_reason(raw.get("stopReason"))
+            self._terminal_evidence.append(
+                TerminalEvidence(outcome, code, provider_stop_reason=reason)
+            )
         elif isinstance(raw, dict) and raw.get("type") == "error":
             self._terminal_evidence.append(TerminalEvidence("failed", "provider_terminal_failure"))
         if isinstance(raw, dict) and raw.get("type") in {"end", "error"}:
             events = self._flush_text()
             if event is not None:
                 events.append(event)
-            if raw.get("type") == "end" and raw.get("stopReason") != SUCCESS_STOP_REASON:
-                session_id = raw.get("sessionId")
-                if isinstance(session_id, str) and session_id:
-                    events.append(
-                        provider_session_event("xai", self.agent_id, session_id, "session", raw=raw)
-                    )
+            if raw.get("type") == "end":
+                outcome, _code, _reason, _text = _classify_end_reason(raw.get("stopReason"))
+                if outcome != "completed":
+                    session_id = raw.get("sessionId")
+                    if isinstance(session_id, str) and session_id:
+                        events.append(
+                            provider_session_event(
+                                "xai", self.agent_id, session_id, "session", raw=raw
+                            )
+                        )
             return events or None
         return event
 

@@ -42,18 +42,23 @@ it is separate from agent-collab's workflow `max_turns` and has no backend
 default, so Grok retains its version-specific default unless a caller overrides
 it.
 
-Observed Grok 0.2.93 records map `text` to xAI messages, `thought` to verbose
-status, explicit errors to transcript errors, and `end.sessionId` to the uniform
+Observed Grok records map `text` to xAI messages, `thought` to verbose status,
+explicit errors to transcript errors, and `end.sessionId` to the uniform
 provider-session event (kind `session`). The raw `sessionId` and `requestId` are
-preserved. Only `stopReason=EndTurn` is successful; cancelled and other terminal
-reasons emit a structured fatal error while retaining session identity.
+preserved. Successful completion is `stopReason=end_turn` (current Grok
+streaming-json / ACP snake_case); legacy `EndTurn` from older captures is still
+accepted. Cancel maps from `cancelled` or legacy `Cancelled`. Incomplete
+terminals (`max_tokens`, `max_turn_requests`) map to
+`provider_output_incomplete`; `refusal` maps to `provider_turn_refused`; other
+end reasons emit a structured fatal error while retaining session identity.
 Streaming text deltas are coalesced into one transcript message per turn; a
 partial turn is flushed at EOF. A real tool-use capture emitted no typed action
 record, so tool, command, and file-change fidelity is intentionally not claimed.
 Resume, interrupt, and tool-gate capabilities are all false.
 
-The typed turn outcome uses the same evidence: `EndTurn` completes,
-`Cancelled` maps to `cancelled`, other end reasons fail conservatively, and EOF
+The typed turn outcome uses the same evidence: `end_turn`/`EndTurn` completes,
+`cancelled`/`Cancelled` maps to `cancelled`, incomplete and refusal terminals
+use their dedicated codes, other end reasons fail conservatively, and EOF
 without `end` fails even after partial text. Conflicting terminal markers fail
 with `provider_protocol_conflict`; identical duplicates are harmless.
 

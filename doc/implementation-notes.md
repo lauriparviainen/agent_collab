@@ -125,7 +125,7 @@ escaping filesystem dependencies, and leader/resume/worktree/prompt-file
 shapes. Only after the outer proof ACK does it force
 `--permission-mode bypassPermissions --sandbox off`. Cached auth health uses
 file metadata without opening provider credentials. Grok terminal fidelity
-remains unchanged: only `EndTurn` succeeds.
+accepts current `end_turn` and legacy `EndTurn` as successful completion.
 
 `none` bypasses the sandbox launcher and preserves existing command behavior.
 Unsupported adapters reject explicit read-only before engine discovery.
@@ -280,8 +280,9 @@ turn emitted no typed action record, so `xai_cli` deliberately maps no tool
 events while capturing `end.sessionId` as provider identity kind `session`.
 Headless CLI runs default to permission-bypassed execution inside Grok's
 read-only sandbox, expose Grok's internal turn limit as `provider_max_turns`,
-and emit a terminal reason other than `EndTurn` as a fatal provider error
-instead of a successful empty response.
+and treat non-success terminals (`cancelled`/`Cancelled`, incomplete, refusal,
+and unknown reasons) as structured outcomes rather than a successful empty
+response. Success is `end_turn` (legacy `EndTurn` still accepted).
 The installed/latest `xai-sdk` 1.17.0 confirmed that ordinary multi-turn
 `Chat` usage replays its local message proto, but the public
 `store_messages=True` + `previous_response_id` path continues provider-stored

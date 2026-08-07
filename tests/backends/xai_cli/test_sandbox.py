@@ -1106,35 +1106,53 @@ class XaiCliSandboxRunnerTests(unittest.IsolatedAsyncioTestCase):
         return events, outcome
 
     async def test_end_turn_is_the_only_successful_process_terminal(self):
-        events, outcome = await self._run_records(
-            (
-                '{"type":"text","data":"ready"}',
-                '{"type":"end","stopReason":"EndTurn","sessionId":"session-ok"}',
-            )
-        )
-        self.assertEqual(outcome.outcome, "completed")
-        self.assertEqual(outcome.provider_stop_reason, "EndTurn")
-        self.assertTrue(any(event.text == "ready" for event in events))
+        for stop_reason in ("end_turn", "EndTurn"):
+            with self.subTest(stop_reason=stop_reason):
+                events, outcome = await self._run_records(
+                    (
+                        '{"type":"text","data":"ready"}',
+                        f'{{"type":"end","stopReason":"{stop_reason}",'
+                        f'"sessionId":"session-ok"}}',
+                    )
+                )
+                self.assertEqual(outcome.outcome, "completed")
+                self.assertEqual(outcome.provider_stop_reason, stop_reason)
+                self.assertIsNone(outcome.code)
+                self.assertTrue(any(event.text == "ready" for event in events))
 
     async def test_cancelled_unsuccessful_and_error_terminals_fail_conservatively(self):
         cases = (
             (
                 ('{"type":"end","stopReason":"Cancelled","sessionId":"cancelled"}',),
-                ("cancelled", "provider_turn_cancelled"),
+                ("cancelled", "provider_turn_cancelled", "Cancelled"),
+            ),
+            (
+                ('{"type":"end","stopReason":"cancelled","sessionId":"cancelled"}',),
+                ("cancelled", "provider_turn_cancelled", "cancelled"),
+            ),
+            (
+                ('{"type":"end","stopReason":"max_tokens","sessionId":"incomplete"}',),
+                ("failed", "provider_output_incomplete", "max_tokens"),
+            ),
+            (
+                ('{"type":"end","stopReason":"refusal","sessionId":"refused"}',),
+                ("refused", "provider_turn_refused", "refusal"),
             ),
             (
                 ('{"type":"end","stopReason":"SafetyStop","sessionId":"failed"}',),
-                ("failed", "provider_terminal_failure"),
+                ("failed", "provider_terminal_failure", None),
             ),
             (
                 ('{"type":"error","error":"private provider detail"}',),
-                ("failed", "provider_terminal_failure"),
+                ("failed", "provider_terminal_failure", None),
             ),
         )
         for records, expected in cases:
             with self.subTest(records=records):
                 _events, outcome = await self._run_records(records)
-                self.assertEqual((outcome.outcome, outcome.code), expected)
+                outcome_kind, code, stop_reason = expected
+                self.assertEqual((outcome.outcome, outcome.code), (outcome_kind, code))
+                self.assertEqual(outcome.provider_stop_reason, stop_reason)
 
     async def test_duplicate_conflicting_and_missing_terminal_evidence(self):
         cases = (

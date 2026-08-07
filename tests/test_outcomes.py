@@ -101,6 +101,12 @@ class OutcomeSanitizationTests(unittest.TestCase):
             outcome = TurnOutcome("failed", "provider_terminal_failure", provider_stop_reason=token)
             self.assertIsNone(outcome.provider_stop_reason)
 
+    def test_xai_cli_snake_case_stop_reasons_are_retained(self):
+        for token in ("end_turn", "cancelled", "max_tokens", "max_turn_requests", "refusal"):
+            with self.subTest(token=token):
+                outcome = TurnOutcome("completed", provider_stop_reason=token)
+                self.assertEqual(outcome.provider_stop_reason, token)
+
     def test_retry_after_is_typed_bounded_and_round_trips(self):
         outcome = TurnOutcome("refused", "provider_turn_refused", retry_after_seconds=90)
         record = TurnOutcomeRecord.from_outcome(

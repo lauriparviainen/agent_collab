@@ -13,6 +13,16 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-08-07 - Grok CLI end_turn success classification
+
+- Treat current Grok streaming-json `stopReason=end_turn` as a successful
+  xAI CLI terminal (#56). The decoder previously accepted only legacy
+  `EndTurn`, so complete answers with process exit 0 were recorded as
+  `provider_terminal_failure`. Cancel accepts `cancelled` and legacy
+  `Cancelled`; incomplete (`max_tokens`, `max_turn_requests`) and `refusal`
+  map to structured outcomes; unknown reasons still fail closed. The typed
+  outcome allowlist retains the snake_case tokens.
+
 ## [0.13.1] - 2026-07-31 - Concurrent-writer alias audit
 
 - Avoid full workspace alias walks when provider state is fully accounted

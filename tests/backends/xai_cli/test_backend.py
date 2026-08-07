@@ -234,6 +234,25 @@ sequence = ["xai_cli"]
         self.assertEqual(events[0].raw["delta_count"], 2)
         self.assertEqual(events[1].raw["provider_session_id"], "sess")
 
+    def test_current_grok_end_turn_completes_and_keeps_session_identity(self):
+        """Live Grok streaming-json emits snake_case end_turn, not EndTurn."""
+        runner = self.backend.create_runner(self.agent(id="reviewer"), False, {})
+        self.assertIsNone(runner.parser('{"type":"text","data":"ready"}', False))
+        events = runner.parser(
+            '{"type":"end","stopReason":"end_turn","sessionId":"sess","requestId":"req",'
+            '"num_turns":10}',
+            False,
+        )
+        self.assertEqual(len(events), 2)
+        message, identity = events
+        self.assertEqual((message.source, message.type, message.text), ("xai", "message", "ready"))
+        self.assertEqual(identity.provider_session["provider_session_id"], "sess")
+        evidence = runner.parser.take_terminal_evidence()
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0].outcome, "completed")
+        self.assertIsNone(evidence[0].code)
+        self.assertEqual(evidence[0].provider_stop_reason, "end_turn")
+
     def test_runner_flushes_partial_text_when_stdout_ends_without_end_record(self):
         runner = self.backend.create_runner(self.agent(), False, {})
         runner.parser('{"type":"text","data":"partial"}', False)
@@ -244,20 +263,29 @@ sequence = ["xai_cli"]
     def test_runner_reports_cancelled_end_as_fatal_and_keeps_session_identity(self):
         runner = self.backend.create_runner(self.agent(id="reviewer"), False, {})
 
-        events = runner.parser(
-            '{"type":"end","stopReason":"Cancelled","sessionId":"sess","requestId":"req"}',
-            False,
-        )
+        for stop_reason in ("Cancelled", "cancelled"):
+            with self.subTest(stop_reason=stop_reason):
+                runner = self.backend.create_runner(self.agent(id="reviewer"), False, {})
+                events = runner.parser(
+                    f'{{"type":"end","stopReason":"{stop_reason}",'
+                    f'"sessionId":"sess","requestId":"req"}}',
+                    False,
+                )
 
-        self.assertEqual(len(events), 2)
-        failure, identity = events
-        self.assertEqual((failure.source, failure.type), ("error", "error"))
-        self.assertIn("before producing a response", failure.text)
-        self.assertEqual(failure.raw["code"], "provider_turn_cancelled")
-        self.assertTrue(failure.raw["fatal"])
-        self.assertEqual(failure.raw["provider_stop_reason"], "Cancelled")
-        self.assertIsNone(failure.provider_session)
-        self.assertEqual(identity.provider_session["provider_session_id"], "sess")
+                self.assertEqual(len(events), 2)
+                failure, identity = events
+                self.assertEqual((failure.source, failure.type), ("error", "error"))
+                self.assertIn("before producing a response", failure.text)
+                self.assertEqual(failure.raw["code"], "provider_turn_cancelled")
+                self.assertTrue(failure.raw["fatal"])
+                self.assertEqual(failure.raw["provider_stop_reason"], stop_reason)
+                self.assertIsNone(failure.provider_session)
+                self.assertEqual(identity.provider_session["provider_session_id"], "sess")
+                evidence = runner.parser.take_terminal_evidence()
+                self.assertEqual(
+                    (evidence[0].outcome, evidence[0].code, evidence[0].provider_stop_reason),
+                    ("cancelled", "provider_turn_cancelled", stop_reason),
+                )
 
     def test_unknown_end_reason_is_not_treated_as_success(self):
         event = parse_xai_line('{"type":"end","stopReason":"SafetyStop","sessionId":"sess"}')
@@ -265,6 +293,31 @@ sequence = ["xai_cli"]
         self.assertEqual((event.source, event.type), ("error", "error"))
         self.assertEqual(event.raw["code"], "provider_terminal_failure")
         self.assertIn("SafetyStop", event.text)
+
+    def test_incomplete_and_refusal_end_reasons_are_structured(self):
+        cases = (
+            ("max_tokens", "failed", "provider_output_incomplete"),
+            ("max_turn_requests", "failed", "provider_output_incomplete"),
+            ("refusal", "refused", "provider_turn_refused"),
+        )
+        for stop_reason, outcome, code in cases:
+            with self.subTest(stop_reason=stop_reason):
+                event = parse_xai_line(
+                    f'{{"type":"end","stopReason":"{stop_reason}","sessionId":"sess"}}'
+                )
+                self.assertEqual((event.source, event.type), ("error", "error"))
+                self.assertEqual(event.raw["code"], code)
+                self.assertTrue(event.raw["fatal"])
+                runner = self.backend.create_runner(self.agent(), False, {})
+                runner.parser(
+                    f'{{"type":"end","stopReason":"{stop_reason}","sessionId":"sess"}}',
+                    False,
+                )
+                evidence = runner.parser.take_terminal_evidence()
+                self.assertEqual(
+                    (evidence[0].outcome, evidence[0].code, evidence[0].provider_stop_reason),
+                    (outcome, code, stop_reason),
+                )
 
     def test_probe_reports_missing_dependency_and_observed_version(self):
         with mock.patch("agent_collab.backends.xai_cli.backend.probe_cli_backend") as probe:

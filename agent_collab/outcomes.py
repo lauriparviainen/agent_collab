@@ -93,10 +93,17 @@ CANONICAL_MESSAGES.update(
 
 # These are provider enum tokens observed in repository fixtures or installed
 # interfaces.  Keep the list deliberately closed; prose is never accepted.
+# xAI CLI streaming-json currently uses ACP/Messages snake_case (end_turn,
+# cancelled, …); older Grok captures and fixtures still emit PascalCase.
 PROVIDER_STOP_REASONS = frozenset(
     {
         "EndTurn",
+        "end_turn",
         "Cancelled",
+        "cancelled",
+        "max_tokens",
+        "max_turn_requests",
+        "refusal",
         "STOP",
         "MAX_TOKENS",
         "LENGTH",
