@@ -1,28 +1,25 @@
 # MCP Streamable HTTP workdir path-namespace bridging
 
-**Status:** Preliminary design — preferred shape is G+C (client-declared
-request-scoped mapping + dual identity). Second Codex review: **Approve with
-changes** — architecture sound enough for implementation *planning*, not yet
-precise enough as the coding/API contract. **Do not implement** until residual
-freeze items below are closed. Header/JSON names remain illustrative.
+**Status:** Design direction frozen for implementation planning as **G+C**
+(client-declared request-scoped mapping + dual identity). Second Codex review
+blocking items are **folded into normative rules** below. Exact header/JSON
+identifier spellings remain illustrative until code freeze. **Do not implement
+until hermetic tests and schema names are locked in a coding PR.**
 
 **Created:** 2026-08-07
 
-**Updated:** 2026-08-08 — adopted G+C; demoted global path_maps; incorporated
-Codex recommendation and second Codex design review.
+**Updated:** 2026-08-08 — G+C preferred; second Codex approve-with-changes
+items folded into algorithm, Decisions, security, and MVP (not only a
+checklist).
 
 **Issue:** [#57](https://github.com/lauriparviainen/agent_collab/issues/57)
 
 ## Design maturity
 
-This document records design only. Production behavior must not change until
-implementation acceptance criteria are refined into hermetic tests and shipped
-deliberately.
-
-Prefer the **Decisions** section over older draft wording if anything
-conflicts. Earlier adversarial critiques still apply as risk analysis; their
-“header maps forbidden in v1” freeze is **superseded** by the Codex redesign
-and the product constraint that topology is client-instance knowledge.
+This document is design-only: no production behavior change until a deliberate
+implementation lands with tests. Prefer **Decisions** and the normative
+sections (algorithm, contract, security, exemptions) over critique-log
+history if anything conflicts.
 
 ## Context
 
@@ -35,12 +32,11 @@ and the product constraint that topology is client-instance knowledge.
   `[workdir].restrict_workdir_roots`, loads
   `WORKDIR/.agent-collab/config.toml`, and uses that path as provider
   subprocess cwd and outer Bubblewrap workspace designation.
-- Preferred MCP transport is Streamable HTTP `POST /mcp`. There is **no MCP
-  server process** and therefore **no process `args`**. Client configuration
-  is effectively `url` + `headers` (+ bearer token).
-- Session state stores a **single** workdir string (daemon path). Status,
-  list, transcripts, and provider output all speak that identity.
-- Review skills freeze an absolute workdir from the **caller** environment and
+- Preferred MCP transport is Streamable HTTP `POST /mcp` (`url` + `headers`;
+  no process `args`).
+- Session state stores a single workdir string (daemon path). Status, list,
+  transcripts, and provider output speak that identity.
+- Review skills freeze an absolute workdir from the caller environment and
   embed `Workdir: …` in the provider prompt.
 
 ### Failure mode
@@ -51,187 +47,237 @@ and the product constraint that topology is client-instance knowledge.
 | Host agent-collab daemon | e.g. `/home/user/src/project` (or missing) |
 
 Client-absolute paths fail with `workdir does not exist`, or bind a wrong tree
-if a coincidental host path exists. Even after a successful start with a
-hand-typed host path, **asymmetric narration** remains: providers and
-transcripts emit daemon-host paths while the calling agent’s local tools use
-client-namespace paths.
+if a coincidental host path exists. Provider output is daemon-namespace even
+when the calling agent’s IDE tools are client-namespace.
 
-### Product constraint (why global daemon maps are wrong)
+### Product constraint
 
-A live host daemon must **not** be the registry of every IDE/devcontainer path
-layout that might attach to it:
+The live host daemon must **not** be a registry of every attaching
+devcontainer layout. Topology is **client-instance** knowledge. Concurrent
+clients often share `/workspaces` while mapping to different host trees; a
+process-global map table cannot disambiguate them.
 
-- Topology is **client-instance** knowledge (“in *this* container,
-  `/workspaces/foo` is host `/home/…/foo`”).
-- Multiple clients commonly share the same client prefix (`/workspaces`) while
-  mapping to **different** host trees. A process-global map table cannot
-  disambiguate concurrent attachers.
-- Operator `~/.agent-collab/config.toml` would become a fragile graveyard of
-  layout fiction and would drift out of date as containers change.
+Client declares remapping (or already passes a host-visible path). Daemon
+validates/executes on host paths only and discloses both identities so the
+agent can reverse-map.
 
-The **client** must declare remapping (or already pass a host-visible path).
-The **daemon** validates and executes on host paths only, and **discloses**
-both identities so the calling agent can reverse-map provider output.
+### Outer sandbox note
 
-### Outer sandbox note (accuracy)
+Outer read-only is typically host-wide RO plus designated workspace identity
+on the session workdir. Wrong mapping risks **wrong-project execution**, not
+a classic single-bind escape.
 
-Linux outer read-only does **not** mean “only the workdir is visible.” The
-common posture is host-wide read-only visibility plus designated workspace
-operations on the session workdir. A wrong mapping mainly risks
-**wrong-project execution** (cwd, project config, agent focus), not a classic
-“escape a single bind.”
+### Non-goals (MVP)
 
-### Non-goals
-
-- Automatic mount-table / inode guessing.
-- Project-config path maps or workdir policy (same trust class as roots).
-- User-global daemon `path_maps` as the **primary** multi-client solution.
-- Rewriting free-form `task` text or transcript bodies.
-- Remote multi-machine daemons without a shared filesystem story.
-- A dedicated `agent_collab_resolve_workdir` tool in MVP.
-- Server-side reverse rewrite of provider answers.
-- Environment variables as the protocol contract (implicit, not HTTP-portable).
+- Mount-table / inode auto-discovery.
+- Project-config workdir maps or roots.
+- **Any** user-global daemon `path_maps` (not even as ambient convenience).
+- Task-text or transcript body rewrite.
+- Remote daemon without shared filesystem.
+- Dedicated `agent_collab_resolve_workdir` tool.
+- Env vars as the protocol contract.
 
 ## Goals
 
-1. **Daemon remains authoritative** for the filesystem identity used as cwd,
-   project config root, sandbox workspace designation, and allowlisting.
-2. **Client owns topology declaration** for non-host path namespaces
-   (devcontainer / IDE MCP config).
-3. **Calling agent is path-aware** when a bridge is active: structured dual
-   identity so it can reverse-map daemon paths for IDE actions and know that
-   provider output is daemon-namespace.
-4. **Streamable HTTP first-class**: use the real HTTP client surface
-   (`url` + `headers`); no process `args`.
-5. **No global multi-client map collisions**: mapping context is
-   request-scoped (and snapshotted on sessions), not a shared daemon table.
-6. **Explicit over magic**: fail closed; no mount discovery.
-7. **Same trust posture** as workdir limits: maps are not permission grants;
-   project config cannot set them.
-8. **Transport parity**: MCP and REST share one normalizer; CLI has an
-   explicit bridge for container→host cases.
+1. Daemon authoritative for cwd, project config, sandbox workspace, allowlist.
+2. Client owns topology declaration for non-host namespaces.
+3. Calling agent path-aware via structured dual identity.
+4. Streamable HTTP first-class (`url` + `headers`).
+5. No global multi-client map collisions (request-scoped context + session
+   snapshot).
+6. Explicit, fail-closed; maps are not permission grants.
+7. MCP + REST share one normalizer; CLI has explicit bridge flags when needed.
+8. Describe→start cannot silently change namespace under the agent’s feet.
 
 ## Option space
 
 | Option | Verdict |
 | --- | --- |
-| A. Silent server rewrite only | **Reject as sole design** — blinds the agent |
-| B. Instructions / tool text only | **Reject as sole design** — models ignore; cannot invent host existence |
-| C. Structured dual identity in responses | **Accept** as the disclosure half |
-| D. Stdio-adapter-only remap | **Reject** — fights preferred Streamable HTTP |
-| E. Identical absolute bind mounts | **Ops mitigation only** — document; not a protocol substitute |
-| F. Client always passes host `workdir` + optional `client_workdir` | **Secondary / fallback** — requires agent already knows host path; topology forced into model-controlled tool args every call |
-| G. Client-declared, request-scoped maps (e.g. Streamable HTTP headers) | **Accept as primary** (with C) |
-| H. Global user-config `path_maps` on daemon | **Demote** — optional single-machine convenience only; not multi-client primary |
-| “Identity-wins if host path exists” under ambient global maps | **Reject as primary** — coincidental host paths pick wrong trees |
+| A Silent rewrite only | Reject as sole design |
+| B Instructions only | Reject as sole design |
+| C Dual-identity responses | Accept (disclosure) |
+| D Stdio-only remap | Reject |
+| E Identical bind paths | Ops mitigation only |
+| F Host `workdir` + optional client path | Secondary fallback |
+| G Client-declared request-scoped maps | **Primary** (with C) |
+| H Global daemon `path_maps` | **Out of MVP entirely** |
 
-## Preferred shape: G + C (client-declared map + dual identity)
+## Preferred shape: G + C
 
 ### Principles
 
-1. **Knowledge vs authority.** Client declares topology; daemon validates and
-   runs on the host path only.
-2. **Request-scoped mapping context** at the daemon (from authenticated
-   request headers or equivalent CLI flags). Do not call it
-   “connection-scoped”: Streamable HTTP POST responses close; there is no
-   durable connection identity today.
-3. **One workspace anchor pair in MVP:** exact `client_root` ↔ `daemon_root`.
-   Tool `workdir` under `client_root` maps by appending the relative suffix
-   under `daemon_root` (component-wise join).
-4. **When mapping headers are present, the map explicitly wins** for inputs
-   under `client_root`. Require tool `workdir` to be at or beneath
-   `client_root` so agents cannot accidentally re-submit a returned daemon
-   path as the next start workdir under an active client map.
-5. **When mapping headers are absent,** preserve today’s identity behavior
-   (input is already a daemon-namespace path).
-6. **Response/session `workdir` always means the daemon path** after
-   normalize.
-7. **`path_namespace` is the machine-readable bridge contract**, present on
-   describe/start and snapshotted on the session; echoed on status/list and
-   included with `wait_result` (provider answers live there).
-8. **Reverse mapping is caller-side.** No transcript mutation.
-9. **Repo-relative paths** in review file lists remain the best cognitive
-   simplification.
-10. **Do not put topology in global daemon config as the main story.**
+1. Client declares topology; daemon validates and runs on host path only.
+2. Mapping context is **request-scoped** (headers / CLI flags on each call),
+   not connection-scoped (Streamable HTTP POSTs close).
+3. MVP: one exact `client_root` ↔ `daemon_root` pair.
+4. Headers present ⇒ map wins for inputs under `client_root`; workdir must
+   stay under `client_root`.
+5. Headers absent ⇒ **identity only** (no ambient global maps).
+6. Top-level `workdir` after normalize always means daemon path.
+7. `path_namespace` is the machine-readable contract; reverse map is
+   caller-side.
+8. Prefer repo-relative paths in review file lists.
+9. Active mapped **start** must prove the same namespace describe returned
+   (`expected_namespace_id`).
 
-### Streamable HTTP configuration (client declares remapping)
+---
 
-Illustrative MCP client config **inside the devcontainer** (or other client
-namespace):
+## Normative: PathNamespaceContext
 
-```json
-{
-  "type": "http",
-  "url": "http://127.0.0.1:8765/mcp",
-  "headers": {
-    "Authorization": "Bearer <token>",
-    "Agent-Collab-Client-Root": "/workspaces/project",
-    "Agent-Collab-Daemon-Root": "/home/alice/src/project"
+### Sources (authenticated requests only)
+
+| Transport | How context is supplied |
+| --- | --- |
+| Streamable HTTP MCP | Headers on **every** authenticated request that needs map apply or compatibility (not only options/start) |
+| REST | Same headers on the same class of endpoints |
+| CLI | `--client-root` / `--daemon-root` (illustrative names) when CLI runs outside the daemon namespace |
+| Internal/scheduler | **No** client maps; see Internal exemptions |
+
+### Header rules (illustrative names)
+
+```http
+Agent-Collab-Client-Root: /workspaces/project
+Agent-Collab-Daemon-Root: /home/alice/src/project
+```
+
+- Both present together, or neither. Exactly one of the pair ⇒ **400** (or
+  equivalent tool error) after auth; do not partially apply.
+- Duplicate conflicting values for the same header ⇒ **400**.
+- Cap total mapping-header bytes; reject control characters / NUL.
+- Do not log Authorization or mapping header values at default log level.
+- Auth is evaluated before map parse; unauthenticated callers never see map
+  diagnostics that leak host layout beyond existing public errors.
+
+### Canonical forms
+
+| Field | Canonical form |
+| --- | --- |
+| `client_root` | Absolute **lexical** POSIX path: no empty segments, no `.` / `..`, no trailing slash except `/`, component-normalized. Not host-resolved (may not exist on daemon). |
+| `daemon_root` | Header spelling expanded if needed, then **`Path.resolve()`** on the host. Must exist and be a directory **before** any workdir join. Reject if resolve fails or not a dir. |
+| Mapping identity | Pair `(canonical_client_root, resolved_daemon_root)`. |
+| `namespace_id` | Non-secret digest of that pair (e.g. sha256 of a fixed encoding). Used as an **identifier / receipt**, not as the sole equality authority. |
+| Compatibility | Exact equality of the two canonical roots (string forms after the rules above). Digest mismatch implies incompatibility; equality of roots is the comparison. |
+
+`namespace_id` and `mapping_matches_request` are **advisory routing metadata**.
+They are **not** authentication, authorization, session ownership, or proof
+that a client-side mount exists.
+
+### Normalization algorithm (MCP + REST describe/start)
+
+```text
+parse_context(request):
+  if neither root header: return InactiveContext
+  if only one: fail closed (invalid mapping headers)
+  client_root = lexical_canonicalize(Client-Root)
+  daemon_root = strict_resolve_existing_dir(Daemon-Root)
+  namespace_id = digest(client_root, daemon_root)
+  return ActiveContext(client_root, daemon_root, namespace_id)
+
+normalize_workdir(input, context) -> NormalizedWorkdir:
+  require absolute input; reject ".." / "." segments; strip trailing slash
+  if context is Inactive:
+    daemon_workdir = strict_resolve_existing_dir(input)  # today's rules;
+                                                         # no expanduser tricks
+                                                         # beyond today's workdir
+    return {
+      active: false,
+      client_root: null,
+      daemon_root: null,
+      client_workdir: null,
+      daemon_workdir,
+      namespace_id: null,
+      input_workdir: input  # optional echo; may omit if redundant
+    }
+  # Active:
+  require input under client_root (component boundary)
+  suffix = relative parts after client_root
+  daemon_candidate = join(daemon_root.parts + suffix)   # Path parts, not concat
+  daemon_workdir = resolve(daemon_candidate)
+  require daemon_workdir equals or under context.daemon_root
+  require exist + is_dir
+  validate_workdir_allowed(daemon_workdir)
+  return {
+    active: true,
+    client_root, daemon_root,  # daemon_root already resolved
+    client_workdir: input,     # caller's path as submitted (under client_root)
+    daemon_workdir,
+    namespace_id,
+    input_workdir: input       # same as client_workdir when active; keep one
+                               # field in schema freeze if preferred
   }
-}
 ```
 
-Rules (design intent):
+**No `expanduser` on already-absolute mapped paths** beyond whatever today’s
+workdir path does for bare identity inputs. Mapped `daemon_root` must be an
+absolute host path the operator/client can spell without relying on daemon
+home expansion for security-sensitive roots.
 
-- Both mapping headers must be present together, or neither.
-- Separate headers avoid inventing JSON-in-header encoding before multi-map
-  phase 2.
-- Roots and workdirs: absolute; lexically clean; reject `.` / `..`, control
-  characters, excessive length, and `client_root = "/"`.
-- Match by **path components**, never raw `startswith`.
-- After map: `resolve()` on host; require final path **exists**, is a
-  directory, and remains **beneath resolved `daemon_root`** (mandatory
-  containment).
-- Then apply existing `restrict_workdir_roots` on the final daemon path.
-- Project config never defines maps.
-- Cap header size; do not log Authorization or mapping headers at default
-  level.
+**TOCTOU / symlink races** after resolve are the same same-user class as
+today’s workdir resolution; document, do not claim `resolve()` eliminates them.
 
-Static headers on the MCP client make the map **client-instance-scoped** in
-practice while remaining **request-scoped** at the daemon (each POST carries
-the same headers).
+Never rewrite task text or transcript bodies.
 
-### Multi-client / overlapping `/workspaces`
+### Describe → start precondition (normative)
 
-Mappings must **never** enter shared global daemon map state as the
-disambiguator. Two concurrent clients may declare:
+When the request carries an **active** mapping context:
 
-```text
-/workspaces/project → /home/alice/src/project-a
-/workspaces/project → /home/alice/src/project-b
-```
+1. `describe_options` returns `path_namespace` including `namespace_id`.
+2. `start` **must** include tool/body field `expected_namespace_id` equal to
+   that `namespace_id` (illustrative name).
+3. Server recomputes context from **this request’s** headers, normalizes
+   workdir, and **fails closed before project-config load or provider launch**
+   if:
+   - headers absent/invalid while `expected_namespace_id` is set, or
+   - computed `namespace_id` ≠ `expected_namespace_id`, or
+   - `expected_namespace_id` is missing while mapping headers are present.
 
-Each request normalizes using **only its own headers**. No collision.
+When the request has **no** mapping headers (identity mode):
 
-Derive a non-secret `namespace_id` from the canonical mapping pair. Snapshot
-it and the dual paths on session creation. Status/list/result should report
-whether the session namespace is **compatible with the current request’s
-namespace**, so a client does not treat another client’s identical-looking
-`/workspaces/project` as locally usable.
+- `expected_namespace_id` must be absent or null.
+- If the client sends `expected_namespace_id` without mapping headers ⇒ fail
+  closed.
 
-### Normalization algorithm (shared MCP + REST)
+This enforces the skill “freeze namespace after describe” at the API boundary
+so headers cannot silently change between describe and start.
 
-```text
-1. Parse optional request PathNamespaceContext (headers or CLI flags).
-2. Require absolute workdir input; reject empty / relative / ".." segments.
-3. If context active:
-     - require workdir at or under client_root (component boundary)
-     - daemon_candidate = join(daemon_root parts + relative suffix parts)
-     - client_workdir = input
-   Else:
-     - daemon_candidate = input
-     - client_workdir = null
-4. daemon_workdir = expanduser().resolve(daemon_candidate)
-5. If context active: require daemon_workdir equals or under resolve(daemon_root)
-6. exist + is_dir + validate_workdir_allowed(daemon_workdir)
-7. Never rewrite task text or transcripts
-```
+CLI: when `--client-root` / `--daemon-root` are set, start requires the same
+expected id (from a prior describe or a deterministic local recompute the CLI
+prints).
 
-One function used by describe and start on MCP and REST.
+### Internal / scheduler exemptions (normative)
 
-### Agent-visible contract
+Trusted internal starts (e.g. usage-window scheduler empty workdir) that today
+bypass ordinary workdir policy:
 
-#### Response sketch
+- **Do not** parse client mapping headers or CLI map flags.
+- **Do not** require `expected_namespace_id`.
+- Produce an **inactive** `path_namespace` snapshot (or omit dual fields with
+  the same meaning as inactive).
+- Must remain **unreachable** through public REST/MCP session-create shapes.
+- Document the exemption next to the existing internal workdir exemption in
+  daemon architecture notes at implementation time.
+
+---
+
+## Agent-visible contract
+
+### Field meanings
+
+| Field | Meaning |
+| --- | --- |
+| `workdir` (top-level / session) | Always **daemon** absolute path after normalize |
+| `path_namespace.active` | Whether a client map applied for origin or request |
+| `path_namespace.namespace_id` | Digest of origin mapping pair (null if inactive) |
+| `path_namespace.client_root` | Lexical client root (null if inactive) |
+| `path_namespace.daemon_root` | **Resolved** daemon root (null if inactive) |
+| `path_namespace.client_workdir` | Caller’s workdir in client namespace when active; null if inactive |
+| `path_namespace.daemon_workdir` | Same as top-level `workdir` |
+| `path_namespace.request_namespace_id` | Digest of **this request’s** map if any; always present on responses that evaluate compatibility (null if request inactive) |
+| `path_namespace.mapping_matches_request` | Whether origin mapping pair equals request mapping pair (see matrix). **Not** “client can open this path.” |
+
+Drop free-form `guidance` strings from JSON; prose lives in mcp-guidance.
+
+### Response sketch (active describe)
 
 ```json
 {
@@ -239,391 +285,299 @@ One function used by describe and start on MCP and REST.
   "path_namespace": {
     "version": 1,
     "active": true,
-    "namespace_id": "sha256:<canonical-map-digest>",
-    "input_workdir": "/workspaces/project/packages/core",
+    "namespace_id": "sha256:<digest>",
     "client_root": "/workspaces/project",
     "client_workdir": "/workspaces/project/packages/core",
     "daemon_root": "/home/alice/src/project",
     "daemon_workdir": "/home/alice/src/project/packages/core",
-    "compatible_with_request": true
+    "request_namespace_id": "sha256:<digest>",
+    "mapping_matches_request": true
   }
 }
 ```
 
-Inactive (no mapping headers):
+### Start (active)
+
+Tool args include:
 
 ```json
-"path_namespace": {
-  "version": 1,
-  "active": false,
-  "namespace_id": null,
-  "input_workdir": "/home/alice/src/project",
-  "client_root": null,
-  "client_workdir": null,
-  "daemon_root": null,
-  "daemon_workdir": "/home/alice/src/project",
-  "compatible_with_request": true
+{
+  "workdir": "/workspaces/project",
+  "expected_namespace_id": "sha256:<digest from describe>"
 }
 ```
 
-Session read from another client namespace:
+Response includes the same `path_namespace` shape; session persists a
+**versioned origin snapshot** (active or inactive).
 
-```json
-"path_namespace": {
-  "active": true,
-  "namespace_id": "sha256:<session-origin-map>",
-  "client_workdir": "/workspaces/project",
-  "daemon_workdir": "/home/alice/src/project-a",
-  "request_namespace_id": "sha256:<current-client-map>",
-  "compatible_with_request": false
-}
-```
+### Where `path_namespace` is emitted (MVP)
 
-#### Where to emit
-
-| Surface | `path_namespace` |
+| Surface | Rule |
 | --- | --- |
-| `describe_options` | Always |
-| start response | Always; snapshot on session when active |
-| status / list | Echo snapshot; set `compatible_with_request` from current headers |
-| `wait_result` | Include (provider answers need reverse-map context) |
-| event batches | Optional small flag / reference in phase 2 |
-| Transcript text | Never rewrite bodies |
+| `describe_options` | Always full object (active or inactive) |
+| `start` | Always; persist origin snapshot on **every** new session |
+| `status`, `list_sessions` | Echo origin snapshot; compute `request_namespace_id` + `mapping_matches_request` from this request’s headers |
+| `wait_result` | Echo origin snapshot + mapping match vs this request |
+| `read_events` / `wait_events` | Include origin snapshot (or compact reference equal to full origin fields) on every authenticated response that returns session events |
+| `read_transcript` | Include origin snapshot in the response envelope (do **not** rewrite transcript body text) |
+| Transcript / event **bodies** | Never path-rewritten |
 
-#### How the calling agent is taught
+If a client cannot send mapping headers on a read, treat request context as
+inactive: `request_namespace_id: null`, and `mapping_matches_request` is true
+only when the **session origin** is also inactive; if session origin is
+active, `mapping_matches_request` is **false** (caller must not reverse-map
+as if it owned the origin client root).
 
-| Channel | Role |
-| --- | --- |
-| Structured `path_namespace` | **Primary contract** |
-| Session + wait_result echo | Long-session re-attach and answer harvest |
-| dual/solo-review skills | Hard steps (below) |
-| mcp-guidance | Procedural rule |
-| Tool `workdir` property description | One-line hint |
-| `initialize.instructions` | Short pointer only |
+### Compatibility matrix
 
-### Agent / skill obligations
+| Session origin | Request context | `mapping_matches_request` | Agent reverse-map using origin client_root? |
+| --- | --- | --- | --- |
+| inactive | inactive | true | N/A (already daemon paths) |
+| inactive | active | false | No — request map is not the session origin |
+| active | inactive | false | No — missing request map; report daemon paths only |
+| active | active, same pair | true | Yes, under origin/daemon roots |
+| active | active, different pair | false | No — different client instance |
+| legacy session (no snapshot fields) | any | treat origin as **inactive** (conservative migration) | No dual reverse-map |
 
-1. Call `describe_options` with the caller-visible absolute path.
-2. Inspect and freeze `namespace_id`, `client_workdir`, `daemon_workdir`.
-3. Confirm an active mapping matches the expected workspace before paid start.
-4. Pass the **original client path** to `start`; do **not** pass the returned
-   daemon path as the next `workdir` while a client map is active.
-5. Put `daemon_workdir` in provider-facing `Workdir:` lines.
-6. Prefer repo-relative file lists and request repo-relative citations.
-7. Reverse-map only component-boundary paths beneath `daemon_root`.
-8. Never raw substring-replace entire transcripts.
-9. Reverse-map only when `compatible_with_request` is true.
-10. If incompatible, report the daemon path and ask the user to open the
-    session from the originating client namespace.
+### Persistence
 
-### REST and CLI parity
+- Every **new** session stores a versioned `path_namespace` origin snapshot
+  (including `active: false` identity sessions).
+- Legacy index records without snapshot fields migrate as **inactive**
+  identity sessions.
+- Session reads never re-normalize the stored daemon workdir from new maps;
+  they only compare request context to the snapshot.
 
-- Shared normalizer: `input workdir + optional PathNamespaceContext`.
-- MCP Streamable HTTP: context from static headers.
-- REST: accept the same headers on options/start.
-- CLI on the daemon host: no mapping needed.
-- CLI in a container talking to the host daemon: explicit paired flags
-  (illustrative `--client-root` / `--daemon-root`) populating the same
-  context — not env as the protocol.
-- Session-read endpoints use request context only for **compatibility**
-  checks; they must not re-normalize the session’s persisted daemon workdir.
+### Multi-client `/workspaces`
 
-### Optional secondary: host path without maps (F)
+Two clients may both use client_root `/workspaces/project` with different
+daemon_roots. Each request uses only its headers. `namespace_id` differs.
+`mapping_matches_request` prevents treating another client’s session client
+paths as local.
 
-If the client environment can inject a host-visible path (devcontainer
-`remoteEnv`, identical bind path, human config), the agent may pass that path
-as `workdir` with **no** mapping headers. Optional later: explicit
-`client_workdir` tool field for dual identity without rewrite. F is a valid
-ops/skill path; it is **not** a substitute for G when the model only knows
-container paths.
+---
 
-### Global daemon maps (H) — outside MVP
+## Agent / skill obligations
 
-**MVP: no global daemon path maps.** Absence of request mapping headers always
-means identity behavior. Silent ambient maps would contradict that rule and
-reintroduce multi-client collisions.
+1. `describe_options` with caller-visible absolute path (and mapping headers
+   from MCP client config).
+2. Freeze `namespace_id`, `client_workdir`, `daemon_workdir`, roots.
+3. Confirm active mapping matches the expected workspace before paid start.
+4. `start` with **client** `workdir` + `expected_namespace_id` from describe.
+5. Never pass returned daemon path as start `workdir` while client map headers
+   are configured.
+6. Put `daemon_workdir` in provider `Workdir:` lines.
+7. Prefer repo-relative file lists and citations.
+8. Reverse-map only component-boundary paths under `daemon_root`, and only
+   when `mapping_matches_request` is true.
+9. No raw whole-transcript substring replacement.
+10. If `mapping_matches_request` is false, report daemon paths and tell the
+    user to use the originating client namespace.
 
-If reintroduced after MVP, require **explicit profile selection** (not silent
-application when headers are absent). Never let ambient global maps change
-no-header semantics.
+Education channels: structured fields primary; skills hard-step; mcp-guidance;
+one-line tool property hint; initialize.instructions pointer only.
 
-### Ops mitigation (E)
+---
 
-Bind the host tree at the same absolute path in the container when possible;
-then neither maps nor dual identity are required for start success (dual
-identity still helps if any other surface emits the other form).
+## REST and CLI parity
 
-## Security
+- One normalizer: `workdir + PathNamespaceContext + optional expected_namespace_id`.
+- REST: same mapping headers on describe/start **and** on session-read
+  endpoints that compute `mapping_matches_request`.
+- CLI host-local: identity mode.
+- CLI container→host: `--client-root` / `--daemon-root` + expected id as above.
+- Env is not the protocol.
 
-### Invariants
+---
 
-1. Parse mapping headers only on **authenticated** MCP/REST requests.
-2. Mapping is **routing, not a grant**: final path must pass exist + dir +
-   `restrict_workdir_roots` with the same meaning as a raw host path.
-3. Project `.agent-collab/config.toml` must never define or weaken mappings or
-   workdir roots.
-4. Allowlist runs on the **final resolved daemon path** before project config
-   load (preserve workdir-trust ordering).
-5. Component-boundary matching; join via path parts; reject `..`; mandatory
-   post-resolve containment under `daemon_root`.
-6. All cwd / project-config / provider / sandbox decisions use only
-   `daemon_workdir`.
-7. Do not log Authorization or mapping headers at default level.
-8. Cap header size and (later) map count.
-9. Treat mapping headers as **untrusted routing input** from a token holder —
-   same class as choosing a host path, not a second principal.
-10. Prefer that bearer token and topology headers live in **user/trusted** MCP
-    configuration, not automatically in untrusted repository-committed IDE
-    config that also holds the daemon token.
+## Secondary: host path without maps (F)
 
-### Threat notes
+If the environment already exposes a host-visible path, pass it as `workdir`
+with no mapping headers. Optional later: explicit `client_workdir` tool field
+for dual identity without rewrite. F does not replace G when the model only
+knows container paths.
 
-- Same-user bearer token already allows any allowlisted host workdir. Maps do
-  not expand that set if join/containment/allowlist hold.
-- Wrong map to a sibling project under the allowlist remains an
-  operator/client-config error class; visible describe output and skill
-  confirmation mitigate but do not eliminate it.
-- Empty `restrict_workdir_roots` makes bridging more dangerous in the same way
-  unrestricted host workdirs already are; document enabling roots for
-  multi-client hosts.
+## Global maps (H)
+
+**Not in MVP. Not ambient. Not documented as a recommended mode.**  
+Future work only via explicit profile selection design (phase 2+), never silent
+no-header rewriting.
+
+## Ops (E)
+
+Identical absolute bind mounts remain a valid zero-protocol mitigation.
+
+---
+
+## Security (normative)
+
+1. Mapping headers only after successful auth.
+2. Maps are routing, not grants; final path must pass exist + dir +
+   `restrict_workdir_roots` with today’s meaning.
+3. Project config never defines maps or roots policy.
+4. Allowlist on final resolved daemon path **before** project config load.
+5. Component-boundary match; Path-part join; reject `..`; mandatory
+   containment under **resolved** `daemon_root`.
+6. Execution surfaces use only `daemon_workdir`.
+7. No Authorization / mapping header values in default logs.
+8. Cap header size; reject partial/duplicate map headers.
+9. **Repository-controlled MCP configuration must not receive or embed the
+   daemon bearer token without explicit workspace trust.** Topology headers
+   alone are not a second principal; the dangerous pair is
+   **token + attacker-controlled URL/headers** in untrusted project config.
+   Prefer user-level or trusted-container MCP config. Non-loopback access
+   requires the existing token model and should use a trusted tunnel or TLS
+   as already implied by daemon deployment guidance.
+10. `namespace_id` / `mapping_matches_request` are not authz controls.
+11. Symlink/TOCTOU: same-user residual risk as today’s resolve; containment
+    uses resolved roots.
+
+---
 
 ## Phasing
 
-### MVP
+### MVP (includes folded freeze items)
 
-- One exact header pair: client root ↔ daemon root.
-- Shared MCP/REST normalization with request PathNamespaceContext.
-- Structured dual identity + session snapshot + `namespace_id`.
-- Compatibility flag on session reads under a different request namespace.
-- CLI paired root flags for container→host CLI use.
-- Guidance + dual/solo-review skill hard steps.
-- Hermetic tests for boundary join, containment, allowlist, missing mapped
-  path, no-header identity, dual-client same client prefix different daemon
-  roots, project config cannot set maps.
+- Paired mapping headers + parse/fail rules.
+- Shared normalize + containment.
+- `expected_namespace_id` on active start.
+- Full `path_namespace` on describe/start/status/list/wait_result/
+  read_events/wait_events/read_transcript envelope.
+- Origin snapshot on every new session; legacy → inactive.
+- Compatibility matrix as above.
+- Internal exemption rules.
+- CLI root flags + expected id.
+- Skills + mcp-guidance.
+- Hermetic tests: partial/duplicate headers; auth-before-parse; under-root
+  join; symlink daemon_root reverse-map; expected_namespace_id mismatch;
+  no-header identity; two clients same client_root different daemon_root;
+  legacy migration; log redaction; project cannot set maps; internal start
+  inactive.
 
 ### Phase 2
 
-- Multiple client-declared maps (multi-root workspaces), longest component
-  prefix, ambiguity rejection.
-- Optional daemon-predeclared profile IDs selected by header (deployments that
-  prohibit free-form host `daemon_root` in client config).
-- Optional binding to a future durable MCP session ID rejecting mid-session
-  namespace changes.
-- Diagnostic resolve tool only if support evidence requires it.
-- Optional path_namespace reference on event batches.
+- Multi-root client maps (longest prefix, ambiguity reject).
+- Optional predeclared daemon profile IDs (no free-form daemon_root in client).
+- Durable MCP session id binding namespace.
+- Resolve tool only if needed.
 
-## Decisions (current)
+---
 
-1. **Preferred shape is G + C:** client-declared request-scoped mapping +
-   structured dual identity.
-2. **Topology is client-instance knowledge**; daemon does not own a global
-   multi-client map registry as the primary design.
-3. **MVP uses paired Streamable HTTP headers** for client_root and
-   daemon_root (illustrative names until freeze).
-4. **Returned `workdir` always daemon path**; dual identity only in
-   `path_namespace`.
-5. **`path_namespace` always on describe and start**; snapshotted on session;
-   echoed on status/list/wait_result with compatibility.
-6. **Shared normalizer** for MCP and REST; CLI uses explicit flags when needed.
-7. **No task/transcript rewrite.**
-8. **No dedicated resolve tool in MVP.**
-9. **No global daemon path_maps in MVP**; no-header always means identity.
-10. **Mandatory containment** under resolved daemon_root after map.
-11. **Skills must** freeze dual paths, pass client path to start, put daemon
-    path in provider Workdir, reverse-map only when compatible.
-12. **Implementation out of scope** until residual freeze items are closed.
-13. **Second Codex review (2026-08-08):** Approve with changes — residual
-    freeze items are binding for coding-contract readiness.
+## Decisions (normative)
 
-## Open questions
+1. Preferred shape is **G + C**.
+2. Topology is client-instance knowledge; no global multi-client map registry.
+3. **MVP has zero global daemon path_maps**; no mapping headers ⇒ identity.
+4. MVP mapping surface: paired Streamable HTTP headers (illustrative names)
+   plus CLI flags; both roots required together.
+5. `client_root` lexical; `daemon_root` strictly resolved exist+dir; that pair
+   is mapping identity; `namespace_id` is its digest.
+6. Top-level `workdir` always daemon path after normalize.
+7. `path_namespace` always on describe/start; full origin snapshot on every
+   new session; echoed on status/list/wait_result and event/transcript
+   **envelopes**; bodies never rewritten.
+8. Field `mapping_matches_request` (not “compatible” as filesystem proof);
+   `request_namespace_id` always present on responses that evaluate match
+   (null if request inactive).
+9. Active mapped start requires `expected_namespace_id` matching this
+   request’s computed id; fail before project config / provider launch.
+10. Shared normalizer for MCP and REST; CLI uses explicit flags when needed.
+11. No task/transcript body rewrite; no resolve tool in MVP.
+12. Mandatory containment under resolved daemon_root.
+13. Internal/scheduler starts: inactive namespace, no client maps, not
+    public-API reachable.
+14. Token + topology must not live in untrusted repository MCP config without
+    workspace trust; `namespace_id` is not auth.
+15. Implementation deferred to a coding PR with tests; design rules above are
+    the intended contract.
 
-1. Exact header names and whether to use `X-` prefix vs bare `Agent-Collab-*`.
-2. Exact JSON field names (`path_namespace` shape freeze), including whether
-   `input_workdir` and `client_workdir` both stay or one is removed.
-3. Whether inactive describe always includes the full object (recommended: yes).
-4. Schema for CLI flag names.
-5. Whether phase-2 profile IDs should exist before multi-map free-form roots.
-6. Session index persistence shape for every session (active and inactive)
-   and legacy migration.
-7. Internal/scheduler workdir exemptions: must bypass namespace path without
-   becoming REST/MCP-reachable (second Codex: freeze required before coding).
-8. **Describe→start precondition:** should start require
-   `expected_namespace_id` (or opaque receipt from describe) so headers cannot
-   silently change between describe and start? (second Codex: blocking)
-9. Propagation: every provider-text surface in MVP vs mandatory prior status
-   lookup (second Codex: blocking ambiguity).
-10. Rename `compatible_with_request` to something that cannot be read as
-    “client FS verified” (e.g. `mapping_matches_request`)?
+## Open questions (cosmetic / naming only)
 
-## Residual freeze items (from second Codex review)
-
-Architecture direction (G+C) may be used for implementation **planning**.
-Close these before treating the document as the coding/API contract:
-
-- [ ] Freeze exact header names, JSON schema, field nullability, versioning.
-- [ ] Freeze canonicalization: lexical `client_root`; **strictly resolved**
-      `daemon_root` (exist + dir); resolved root used for reverse map, persist,
-      and hash; compatibility compares canonical pairs (digest is identity, not
-      comparison authority).
-- [ ] Add describe→start namespace precondition (expected id/receipt) **or**
-      explicitly abandon the pre-start freeze guarantee in Decisions.
-- [ ] Full compatibility matrix: active/active-same, active/active-different,
-      active/no-request-map, inactive/active, inactive/inactive, legacy sessions;
-      whether `request_namespace_id` is always present.
-- [ ] Persist versioned namespace snapshot for **every** new session (including
-      inactive); migrate legacy records conservatively as inactive identity.
-- [ ] Resolve REST/session-read header parsing (all reads that need
-      compatibility) and event/transcript vs wait_result propagation.
-- [ ] **Exclude global maps from MVP** so “no headers ⇒ identity” is
-      unconditional; if reintroduced later, require explicit profile selection.
-- [ ] Resolve scheduler/internal workdir exemption interaction.
-- [ ] Make trusted IDE/user MCP configuration and non-loopback transport
-      requirements **normative** (not “prefer”); state that `namespace_id` is
-      not auth/ownership.
-- [ ] Hermetic tests: partial/duplicate headers, auth-before-parse,
-      canonical-root symlinks, symlink escape, compatibility combinations,
-      legacy records, context propagation, log redaction, internal starts.
+1. Final header spellings (`Agent-Collab-*` vs `X-Agent-Collab-*`).
+2. Final JSON key spellings if bikeshed requires rename (semantics fixed).
+3. Whether to keep both `input_workdir` and `client_workdir` or only
+   `client_workdir` when active.
+4. Exact CLI flag spellings.
+5. Digest encoding string format for `namespace_id`.
 
 ## Acceptance criteria (design phase)
 
-- [x] Preferred shape addresses client-owned topology and multi-client
-      `/workspaces` overlap.
-- [x] Streamable HTTP configuration story without process args.
-- [x] Dual-identity agent contract and skill obligations specified.
-- [x] Security invariants vs allowlist and project trust stated.
-- [x] Global maps demoted; request-scoped client declaration preferred.
-- [x] Codex recommendation incorporated (2026-08-08).
-- [x] Second Codex review of this revised document recorded
-      (`daemon-83bd6f327f0241b9`).
-- [ ] Residual freeze items closed (Approve with changes → coding freeze).
-- [x] Implementation deferred until freeze.
+- [x] Client-owned topology and multi-client overlap addressed.
+- [x] Streamable HTTP without process args.
+- [x] Dual-identity contract + skill obligations.
+- [x] Security vs allowlist and project trust.
+- [x] Global maps out of MVP; no-header identity unconditional.
+- [x] Describe→start expected namespace precondition specified.
+- [x] Canonical root / symlink reverse-map rules specified.
+- [x] Compatibility matrix + persistence + legacy migration specified.
+- [x] Propagation to event/transcript envelopes specified.
+- [x] Internal exemption specified.
+- [x] IDE/token trust normative.
+- [x] Codex recommendation + second review recorded and folded.
+- [x] Implementation still deferred to a tested coding change.
 
 ## Acceptance criteria (implementation phase — draft)
 
-- Hermetic tests listed under MVP phasing.
-- describe/start/status/list/wait_result expose `path_namespace` as designed.
-- Header parse only when both roots present; fail closed on partial/invalid.
-- REST accepts same headers; CLI flags documented.
+- All MVP hermetic tests listed under Phasing.
+- Schema and OpenAPI/MCP tool schemas match Decisions.
 - Skills and mcp-guidance updated.
-- Logging tests: no auth/map header leakage at default level.
+- Config show / docs state: no global path_maps in product.
 
-## Verification (design pass)
+## Verification
 
-- Adversarial design critiques (2026-08-07) — risk analysis retained.
-- Product pushback: daemon must not learn all container layouts (2026-08-08).
-- Independent Codex gpt-5.6-sol high recommendation session
-  `daemon-4924afa840404662` — preferred G+C adopted into this document.
-- Second Codex design review session `daemon-83bd6f327f0241b9` — Approve with
-  changes; residual freeze items recorded.
+- Adversarial critiques 2026-08-07 (risk analysis).
+- Product pushback 2026-08-08 (client owns topology).
+- Codex recommendation `daemon-4924afa840404662`.
+- Codex second review `daemon-83bd6f327f0241b9` (Approve with changes) —
+  blocking items folded into this revision.
 
-## Implementation plan (after design freeze in code review)
+## Implementation plan
 
-1. Define PathNamespaceContext parse (headers + CLI flags).
-2. Shared normalize in describe/start path (MCP + REST).
-3. Session snapshot fields + compatibility on reads.
-4. wait_result includes path_namespace.
-5. Docs, skills, hermetic tests.
-6. No mount auto-discovery; no global-map-primary path.
+1. PathNamespaceContext parse (headers + CLI) with fail-closed partials.
+2. Shared normalize + containment + allowlist ordering.
+3. `expected_namespace_id` on start.
+4. Session snapshot for every session; legacy migrate inactive.
+5. Emit path_namespace on all MVP surfaces including event/transcript
+   envelopes.
+6. Internal exemption wiring.
+7. Docs, skills, tests.
 
 ---
 
 ## Critique log
 
-### 2026-08-07 — three independent adversarial reviews
+### 2026-08-07 — adversarial reviews
 
-**Then-consensus (partially superseded):** dual identity + rewrite good;
-free-form header maps bad for v1; prefer user-config maps; persist dual
-identity; top-level fields; no resolve tool; REST parity.
+Retained risks: dual identity must persist; maps ≠ grants; no transcript
+rewrite; project cannot set policy; wrong map ⇒ wrong project under allowlist.
 
-**What remains valid**
-
-- Dual identity must be a session fact, not only a start ornament.
-- Maps are not permission grants; join/`..`/allowlist discipline required.
-- No transcript rewrite; prefer repo-relative file lists.
-- Project config must not set workdir policy.
-- Bubblewrap wrong-map blast radius is mainly wrong-project execution.
-
-**What is superseded (2026-08-08)**
-
-- “User-config maps only / ban header maps in v1” as the **primary** product
-  answer — conflicts with client-owned topology and multi-client
-  `/workspaces` overlap.
-- “Identity-wins for existing host paths” as a global-map escape hatch —
-  replaced by: no headers ⇒ identity; headers present ⇒ explicit map wins
-  under client_root.
+Superseded: “user-config maps only / ban headers” as primary; ambient
+identity-wins under global maps.
 
 ### 2026-08-08 — product pushback
 
-Live daemon must not know every attaching devcontainer layout. Client should
-declare remapping. Global config maps collide across concurrent clients that
-share client prefixes.
+Daemon must not learn every container layout; client declares remap; global
+maps collide on shared client prefixes.
 
-### 2026-08-08 — Codex gpt-5.6-sol high (session daemon-4924afa840404662)
+### 2026-08-08 — Codex recommendation (`daemon-4924afa840404662`)
 
-**Verdict:** Choose **G + C**. Client instance declares topology on each
-authenticated HTTP request; daemon authoritative on resolved host path;
-return structured dual identity. MVP: one exact client-root ↔ daemon-root
-pair via static Streamable HTTP headers. Supersede global daemon path_maps as
-primary design.
+G+C; request-scoped headers; dual identity; demote global maps; namespace_id;
+wait_result awareness; REST/CLI parity.
 
-**Key points adopted into this document**
+### 2026-08-08 — Codex second review (`daemon-83bd6f327f0241b9`)
 
-- Request-scoped (not connection-scoped) mapping context.
-- Separate Client-Root / Daemon-Root headers for MVP readability.
-- `namespace_id` + `compatible_with_request` for multi-client session safety.
-- When headers present, map wins; require workdir under client_root.
-- path_namespace on wait_result; no transcript rewrite.
-- REST same headers; CLI paired flags; env not the protocol.
-- Reject A/B/D/H-as-primary; F as secondary; E ops-only.
-- Mandatory containment under daemon_root; project never sets maps.
+**Approve with changes** → changes **folded** in this revision:
 
-**Session logs:** `daemon-4924afa840404662` under the global session data
-directory.
+| Blocking item | Folded as |
+| --- | --- |
+| Describe→start freeze | `expected_namespace_id` required when map active |
+| Canonical / symlink roots | lexical client_root; strict resolve daemon_root; reverse-map uses resolved root |
+| Compatibility + persistence | matrix + every-session snapshot + legacy inactive |
+| Propagation | path_namespace on event/transcript envelopes in MVP |
+| Global maps vs no-header identity | global maps out of MVP entirely |
+| IDE token trust | normative security decision 9 / 14 |
+| Internal exemption | dedicated section |
 
-### 2026-08-08 — second Codex review of revised document
-(session `daemon-83bd6f327f0241b9`, gpt-5.6-sol high)
-
-**Overall verdict: Approve with changes.**
-
-G+C is sound and consistent with workdir trust: client declares topology;
-daemon authorizes and executes on resolved daemon path. Direction is sound
-enough for **implementation planning**. Document is **not yet precise enough
-to freeze as the coding/API contract**.
-
-**Blocking issues recorded into residual freeze items**
-
-1. Describe→start freeze not enforced — need `expected_namespace_id`/receipt
-   or drop the pre-start guarantee.
-2. Canonical identity / symlink semantics for `daemon_root` underspecified
-   (return/persist/hash/reverse-map the **resolved** root).
-3. Full compatibility matrix + persistence for inactive and legacy sessions.
-4. Request-context propagation incomplete (session reads, events/transcripts
-   vs wait_result only).
-5. Optional global maps contradict unconditional no-header identity — exclude
-   from MVP.
-6. IDE MCP config trust requirement too soft (“prefer”) — make normative.
-7. Internal/scheduler workdir exemption must be specified, not open.
-
-**Non-blocking**
-
-- Header error codes / duplicate headers; drop or justify `expanduser` on
-  mapped absolute paths; TOCTOU as inherited same-user risk; rename
-  `compatible_with_request`; CLI flags can be a second delivery slice;
-  allowlist-before-project-config ordering is correct.
-
-**Suggested Decision lines (to adopt when closing freeze items)**
-
-- MVP has no global daemon path maps; no headers always means identity.
-- Server strictly resolves `daemon_root`; resolved root + lexical
-  `client_root` form persisted mapping identity.
-- Compatibility = exact equality of canonical mapping pairs; advisory
-  routing only — never auth/ownership.
-- Active mapped start must present describe’s namespace receipt, or fail
-  before project config / provider launch.
-- All new sessions persist versioned namespace snapshot (including inactive).
-- Every authenticated response exposing session paths or provider text
-  carries namespace context, or a mandatory prior lookup is defined.
-- Repository-controlled MCP config must not receive the daemon bearer token
-  without explicit workspace trust.
-
-Logs: `daemon-83bd6f327f0241b9` under the global session data directory.
+Non-blocking nits also folded where cheap: rename to
+`mapping_matches_request`; no expanduser on absolute mapped roots; TOCTOU
+note; header partial/duplicate fail-closed.
