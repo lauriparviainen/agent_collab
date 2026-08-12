@@ -4,8 +4,9 @@ Write-back is the deliberate exception to the lazy in-memory layer — install
 calls it to bring the file on disk forward while preserving user comments and
 formatting. Shape-changing migrations implement a comment-preserving
 counterpart here (the pre-v8 structural rewrite; the v10 antigravity model
-renames); stamp-only steps keep a tomlkit-free regex fallback so a bootstrap
-Python without tomlkit can still finish install.
+renames; the v12 xAI Event Window target ids); stamp-only steps keep a
+tomlkit-free regex fallback so a bootstrap Python without tomlkit can still
+finish install.
 """
 
 from __future__ import annotations
@@ -13,10 +14,11 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, List, Mapping, Optional
 
 from .base import CURRENT_CONFIG_SCHEMA, ConfigMigrationError
 from .v9_to_v10 import _apply_antigravity_model_renames
+from .v11_to_v12 import _apply_xai_event_window_target_renames
 
 
 @dataclass(frozen=True)
@@ -39,8 +41,8 @@ def migrate_user_config_file(path: Path) -> UserConfigWriteBack:
     existing ``schema_version`` value is updated through tomlkit, a missing
     one is prepended as text. Shape-changing migrations implement a
     comment-preserving counterpart here (the pre-v8 structural rewrite; the
-    v10 antigravity model renames) — a future one must do the same before it
-    ships.
+    v10 antigravity model renames; the v12 xAI Event Window target ids) —
+    a future one must do the same before it ships.
     """
 
     path = path.expanduser()
@@ -65,16 +67,17 @@ def migrate_user_config_file(path: Path) -> UserConfigWriteBack:
     atomic_write_private_text(backup_path, text)
     if int(raw_version) < 8:
         # The structural rewrite regenerates agents/backends/workflows from
-        # the fully migrated data, so the v10 model renames ride along for
+        # the fully migrated data, so later shape changes ride along for
         # those sections. Sections it deliberately leaves as original text
-        # (e.g. a hand-added [usage_windows]) still need the rename pass —
-        # otherwise a display-name model would be frozen on disk under the
-        # freshly stamped current version and never migrated again.
-        new_text = _apply_model_renames_to_rendered(
+        # (e.g. a hand-added [usage_windows]) still need the shape-change
+        # pass — otherwise a display-name model or retired Event Window id
+        # would be frozen on disk under the freshly stamped current version
+        # and never migrated again.
+        new_text = _apply_shape_changes_to_rendered(
             _rewrite_backend_first(text, migrated, path), path
         )
     else:
-        new_text = _rewrite_model_renames_and_stamp(text, data, path)
+        new_text = _rewrite_shape_changes_and_stamp(text, data, path)
     atomic_write_private_text(path, new_text)
     return UserConfigWriteBack(
         status="migrated",
@@ -141,45 +144,58 @@ def _rewrite_backend_first(text: str, migrated: Mapping[str, Any], path: Path) -
     return rendered
 
 
-def _apply_model_renames_to_rendered(text: str, path: Path) -> str:
-    """Apply pending antigravity model renames to already-rendered config text.
+def _apply_pending_shape_changes(root: Any, source: str = "") -> List[str]:
+    """Apply every comment-preserving shape change that write-back owns.
+
+    Order matches the in-memory steps: v10 antigravity model names, then v12
+    xAI Event Window target ids. Returns a description per change.
+    """
+
+    descriptions = list(_apply_antigravity_model_renames(root))
+    descriptions.extend(_apply_xai_event_window_target_renames(root, source))
+    return descriptions
+
+
+def _apply_shape_changes_to_rendered(text: str, path: Path) -> str:
+    """Apply pending shape changes to already-rendered config text.
 
     Post-pass for the pre-v8 structural rewrite, whose output can still carry
-    display-name models in sections it keeps as original text. Returns the
-    text unchanged when nothing needs renaming. Callers reach here only via
-    ``_rewrite_backend_first``, which already required tomlkit.
+    display-name models or retired Event Window ids in sections it keeps as
+    original text. Returns the text unchanged when nothing needs rewriting.
+    Callers reach here only via ``_rewrite_backend_first``, which already
+    required tomlkit.
     """
 
     from ..config import load_toml_text
 
     data = load_toml_text(text, source=str(path))
     probe = copy.deepcopy(dict(data))
-    if not _apply_antigravity_model_renames(probe):
+    if not _apply_pending_shape_changes(probe, str(path)):
         return text
     try:
         import tomlkit
     except ImportError:
         raise ConfigMigrationError(
-            f"{path}: migrating antigravity model names to schema v{CURRENT_CONFIG_SCHEMA} "
+            f"{path}: migrating config shape changes to schema v{CURRENT_CONFIG_SCHEMA} "
             "requires tomlkit; install it with: pip install tomlkit"
         ) from None
     document = tomlkit.parse(text)
-    _apply_antigravity_model_renames(document)
+    _apply_pending_shape_changes(document, str(path))
     return tomlkit.dumps(document)
 
 
-def _rewrite_model_renames_and_stamp(text: str, data: Mapping[str, Any], path: Path) -> str:
-    """Write back a v8/v9 config: apply the v10 model renames (if any values
-    need them) and stamp the schema version, preserving comments/formatting.
+def _rewrite_shape_changes_and_stamp(text: str, data: Mapping[str, Any], path: Path) -> str:
+    """Write back a v8+ config: apply pending shape changes (if any) and stamp
+    the schema version, preserving comments/formatting.
 
-    A config with no display-name model values reduces to the plain version
-    stamp (keeping the tomlkit-free bootstrap fallback usable); one that needs
-    renames is a shape change and requires tomlkit, per the write-back
+    A config with no pending shape changes reduces to the plain version stamp
+    (keeping the tomlkit-free bootstrap fallback usable); one that needs
+    rewrites is a shape change and requires tomlkit, per the write-back
     contract in ``migrate_user_config_file``.
     """
 
     probe = copy.deepcopy(dict(data))
-    if not _apply_antigravity_model_renames(probe):
+    if not _apply_pending_shape_changes(probe, str(path)):
         if "schema_version" in data:
             return _stamp_schema_version(text, path)
         return f"schema_version = {CURRENT_CONFIG_SCHEMA}\n\n{text}"
@@ -187,11 +203,11 @@ def _rewrite_model_renames_and_stamp(text: str, data: Mapping[str, Any], path: P
         import tomlkit
     except ImportError:
         raise ConfigMigrationError(
-            f"{path}: migrating antigravity model names to schema v{CURRENT_CONFIG_SCHEMA} "
+            f"{path}: migrating config shape changes to schema v{CURRENT_CONFIG_SCHEMA} "
             "requires tomlkit; install it with: pip install tomlkit"
         ) from None
     document = tomlkit.parse(text)
-    _apply_antigravity_model_renames(document)
+    _apply_pending_shape_changes(document, str(path))
     had_version = "schema_version" in document
     if had_version:
         document["schema_version"] = CURRENT_CONFIG_SCHEMA
@@ -210,8 +226,8 @@ def _stamp_schema_version(text: str, path: Path) -> str:
     is exactly equivalent whenever stamping is the only change needed for this
     file — it lets a bootstrap Python without tomlkit (fresh machine,
     dotfile-carried old config) still complete install. Shape-changing paths
-    (``_rewrite_backend_first``, ``_rewrite_model_renames_and_stamp`` with
-    pending renames) never route here; they require tomlkit outright.
+    (``_rewrite_backend_first``, ``_rewrite_shape_changes_and_stamp`` with
+    pending rewrites) never route here; they require tomlkit outright.
     """
 
     try:

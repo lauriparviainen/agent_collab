@@ -128,7 +128,7 @@ explicitly selected provider cannot run. Behavioral failures return `1`.
 Live tests use cheap, fast defaults because they verify backend transport and
 event fidelity rather than model quality: Claude `sonnet`/low, Codex
 `gpt-5.6-luna`/low, Antigravity `Gemini 3.5 Flash (Low)`, and both xAI
-transports on `grok-4.5`/low. See
+transports on `grok-4.6`/low. See
 `integration_tests/README.md` for environment overrides.
 
 Usage-window unit tests inject the clock, randomness, backend health, and

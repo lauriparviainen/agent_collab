@@ -10,6 +10,7 @@ from agent_collab.config import (
     load_config,
     merge_config_data,
     CollaborationConfig,
+    builtin_config,
     validate_config,
 )
 from agent_collab.config_migrations import (
@@ -744,6 +745,164 @@ class V10AntigravityModelRenameTests(unittest.TestCase):
                 "schema_version = 9\n\n"
                 "[backends.antigravity_cli.options]\n"
                 'model = "Gemini 3.5 Flash (High)"\n'
+            )
+            path = self._write(Path(tmp), text)
+
+            with mock.patch.dict(sys.modules, {"tomlkit": None}):
+                with self.assertRaisesRegex(ConfigMigrationError, "tomlkit"):
+                    migrate_user_config_file(path)
+
+
+class XaiEventWindowTargetMigrationTests(unittest.TestCase):
+    def test_v11_enable_only_xai_targets_are_renamed_and_inherit_packaged_defaults(self):
+        data = {
+            "schema_version": 11,
+            "usage_windows": {
+                "targets": {
+                    "xai_cli_grok_4_5": {"enabled": True},
+                    "xai_sdk_grok_4_5": {"enabled": True},
+                }
+            },
+        }
+
+        with self.assertLogs("agent_collab.config", level="WARNING") as logs:
+            migrated = migrate_config_data(data, source="user.toml")
+
+        self.assertEqual(migrated["schema_version"], CURRENT_CONFIG_SCHEMA)
+        targets = migrated["usage_windows"]["targets"]
+        self.assertNotIn("xai_cli_grok_4_5", targets)
+        self.assertNotIn("xai_sdk_grok_4_5", targets)
+        self.assertEqual(targets["xai_cli_grok_4_6"], {"enabled": True})
+        self.assertEqual(targets["xai_sdk_grok_4_6"], {"enabled": True})
+        self.assertIn("xai_cli_grok_4_5 -> xai_cli_grok_4_6", "\n".join(logs.output))
+
+        config = builtin_config()
+        merge_config_data(config, migrated)
+        validate_config(config)
+        cli = config.usage_windows.targets["xai_cli_grok_4_6"]
+        sdk = config.usage_windows.targets["xai_sdk_grok_4_6"]
+        self.assertTrue(cli.enabled)
+        self.assertEqual((cli.backend, cli.model), ("xai_cli", "grok-4.6"))
+        self.assertEqual(cli.options["thinking_level"], "low")
+        self.assertTrue(sdk.enabled)
+        self.assertEqual((sdk.backend, sdk.model), ("xai_sdk", "grok-4.6"))
+
+    def test_explicit_model_on_old_target_is_preserved(self):
+        data = {
+            "schema_version": 11,
+            "usage_windows": {
+                "targets": {
+                    "xai_cli_grok_4_5": {
+                        "enabled": True,
+                        "model": "grok-4.5",
+                    }
+                }
+            },
+        }
+
+        migrated = migrate_config_data(data)
+        self.assertEqual(
+            migrated["usage_windows"]["targets"]["xai_cli_grok_4_6"]["model"],
+            "grok-4.5",
+        )
+
+        config = builtin_config()
+        merge_config_data(config, migrated)
+        validate_config(config)
+        target = config.usage_windows.targets["xai_cli_grok_4_6"]
+        self.assertEqual(target.model, "grok-4.5")
+
+    def test_conflicting_old_and_new_ids_fail_closed(self):
+        data = {
+            "schema_version": 11,
+            "usage_windows": {
+                "targets": {
+                    "xai_cli_grok_4_5": {"enabled": True},
+                    "xai_cli_grok_4_6": {
+                        "enabled": False,
+                        "backend": "xai_cli",
+                        "model": "grok-4.6",
+                    },
+                }
+            },
+        }
+
+        with self.assertRaisesRegex(ConfigMigrationError, "user.toml.*xai_cli_grok_4_5"):
+            migrate_config_data(data, source="user.toml")
+
+    def test_unrelated_target_ids_pass_through(self):
+        data = {
+            "schema_version": 11,
+            "usage_windows": {
+                "targets": {
+                    "my_xai_target": {
+                        "enabled": True,
+                        "backend": "xai_cli",
+                        "model": "grok-4.5",
+                    }
+                }
+            },
+        }
+
+        migrated = migrate_config_data(data)
+        self.assertEqual(
+            migrated["usage_windows"]["targets"]["my_xai_target"]["model"],
+            "grok-4.5",
+        )
+
+
+class XaiEventWindowTargetWriteBackTests(unittest.TestCase):
+    def _write(self, directory: Path, text: str) -> Path:
+        path = directory / "config.toml"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    @unittest.skipUnless(_tomlkit_available(), "tomlkit is not installed")
+    def test_v11_write_back_renames_targets_preserving_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = (
+                "# my agent-collab config\n"
+                "schema_version = 11\n\n"
+                "# inherit the packaged xAI window\n"
+                "[usage_windows.targets.xai_cli_grok_4_5]\n"
+                "enabled = true\n\n"
+                "[usage_windows.targets.xai_cli_grok_4_5.options]\n"
+                'thinking_level = "low"\n\n'
+                "[daemon]\n"
+                'token = "test-token-value"\n'
+            )
+            path = self._write(Path(tmp), text)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "migrated")
+            self.assertEqual(result.previous_version, 11)
+            self.assertEqual(result.backup_path.read_text(encoding="utf-8"), text)
+            migrated = path.read_text(encoding="utf-8")
+            self.assertIn(f"schema_version = {CURRENT_CONFIG_SCHEMA}", migrated)
+            self.assertIn("[usage_windows.targets.xai_cli_grok_4_6]", migrated)
+            self.assertIn("[usage_windows.targets.xai_cli_grok_4_6.options]", migrated)
+            self.assertNotIn("xai_cli_grok_4_5", migrated)
+            self.assertIn("# my agent-collab config", migrated)
+            self.assertIn("# inherit the packaged xAI window", migrated)
+            self.assertIn('token = "test-token-value"', migrated)
+
+    def test_v11_write_back_without_old_ids_only_stamps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = "schema_version = 11\n\n[backends.claude_cli.options]\nmodel = 'opus'\n"
+            path = self._write(Path(tmp), text)
+
+            result = migrate_user_config_file(path)
+
+            self.assertEqual(result.status, "migrated")
+            migrated = path.read_text(encoding="utf-8")
+            self.assertIn(f"schema_version = {CURRENT_CONFIG_SCHEMA}", migrated)
+            self.assertIn("model = 'opus'", migrated)
+
+    def test_v11_write_back_with_old_ids_requires_tomlkit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = (
+                "schema_version = 11\n\n[usage_windows.targets.xai_cli_grok_4_5]\nenabled = true\n"
             )
             path = self._write(Path(tmp), text)
 

@@ -13,6 +13,16 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-12 - Grok 4.6 xAI default
+
+- Make `grok-4.6` the shipped xAI CLI and SDK default (#59). Static suggestions
+  list `grok-4.6` first and keep `grok-4.5` (plus CLI `grok-composer-2.5-fast`).
+  Packaged Event Window targets become `xai_cli_grok_4_6` / `xai_sdk_grok_4_6`.
+  Schema v12 remaps enable-only leftover tables for the retired ids so they
+  inherit the new packaged model; an explicit `model` on the old table is kept.
+  Both old and new ids in one file fail closed. A user `options.model` override
+  is unchanged.
+
 ## [0.14.0] - 2026-08-12 - macOS LaunchAgent daemon autostart
 
 - Add macOS per-user LaunchAgent daemon autostart with the same enable, status,

@@ -34,8 +34,8 @@ skips exit `0`.
 
 The paid calls default to economical, low-latency settings: Claude `sonnet` with
 low effort, Codex `gpt-5.6-luna` with low reasoning, and Antigravity
-`Gemini 3.5 Flash (Low)`. Both xAI transports use `grok-4.5` with low effort;
-the CLI value matches the default reported by `grok models`. Override models with
+`Gemini 3.5 Flash (Low)`. Both xAI transports use `grok-4.6` with low effort;
+the CLI value matches the shipped xAI default. Override models with
 `AGENT_COLLAB_IT_CLAUDE_MODEL`, `AGENT_COLLAB_IT_CODEX_MODEL`, or
 `AGENT_COLLAB_IT_ANTIGRAVITY_MODEL`, or `AGENT_COLLAB_IT_XAI_MODEL`; override
 Claude/Codex/xAI effort with the

@@ -169,7 +169,7 @@ enabled = true
 [usage_windows.targets.antigravity_cli_flash_low]
 enabled = true
 
-[usage_windows.targets.xai_cli_grok_4_5]
+[usage_windows.targets.xai_cli_grok_4_6]
 enabled = true
 ```
 

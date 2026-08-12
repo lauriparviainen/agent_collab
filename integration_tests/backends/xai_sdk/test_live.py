@@ -25,7 +25,7 @@ class XaiSdkLiveTests(LiveBackendTestCase):
             args=[],
             enabled=True,
             options={},
-            default_options={"model": "grok-4.5", "thinking_level": "high"},
+            default_options={"model": "grok-4.6", "thinking_level": "high"},
         )
 
     def setUp(self):
@@ -46,7 +46,7 @@ class XaiSdkLiveTests(LiveBackendTestCase):
         self.assertEqual(observation.status, "ok")
         self.assertEqual(observation.source, "sdk")
         self.assertTrue(observation.complete)
-        self.assertIn("grok-4.5", observation.models)
+        self.assertIn("grok-4.6", observation.models)
 
     def test_provider_memory_across_stored_response_chain(self):
         from agent_collab.backends.xai_sdk.compat import import_xai_sdk

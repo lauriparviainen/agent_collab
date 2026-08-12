@@ -26,6 +26,7 @@ from agent_collab.config import (
     validate_agent,
     validate_workflow,
 )
+from agent_collab.config_migrations import CURRENT_CONFIG_SCHEMA
 from agent_collab.paths import AgentCollabHome
 
 
@@ -48,7 +49,7 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_file_parses_with_fallback_toml_parser(self):
         data = _parse_toml_subset(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(data["schema_version"], 11)
+        self.assertEqual(data["schema_version"], CURRENT_CONFIG_SCHEMA)
         self.assertNotIn("agents", data)
         self.assertNotIn("backends", data)
         self.assertNotIn("targets", data["usage_windows"])

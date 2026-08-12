@@ -43,11 +43,12 @@ both use the SDK's normal process-environment lookup.
 Event Window target.
 
 Select it with `backend="sdk"`; the shipped normal-session model is
-`grok-4.5`, currently the SDK transport's verified model selection. The schema
+`grok-4.6`, currently the SDK transport's verified model selection (`grok-4.5`
+remains a listed suggestion). The schema
 still requires a model after defaults are resolved, so a custom configuration
 that removes the shipped default must supply one; other provider-supported
 model IDs remain accepted. Normal sessions default to
-`thinking_level=high`; `grok-4.5` also supports `low` and `medium`.
+`thinking_level=high`; `grok-4.6` also supports `low` and `medium`.
 `thinking_level` is the preferred spelling and `reasoning_effort` is an alias;
 one effective `none`, `low`, `medium`, or `high` value maps to
 `chat.create(reasoning_effort=...)`. CLI-only

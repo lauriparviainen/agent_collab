@@ -1,7 +1,7 @@
 # General built-in policy lives here. Backend-specific shipped settings and
 # Event Window targets live in backends/<canonical>/defaults.toml.
 
-schema_version = 11
+schema_version = 12
 
 ##### SYSTEM CONFIG #####
 

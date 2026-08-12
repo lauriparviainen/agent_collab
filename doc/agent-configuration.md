@@ -55,12 +55,12 @@ schema, shared Event Window schedule, system settings, and workflows; backend
 fragments own backend commands, option defaults, and disabled Event Window
 targets. All shipped values remain inspectable without reading Python code.
 
-Config files declare a top-level `schema_version` (currently `11`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. `./agent_collab.sh install` additionally rewrites the user config file on disk to the current schema (see [Migration](#migration-from-the-agents-first-schema)). Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
+Config files declare a top-level `schema_version` (currently `12`; a missing version means `1`). Known old shapes are migrated in memory by `agent_collab/config_migrations.py` before validation; unknown fields are still rejected afterwards. `./agent_collab.sh install` additionally rewrites the user config file on disk to the current schema (see [Migration](#migration-from-the-agents-first-schema)). Inspect the effective merged config with `agent-collab config show --workdir PROJECT`.
 
 ## Example
 
 ```toml
-schema_version = 11
+schema_version = 12
 
 [backends.claude_cli]
 enabled = true
@@ -125,7 +125,7 @@ workflow (it becomes start-eligible once the `grok` CLI is installed; enable an
 opt-in `sdk` backend first if you would rather use one of those):
 
 ```toml
-schema_version = 11
+schema_version = 12
 
 [workflows.triple-review]
 parallel = ["claude_cli", "codex_cli", "xai_cli"]
@@ -552,19 +552,19 @@ on top for that agent; MCP values override both for that session.
 
 `backend_options.xai_cli` accepts `model`, `permission_mode`, `sandbox`,
 `provider_max_turns`, and the reasoning aliases. Its headless defaults are
-`model=grok-4.5`, `thinking_level=high`,
+`model=grok-4.6`, `thinking_level=high`,
 `permission_mode=bypassPermissions`, and
 `sandbox=read-only`: inspection
 commands run without an interactive approval prompt while repository writes
-remain blocked. Its verified model suggestions are `grok-4.5` and
+remain blocked. Its verified model suggestions are `grok-4.6`, `grok-4.5`, and
 `grok-composer-2.5-fast`; other provider-supported model IDs remain accepted.
 `provider_max_turns` maps to Grok's internal model/tool-loop
 limit and is distinct from the top-level agent-collab workflow `max_turns`; it
 has no backend default. `backend_options.xai_sdk` accepts only `model` and the
-reasoning aliases. It also ships `model=grok-4.5` and `thinking_level=high`; a
-session override is optional, and `grok-4.5` is currently its verified model
-suggestion; other provider-supported model IDs remain accepted. Grok 4.5 supports
-`low`, `medium`, and `high`.
+reasoning aliases. It also ships `model=grok-4.6` and `thinking_level=high`; a
+session override is optional, and `grok-4.6` is currently its verified model
+suggestion (`grok-4.5` remains listed); other provider-supported model IDs remain
+accepted. Grok 4.6 supports `low`, `medium`, and `high`.
 The SDK schema also accepts `none` for compatible models. The SDK is remote
 message-only chat and does not provide the local coding/tool behavior of Grok
 Build.
@@ -575,7 +575,7 @@ CLI callers can pass JSON option objects and select a backend:
 agent-collab start --backend-options '{"codex_cli":{"thinking_level":"medium"},"claude_cli":{"model":"opus"}}' "Task"
 agent-collab start --workflow solo --members '{"claude_cli":"antigravity_sdk"}' --backend-options '{"antigravity_sdk":{"model":"Gemini 3.1 Pro (High)"}}' "Task"
 agent-collab start --workflow solo --members '{"claude_cli":"xai_cli"}' "Task"
-agent-collab start --workflow solo --members '{"claude_cli":"xai_sdk"}' --backend-options '{"xai_sdk":{"model":"grok-4.5","thinking_level":"low"}}' "Task"
+agent-collab start --workflow solo --members '{"claude_cli":"xai_sdk"}' --backend-options '{"xai_sdk":{"model":"grok-4.6","thinking_level":"low"}}' "Task"
 ```
 
 The option-to-command mapping is explicit. Unknown option keys are never appended as arbitrary shell flags.
@@ -744,7 +744,7 @@ args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
 # env = { XAI_API_KEY = "xai-your-key-here" }
 
 [backends.xai_cli.options]
-model = "grok-4.5"
+model = "grok-4.6"
 thinking_level = "high"
 permission_mode = "bypassPermissions"
 sandbox = "read-only"
@@ -762,7 +762,7 @@ enabled = true
 env = { XAI_API_KEY = "xai-your-key-here" }
 
 [backends.xai_sdk.options]
-model = "grok-4.5"
+model = "grok-4.6"
 thinking_level = "high"
 ```
 

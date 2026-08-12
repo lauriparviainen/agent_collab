@@ -32,7 +32,7 @@ enabled = true
 [usage_windows.targets.antigravity_cli_flash_low]
 enabled = true
 
-[usage_windows.targets.xai_cli_grok_4_5]
+[usage_windows.targets.xai_cli_grok_4_6]
 enabled = true
 ```
 
@@ -94,8 +94,8 @@ owns only the shared Event Window schedule. The initial target matrix is:
 | `codex_sdk_luna` | `codex_sdk` | `gpt-5.6-luna` |
 | `antigravity_cli_flash_low` | `antigravity_cli` | `Gemini 3.5 Flash (Low)` |
 | `antigravity_sdk_flash_low` | `antigravity_sdk` | `Gemini 3.5 Flash (Low)` |
-| `xai_cli_grok_4_5` | `xai_cli` | `grok-4.5` |
-| `xai_sdk_grok_4_5` | `xai_sdk` | `grok-4.5` |
+| `xai_cli_grok_4_6` | `xai_cli` | `grok-4.6` |
+| `xai_sdk_grok_4_6` | `xai_sdk` | `grok-4.6` |
 
 The packaged target options favor low reasoning and read-only or plan posture
 where each backend supports it. Enabling a target does not enable its backend:
@@ -105,6 +105,15 @@ and credentials must be available.
 Because config merges with the packaged defaults, an inherited target needs
 only `enabled = true`. Do not copy its model or options into your user config
 unless you intend to take ownership of those overrides.
+
+Schema v12 remaps the retired xAI ids `xai_cli_grok_4_5` and
+`xai_sdk_grok_4_5` to `xai_cli_grok_4_6` and `xai_sdk_grok_4_6`. An enable-only
+leftover table keeps working and inherits the new packaged model. An explicit
+`model` on the old table is left unchanged. If both the old and new ids exist
+in the same file, migration fails until one table is removed. `./agent_collab.sh
+install` rewrites the user file; every load also migrates in memory. Leftover
+scheduler state keyed by the old ids is unused; the new ids plan a fresh
+future anchor.
 
 ## Configure the shared schedule
 
@@ -225,7 +234,7 @@ normal session history and transcripts.
 To stop one target, set its inherited override back to false and restart:
 
 ```toml
-[usage_windows.targets.xai_cli_grok_4_5]
+[usage_windows.targets.xai_cli_grok_4_6]
 enabled = false
 ```
 

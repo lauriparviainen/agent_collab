@@ -17,12 +17,11 @@ dependencies cannot be proved.
 disabled Event Window target.
 
 `model`, `permission_mode`, and `sandbox` map to the corresponding Grok flags.
-The shipped normal-session model is `grok-4.5`, matching the default reported
-by the installed Grok CLI's `grok models` catalog; callers can override it with
-the other verified catalog suggestion, `grok-composer-2.5-fast`, or another
-provider-supported model ID. Its shipped
-`thinking_level=high` maps to `--reasoning-effort high`; `grok-4.5` also
-supports `low` and `medium`.
+The shipped normal-session model is `grok-4.6`. Callers can override it with
+`grok-4.5`, the other verified catalog suggestion `grok-composer-2.5-fast`, or
+another provider-supported model ID. Its shipped
+`thinking_level=high` maps to `--reasoning-effort high`; `grok-4.6` also
+supports `low`, `medium`, and model-specific `xhigh`.
 `thinking_level` is preferred; `reasoning_effort` is an alias, and one effective
 value maps to `--reasoning-effort`. Flags are inserted before `-p`/`--single`,
 and the subprocess working directory is used directly without adding `--cwd`.

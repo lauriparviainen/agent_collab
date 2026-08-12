@@ -43,7 +43,9 @@ from agent_collab.options import describe_options
 from agent_collab.paths import GlobalDataPaths
 
 AGY_OUTPUT = "gemini-3.6-flash-high\ngemini-3.6-flash-medium\ngemini-3.5-flash-low\n"
-GROK_OUTPUT = "Available models:\n  * grok-4.5 (default)\n  * grok-composer-2.5-fast\n"
+GROK_OUTPUT = (
+    "Available models:\n  * grok-4.6 (default)\n  * grok-4.5\n  * grok-composer-2.5-fast\n"
+)
 NOW = "2026-07-22T01:00:00+00:00"
 RECENT = "2026-07-22T00:30:00+00:00"
 OLD = "2026-07-20T00:00:00+00:00"  # more than the 24h TTL before NOW
@@ -517,7 +519,7 @@ class DescribeOptionsIntegrationTests(unittest.TestCase):
         self.assertEqual(antigravity["served_from"], "fresh_probe")
         self.assertEqual(antigravity["models"][0], "gemini-3.6-flash-high")
         xai = payload["backends"]["xai_cli"]["model_catalog"]
-        self.assertEqual(xai["models"], ["grok-4.5", "grok-composer-2.5-fast"])
+        self.assertEqual(xai["models"], ["grok-4.6", "grok-4.5", "grok-composer-2.5-fast"])
         # Both canonical defaults are present in their catalogs: no warnings.
         self.assertEqual(xai["reason_codes"], [])
         self.assertEqual(antigravity["reason_codes"], [])

@@ -67,9 +67,9 @@ class BackendQualifiedOptionTests(unittest.TestCase):
         self.assertEqual(validated["codex_cli"]["model"], "gpt-5.6-sol")
 
         defaults = _config().backends
-        self.assertEqual(defaults["xai_cli"].default_options["model"], "grok-4.5")
+        self.assertEqual(defaults["xai_cli"].default_options["model"], "grok-4.6")
         self.assertEqual(defaults["xai_cli"].default_options["thinking_level"], "high")
-        self.assertEqual(defaults["xai_sdk"].default_options["model"], "grok-4.5")
+        self.assertEqual(defaults["xai_sdk"].default_options["model"], "grok-4.6")
         self.assertEqual(defaults["xai_sdk"].default_options["thinking_level"], "high")
 
     def test_cli_and_sdk_options_can_coexist_for_same_provider(self):
@@ -147,8 +147,8 @@ class DescribeOptionsTests(unittest.TestCase):
         self.assertIn("profile", schemas["codex_cli"]["properties"])
         self.assertNotIn("profile", schemas["codex_sdk"]["properties"])
         self.assertEqual(schemas["claude_cli"]["properties"]["model"]["default"], "opus")
-        self.assertEqual(schemas["xai_cli"]["properties"]["model"]["default"], "grok-4.5")
-        self.assertEqual(schemas["xai_sdk"]["properties"]["model"]["default"], "grok-4.5")
+        self.assertEqual(schemas["xai_cli"]["properties"]["model"]["default"], "grok-4.6")
+        self.assertEqual(schemas["xai_sdk"]["properties"]["model"]["default"], "grok-4.6")
 
     def test_backend_health_and_capabilities_remain_discoverable(self):
         payload = describe_options(_config())

@@ -90,7 +90,7 @@ sequence = ["xai_cli"]
         self.assertTrue(schema["model"].inferred)
         self.assertEqual(
             schema["model"].suggested,
-            ("grok-4.5", "grok-composer-2.5-fast"),
+            ("grok-4.6", "grok-4.5", "grok-composer-2.5-fast"),
         )
         self.assertIsNone(schema["model"].allowed)
         self.assertIsNone(schema["sandbox"].allowed)
@@ -98,7 +98,7 @@ sequence = ["xai_cli"]
         self.assertIs(schema["permission_mode"].default, OPTION_UNSET)
         self.assertIs(schema["sandbox"].default, OPTION_UNSET)
         defaults = builtin_config().backends["xai_cli"].default_options
-        self.assertEqual(defaults["model"], "grok-4.5")
+        self.assertEqual(defaults["model"], "grok-4.6")
         self.assertEqual(defaults["thinking_level"], "high")
         self.assertEqual(defaults["permission_mode"], "bypassPermissions")
         self.assertEqual(defaults["sandbox"], "read-only")
@@ -109,7 +109,7 @@ sequence = ["xai_cli"]
         self.assertEqual(
             options,
             {
-                "model": "grok-4.5",
+                "model": "grok-4.6",
                 "permission_mode": "bypassPermissions",
                 "sandbox": "read-only",
                 "thinking_level": "high",
@@ -120,7 +120,7 @@ sequence = ["xai_cli"]
                 self.agent(), {"thinking_level": "low", "reasoning_effort": "low"}
             ),
             {
-                "model": "grok-4.5",
+                "model": "grok-4.6",
                 "permission_mode": "bypassPermissions",
                 "sandbox": "read-only",
                 "thinking_level": "low",
@@ -366,7 +366,10 @@ sequence = ["xai_cli"]
         model_schema = described["backends"]["xai_cli"]["static"]["option_schema"]["properties"][
             "model"
         ]
-        self.assertEqual(model_schema["suggested"], ["grok-4.5", "grok-composer-2.5-fast"])
+        self.assertEqual(
+            model_schema["suggested"],
+            ["grok-4.6", "grok-4.5", "grok-composer-2.5-fast"],
+        )
         self.assertNotIn("allowed", model_schema)
         policy = described["backends"]["xai_cli"]["policy"]
         self.assertTrue(policy["enabled"])

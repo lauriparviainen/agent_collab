@@ -116,7 +116,7 @@ class BuiltinDefaultsCompositionTests(unittest.TestCase):
         self.assertEqual(config.backends["claude_cli"].default_options["model"], "opus")
         self.assertEqual(config.backends["codex_cli"].default_options["sandbox"], "read-only")
         self.assertEqual(config.backends["antigravity_cli"].default_options["mode"], "plan")
-        self.assertEqual(config.backends["xai_cli"].default_options["model"], "grok-4.5")
+        self.assertEqual(config.backends["xai_cli"].default_options["model"], "grok-4.6")
         expected_backends = {
             "antigravity_cli": (
                 "agy",
@@ -148,13 +148,13 @@ class BuiltinDefaultsCompositionTests(unittest.TestCase):
                 "grok",
                 ["--no-auto-update", "--output-format", "streaming-json", "-p"],
                 {
-                    "model": "grok-4.5",
+                    "model": "grok-4.6",
                     "thinking_level": "high",
                     "permission_mode": "bypassPermissions",
                     "sandbox": "read-only",
                 },
             ),
-            "xai_sdk": (None, [], {"model": "grok-4.5", "thinking_level": "high"}),
+            "xai_sdk": (None, [], {"model": "grok-4.6", "thinking_level": "high"}),
         }
         self.assertEqual(
             {
@@ -194,14 +194,14 @@ class BuiltinDefaultsCompositionTests(unittest.TestCase):
                 "gpt-5.6-luna",
                 {"thinking_level": "low", "sandbox": "read-only"},
             ),
-            "xai_cli_grok_4_5": (
+            "xai_cli_grok_4_6": (
                 "xai_cli",
-                "grok-4.5",
+                "grok-4.6",
                 {"thinking_level": "low", "sandbox": "read-only", "provider_max_turns": 1},
             ),
-            "xai_sdk_grok_4_5": (
+            "xai_sdk_grok_4_6": (
                 "xai_sdk",
-                "grok-4.5",
+                "grok-4.6",
                 {"thinking_level": "low"},
             ),
         }

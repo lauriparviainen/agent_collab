@@ -132,7 +132,7 @@ class XaiSdkBackendTests(unittest.TestCase):
             {"model", "thinking_level", "reasoning_effort"},
         )
         model = backend.option_schema(_agent())["model"]
-        self.assertEqual(model.suggested, ("grok-4.5",))
+        self.assertEqual(model.suggested, ("grok-4.6", "grok-4.5"))
         self.assertIsNone(model.allowed)
         self.assertEqual(
             backend.capabilities.to_dict(),
@@ -202,7 +202,7 @@ class XaiSdkBackendTests(unittest.TestCase):
         properties = entry["static"]["option_schema"]["properties"]
         self.assertNotIn("permission_mode", properties)
         self.assertIn("reasoning_effort", properties)
-        self.assertEqual(properties["model"]["suggested"], ["grok-4.5"])
+        self.assertEqual(properties["model"]["suggested"], ["grok-4.6", "grok-4.5"])
         self.assertNotIn("allowed", properties["model"])
 
     def test_fake_response_maps_message_identity_and_closes_stream(self):

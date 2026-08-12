@@ -15,9 +15,9 @@ class XaiCliLiveTests(LiveBackendTestCase):
 
     def requested_options(self):
         options = super().requested_options()
-        # Keep this explicit so the live transport test follows the model
-        # reported by the installed Grok CLI's local catalog.
-        options["model"] = os.environ.get("AGENT_COLLAB_IT_XAI_MODEL", "grok-4.5")
+        # Keep this explicit so the live transport test follows the shipped
+        # xAI model pin; override with AGENT_COLLAB_IT_XAI_MODEL.
+        options["model"] = os.environ.get("AGENT_COLLAB_IT_XAI_MODEL", "grok-4.6")
         return options
 
     def prepare_workdir(self, workdir):

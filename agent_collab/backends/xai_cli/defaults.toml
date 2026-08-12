@@ -8,7 +8,7 @@ command = "grok"
 args = ["--no-auto-update", "--output-format", "streaming-json", "-p"]
 
 [backends.xai_cli.options]
-model = "grok-4.5"
+model = "grok-4.6"
 thinking_level = "high"
 # Inspection commands run without approval prompts while the read-only
 # sandbox blocks repository writes: the sandbox, not the prompt gate, is the
@@ -19,12 +19,12 @@ thinking_level = "high"
 permission_mode = "bypassPermissions"
 sandbox = "read-only"
 
-[usage_windows.targets.xai_cli_grok_4_5]
+[usage_windows.targets.xai_cli_grok_4_6]
 enabled = false
 backend = "xai_cli"
-model = "grok-4.5"
+model = "grok-4.6"
 
-[usage_windows.targets.xai_cli_grok_4_5.options]
+[usage_windows.targets.xai_cli_grok_4_6.options]
 thinking_level = "low"
 sandbox = "read-only"
 provider_max_turns = 1
