@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -145,6 +146,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(outer["support"], "no_local_effects")
             self.assertEqual(outer["enforcement"], "not_applicable_no_local_effects")
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "bubblewrap planning is Linux-only")
     async def test_claude_read_only_dry_run_projects_effective_profile_without_prompt(self):
         from agent_collab.backends.claude_cli import sandbox as claude_sandbox
         from agent_collab.sandbox.bubblewrap import BubblewrapInstallation
@@ -207,6 +209,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(command_event["raw"]["command_preview"], preview)
         self.assertNotIn("PRIVATE CLAUDE DRY RUN PROMPT", str(command_event["raw"]))
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "bubblewrap planning is Linux-only")
     async def test_antigravity_read_only_settings_dry_run_and_command_event_match(self):
         from agent_collab.sandbox.bubblewrap import BubblewrapInstallation
 
@@ -267,6 +270,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(command_event["raw"]["command_preview"], preview)
         self.assertNotIn("PRIVATE ANTIGRAVITY DRY RUN PROMPT", str(command_event["raw"]))
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "bubblewrap planning is Linux-only")
     async def test_xai_read_only_settings_dry_run_and_command_event_match(self):
         from agent_collab.backends.xai_cli import sandbox as xai_sandbox
         from agent_collab.sandbox.bubblewrap import BubblewrapInstallation
