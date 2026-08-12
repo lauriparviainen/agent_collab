@@ -411,7 +411,7 @@ class LaunchdAutostartTests(unittest.TestCase):
         self.assertEqual(snapshot.pid, 4321)
         self.assertEqual(snapshot.command.interpreter, Path("/tmp/venv with spaces/bin/python"))
         self.assertEqual(snapshot.command.port, 9000)
-        self.assertEqual(snapshot.effective_home, Path("/tmp/agent home"))
+        self.assertEqual(snapshot.effective_home, Path("/tmp/agent home").resolve())
 
     def test_launchctl_print_parser_accepts_bare_argument_array_entries(self):
         output = """gui/501/io.github.lauriparviainen.agent-collab = {
@@ -1298,6 +1298,7 @@ class LaunchdAutostartTests(unittest.TestCase):
                 ),
                 mock.patch("agent_collab.daemon_autostart_launchd._set_disabled"),
                 mock.patch("agent_collab.daemon_autostart_launchd._bootout_matching"),
+                mock.patch("agent_collab.daemon_autostart_launchd._wait_for_pid_exit"),
                 mock.patch("agent_collab.daemon_autostart_launchd._launchctl") as launchctl,
                 mock.patch(
                     "agent_collab.daemon_autostart_launchd._wait_for_ready",
@@ -1765,6 +1766,7 @@ class LaunchdAutostartTests(unittest.TestCase):
                 ),
                 mock.patch("agent_collab.daemon_autostart_launchd._set_disabled") as disabled,
                 mock.patch("agent_collab.daemon_autostart_launchd._bootout_matching"),
+                mock.patch("agent_collab.daemon_autostart_launchd._wait_for_pid_exit"),
                 mock.patch(
                     "agent_collab.daemon_autostart_launchd.reserve_server_endpoint",
                     return_value=[],

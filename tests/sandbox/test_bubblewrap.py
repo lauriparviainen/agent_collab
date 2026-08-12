@@ -181,6 +181,7 @@ class SandboxLaunchInputTests(unittest.TestCase):
         self.assertEqual(raised.exception.phase, "launch")
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "pidfd wait is Linux-only")
 class PinnedProcessWaitTests(unittest.IsolatedAsyncioTestCase):
     async def test_wait_requires_every_pidfd_to_signal_exit(self):
         first_read, first_write = os.pipe2(os.O_CLOEXEC)
@@ -379,6 +380,7 @@ class CoverageProofTests(unittest.TestCase):
                 )
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "bubblewrap bootstrap is Linux-only")
 class BootstrapGateTests(unittest.TestCase):
     def _run(self, acknowledge: bool) -> tuple[int, bool]:
         bootstrap = Path(__file__).parents[2] / "agent_collab" / "sandbox" / "bootstrap.py"

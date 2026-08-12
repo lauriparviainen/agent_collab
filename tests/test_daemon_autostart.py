@@ -1998,6 +1998,7 @@ class DaemonAutostartTests(unittest.TestCase):
                     "agent_collab.daemon_autostart_systemd.daemon_status",
                     return_value=DaemonStatus(False, {}, "stopped"),
                 ),
+                mock.patch("agent_collab.daemon_autostart_systemd._pid_alive", return_value=False),
             ):
                 with self.assertRaisesRegex(AutostartError, "--takeover"):
                     disable_autostart(paths=paths, unit_path=unit)

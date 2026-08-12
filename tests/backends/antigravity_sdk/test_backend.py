@@ -993,7 +993,7 @@ class SdkMissingExtraTests(unittest.TestCase):
         self.assertEqual(
             fresh_config,
             {
-                "workspaces": ["/tmp/antigravity-workspace"],
+                "workspaces": [str(Path("/tmp/antigravity-workspace").resolve())],
                 "model": "gemini-test",
                 "vertex": True,
                 "project": "test-project",

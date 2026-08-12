@@ -46,6 +46,11 @@ jobs:
   macos-launchd:
     runs-on: macos-latest
     timeout-minutes: 20
+    env:
+      # macOS exposes /tmp and /var as symlinks into /private. Use the
+      # canonical temp root so path-identity security tests exercise their
+      # intended fixtures instead of rejecting the runner's TMPDIR alias.
+      TMPDIR: /private/tmp
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
