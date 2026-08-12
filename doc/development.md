@@ -95,8 +95,9 @@ a normal non-editable copy of the checkout with the `all` extra (every
 provider SDK, so the `sdk` backends work out of the box), atomically exposes
 the `agent-collab` entry point under `~/.local/bin`, migrates the user config
 to the current schema (with a `config.toml.bak` backup, preserving comments),
-and restarts the daemon if it was running before install — which interrupts
-active sessions. It does not edit shell startup files, never starts a stopped
+and quiesces/restores the daemon if it was running before install — which
+interrupts active sessions and keeps it unavailable for the full package/link/
+config mutation. It does not edit shell startup files, never starts a stopped
 daemon, and never enables autostart. Verbose pip output is captured to
 `~/.agent-collab/install.log` and shown only on failure. For active
 development set `AGENT_COLLAB_INSTALL_EDITABLE=1`; `AGENT_COLLAB_BIN_DIR`
@@ -207,5 +208,18 @@ Before handing back implementation work, run:
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+On macOS, also lint a rendered LaunchAgent and run the credential-free native
+lifecycle smoke from a graphical login session:
+
+```bash
+python3 -m unittest tests.test_daemon_autostart_launchd
+python3 -m scripts.macos_launchd_smoke
+```
+
+The smoke refuses to start if the production label, canonical plist, either
+recovery slot, or a persisted disabled override already exists. Its cleanup
+uses the ordinary identity-checking `autostart disable` command; do not replace
+that with a shell `rm` or a separate check-then-delete trap.
 
 If live smoke is needed, use mock mode first. Real Claude/Codex smoke can be expensive and may need unsandboxed credentials.

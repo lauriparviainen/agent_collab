@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -16,6 +17,25 @@ from agent_collab.user_install import (
     main,
     uninstall_user_command,
 )
+from agent_collab.daemon_service import ManagedServiceIdentity
+from agent_collab.daemon_service import SafeManagedRestoreError
+from agent_collab.daemon_supervisor import DaemonStatus
+from agent_collab.paths import GlobalDataPaths
+
+
+class _AbsentBackend:
+    MANAGER = "systemd"
+
+    def inspect(self, **_kwargs):
+        return ManagedServiceIdentity(
+            "systemd", "absent", False, False, False, False, False, None, None
+        )
+
+
+@contextmanager
+def _isolated_service_transaction(_operation, *, paths=None, interpreter=None):
+    resolved = paths or GlobalDataPaths.resolve()
+    yield _AbsentBackend(), resolved.home / "agent-collab.service", resolved, Path(interpreter)
 
 
 class MigrateUserConfigTests(unittest.TestCase):
@@ -57,6 +77,127 @@ class MigrateUserConfigTests(unittest.TestCase):
 
 
 class UserInstallTests(unittest.TestCase):
+    def test_install_remains_available_without_a_native_autostart_backend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stopped = DaemonStatus(False, {}, "stopped")
+            with (
+                mock.patch("sys.platform", "freebsd"),
+                mock.patch("agent_collab.user_install.install_user_command") as install,
+                mock.patch("agent_collab.user_install._migrate_user_config"),
+                mock.patch("agent_collab.daemon_supervisor.daemon_status", return_value=stopped),
+                mock.patch(
+                    "agent_collab.user_install._check_backend_readiness", return_value=False
+                ),
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}, clear=False),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                code = main(["install", "--repo-root", str(root), "--venv", str(root / "venv")])
+
+            self.assertEqual(code, 0)
+            install.assert_called_once()
+
+    def test_main_install_preserves_nonresolving_venv_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real_parent = root / "real"
+            real_parent.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(real_parent, target_is_directory=True)
+            venv = alias / "venv"
+            with (
+                mock.patch("agent_collab.user_install._install_with_daemon_envelope") as envelope,
+                mock.patch(
+                    "agent_collab.user_install._check_backend_readiness", return_value=False
+                ),
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}, clear=False),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                code = main(["install", "--repo-root", str(root), "--venv", str(venv)])
+
+            self.assertEqual(code, 0)
+            self.assertEqual(envelope.call_args.kwargs["venv_python"], venv / "bin" / "python")
+
+    def test_main_install_refuses_unloaded_same_manager_orphan_before_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            orphan = DaemonStatus(
+                True,
+                {"pid": 321, "manager": "systemd", "home": str(root / "home")},
+                "running",
+            )
+            with (
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=_isolated_service_transaction,
+                ),
+                mock.patch("agent_collab.daemon_supervisor.daemon_status", return_value=orphan),
+                mock.patch("agent_collab.user_install.install_user_command") as install,
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}, clear=False),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+                mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                code = main(["install", "--repo-root", str(root), "--venv", str(root / "venv")])
+
+            self.assertEqual(code, 1)
+            self.assertIn("native target is unloaded", stderr.getvalue())
+            install.assert_not_called()
+
+    def test_main_install_refuses_foreign_registration_shapes_before_mutation(self):
+        cases = {
+            "canonical": ("definition", True, False, None),
+            "active": ("runtime", False, True, 733),
+            "sole-recovery": ("recovery", False, False, None),
+        }
+        for name, (source, installed, loaded, pid) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                paths = GlobalDataPaths.resolve(
+                    env={"AGENT_COLLAB_HOME": str(root / "current-home")}
+                )
+                identity = ManagedServiceIdentity(
+                    "systemd",
+                    source,
+                    True,
+                    False,
+                    installed,
+                    loaded,
+                    installed,
+                    None,
+                    root / "foreign-home",
+                    pid,
+                )
+                backend = mock.Mock(MANAGER="systemd")
+                backend.inspect.return_value = identity
+
+                @contextmanager
+                def transaction(_operation, *, interpreter=None, **_kwargs):
+                    yield backend, root / "agent-collab.service", paths, Path(interpreter)
+
+                with (
+                    mock.patch(
+                        "agent_collab.daemon_autostart.service_transaction",
+                        side_effect=transaction,
+                    ),
+                    mock.patch("agent_collab.user_install.install_user_command") as install,
+                    mock.patch("agent_collab.user_install._migrate_user_config") as migrate,
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "AGENT_COLLAB_HOME": str(paths.home),
+                            "AGENT_COLLAB_BIN_DIR": str(root / "bin"),
+                        },
+                        clear=False,
+                    ),
+                    mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+                ):
+                    code = main(["install", "--repo-root", str(root), "--venv", str(root / "venv")])
+
+                self.assertEqual(code, 1)
+                self.assertIn("belongs to another installation", stderr.getvalue())
+                install.assert_not_called()
+                migrate.assert_not_called()
+
     def test_readiness_helper_runs_through_installed_interpreter(self):
         payload = {"rows": [], "enabled_count": 0, "attention_count": 0}
         completed = subprocess.CompletedProcess(
@@ -277,14 +418,10 @@ class UserInstallTests(unittest.TestCase):
                     "agent_collab.user_install.install_user_command", return_value=link
                 ) as install,
                 mock.patch(
-                    "agent_collab.user_install._probe_daemon",
-                    return_value={
-                        "running": False,
-                        "systemd": False,
-                        "sessions": None,
-                        "state": {},
-                    },
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=_isolated_service_transaction,
                 ),
+                mock.patch("agent_collab.user_install._migrate_user_config"),
                 mock.patch(
                     "agent_collab.user_install._check_backend_readiness", return_value=False
                 ) as readiness,
@@ -305,24 +442,34 @@ class UserInstallTests(unittest.TestCase):
     def test_main_install_restarts_previously_running_daemon(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            probe = {
-                "running": True,
-                "systemd": False,
-                "sessions": 2,
-                "state": {"host": "127.0.0.1", "port": 8765, "default_workdir": None},
-            }
+            daemon = DaemonStatus(
+                True,
+                {
+                    "pid": 123,
+                    "manager": "detached",
+                    "host": "127.0.0.1",
+                    "port": 8765,
+                    "default_workdir": None,
+                },
+                "running",
+            )
             with (
                 mock.patch(
                     "agent_collab.user_install.install_user_command",
                     return_value=root / "bin" / "agent-collab",
                 ),
-                mock.patch("agent_collab.user_install._probe_daemon", return_value=probe),
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=_isolated_service_transaction,
+                ),
                 mock.patch("agent_collab.user_install._migrate_user_config"),
                 mock.patch(
                     "agent_collab.user_install._check_backend_readiness", return_value=False
                 ) as readiness,
                 mock.patch("agent_collab.daemon_supervisor.stop_daemon") as stop,
                 mock.patch("agent_collab.daemon_supervisor.start_daemon") as start,
+                mock.patch("agent_collab.daemon_supervisor.daemon_status", return_value=daemon),
+                mock.patch("agent_collab.daemon_supervisor.count_running_sessions", return_value=2),
                 mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root)}, clear=False),
                 mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
             ):
@@ -331,17 +478,131 @@ class UserInstallTests(unittest.TestCase):
                 )
 
             self.assertEqual(code, 0)
-            stop.assert_called_once()
+            stop.assert_called_once_with(mock.ANY, _lifecycle_locked=True)
             start.assert_called_once_with(
+                mock.ANY,
                 host="127.0.0.1",
                 port=8765,
                 default_workdir=None,
                 interpreter=(root / "venv" / "bin" / "python"),
+                _lifecycle_locked=True,
             )
             readiness.assert_called_once_with(root / "venv" / "bin" / "python")
             output = stdout.getvalue()
-            self.assertIn("interrupting 2 active sessions", output)
+            self.assertIn("interrupt 2 active sessions", output)
             self.assertIn("✓ Daemon restarted", output)
+
+    def test_managed_restore_failure_blocks_detached_daemon_restore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = GlobalDataPaths.resolve(env={"AGENT_COLLAB_HOME": str(root / "home")})
+            detached = DaemonStatus(
+                True,
+                {"pid": 123, "manager": "detached", "host": "127.0.0.1", "port": 8765},
+                "running",
+            )
+            identity = ManagedServiceIdentity(
+                "systemd", "definition", True, True, True, False, True, None, paths.home
+            )
+            backend = mock.Mock(MANAGER="systemd")
+            backend.inspect.return_value = identity
+
+            @contextmanager
+            def transaction(_operation, *, interpreter=None, **_kwargs):
+                yield backend, root / "agent-collab.service", paths, Path(interpreter)
+
+            with (
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=transaction,
+                ),
+                mock.patch(
+                    "agent_collab.daemon_autostart.quiesce_for_install_locked",
+                    return_value={"owned": True, "installed": True, "running": False},
+                ),
+                mock.patch(
+                    "agent_collab.daemon_autostart.restore_after_install_locked",
+                    side_effect=RuntimeError("managed cleanup unproven"),
+                ),
+                mock.patch(
+                    "agent_collab.user_install.install_user_command",
+                    return_value=root / "bin" / "agent-collab",
+                ),
+                mock.patch("agent_collab.user_install._migrate_user_config"),
+                mock.patch("agent_collab.daemon_supervisor.daemon_status", return_value=detached),
+                mock.patch("agent_collab.daemon_supervisor.stop_daemon"),
+                mock.patch("agent_collab.daemon_supervisor.start_daemon") as start,
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "AGENT_COLLAB_HOME": str(paths.home),
+                        "AGENT_COLLAB_BIN_DIR": str(root / "bin"),
+                    },
+                    clear=False,
+                ),
+                mock.patch("sys.stderr", new_callable=io.StringIO),
+            ):
+                code = main(
+                    ["install", "--repo-root", str(root / "repo"), "--venv", str(root / "venv")]
+                )
+
+            self.assertEqual(code, 1)
+            start.assert_not_called()
+
+    def test_safe_managed_restore_failure_allows_detached_daemon_restore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = GlobalDataPaths.resolve(env={"AGENT_COLLAB_HOME": str(root / "home")})
+            detached = DaemonStatus(
+                True,
+                {"pid": 123, "manager": "detached", "host": "127.0.0.1", "port": 8765},
+                "running",
+            )
+            backend = mock.Mock(MANAGER="systemd")
+            backend.inspect.return_value = ManagedServiceIdentity(
+                "systemd", "definition", True, True, True, False, True, None, paths.home
+            )
+
+            @contextmanager
+            def transaction(_operation, *, interpreter=None, **_kwargs):
+                yield backend, root / "agent-collab.service", paths, Path(interpreter)
+
+            with (
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction", side_effect=transaction
+                ),
+                mock.patch(
+                    "agent_collab.daemon_autostart.quiesce_for_install_locked",
+                    return_value={"owned": True, "installed": True, "running": False},
+                ),
+                mock.patch(
+                    "agent_collab.daemon_autostart.restore_after_install_locked",
+                    side_effect=SafeManagedRestoreError("managed residual safe"),
+                ),
+                mock.patch(
+                    "agent_collab.user_install.install_user_command",
+                    return_value=root / "bin" / "agent-collab",
+                ),
+                mock.patch("agent_collab.user_install._migrate_user_config"),
+                mock.patch("agent_collab.daemon_supervisor.daemon_status", return_value=detached),
+                mock.patch("agent_collab.daemon_supervisor.stop_daemon"),
+                mock.patch("agent_collab.daemon_supervisor.start_daemon") as start,
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "AGENT_COLLAB_HOME": str(paths.home),
+                        "AGENT_COLLAB_BIN_DIR": str(root / "bin"),
+                    },
+                    clear=False,
+                ),
+                mock.patch("sys.stderr", new_callable=io.StringIO),
+            ):
+                code = main(
+                    ["install", "--repo-root", str(root / "repo"), "--venv", str(root / "venv")]
+                )
+
+            self.assertEqual(code, 1)
+            start.assert_called_once()
 
     def test_main_install_keeps_unready_backends_nonfatal(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -352,16 +613,12 @@ class UserInstallTests(unittest.TestCase):
                     return_value=root / "bin" / "agent-collab",
                 ),
                 mock.patch(
-                    "agent_collab.user_install._probe_daemon",
-                    return_value={
-                        "running": False,
-                        "systemd": False,
-                        "sessions": None,
-                        "state": {},
-                    },
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=_isolated_service_transaction,
                 ),
                 mock.patch("agent_collab.user_install._migrate_user_config"),
                 mock.patch("agent_collab.user_install._check_backend_readiness", return_value=True),
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}, clear=False),
                 mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
             ):
                 code = main(
@@ -377,25 +634,45 @@ class UserInstallTests(unittest.TestCase):
         self.assertNotIn("! Warning: Install complete", output)
 
     def test_main_reports_fatal_errors_with_error_prefix(self):
-        with (
-            mock.patch(
-                "agent_collab.user_install._probe_daemon",
-                return_value={"running": False, "systemd": False, "sessions": None, "state": {}},
-            ),
-            mock.patch(
-                "agent_collab.user_install.install_user_command",
-                side_effect=UserInstallError("pip exploded"),
-            ),
-            mock.patch("sys.stdout", new_callable=io.StringIO),
-            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
-        ):
-            code = main(["install", "--repo-root", "/tmp/repo", "--venv", "/tmp/venv"])
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=_isolated_service_transaction,
+                ),
+                mock.patch(
+                    "agent_collab.user_install.install_user_command",
+                    side_effect=UserInstallError("pip exploded"),
+                ),
+                mock.patch.dict(
+                    os.environ, {"AGENT_COLLAB_HOME": str(Path(tmp) / "home")}, clear=False
+                ),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+                mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                code = main(["install", "--repo-root", "/tmp/repo", "--venv", "/tmp/venv"])
 
         self.assertEqual(code, 1)
         self.assertIn("Error: pip exploded", stderr.getvalue())
 
 
 class UserUninstallTests(unittest.TestCase):
+    def test_uninstall_remains_available_without_a_native_autostart_backend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            venv = root / "venv"
+            (venv / "bin").mkdir(parents=True)
+            stopped = DaemonStatus(False, {}, "stopped")
+            with (
+                mock.patch("sys.platform", "freebsd"),
+                mock.patch("agent_collab.daemon_supervisor.daemon_status", return_value=stopped),
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}, clear=False),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                uninstall_user_command(venv=venv, bin_dir=root / "bin")
+
+            self.assertFalse(venv.exists())
+
     def test_uninstall_removes_venv_and_owned_link_keeps_home_data(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -412,7 +689,11 @@ class UserUninstallTests(unittest.TestCase):
             (home / "config.toml").write_text("schema_version = 6\n", encoding="utf-8")
 
             with (
-                mock.patch("agent_collab.user_install._teardown_daemon") as teardown,
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=_isolated_service_transaction,
+                ),
+                mock.patch("agent_collab.user_install._teardown_daemon_locked") as teardown,
                 mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}, clear=False),
                 mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
             ):
@@ -438,7 +719,11 @@ class UserUninstallTests(unittest.TestCase):
             command.write_text("unrelated\n", encoding="utf-8")
 
             with (
-                mock.patch("agent_collab.user_install._teardown_daemon"),
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=_isolated_service_transaction,
+                ),
+                mock.patch("agent_collab.user_install._teardown_daemon_locked"),
                 mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}, clear=False),
                 mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
             ):
@@ -457,8 +742,12 @@ class UserUninstallTests(unittest.TestCase):
 
             with (
                 mock.patch(
-                    "agent_collab.user_install._teardown_daemon",
+                    "agent_collab.user_install._teardown_daemon_locked",
                     side_effect=UserInstallError("systemd said no"),
+                ),
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=_isolated_service_transaction,
                 ),
                 mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}, clear=False),
                 mock.patch("sys.stdout", new_callable=io.StringIO),
@@ -468,11 +757,162 @@ class UserUninstallTests(unittest.TestCase):
 
             self.assertTrue(venv.exists())
 
+    def test_uninstall_refuses_foreign_registration_shapes_before_venv_or_link_removal(self):
+        cases = {
+            "canonical": ("definition", True, False, None),
+            "active": ("runtime", False, True, 733),
+            "sole-recovery": ("recovery", False, False, None),
+        }
+        for name, (source, installed, loaded, pid) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                paths = GlobalDataPaths.resolve(
+                    env={"AGENT_COLLAB_HOME": str(root / "current-home")}
+                )
+                venv = root / "venv"
+                entrypoint = venv / "bin" / "agent-collab"
+                entrypoint.parent.mkdir(parents=True)
+                entrypoint.touch()
+                bin_dir = root / "bin"
+                bin_dir.mkdir()
+                link = bin_dir / "agent-collab"
+                link.symlink_to(entrypoint)
+                identity = ManagedServiceIdentity(
+                    "systemd",
+                    source,
+                    True,
+                    False,
+                    installed,
+                    loaded,
+                    installed,
+                    None,
+                    root / "foreign-home",
+                    pid,
+                )
+                backend = mock.Mock(MANAGER="systemd")
+                backend.inspect.return_value = identity
+
+                @contextmanager
+                def transaction(_operation, *, interpreter=None, **_kwargs):
+                    yield backend, root / "agent-collab.service", paths, Path(interpreter)
+
+                with (
+                    mock.patch(
+                        "agent_collab.daemon_autostart.service_transaction",
+                        side_effect=transaction,
+                    ),
+                    mock.patch.dict(
+                        os.environ, {"AGENT_COLLAB_HOME": str(paths.home)}, clear=False
+                    ),
+                    mock.patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    with self.assertRaisesRegex(UserInstallError, "another installation"):
+                        uninstall_user_command(venv=venv, bin_dir=bin_dir)
+
+                self.assertTrue(venv.exists())
+                self.assertTrue(os.path.lexists(link))
+                backend.disable_autostart.assert_not_called()
+
+    def test_uninstall_current_canonical_preserves_reported_foreign_recovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = GlobalDataPaths.resolve(env={"AGENT_COLLAB_HOME": str(root / "current-home")})
+            venv = root / "venv"
+            (venv / "bin").mkdir(parents=True)
+            foreign_recovery = root / "agent-collab.service.agent-collab-recovery"
+            foreign_recovery.write_text("foreign recovery\n", encoding="utf-8")
+            identity = ManagedServiceIdentity(
+                "systemd",
+                "definition+recovery",
+                True,
+                True,
+                True,
+                False,
+                True,
+                None,
+                paths.home,
+                detail=f"preserved foreign recovery at {foreign_recovery}",
+            )
+            backend = mock.Mock(MANAGER="systemd")
+            backend.inspect.return_value = identity
+
+            @contextmanager
+            def transaction(_operation, *, interpreter=None, **_kwargs):
+                yield backend, root / "agent-collab.service", paths, Path(interpreter)
+
+            with (
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction", side_effect=transaction
+                ),
+                mock.patch(
+                    "agent_collab.daemon_supervisor.daemon_status",
+                    return_value=DaemonStatus(False, {}, "stopped"),
+                ),
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(paths.home)}, clear=False),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                uninstall_user_command(venv=venv, bin_dir=root / "bin")
+
+            self.assertFalse(venv.exists())
+            self.assertEqual(foreign_recovery.read_text(encoding="utf-8"), "foreign recovery\n")
+            backend.disable_autostart.assert_called_once()
+
+    def test_uninstall_refuses_unattributable_loaded_native_target_before_venv_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            venv = root / "venv"
+            interpreter = venv / "bin" / "python"
+            interpreter.parent.mkdir(parents=True)
+            interpreter.touch()
+            definition = root / "agent-collab.service"
+
+            class CollisionBackend:
+                MANAGER = "systemd"
+
+                @staticmethod
+                def inspect(**_kwargs):
+                    return ManagedServiceIdentity(
+                        "systemd",
+                        "process-collision",
+                        False,
+                        False,
+                        False,
+                        True,
+                        False,
+                        None,
+                        None,
+                        733,
+                    )
+
+            @contextmanager
+            def collision_transaction(_operation, *, paths=None, interpreter=None):
+                resolved = paths or GlobalDataPaths.resolve(
+                    {"AGENT_COLLAB_HOME": str(root / "home")}
+                )
+                yield CollisionBackend(), definition, resolved, Path(interpreter)
+
+            with (
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=collision_transaction,
+                ),
+                mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}, clear=False),
+                mock.patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                with self.assertRaisesRegex(UserInstallError, "cannot be attributed"):
+                    uninstall_user_command(venv=venv, bin_dir=root / "bin")
+
+            self.assertTrue(interpreter.exists())
+
     def test_uninstall_is_safe_when_nothing_is_installed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with (
-                mock.patch("agent_collab.user_install._teardown_daemon"),
+                mock.patch(
+                    "agent_collab.daemon_autostart.service_transaction",
+                    side_effect=_isolated_service_transaction,
+                ),
+                mock.patch("agent_collab.user_install._teardown_daemon_locked"),
                 mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}, clear=False),
                 mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
             ):

@@ -25,6 +25,7 @@ from .api_schema import (
     API_VERSION_HEADER,
     ROUTES,
     AgentAnswerModel,
+    DaemonReadinessModel,
     ErrorModel,
     EventBatchModel,
     EventModel,
@@ -54,6 +55,7 @@ HTTP_API_PATH = DOC_DIR / "http-api.md"
 
 _MODELS = (
     HealthModel,
+    DaemonReadinessModel,
     SessionStateModel,
     SessionListModel,
     EventModel,
@@ -90,6 +92,8 @@ _FIELD_SCHEMAS: Dict[Tuple[type, str], Dict[str, Any]] = {
     (HealthModel, "status"): {"const": "ok"},
     (HealthModel, "sessions"): {"minimum": 0},
     (HealthModel, "api_version"): {"const": API_VERSION},
+    (DaemonReadinessModel, "pid"): {"minimum": 1},
+    (DaemonReadinessModel, "manager"): {"enum": ["detached", "systemd", "launchd"]},
     (SessionStateModel, "status"): {
         "enum": ["running", "awaiting_input", "done", "failed", "stopped", "interrupted"]
     },
@@ -303,6 +307,7 @@ def _operation(route: Any) -> Dict[str, Any]:
 def _summary(route: Any) -> str:
     names = {
         "health": "Read daemon liveness and API version",
+        "ready": "Read authenticated process-bound daemon readiness",
         "options": "Describe workdir-scoped runtime options",
         "start_session": "Start a collaboration session",
         "list_sessions": "List daemon sessions",

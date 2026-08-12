@@ -9,6 +9,7 @@ All operations except `GET /health` require the per-daemon Bearer token. `/optio
 | Method | Path | Authentication | Request | Response |
 | --- | --- | --- | --- | --- |
 | `GET` | `/health` | open | — | HealthModel |
+| `GET` | `/ready` | Bearer | — | DaemonReadinessModel |
 | `POST` | `/options` | Bearer | OptionsRequestModel | runtime object |
 | `GET` | `/options` | Bearer | OptionsRequestModel | runtime object |
 | `POST` | `/sessions` | Bearer | StartSessionRequestModel | SessionStateModel |
@@ -32,6 +33,15 @@ Read daemon liveness and API version
 - Authentication: none
 - Request model: none
 - Response model: `HealthModel`
+
+### GET `/ready`
+
+Read authenticated process-bound daemon readiness
+
+- Operation ID: `ready_get`
+- Authentication: Bearer token
+- Request model: none
+- Response model: `DaemonReadinessModel`
 
 ### POST `/options`
 

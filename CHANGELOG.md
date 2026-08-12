@@ -13,6 +13,15 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-12 - macOS LaunchAgent daemon autostart
+
+- Add macOS per-user LaunchAgent daemon autostart with the same enable, status,
+  disable, and ordinary lifecycle commands used by Linux systemd. Native
+  process-bound readiness, cross-home takeover safeguards, lifecycle and
+  registration locks, non-loadable rollback recovery, and quiesced
+  install/uninstall handling preserve daemon data and prevent competing
+  registrations (#58).
+
 ## [0.13.2] - 2026-08-07 - Grok CLI end_turn success classification
 
 - Treat current Grok streaming-json `stopReason=end_turn` as a successful

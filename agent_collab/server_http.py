@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import hmac
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -12,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 from .api_schema import (
     API_VERSION,
     API_VERSION_HEADER,
+    DaemonReadinessModel,
     GetSessionRequestModel,
     HealthModel,
     OptionsRequestModel,
@@ -74,7 +76,10 @@ class AgentCollabHttpServer:
         sessions_config: Optional[SessionsConfig] = None,
         daemon_config: Optional[CollaborationConfig] = None,
         data_paths: Optional[GlobalDataPaths] = None,
+        runtime_manager: str = "detached",
     ):
+        if runtime_manager not in {"detached", "systemd", "launchd"}:
+            raise ValueError(f"invalid daemon runtime manager: {runtime_manager!r}")
         owns_manager = manager is None
         self.manager = manager or SessionManager(
             lifecycle_logger=self._log,
@@ -91,6 +96,7 @@ class AgentCollabHttpServer:
             daemon_config.sessions if daemon_config is not None else SessionsConfig()
         )
         self.data_paths = data_paths or GlobalDataPaths.resolve()
+        self.runtime_manager = runtime_manager
         # Seconds between scheduled retention runs; tests shrink this.
         self._retention_interval_seconds = float(self.sessions_config.cleanup_interval_hours * 3600)
 
@@ -326,10 +332,9 @@ class AgentCollabHttpServer:
 
     def _authorize(self, method: str, path: str, headers: Dict[str, str]) -> None:
         # Intentional asymmetry: GET /health alone bypasses auth so liveness
-        # checks work without the token, while the supervisor's readiness
-        # probe deliberately uses the authenticated /sessions endpoint to
-        # prove token auth end-to-end. Do not "simplify" the probe to /health
-        # — that would stop verifying the token path at startup.
+        # checks work without the token, while lifecycle readiness deliberately
+        # uses authenticated /ready to prove token auth plus immutable serving
+        # PID/manager identity. Do not "simplify" that probe to /health.
         if self.auth_token is None or (method == "GET" and path == "/health"):
             return
         authorization = headers.get("authorization", "")
@@ -349,6 +354,15 @@ class AgentCollabHttpServer:
             status="ok",
             sessions=len(self.manager.list_sessions()),
             api_version=API_VERSION,
+        ).to_dict()
+
+    async def _route_ready(
+        self, _route: Route, _path: Dict[str, str], _query: Dict[str, str], _body: bytes
+    ) -> Any:
+        from . import __version__
+
+        return DaemonReadinessModel(
+            pid=os.getpid(), manager=self.runtime_manager, version=__version__
         ).to_dict()
 
     async def _route_options(
@@ -653,7 +667,10 @@ def run_server(
     *,
     default_workdir: Path = Path("."),
     session_log_dir: Optional[Path] = None,
+    manager: str = "detached",
 ) -> None:
+    if manager not in {"detached", "systemd", "launchd"}:
+        raise ValueError(f"invalid daemon runtime manager: {manager!r}")
     from .config import ensure_daemon_token
 
     paths = GlobalDataPaths.resolve()
@@ -673,5 +690,6 @@ def run_server(
             auth_token=token,
             daemon_config=daemon_policy,
             data_paths=paths,
+            runtime_manager=manager,
         ).serve(host, port)
     )

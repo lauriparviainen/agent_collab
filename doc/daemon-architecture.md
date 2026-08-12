@@ -236,27 +236,36 @@ agent-collab stop SESSION_ID
 agent-collab config show --workdir /repo
 ```
 
-### Linux user-service ownership
+### Native user-service ownership
 
-`daemon autostart enable` installs a generated systemd user unit and starts it
-immediately. The unit runs the internal foreground `agent-collab daemon run`
-entry point; it never wraps `daemon start`, because that path already detaches a
-child. Runtime state records `manager = "systemd"`, but systemd and the
-authenticated readiness probe are authoritative for the managed process.
+`daemon autostart enable` installs a generated systemd user unit on Linux or a
+per-user LaunchAgent on macOS and starts it immediately. The definition runs
+the internal foreground `agent-collab daemon run` entry point with a closed
+`systemd|launchd` owner identity; it never wraps `daemon start`, because that
+path already detaches a child. Runtime state records the manager, while native
+process evidence plus authenticated `GET /ready` PID/manager identity are
+authoritative for readiness.
 
-While the generated unit is installed, the ordinary `daemon start`, `stop`,
-and `restart` commands delegate to `systemctl --user`. This prevents raw PID
-signals from fighting systemd's restart policy and prevents a detached daemon
-from competing for the same port. The managed foreground process redirects to
-the same owner-only daemon log files used by the detached supervisor, so
-`daemon logs` keeps one contract.
+While a current-home-owned definition is installed (or attributable live native
+state survives external definition removal), ordinary `daemon start`, `stop`,
+and `restart` delegate to the selected manager. This prevents raw PID signals
+from fighting restart policy and prevents a detached daemon from competing for
+the same endpoint. The managed foreground process redirects to the same
+owner-only daemon logs used by the detached supervisor.
 
-The unit records the absolute installed Python interpreter and a snapshot of
-PATH for provider CLI discovery. It never records the daemon token, provider
-keys, or the rest of the caller's environment. Re-running `autostart enable`
-refreshes a stale interpreter or PATH. The registration targets
-`default.target`, which starts with the user's login session; boot-before-login
-requires the user to opt into systemd lingering separately.
+Definitions record the durable Python interpreter, canonical agent-collab home,
+and a PATH snapshot for provider discovery. They never record daemon/provider
+tokens or the rest of the caller environment. Re-running enable refreshes a
+stale definition without restarting an unchanged healthy job. systemd targets
+`default.target`; launchd targets `gui/<uid>` with `RunAtLoad` and
+restart-on-failure intent. launchd throttles repeated failures but does not have
+systemd's bounded burst-stop policy, so a crash loop remains periodically
+retried until disabled or fixed.
+
+Every mutating lifecycle/install/uninstall operation holds an owner-home
+lifecycle lock and then the fixed OS-account manager-registration lock through
+discovery, readiness, and rollback. A different `AGENT_COLLAB_HOME` can inspect
+the global registration but cannot mutate it without explicit `--takeover`.
 
 `watch` also supports direct file watching:
 

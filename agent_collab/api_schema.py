@@ -178,6 +178,31 @@ class HealthModel:
 
 
 @dataclass
+class DaemonReadinessModel:
+    """``GET /ready`` — authenticated process-bound daemon readiness."""
+
+    pid: int
+    manager: str
+    version: str
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DaemonReadinessModel":
+        pid = int(data["pid"])
+        manager = str(data["manager"])
+        version = str(data["version"])
+        if pid <= 0:
+            raise ValueError("pid must be positive")
+        if manager not in {"detached", "systemd", "launchd"}:
+            raise ValueError(f"invalid daemon manager: {manager!r}")
+        if not version:
+            raise ValueError("version must not be empty")
+        return cls(pid=pid, manager=manager, version=version)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"pid": self.pid, "manager": self.manager, "version": self.version}
+
+
+@dataclass
 class SessionStateModel:
     """A daemon session's state; mirrors ``daemon.SessionState.to_dict()``.
 
@@ -1018,6 +1043,7 @@ class Route:
 # client method, so a route silently losing its client method is caught.
 ROUTES: Tuple[Route, ...] = (
     Route("GET", "/health", "health", "health", None, HealthModel),
+    Route("GET", "/ready", "ready", None, None, DaemonReadinessModel),
     Route(
         "POST",
         "/options",
@@ -1106,7 +1132,7 @@ ROUTES: Tuple[Route, ...] = (
 # REST routes that legitimately have no typed-client method (server/manual-curl
 # only). The contract test pins this exactly, so any *other* route missing its
 # client method fails.
-SERVER_ONLY_ROUTES: Tuple[Tuple[str, str], ...] = (("GET", "/options"),)
+SERVER_ONLY_ROUTES: Tuple[Tuple[str, str], ...] = (("GET", "/ready"), ("GET", "/options"))
 
 
 __all__ = [
@@ -1114,6 +1140,7 @@ __all__ = [
     "API_VERSION_HEADER",
     "NON_USER_START_FIELDS",
     "HealthModel",
+    "DaemonReadinessModel",
     "SessionStateModel",
     "SessionListModel",
     "EventModel",

@@ -25,6 +25,7 @@ from agent_collab.api_schema import (
     ROUTES,
     SERVER_ONLY_ROUTES,
     AgentAnswerModel,
+    DaemonReadinessModel,
     EventBatchModel,
     EventModel,
     ErrorModel,
@@ -225,6 +226,14 @@ class ModelRoundTripTests(unittest.TestCase):
     def test_health_round_trips_with_version(self):
         payload = {"status": "ok", "sessions": 0, "api_version": api_schema.API_VERSION}
         self.assertEqual(HealthModel.from_dict(payload).to_dict(), payload)
+
+    def test_daemon_readiness_round_trips_and_validates_closed_manager_set(self):
+        payload = {"pid": 123, "manager": "launchd", "version": "0.8.0"}
+        self.assertEqual(DaemonReadinessModel.from_dict(payload).to_dict(), payload)
+        with self.assertRaisesRegex(ValueError, "invalid daemon manager"):
+            DaemonReadinessModel.from_dict({**payload, "manager": "mystery"})
+        with self.assertRaisesRegex(ValueError, "pid must be positive"):
+            DaemonReadinessModel.from_dict({**payload, "pid": 0})
 
     def test_error_envelopes_round_trip(self):
         message_only = {"error": "not found: GET /nope"}
@@ -543,6 +552,10 @@ class LiveWireFidelityTests(unittest.IsolatedAsyncioTestCase):
 
                 health = await server._dispatch("GET", "/health", {}, b"")
                 self.assertEqual(HealthModel.from_dict(health).to_dict(), health)
+
+                ready = await server._dispatch("GET", "/ready", {}, b"")
+                self.assertEqual(DaemonReadinessModel.from_dict(ready).to_dict(), ready)
+                self.assertEqual(ready["manager"], "detached")
 
                 options_body = json.dumps({"workdir": str(root)}).encode("utf-8")
                 options = await server._dispatch("POST", "/options", {}, options_body)

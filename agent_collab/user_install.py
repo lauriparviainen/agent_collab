@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 from . import __version__
 from .cli_output import error, info, ok, print_kv, print_table, step, warn
+from .daemon_service import SafeManagedRestoreError
 
 
 class UserInstallError(RuntimeError):
@@ -305,58 +306,6 @@ def _ensure_daemon_token(config_path: Path) -> None:
     ok("Added a daemon token to the user config")
 
 
-def _probe_daemon() -> Dict[str, Any]:
-    """Snapshot daemon state before install; never fails the install."""
-
-    probe: Dict[str, Any] = {"running": False, "systemd": False, "sessions": None, "state": {}}
-    try:
-        from .daemon_supervisor import count_running_sessions, daemon_status
-
-        status = daemon_status()
-    except Exception:
-        return probe
-    if not status.running:
-        return probe
-    probe["running"] = True
-    probe["systemd"] = status.state.get("manager") == "systemd"
-    probe["state"] = dict(status.state)
-    probe["sessions"] = count_running_sessions(status.state)
-    return probe
-
-
-def _restart_daemon(probe: Dict[str, Any], venv_python: Path) -> None:
-    sessions = probe.get("sessions")
-    suffix = ""
-    if sessions:
-        plural = "s" if sessions != 1 else ""
-        suffix = f", interrupting {sessions} active session{plural}"
-    step(f"Restarting daemon (was running{suffix})")
-    try:
-        if probe.get("systemd"):
-            from .daemon_autostart import restart_systemd_daemon
-
-            restart_systemd_daemon()
-        else:
-            from .daemon_supervisor import start_daemon, stop_daemon
-
-            state = probe.get("state", {})
-            stop_daemon()
-            raw_workdir = state.get("default_workdir")
-            # The installer may run under a bootstrap system Python; the
-            # daemon must run under the durable venv it was installed into.
-            start_daemon(
-                host=str(state.get("host") or "127.0.0.1"),
-                port=_state_port(state),
-                default_workdir=Path(str(raw_workdir)) if raw_workdir else None,
-                interpreter=venv_python,
-            )
-    except Exception as exc:
-        raise UserInstallError(
-            f"daemon restart failed: {exc}; restart it manually: agent-collab daemon restart"
-        ) from exc
-    ok(f"Daemon restarted on {__version__}")
-
-
 def _state_port(state: Dict[str, Any]) -> int:
     try:
         return int(state.get("port") or 8765)
@@ -553,19 +502,13 @@ def _print_model_discovery(discovery: Any) -> None:
 def _main_install(args: argparse.Namespace) -> int:
     bin_dir = Path(os.environ.get(DEFAULT_BIN_DIR_ENV) or "~/.local/bin")
     editable = os.environ.get(EDITABLE_ENV, "").strip().lower() in {"1", "true", "yes"}
-    probe = _probe_daemon()
-    install_user_command(
-        repo_root=args.repo_root,
-        venv=args.venv,
+    venv_python = Path(os.path.abspath(os.fspath(args.venv.expanduser()))) / "bin" / "python"
+    _install_with_daemon_envelope(
+        args=args,
         bin_dir=bin_dir,
         editable=editable,
+        venv_python=venv_python,
     )
-    _migrate_user_config()
-    venv_python = args.venv.expanduser().resolve() / "bin" / "python"
-    if probe["running"]:
-        _restart_daemon(probe, venv_python)
-    else:
-        info("Daemon not running; start it with: agent-collab daemon start")
     backends_awaiting_setup = _check_backend_readiness(venv_python)
     if backends_awaiting_setup:
         ok(
@@ -574,6 +517,155 @@ def _main_install(args: argparse.Namespace) -> int:
     else:
         ok("Install complete — try: agent-collab --help")
     return 0
+
+
+def _install_with_daemon_envelope(
+    *,
+    args: argparse.Namespace,
+    bin_dir: Path,
+    editable: bool,
+    venv_python: Path,
+) -> None:
+    """Quiesce daemon ownership across the complete durable-install mutation."""
+
+    from .daemon_autostart import (
+        AutostartError,
+        quiesce_for_install_locked,
+        restore_after_install_locked,
+        service_transaction,
+    )
+    from .daemon_supervisor import (
+        count_running_sessions,
+        daemon_status,
+        start_daemon,
+        stop_daemon,
+    )
+
+    try:
+        with service_transaction("install", interpreter=venv_python) as (
+            backend,
+            definition_path,
+            paths,
+            interpreter,
+        ):
+            identity = (
+                backend.inspect(
+                    paths=paths,
+                    definition_path=definition_path,
+                    interpreter=interpreter,
+                )
+                if backend is not None and definition_path is not None
+                else None
+            )
+            if identity is not None and identity.owned and not identity.current_home_owned:
+                command_interpreter = (
+                    identity.command.interpreter if identity.command else "unknown"
+                )
+                raise UserInstallError(
+                    "the per-user daemon registration belongs to another installation "
+                    f"(home {identity.effective_home or 'unknown'}, interpreter "
+                    f"{command_interpreter}); upgrade from that home or take it over first"
+                )
+            if identity is not None and identity.loaded and not identity.installed:
+                raise UserInstallError(
+                    "the native daemon job is loaded but its owned definition is missing; "
+                    "run 'agent-collab daemon autostart enable' or disable it before upgrading"
+                )
+
+            live = daemon_status(paths)
+            live_manager = live.state.get("manager") if live.running else None
+            native_manager = backend.MANAGER if backend is not None else None
+            if live.running and live_manager not in {None, "detached", native_manager}:
+                raise UserInstallError(
+                    f"daemon pid {live.state.get('pid')} records manager {live_manager!r}; "
+                    "stop it manually before upgrading"
+                )
+            if (
+                identity is not None
+                and live.running
+                and live_manager == native_manager
+                and not identity.loaded
+            ):
+                raise UserInstallError(
+                    f"daemon pid {live.state.get('pid')} is owned by {native_manager} but its "
+                    "native target is unloaded; stop that orphan manually before upgrading"
+                )
+            sessions = count_running_sessions(live.state) if live.running else None
+            if sessions:
+                plural = "s" if sessions != 1 else ""
+                warn(
+                    f"upgrade will interrupt {sessions} active session{plural}; the daemon "
+                    "will remain unavailable through package and config migration"
+                )
+
+            managed_snapshot: Optional[Dict[str, object]] = None
+            detached_snapshot: Optional[Dict[str, Any]] = None
+            if identity is not None and identity.owned:
+                managed_snapshot = quiesce_for_install_locked(
+                    backend, definition_path, paths, interpreter
+                )
+            if live.running and live_manager in {None, "detached"}:
+                detached_snapshot = dict(live.state)
+                stop_daemon(paths, _lifecycle_locked=True)
+
+            mutation_error: Optional[Exception] = None
+            try:
+                install_user_command(
+                    repo_root=args.repo_root,
+                    venv=args.venv,
+                    bin_dir=bin_dir,
+                    editable=editable,
+                )
+                _migrate_user_config()
+            except Exception as exc:
+                mutation_error = exc
+
+            restore_errors: List[str] = []
+            managed_residual_safe = True
+            if managed_snapshot is not None:
+                managed_snapshot["mutation_succeeded"] = mutation_error is None
+                try:
+                    restore_after_install_locked(
+                        backend,
+                        managed_snapshot,
+                        definition_path,
+                        paths,
+                        venv_python,
+                    )
+                except Exception as exc:
+                    restore_errors.append(f"managed daemon restore failed: {exc}")
+                    managed_residual_safe = isinstance(exc, SafeManagedRestoreError)
+            if detached_snapshot is not None and managed_residual_safe:
+                raw_workdir = detached_snapshot.get("default_workdir")
+                try:
+                    start_daemon(
+                        paths,
+                        host=str(detached_snapshot.get("host") or "127.0.0.1"),
+                        port=_state_port(detached_snapshot),
+                        default_workdir=Path(str(raw_workdir)) if raw_workdir else None,
+                        interpreter=venv_python,
+                        _lifecycle_locked=True,
+                    )
+                except Exception as exc:
+                    restore_errors.append(f"detached daemon restore failed: {exc}")
+
+            if mutation_error is not None:
+                detail = f"; {'; '.join(restore_errors)}" if restore_errors else ""
+                if isinstance(mutation_error, UserInstallError):
+                    raise UserInstallError(f"{mutation_error}{detail}") from mutation_error
+                raise UserInstallError(
+                    f"install failed: {mutation_error}{detail}"
+                ) from mutation_error
+            if restore_errors:
+                raise UserInstallError("; ".join(restore_errors))
+            if managed_snapshot and managed_snapshot.get("running") and backend is not None:
+                ok(f"Daemon restarted on {__version__} ({backend.MANAGER})")
+            elif detached_snapshot is not None:
+                ok(f"Daemon restarted on {__version__}")
+            else:
+                info("Daemon not running; start it with: agent-collab daemon start")
+    except AutostartError as exc:
+        raise UserInstallError(str(exc)) from exc
 
 
 def uninstall_user_command(*, venv: Path, bin_dir: Path) -> None:
@@ -585,26 +677,37 @@ def uninstall_user_command(*, venv: Path, bin_dir: Path) -> None:
 
     home_root = AgentCollabHome.resolve().root
 
-    step("Checking daemon and autostart")
-    _teardown_daemon()
+    from .daemon_autostart import AutostartError, service_transaction
 
-    step(f"Removing environment ({_display(venv)})")
-    link = bin_dir / "agent-collab"
-    link_target = _link_target(link)
-    if venv.exists():
-        shutil.rmtree(venv)
-        ok("Environment removed")
-    else:
-        info("Environment not present")
+    try:
+        with service_transaction("uninstall", interpreter=venv / "bin" / "python") as (
+            backend,
+            definition_path,
+            paths,
+            interpreter,
+        ):
+            step("Checking daemon and autostart")
+            _teardown_daemon_locked(backend, definition_path, paths, interpreter)
 
-    step("Removing the agent-collab command")
-    if link_target is not None and (link_target == venv / "bin" / "agent-collab"):
-        link.unlink(missing_ok=True)
-        ok(f"Removed {_display(link)}")
-    elif os.path.lexists(link):
-        warn(f"left {link} in place; agent-collab did not create it")
-    else:
-        info("Command link not present")
+            step(f"Removing environment ({_display(venv)})")
+            link = bin_dir / "agent-collab"
+            link_target = _link_target(link)
+            if venv.exists():
+                shutil.rmtree(venv)
+                ok("Environment removed")
+            else:
+                info("Environment not present")
+
+            step("Removing the agent-collab command")
+            if link_target is not None and (link_target == venv / "bin" / "agent-collab"):
+                link.unlink(missing_ok=True)
+                ok(f"Removed {_display(link)}")
+            elif os.path.lexists(link):
+                warn(f"left {link} in place; agent-collab did not create it")
+            else:
+                info("Command link not present")
+    except AutostartError as exc:
+        raise UserInstallError(str(exc)) from exc
 
     info(
         f"Config and session data kept at {_display(home_root)}; "
@@ -613,30 +716,58 @@ def uninstall_user_command(*, venv: Path, bin_dir: Path) -> None:
     ok("Uninstall complete")
 
 
-def _teardown_daemon() -> None:
-    """Stop the daemon and remove autostart; failure aborts the uninstall.
+def _teardown_daemon_locked(backend, definition_path, paths, interpreter) -> None:
+    """Lock-held uninstall teardown; never reacquires lifecycle/manager locks."""
 
-    Deleting the venv while a systemd unit or live daemon still references it
-    would leave a broken service behind, so teardown errors are fatal here.
-    """
+    from .daemon_supervisor import daemon_status, stop_daemon
 
     try:
-        from .daemon_autostart import disable_autostart, managed_unit_installed
-        from .daemon_supervisor import daemon_status, stop_daemon
-
-        autostart_disabled = False
-        if managed_unit_installed():
-            disable_autostart()
+        identity = (
+            backend.inspect(
+                paths=paths,
+                definition_path=definition_path,
+                interpreter=interpreter,
+            )
+            if backend is not None and definition_path is not None
+            else None
+        )
+        if identity is not None and identity.owned and not identity.current_home_owned:
+            raise UserInstallError(
+                "the per-user daemon registration belongs to another installation "
+                f"at {identity.effective_home}; uninstall from that home or take it over first"
+            )
+        if identity is not None and identity.loaded and not identity.owned:
+            raise UserInstallError(
+                "the native daemon target is loaded but cannot be attributed to agent-collab; "
+                "unload the conflicting target before uninstalling"
+            )
+        disabled = False
+        if identity is not None and identity.owned:
+            if backend.MANAGER == "systemd":
+                backend.disable_autostart(
+                    paths=paths,
+                    unit_path=definition_path,
+                    interpreter=interpreter,
+                )
+            else:
+                backend.disable_locked(
+                    paths=paths,
+                    definition_path=definition_path,
+                    interpreter=interpreter,
+                    takeover=False,
+                )
+            disabled = True
             ok("Autostart disabled")
-            autostart_disabled = True
-        # A manual daemon can be running even when a (stopped) systemd unit
-        # existed, so always probe again after the autostart teardown.
-        status = daemon_status()
+        status = daemon_status(paths)
         if status.running:
-            stop_daemon()
+            if status.state.get("manager") not in {None, "detached"}:
+                raise UserInstallError(
+                    f"managed daemon pid {status.state.get('pid')} remained live after teardown"
+                )
+            stop_daemon(paths, _lifecycle_locked=True)
             ok("Daemon stopped")
-        elif autostart_disabled:
-            ok("Daemon stopped (was systemd-managed)")
+        elif disabled and backend is not None:
+            ok(f"Daemon stopped (was {backend.MANAGER}-managed)")
         else:
             info("Daemon not running")
     except UserInstallError:

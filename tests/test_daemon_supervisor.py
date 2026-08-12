@@ -15,6 +15,7 @@ from agent_collab.daemon_supervisor import (
     _daemon_identity_matches,
     _daemon_identity_status,
     _daemon_start_lock,
+    _remove_stale_pid_state,
     _ready_timeout_seconds,
     _wait_for_ready,
     daemon_status,
@@ -23,6 +24,7 @@ from agent_collab.daemon_supervisor import (
     stop_daemon,
     tail_daemon_log,
 )
+from agent_collab.daemon_service import parse_managed_command
 from agent_collab.paths import GlobalDataPaths
 
 
@@ -81,7 +83,7 @@ class _Response:
         return None
 
     def read(self):
-        return b'{"sessions":[]}'
+        return b'{"pid":4244,"manager":"detached","version":"test"}'
 
 
 class DaemonSupervisorTests(unittest.TestCase):
@@ -154,7 +156,36 @@ class DaemonSupervisorTests(unittest.TestCase):
             self.assertEqual(observed["pid"], 4242)
             self.assertEqual(observed["manager"], "systemd")
             self.assertEqual(observed["session_dir"], str(paths.session_dir))
+            command = parse_managed_command(observed["argv"], platform_manager="systemd")
+            self.assertEqual(command.host, "127.0.0.1")
+            self.assertEqual(command.port, 8765)
             self.assertFalse(paths.pid_path.exists())
+            self.assertFalse(paths.state_path.exists())
+
+    def test_managed_foreground_daemon_accepts_launchd_and_reports_it_to_server(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(Path(tmp))
+            observed = {}
+
+            def run_server(*_args, **kwargs):
+                observed["state"] = json.loads(paths.state_path.read_text(encoding="utf-8"))
+                observed["manager"] = kwargs["manager"]
+
+            with (
+                mock.patch("agent_collab.server_http.run_server", side_effect=run_server),
+                mock.patch("signal.signal"),
+            ):
+                run_managed_daemon(paths, manager="launchd", redirect_logs=False)
+
+            self.assertEqual(observed["state"]["manager"], "launchd")
+            self.assertEqual(observed["manager"], "launchd")
+            self.assertFalse(paths.state_path.exists())
+
+    def test_managed_foreground_daemon_rejects_invalid_manager_before_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(Path(tmp))
+            with self.assertRaisesRegex(DaemonSupervisorError, "launchd, systemd"):
+                run_managed_daemon(paths, manager="detached", redirect_logs=False)
             self.assertFalse(paths.state_path.exists())
 
     def test_managed_foreground_daemon_refuses_existing_live_daemon(self):
@@ -249,7 +280,7 @@ class DaemonSupervisorTests(unittest.TestCase):
                 self.assertEqual(authorization, "Bearer fresh")
                 return _Response()
 
-            with mock.patch("agent_collab.daemon_supervisor.urlopen", side_effect=open_request):
+            with mock.patch("agent_collab.daemon_service.urlopen", side_effect=open_request):
                 _wait_for_ready(ReadyProcess(), "127.0.0.1", 8765, paths, timeout=0.5)
 
             self.assertEqual(seen, ["Bearer stale", "Bearer fresh"])
@@ -259,7 +290,7 @@ class DaemonSupervisorTests(unittest.TestCase):
             paths = self._paths(tmp)
             paths.ensure_dirs()
 
-            with mock.patch("agent_collab.daemon_supervisor.urlopen") as urlopen:
+            with mock.patch("agent_collab.daemon_service.urlopen") as urlopen:
                 with self.assertRaisesRegex(DaemonSupervisorError, "token is not ready"):
                     _wait_for_ready(ReadyProcess(), "127.0.0.1", 8765, paths, timeout=0.3)
 
@@ -315,6 +346,23 @@ class DaemonSupervisorTests(unittest.TestCase):
             self.assertFalse(paths.state_path.exists())
             self.assertFalse(paths.token_path.exists())
 
+    def test_stale_cleanup_preserves_a_replacement_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            stale = {"pid": 4242, "manager": "detached"}
+            replacement = {"pid": 5252, "manager": "systemd"}
+            paths.state_path.write_text(json.dumps(replacement), encoding="utf-8")
+            paths.pid_path.write_text("5252\n", encoding="utf-8")
+            paths.token_path.write_text("replacement-token\n", encoding="utf-8")
+
+            removed = _remove_stale_pid_state(paths, stale, 4242)
+
+            self.assertFalse(removed)
+            self.assertEqual(json.loads(paths.state_path.read_text(encoding="utf-8")), replacement)
+            self.assertEqual(paths.pid_path.read_text(encoding="utf-8"), "5252\n")
+            self.assertEqual(paths.token_path.read_text(encoding="utf-8"), "replacement-token\n")
+
     def test_status_cleans_zombie_pid_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._paths(tmp)
@@ -329,6 +377,35 @@ class DaemonSupervisorTests(unittest.TestCase):
             self.assertFalse(status.running)
             self.assertFalse(paths.pid_path.exists())
             self.assertFalse(paths.state_path.exists())
+
+    def test_stop_stale_cleanup_preserves_a_concurrent_native_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            paths.pid_path.write_text("4242\n", encoding="utf-8")
+            paths.state_path.write_text(
+                json.dumps({"pid": 4242, "manager": "detached"}), encoding="utf-8"
+            )
+            replacement = {"pid": 5252, "manager": "systemd"}
+
+            def publish_replacement(_pid):
+                paths.state_path.write_text(json.dumps(replacement), encoding="utf-8")
+                paths.pid_path.write_text("5252\n", encoding="utf-8")
+                paths.token_path.write_text("replacement-token\n", encoding="utf-8")
+                return False
+
+            with mock.patch(
+                "agent_collab.daemon_supervisor._is_running",
+                side_effect=publish_replacement,
+            ):
+                with self.assertRaisesRegex(
+                    DaemonSupervisorError, "generation changed during stop"
+                ):
+                    stop_daemon(paths, _lifecycle_locked=True)
+
+            self.assertEqual(json.loads(paths.state_path.read_text(encoding="utf-8")), replacement)
+            self.assertEqual(paths.pid_path.read_text(encoding="utf-8"), "5252\n")
+            self.assertEqual(paths.token_path.read_text(encoding="utf-8"), "replacement-token\n")
 
     def test_stop_sends_sigterm_and_removes_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -456,7 +533,26 @@ class DaemonSupervisorTests(unittest.TestCase):
                 json.dumps({"pid": 4242, "manager": "systemd"}), encoding="utf-8"
             )
             with mock.patch("agent_collab.daemon_supervisor.os.kill") as kill:
-                with self.assertRaisesRegex(DaemonSupervisorError, "owned by systemd"):
+                with self.assertRaisesRegex(
+                    DaemonSupervisorError,
+                    "systemd.*agent-collab daemon stop.*ordinary daemon lifecycle",
+                ):
+                    stop_daemon(paths)
+
+            self.assertEqual(kill.call_args_list, [mock.call(4242, 0)])
+
+    def test_stop_refuses_to_signal_launchd_owned_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._paths(tmp)
+            paths.ensure_dirs()
+            paths.state_path.write_text(
+                json.dumps({"pid": 4242, "manager": "launchd"}), encoding="utf-8"
+            )
+            with mock.patch("agent_collab.daemon_supervisor.os.kill") as kill:
+                with self.assertRaisesRegex(
+                    DaemonSupervisorError,
+                    "launchd.*agent-collab daemon stop.*ordinary daemon lifecycle",
+                ):
                     stop_daemon(paths)
 
             self.assertEqual(kill.call_args_list, [mock.call(4242, 0)])

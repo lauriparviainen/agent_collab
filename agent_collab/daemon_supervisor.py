@@ -39,6 +39,8 @@ READY_TIMEOUT_ENV = "AGENT_COLLAB_DAEMON_READY_TIMEOUT"
 IDENTITY_MATCH = "match"
 IDENTITY_MISMATCH = "mismatch"
 IDENTITY_UNKNOWN = "unknown"
+MANAGED_DAEMON_MANAGERS = frozenset({"systemd", "launchd"})
+RUNTIME_MANAGERS = frozenset({"detached", *MANAGED_DAEMON_MANAGERS})
 
 
 def start_daemon(
@@ -47,6 +49,8 @@ def start_daemon(
     port: int = 8765,
     default_workdir: Optional[Path] = None,
     interpreter: Optional[Path] = None,
+    *,
+    _lifecycle_locked: bool = False,
 ) -> Dict[str, Any]:
     """Spawn the detached daemon; ``interpreter`` defaults to this process's.
 
@@ -56,6 +60,18 @@ def start_daemon(
     """
 
     paths = paths or GlobalDataPaths.resolve()
+    if not _lifecycle_locked:
+        from .daemon_lifecycle import lifecycle_transaction
+
+        with lifecycle_transaction("daemon start", paths):
+            return start_daemon(
+                paths,
+                host,
+                port,
+                default_workdir,
+                interpreter,
+                _lifecycle_locked=True,
+            )
     paths.ensure_dirs()
     with _daemon_start_lock(paths):
         return _start_daemon_locked(paths, host, port, default_workdir, interpreter)
@@ -67,14 +83,24 @@ def run_managed_daemon(
     port: int = 8765,
     default_workdir: Optional[Path] = None,
     *,
+    manager: str = "systemd",
     redirect_logs: bool = True,
 ) -> None:
-    """Run a foreground daemon whose process lifecycle is owned by systemd."""
+    """Run a foreground daemon owned by a validated native service manager."""
+
+    if manager not in MANAGED_DAEMON_MANAGERS:
+        allowed = ", ".join(sorted(MANAGED_DAEMON_MANAGERS))
+        raise DaemonSupervisorError(f"managed daemon manager must be one of: {allowed}")
 
     paths = paths or GlobalDataPaths.resolve()
     paths.ensure_dirs()
     pid = os.getpid()
-    argv = [sys.executable, *sys.argv]
+    argv = _managed_daemon_argv(
+        manager=manager,
+        host=host,
+        port=port,
+        default_workdir=default_workdir,
+    )
     with _daemon_start_lock(paths):
         state = _read_state(paths)
         existing_pid = _state_pid(state) or _read_pid(paths)
@@ -92,7 +118,7 @@ def run_managed_daemon(
             port,
             argv,
             default_workdir,
-            manager="systemd",
+            manager=manager,
         )
         _write_state(paths, state)
         atomic_write_private_text(paths.pid_path, f"{pid}\n")
@@ -109,10 +135,11 @@ def run_managed_daemon(
             port,
             default_workdir=default_workdir or paths.home,
             session_log_dir=paths.session_dir,
+            manager=manager,
         )
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
-        _remove_owned_pid_state(paths, pid, manager="systemd")
+        _remove_owned_pid_state(paths, pid, manager=manager)
 
 
 def _start_daemon_locked(
@@ -150,6 +177,8 @@ def _start_daemon_locked(
         "-m",
         "agent_collab.cli",
         "serve",
+        "--manager",
+        "detached",
         "--host",
         host,
         "--port",
@@ -204,40 +233,68 @@ def daemon_status(paths: Optional[GlobalDataPaths] = None) -> DaemonStatus:
                 state,
                 f"live pid {pid} cannot be attributed to the daemon; state was preserved",
             )
-        _remove_pid_state(paths)
+        removed = _remove_stale_pid_state(paths, state, pid)
         return DaemonStatus(
             False,
             state,
-            f"removed stale agent-collab daemon state; live pid {pid} belongs to another process",
+            (
+                f"removed stale agent-collab daemon state; live pid {pid} belongs to another process"
+                if removed
+                else "stale daemon state changed during inspection; preserved the newer state"
+            ),
         )
-    _remove_pid_state(paths)
-    return DaemonStatus(False, state, f"removed stale agent-collab daemon state for pid {pid}")
+    removed = _remove_stale_pid_state(paths, state, pid)
+    detail = (
+        f"removed stale agent-collab daemon state for pid {pid}"
+        if removed
+        else "stale daemon state changed during inspection; preserved the newer state"
+    )
+    return DaemonStatus(False, state, detail)
 
 
 def stop_daemon(
-    paths: Optional[GlobalDataPaths] = None, grace_seconds: float = 3.0
+    paths: Optional[GlobalDataPaths] = None,
+    grace_seconds: float = 3.0,
+    *,
+    _lifecycle_locked: bool = False,
 ) -> DaemonStatus:
     paths = paths or GlobalDataPaths.resolve()
+    if not _lifecycle_locked:
+        from .daemon_lifecycle import lifecycle_transaction
+
+        with lifecycle_transaction("daemon stop", paths):
+            return stop_daemon(paths, grace_seconds, _lifecycle_locked=True)
     state = _read_state(paths)
     pid = _state_pid(state) or _read_pid(paths)
-    if state.get("manager") == "systemd":
+    recorded_manager = state.get("manager")
+    if recorded_manager in MANAGED_DAEMON_MANAGERS:
         if pid is not None and _is_running(pid):
             raise DaemonSupervisorError(
-                "daemon process is owned by systemd; stop it through systemctl --user"
+                f"daemon process is owned by {recorded_manager}; "
+                "run 'agent-collab daemon stop' through the ordinary daemon lifecycle"
             )
-        _remove_pid_state(paths)
-        return DaemonStatus(False, state, "removed stale systemd-owned daemon state")
+        _remove_stale_pid_state_after_stop(paths, state, pid)
+        return DaemonStatus(False, state, f"removed stale {recorded_manager}-owned daemon state")
+    if recorded_manager not in {None, "detached"}:
+        if pid is not None and _is_running(pid):
+            raise DaemonSupervisorError(
+                f"daemon state records unknown manager {recorded_manager!r} for live pid {pid}; "
+                "refusing to signal it; stop the attributable process manually and remove stale "
+                f"state at {paths.state_path}"
+            )
+        _remove_stale_pid_state_after_stop(paths, state, pid)
+        return DaemonStatus(False, state, f"removed stale {recorded_manager!r}-owned daemon state")
     if pid is None:
         return DaemonStatus(False, state, "global agent-collab daemon is not running")
     if not _is_running(pid):
-        _remove_pid_state(paths)
+        _remove_stale_pid_state_after_stop(paths, state, pid)
         return DaemonStatus(False, state, f"removed stale agent-collab daemon state for pid {pid}")
 
     identity = _daemon_identity_status(pid, state)
     if identity == IDENTITY_UNKNOWN:
         raise DaemonSupervisorError(f"live pid {pid} cannot be attributed; refusing to signal it")
     if identity == IDENTITY_MISMATCH:
-        _remove_pid_state(paths)
+        _remove_stale_pid_state_after_stop(paths, state, pid)
         return DaemonStatus(
             False,
             state,
@@ -248,11 +305,11 @@ def stop_daemon(
     deadline = time.monotonic() + grace_seconds
     while time.monotonic() < deadline:
         if not _is_running(pid):
-            _remove_pid_state(paths)
+            _remove_stale_pid_state_after_stop(paths, state, pid)
             return DaemonStatus(False, state, f"agent-collab daemon stopped pid {pid}")
         identity = _daemon_identity_status(pid, state)
         if identity == IDENTITY_MISMATCH:
-            _remove_pid_state(paths)
+            _remove_stale_pid_state_after_stop(paths, state, pid)
             return DaemonStatus(False, state, f"agent-collab daemon stopped pid {pid}")
         # A pid we already attributed and signaled can momentarily become
         # unattributable while it tears down (its procfs cmdline empties before
@@ -264,7 +321,7 @@ def stop_daemon(
     if _is_running(pid):
         identity = _daemon_identity_status(pid, state)
         if identity == IDENTITY_MISMATCH:
-            _remove_pid_state(paths)
+            _remove_stale_pid_state_after_stop(paths, state, pid)
             return DaemonStatus(
                 False,
                 state,
@@ -291,8 +348,40 @@ def stop_daemon(
         # state would be discarded and a later start could spawn a second
         # daemon on the same port.
         raise DaemonSupervisorError(f"failed to stop agent-collab daemon pid {pid}")
-    _remove_pid_state(paths)
+    _remove_stale_pid_state_after_stop(paths, state, pid)
     return DaemonStatus(False, state, f"agent-collab daemon killed pid {pid}")
+
+
+def _managed_daemon_argv(
+    *,
+    manager: str,
+    host: str,
+    port: int,
+    default_workdir: Optional[Path],
+) -> list[str]:
+    """Return the canonical native-manager command recorded in daemon state.
+
+    ``sys.argv`` is launcher-dependent: ``python -m`` rewrites argv[0] to the
+    module file. Native ownership checks instead need the stable command shape
+    written into the systemd unit or launchd plist.
+    """
+
+    argv = [
+        os.path.abspath(sys.executable),
+        "-m",
+        "agent_collab.cli",
+        "daemon",
+        "run",
+        "--manager",
+        manager,
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+    if default_workdir is not None:
+        argv.extend(["--workdir", str(Path(default_workdir).expanduser().resolve())])
+    return argv
 
 
 def count_running_sessions(state: Dict[str, Any]) -> Optional[int]:
@@ -345,6 +434,8 @@ def _build_state(
     default_workdir: Optional[Path] = None,
     manager: str = "detached",
 ) -> Dict[str, Any]:
+    if manager not in RUNTIME_MANAGERS:
+        raise DaemonSupervisorError(f"invalid daemon runtime manager: {manager!r}")
     return {
         "pid": pid,
         "version": __version__,
@@ -390,7 +481,7 @@ def _redirect_managed_logs(paths: GlobalDataPaths) -> None:
 def _remove_owned_pid_state(paths: GlobalDataPaths, pid: int, *, manager: str) -> None:
     state = _read_state(paths)
     if _state_pid(state) == pid and state.get("manager") == manager:
-        _remove_pid_state(paths)
+        _remove_stale_pid_state(paths, state, pid)
 
 
 @contextmanager
@@ -597,23 +688,17 @@ def _wait_for_ready(
                 message += f": {stderr_tail}"
             raise DaemonSupervisorError(message)
         try:
-            from .config import load_daemon_token
-            from .paths import AgentCollabHome
+            from .daemon_service import readiness
 
-            home = AgentCollabHome(root=paths.home, config_path=paths.home / "config.toml")
-            token = load_daemon_token(home=home)
-            if not token:
-                raise OSError("daemon token is not ready")
-            display_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-            request = Request(
-                f"http://{display_host}:{port}/sessions",
-                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-                method="GET",
+            healthy, detail, _ = readiness(
+                host=host,
+                port=port,
+                paths=paths,
+                expected_manager="detached",
+                expected_pid=process.pid,
             )
-            with urlopen(request, timeout=0.2) as response:
-                if response.status != 200:
-                    raise OSError(f"protected readiness probe returned {response.status}")
-                response.read()
+            if not healthy:
+                raise OSError(detail)
             time.sleep(0.05)
             code = poll()
             if code is None:
@@ -654,3 +739,26 @@ def _remove_pid_state(paths: GlobalDataPaths) -> None:
             path.unlink()
         except FileNotFoundError:
             pass
+
+
+def _remove_stale_pid_state(
+    paths: GlobalDataPaths, expected_state: Dict[str, Any], expected_pid: Optional[int]
+) -> bool:
+    """Remove stale state only if no concurrent daemon generation replaced the snapshot."""
+
+    with _daemon_start_lock(paths):
+        current_state = _read_state(paths)
+        current_pid = _state_pid(current_state) or _read_pid(paths)
+        if current_state == expected_state and current_pid == expected_pid:
+            _remove_pid_state(paths)
+            return True
+    return False
+
+
+def _remove_stale_pid_state_after_stop(
+    paths: GlobalDataPaths, expected_state: Dict[str, Any], expected_pid: Optional[int]
+) -> None:
+    if not _remove_stale_pid_state(paths, expected_state, expected_pid):
+        raise DaemonSupervisorError(
+            "daemon generation changed during stop; the newer daemon state was preserved"
+        )

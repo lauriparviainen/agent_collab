@@ -255,8 +255,10 @@ git pull
 
 Each run reinstalls the checkout into the venv, migrates your user config to
 the current schema (a `config.toml.bak` backup is written first; comments and
-formatting are preserved), and restarts the daemon if it was running before
-install. Restarting interrupts active sessions; session history under
+formatting are preserved), and restores the daemon if it was running before
+install. A running daemon is quiesced for the full package/link/config mutation
+so systemd or launchd cannot execute partially upgraded code. This interrupts
+active sessions; session history under
 `~/.agent-collab/data` and all configuration are preserved. If your config
 has a problem, install is where you hear about it, as a plain warning or
 error with the file path. If you use the
@@ -294,8 +296,9 @@ Start the local daemon:
 agent-collab daemon start
 ```
 
-On Linux with a systemd user manager, you can instead register the daemon to
-start with your login session:
+On Linux with a systemd user manager or macOS with a graphical login session,
+you can instead register the daemon to start when you log in. The same commands
+select systemd on Linux and a per-user LaunchAgent on macOS:
 
 ```bash
 agent-collab daemon autostart enable
@@ -311,11 +314,17 @@ removing configuration or transcripts:
 agent-collab daemon autostart disable
 ```
 
-This is login-time startup. The command deliberately does not enable systemd
-"lingering," which would run the user manager from boot before login. Users who
-need that machine-level policy can enable it separately with
+This is login-time startup, not a system-wide boot service. On Linux the command
+does not enable systemd "lingering"; users who need that separate policy can use
 `loginctl enable-linger "$USER"` after considering credential availability and
-resource use. macOS LaunchAgent registration is not yet supported.
+resource use. On macOS, run the command from a graphical login session: an
+SSH-only/headless session may not have the required `gui/<uid>` launchd domain.
+If macOS has denied the item, allow agent-collab under **System Settings →
+General → Login Items & Extensions**, then run `autostart enable` again.
+
+The per-user native registration is shared by all `AGENT_COLLAB_HOME` values.
+A command from a different home refuses to change it unless you explicitly use
+`autostart enable --takeover` or `autostart disable --takeover`.
 
 Install creates the permanent bearer token in `~/.agent-collab/config.toml`, so
 it is ready before the daemon's first start (the daemon also generates one on

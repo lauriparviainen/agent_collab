@@ -1,8 +1,10 @@
 # macOS LaunchAgent daemon autostart
 
-**Status:** Open
+**Status:** Closed
 
 **Created:** 2026-08-11
+
+**Completed:** 2026-08-12
 
 **Issue:** [#58](https://github.com/lauriparviainen/agent_collab/issues/58)
 
@@ -1538,3 +1540,19 @@ acceptance path. Credentialed provider calls are unnecessary.
   warn before interrupting active sessions, then keep the daemon stopped for
   the full venv/link/config mutation so native restart policies cannot execute
   partially installed code.
+
+## Completion
+
+Implemented a platform-neutral daemon lifecycle facade with systemd and launchd
+backends, authenticated PID-bound readiness, cross-home ownership and takeover
+rules, lifecycle and registration locking, crash-safe recovery slots, and
+quiesced install/uninstall handling. Added hermetic backend coverage, a native
+macOS smoke script and CI job, regenerated daemon API documentation, and updated
+the user and architecture documentation.
+
+Repeated read-only Grok 4.5 and Gemini 3.6 Flash High review rounds converged
+with no confirmed high- or medium-severity findings. The final focused daemon,
+autostart, lifecycle, CLI, supervisor, and installer suite passed 235 tests with
+one platform skip. `./agent_collab_dev.sh build --check` verified the generated
+API documentation, and the complete `./agent_collab_dev.sh test` gate passed
+1,637 tests with two expected platform skips.

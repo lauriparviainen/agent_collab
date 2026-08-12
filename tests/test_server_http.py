@@ -668,9 +668,15 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(headers=headers), self.assertRaises(HttpError) as ctx:
                 await server._dispatch("GET", "/sessions", headers, b"")
             self.assertEqual(ctx.exception.status, 401)
+            with self.subTest(headers=headers), self.assertRaises(HttpError) as ctx:
+                await server._dispatch("GET", "/ready", headers, b"")
+            self.assertEqual(ctx.exception.status, 401)
 
         listed = await server._dispatch("GET", "/sessions", {"authorization": "Bearer secret"}, b"")
         self.assertEqual(listed, {"sessions": []})
+        ready = await server._dispatch("GET", "/ready", {"authorization": "Bearer secret"}, b"")
+        self.assertEqual(ready["manager"], "detached")
+        self.assertGreater(ready["pid"], 0)
         health_with_slash = await server._dispatch("GET", "/health/", {}, b"")
         self.assertEqual(health_with_slash["status"], "ok")
         with self.assertRaises(HttpError) as ctx:

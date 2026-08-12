@@ -26,6 +26,32 @@
         ],
         "type": "object"
       },
+      "DaemonReadinessModel": {
+        "additionalProperties": false,
+        "properties": {
+          "manager": {
+            "enum": [
+              "detached",
+              "systemd",
+              "launchd"
+            ],
+            "type": "string"
+          },
+          "pid": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pid",
+          "manager",
+          "version"
+        ],
+        "type": "object"
+      },
       "ErrorModel": {
         "additionalProperties": false,
         "properties": {
@@ -1282,6 +1308,114 @@
           }
         ],
         "summary": "Describe workdir-scoped runtime options"
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DaemonReadinessModel"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Read authenticated process-bound daemon readiness"
       }
     },
     "/sessions": {

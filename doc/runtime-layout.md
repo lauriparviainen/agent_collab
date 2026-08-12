@@ -39,8 +39,9 @@ and command link:
 The link makes `agent-collab tui` and the rest of the CLI available without
 activating the venv. Neither location contains daemon registration state.
 
-On Linux, `agent-collab daemon autostart enable` additionally writes the
-owner-managed unit below (respecting `XDG_CONFIG_HOME`):
+On Linux, `agent-collab daemon autostart enable` additionally writes an
+owner-managed unit under the configuration root reported by the systemd user
+manager (an existing owner-marked `FragmentPath` remains authoritative):
 
 ```text
 ~/.config/systemd/user/agent-collab.service
@@ -50,6 +51,22 @@ The unit contains an absolute interpreter path, PATH for provider executable
 discovery, and non-secret daemon options. Tokens and provider credentials stay
 in their existing owner-only stores. `autostart disable` removes only this
 unit; it preserves the venv, command link, config, daemon logs, and sessions.
+
+On macOS the equivalent registration is the per-user LaunchAgent below. It is
+derived from the real OS-account home, never caller-controlled `HOME`:
+
+```text
+~/Library/LaunchAgents/io.github.lauriparviainen.agent-collab.plist
+```
+
+Both managers keep two non-loadable, owner-marked recovery names beside the
+definition during transactional replacement or disable. Recovery artifacts are
+removed after successful health/teardown and remain discoverable after an
+interrupted rollback. Manager registration locks are persistent owner-only
+files under `~/Library/Application Support/io.github.lauriparviainen.agent-collab/`
+on macOS and `~/.local/state/io.github.lauriparviainen.agent-collab/` on Linux.
+Definitions and locks contain no bearer token, provider secret, or general
+caller environment.
 
 `tmp/usage-windows/` is the owner-only empty workdir for scheduled minimal
 requests. `usage-window-state.json` is atomically replaced with mode `0600`

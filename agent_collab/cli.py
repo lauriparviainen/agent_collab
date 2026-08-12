@@ -158,6 +158,9 @@ def build_serve_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--workdir", type=Path, default=Path("."), help=argparse.SUPPRESS)
     parser.add_argument("--session-log-dir", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--manager", choices=("detached",), default="detached", help=argparse.SUPPRESS
+    )
     return parser
 
 
@@ -269,6 +272,9 @@ def build_daemon_parser() -> argparse.ArgumentParser:
     _add_daemon_default_workdir(run)
     run.add_argument("--host", default="127.0.0.1")
     run.add_argument("--port", type=int, default=8765)
+    run.add_argument(
+        "--manager", choices=("systemd", "launchd"), default=None, help=argparse.SUPPRESS
+    )
 
     autostart = subparsers.add_parser(
         "autostart", help="Manage automatic daemon startup for the current user."
@@ -280,9 +286,19 @@ def build_daemon_parser() -> argparse.ArgumentParser:
     _add_daemon_default_workdir(enable)
     enable.add_argument("--host", default="127.0.0.1")
     enable.add_argument("--port", type=int, default=8765)
+    enable.add_argument(
+        "--takeover",
+        action="store_true",
+        help="Explicitly replace another agent-collab home's per-user registration.",
+    )
     autostart_actions.add_parser("status", help="Show registration and service health.")
-    autostart_actions.add_parser(
+    disable = autostart_actions.add_parser(
         "disable", help="Stop and unregister the user service without deleting data."
+    )
+    disable.add_argument(
+        "--takeover",
+        action="store_true",
+        help="Explicitly remove another agent-collab home's owned registration.",
     )
     return parser
 
@@ -517,6 +533,7 @@ def _main_serve(argv) -> int:
             args.port,
             default_workdir=args.workdir,
             session_log_dir=args.session_log_dir,
+            manager=args.manager,
         )
     except KeyboardInterrupt:
         return 130
@@ -616,16 +633,18 @@ def _main_daemon(argv) -> int:
         autostart_status,
         disable_autostart,
         enable_autostart,
-        restart_systemd_daemon,
-        start_systemd_daemon,
-        stop_systemd_daemon,
-        systemd_owns_daemon,
+        restart_detached_daemon,
+        restart_managed_daemon,
+        selected_manager as status_manager,
+        managed_service_identity,
+        start_detached_daemon,
+        start_managed_daemon,
+        stop_managed_daemon,
     )
     from .daemon_supervisor import (
         DaemonSupervisorError,
         daemon_status,
         run_managed_daemon,
-        start_daemon,
         stop_daemon,
         tail_daemon_log,
     )
@@ -637,11 +656,20 @@ def _main_daemon(argv) -> int:
     )
     try:
         if args.action == "run":
+            manager = args.manager
+            if manager is None:
+                if sys.platform.startswith("linux"):
+                    manager = "systemd"
+                else:
+                    raise DaemonSupervisorError(
+                        "daemon run requires --manager launchd on macOS; reinstall the managed definition"
+                    )
             try:
                 run_managed_daemon(
                     host=args.host,
                     port=args.port,
                     default_workdir=default_workdir,
+                    manager=manager,
                 )
             except KeyboardInterrupt:
                 pass
@@ -659,6 +687,7 @@ def _main_daemon(argv) -> int:
                     host=args.host,
                     port=args.port,
                     default_workdir=default_workdir,
+                    takeover=args.takeover,
                 )
                 _print_autostart_status(status)
                 return 0
@@ -667,24 +696,59 @@ def _main_daemon(argv) -> int:
                 _print_autostart_status(status)
                 return 0 if status.enabled and status.active and status.healthy else 1
             if args.autostart_action == "disable":
-                status = disable_autostart()
+                status = disable_autostart(takeover=args.takeover)
                 _print_autostart_status(status)
                 return 0
-        systemd_managed = systemd_owns_daemon()
+        if args.action == "logs":
+            text = tail_daemon_log(tail=args.tail, stderr=args.stderr)
+            if text:
+                print(text)
+            return 0
+        native_discovery_error = None
+        try:
+            status_manager()
+        except AutostartError:
+            native_identity = None
+            native_managed = False
+        else:
+            try:
+                native_identity = managed_service_identity()
+            except AutostartError as exc:
+                native_discovery_error = exc
+                native_identity = None
+                native_managed = False
+            else:
+                native_managed = bool(
+                    native_identity.current_home_owned
+                    and (
+                        native_identity.installed
+                        or native_identity.loaded
+                        or native_identity.pid is not None
+                    )
+                )
+        if args.action in {"start", "stop", "restart"} and native_discovery_error is not None:
+            raise AutostartError(
+                f"native service-manager discovery is indeterminate: {native_discovery_error}"
+            )
         if args.action == "start":
-            if systemd_managed:
-                step("Starting daemon (systemd)")
-                status = start_systemd_daemon()
+            if native_managed:
+                manager = status_manager()
+                step(f"Starting daemon ({manager})")
+                status = start_managed_daemon()
                 _print_live_daemon()
                 _print_autostart_status(status)
                 return 0
             step("Starting daemon")
-            state = start_daemon(host=args.host, port=args.port, default_workdir=default_workdir)
+            state = start_detached_daemon(
+                host=args.host, port=args.port, default_workdir=default_workdir
+            )
             ok("Daemon running")
             _print_daemon_state(state)
             return 0
         if args.action == "status":
-            if systemd_managed:
+            if native_discovery_error is not None:
+                warn(f"native service-manager discovery is indeterminate: {native_discovery_error}")
+            if native_managed:
                 status = autostart_status()
                 _print_live_daemon()
                 _print_autostart_status(status)
@@ -694,15 +758,22 @@ def _main_daemon(argv) -> int:
                 ok("Daemon running")
                 _print_daemon_state(status.state, live=True)
                 _warn_on_version_skew(status.state)
+                if native_identity is not None and native_identity.owned:
+                    warn(native_identity.detail)
+                    _print_autostart_status(autostart_status())
                 return 0
             fail("Daemon not running")
             if status.message != "global agent-collab daemon is not running":
                 info(status.message)
+            if native_identity is not None and native_identity.owned:
+                warn(native_identity.detail)
+                _print_autostart_status(autostart_status())
             return 1
         if args.action == "stop":
-            if systemd_managed:
-                step("Stopping daemon (systemd)")
-                status = stop_systemd_daemon()
+            if native_managed:
+                manager = status_manager()
+                step(f"Stopping daemon ({manager})")
+                status = stop_managed_daemon()
                 _print_autostart_status(status)
                 return 0
             result = stop_daemon()
@@ -713,22 +784,19 @@ def _main_daemon(argv) -> int:
                 info(result.message)
             return 0
         if args.action == "restart":
-            if systemd_managed:
-                step("Restarting daemon (systemd)")
-                status = restart_systemd_daemon()
+            if native_managed:
+                manager = status_manager()
+                step(f"Restarting daemon ({manager})")
+                status = restart_managed_daemon()
                 _print_live_daemon()
                 _print_autostart_status(status)
                 return 0
             step("Restarting daemon")
-            stop_daemon()
-            state = start_daemon(host=args.host, port=args.port, default_workdir=default_workdir)
+            state = restart_detached_daemon(
+                host=args.host, port=args.port, default_workdir=default_workdir
+            )
             ok("Daemon restarted")
             _print_daemon_state(state)
-            return 0
-        if args.action == "logs":
-            text = tail_daemon_log(tail=args.tail, stderr=args.stderr)
-            if text:
-                print(text)
             return 0
     except (AutostartError, DaemonSupervisorError) as exc:
         error(str(exc))
@@ -870,7 +938,8 @@ def _print_autostart_status(status) -> None:
     print_kv(
         [
             ("version", _installed_version()),
-            ("unit", status.unit_path),
+            ("manager", status.manager),
+            ("definition", status.definition_path),
             ("installed", str(status.installed).lower()),
             ("enabled", str(status.enabled).lower()),
             ("active", str(status.active).lower()),
