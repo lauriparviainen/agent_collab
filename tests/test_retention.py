@@ -107,6 +107,7 @@ class SelectExpiredSessionsTests(unittest.TestCase):
         records += [
             _record("live-running", status="running", ended_at=_iso(60)),
             _record("live-waiting", status="awaiting_input", ended_at=_iso(60)),
+            _record("live-approval", status="awaiting_approval", ended_at=_iso(60)),
             _record("odd-status", status="archived", ended_at=_iso(60)),
         ]
 

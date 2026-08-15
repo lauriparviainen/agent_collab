@@ -91,7 +91,7 @@ hardcoded to exactly one Claude runner and one Codex runner. See
    daemon appends each outcome to the packed session history together with its
    boundary event before notifying watchers.
 7. Clients watch by reading event history from a cursor and then waiting for new events.
-8. Session status becomes `done`, `failed`, or `stopped`. Interactive sessions may pause in non-terminal `awaiting_input` before a terminal status. Session state is persisted to the global `session-index.json` on every change; after a daemon restart, sessions that were `running` or `awaiting_input` are reported as `interrupted` without a fabricated lost-turn outcome.
+8. Session status becomes `done`, `failed`, or `stopped`. Interactive sessions may pause in non-terminal `awaiting_input` before a terminal status. `awaiting_approval` is also a live wait status, reserved for a mid-turn tool-approval park so `wait_events` keeps blocking instead of busy-spinning. Session state is persisted to the global `session-index.json` on every change; after a daemon restart, sessions in a live wait status (`running`, `awaiting_input`, or `awaiting_approval`) are reported as `interrupted` without a fabricated lost-turn outcome.
 
 ## Usage-window scheduler
 

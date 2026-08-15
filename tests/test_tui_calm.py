@@ -351,6 +351,9 @@ class SpinnerTests(unittest.TestCase):
             format_activity_indicator({"status": "running"}, 0, utf8=False), ". running"
         )
         self.assertEqual(format_activity_indicator({"status": "awaiting_input"}), "awaiting input")
+        self.assertEqual(
+            format_activity_indicator({"status": "awaiting_approval"}), "awaiting approval"
+        )
 
 
 class InputModeChipTests(unittest.TestCase):

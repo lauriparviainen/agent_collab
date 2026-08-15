@@ -16,8 +16,9 @@ global daemon owns all sessions across any number of projects.
 
 A session is one supervised run of a task:
 
-- it has a `session_id`, a `status` (`running`, `awaiting_input`, `done`,
-  `failed`, `stopped`, `interrupted`), a `task`, a `workflow`, and a `workdir`,
+- it has a `session_id`, a `status` (`running`, `awaiting_input`,
+  `awaiting_approval`, `done`, `failed`, `stopped`, `interrupted`), a `task`, a
+  `workflow`, and a `workdir`,
 - its events append to a JSONL log mirrored as a Markdown transcript under
   the global data root (`~/.agent-collab/data/sessions`),
 - it survives daemon restarts in a persistent session index; sessions running

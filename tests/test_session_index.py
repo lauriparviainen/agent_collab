@@ -194,6 +194,34 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(restored.turn_outcomes)
             self.assertEqual(index.load()["daemon-awaiting"]["status"], "interrupted")
 
+    async def test_awaiting_approval_sessions_marked_interrupted_on_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            index = SessionIndex(index_path)
+            index.upsert(
+                {
+                    "session_id": "daemon-approval",
+                    "status": "awaiting_approval",
+                    "task": "was awaiting approval",
+                    "workflow": "cross-review",
+                    "workdir": str(root),
+                    "jsonl_path": str(root / "daemon-approval.jsonl"),
+                    "markdown_path": str(root / "daemon-approval.md"),
+                    "created_at": "2026-07-08T00:00:00+00:00",
+                    "updated_at": "2026-07-08T00:00:00+00:00",
+                }
+            )
+
+            manager = SessionManager(index_path=index_path)
+
+            restored = manager.get_session("daemon-approval")
+            self.assertEqual(restored.status, "interrupted")
+            self.assertIsNone(restored.error)
+            self.assertIsNone(restored.failure)
+            self.assertIsNone(restored.turn_outcomes)
+            self.assertEqual(index.load()["daemon-approval"]["status"], "interrupted")
+
     async def test_read_events_replays_jsonl_for_restored_sessions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

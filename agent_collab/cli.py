@@ -1156,10 +1156,10 @@ def _main_list(argv) -> int:
     args = parser.parse_args(argv)
     try:
         sessions = _client(args.server_url).list_sessions().sessions
-        print(f"{'SESSION_ID':<24} {'STATUS':<11} {'WORKFLOW':<14} {'WORKDIR':<40} AGENTS")
+        print(f"{'SESSION_ID':<24} {'STATUS':<17} {'WORKFLOW':<14} {'WORKDIR':<40} AGENTS")
         for session in sessions:
             print(
-                f"{session.session_id:<24} {session.status:<11} "
+                f"{session.session_id:<24} {session.status:<17} "
                 f"{session.workflow:<14} {session.workdir:<40} "
                 f"{_format_agents_summary(session.settings)}"
             )

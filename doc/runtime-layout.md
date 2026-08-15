@@ -214,7 +214,7 @@ Session records store the execution project and the effective settings confirmat
 }
 ```
 
-`settings` reflects effective config plus validated start options; `command_preview` never contains the task prompt. Statuses are `running`, `awaiting_input`, `done`, `failed`, `stopped`, and `interrupted` (the session was running or awaiting input when the daemon died).
+`settings` reflects effective config plus validated start options; `command_preview` never contains the task prompt. Statuses are `running`, `awaiting_input`, `awaiting_approval`, `done`, `failed`, `stopped`, and `interrupted` (the session was in a live wait status — `running`, `awaiting_input`, or `awaiting_approval` — when the daemon died).
 
 ## Session Retention
 

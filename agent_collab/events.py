@@ -43,7 +43,16 @@ VALID_SOURCES = {
     "tool",
     "error",
 }
-VALID_TYPES = {"message", "tool_call", "command", "file_change", "status", "error"}
+VALID_TYPES = {
+    "message",
+    "tool_call",
+    "command",
+    "file_change",
+    "status",
+    "error",
+    "approval_request",
+    "approval_resolved",
+}
 
 
 def utc_timestamp() -> str:

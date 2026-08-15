@@ -267,6 +267,10 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(
             format_activity_indicator({"status": "awaiting_input"}, tick=2), "awaiting input"
         )
+        self.assertEqual(
+            format_activity_indicator({"status": "awaiting_approval"}, tick=2),
+            "awaiting approval",
+        )
         # Terminal sessions show just the status — the input chip carries "read-only".
         self.assertEqual(format_activity_indicator({"status": "done"}, tick=3), "done")
 
@@ -642,9 +646,11 @@ class TuiCoreTests(unittest.TestCase):
     def test_terminal_status_controls_poller_and_read_only_helpers(self):
         self.assertTrue(session_is_terminal({"status": "interrupted"}))
         self.assertFalse(session_is_terminal({"status": "awaiting_input"}))
+        self.assertFalse(session_is_terminal({"status": "awaiting_approval"}))
         self.assertFalse(should_start_poller({"status": "done"}))
         self.assertTrue(should_start_poller({"status": "running"}))
         self.assertTrue(should_start_poller({"status": "awaiting_input"}))
+        self.assertTrue(should_start_poller({"status": "awaiting_approval"}))
 
     def test_cli_tui_dispatch_is_additive(self):
         with mock.patch("agent_collab.tui.run_tui", return_value=0) as run_tui:

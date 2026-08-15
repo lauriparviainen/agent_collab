@@ -571,6 +571,7 @@
             "enum": [
               "running",
               "awaiting_input",
+              "awaiting_approval",
               "done",
               "failed",
               "stopped",
@@ -712,6 +713,7 @@
             "enum": [
               "running",
               "awaiting_input",
+              "awaiting_approval",
               "done",
               "failed",
               "stopped",

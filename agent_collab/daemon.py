@@ -1972,9 +1972,13 @@ def _render_transcript(
     return "".join(parts)
 
 
+def _is_approval_event(event: Dict[str, Any]) -> bool:
+    return event.get("type") in {"approval_request", "approval_resolved"}
+
+
 def _project_event(event: Dict[str, Any], event_id: int, tool_output: str) -> Dict[str, Any]:
     projected = copy.deepcopy(event)
-    if projected.get("source") != "tool":
+    if projected.get("source") != "tool" or _is_approval_event(projected):
         return projected
     if tool_output == "summary":
         projected["text"] = _tool_event_summary(projected, event_id)
@@ -2002,10 +2006,12 @@ def _digest_event(event: Dict[str, Any], event_id: int) -> Dict[str, Any]:
     ``tool_output`` has no meaning here — a tool payload is never carried, so a
     tool event's text is always the one-line summary the summary projection
     already produces (which keeps its own ``[event N]`` prefix, so the shared
-    transcript renderer stays byte-stable).
+    transcript renderer stays byte-stable). Approval events are ``source="tool"``
+    with a daemon-minted one-line ``text`` and digest-sized ``raw`` metadata, so
+    they take the collapsed/capped text path rather than ``_tool_event_summary``.
     """
 
-    if event.get("source") == "tool":
+    if event.get("source") == "tool" and not _is_approval_event(event):
         # The tool line is the summary projection's own, so the two views agree
         # on tool events — but it is capped like every other digest line: its
         # tool name comes from provider payload and is otherwise unbounded.

@@ -95,10 +95,26 @@ _FIELD_SCHEMAS: Dict[Tuple[type, str], Dict[str, Any]] = {
     (DaemonReadinessModel, "pid"): {"minimum": 1},
     (DaemonReadinessModel, "manager"): {"enum": ["detached", "systemd", "launchd"]},
     (SessionStateModel, "status"): {
-        "enum": ["running", "awaiting_input", "done", "failed", "stopped", "interrupted"]
+        "enum": [
+            "running",
+            "awaiting_input",
+            "awaiting_approval",
+            "done",
+            "failed",
+            "stopped",
+            "interrupted",
+        ]
     },
     (SessionResultModel, "status"): {
-        "enum": ["running", "awaiting_input", "done", "failed", "stopped", "interrupted"]
+        "enum": [
+            "running",
+            "awaiting_input",
+            "awaiting_approval",
+            "done",
+            "failed",
+            "stopped",
+            "interrupted",
+        ]
     },
     (SessionResultModel, "cursor"): {"minimum": 0},
     (AgentAnswerModel, "event_id"): {"minimum": 0},

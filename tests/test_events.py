@@ -59,6 +59,16 @@ class EventCreateCoercionTests(unittest.TestCase):
 
         self.assertEqual((event.source, event.type), ("referee", "message"))
 
+    def test_approval_event_types_are_first_class(self):
+        with self.assertNoLogs("agent_collab.events", level="WARNING"):
+            request = Event.create("tool", "approval_request", "Bash needs approval")
+            resolved = Event.create("tool", "approval_resolved", "denied")
+
+        self.assertEqual(request.type, "approval_request")
+        self.assertEqual(resolved.type, "approval_resolved")
+        self.assertEqual(request.source, "tool")
+        self.assertEqual(resolved.source, "tool")
+
     def test_agent_id_is_additive_and_defaults_to_null(self):
         unattributed = Event.create("referee", "status", "ready")
         attributed = Event.create("claude", "message", "review", agent_id="claude-reviewer")

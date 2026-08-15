@@ -13,9 +13,12 @@ from agent_collab.daemon import (
     RESULT_TAIL_EVENTS,
     SessionManager,
     SessionRequestError,
+    SessionState,
     StartSessionRequest,
     _ManagedSession,
     _digest_event,
+    _is_approval_event,
+    _project_event,
 )
 from agent_collab.events import Event
 from agent_collab.outcomes import TurnOutcome
@@ -1212,6 +1215,91 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(digested["text"].endswith("c"))
         self.assertEqual(digested["event_id"], 3)
 
+    async def test_digest_keeps_approval_event_text_instead_of_tool_summary(self):
+        request = {
+            "timestamp": "t",
+            "source": "tool",
+            "type": "approval_request",
+            "text": "claude: Bash needs approval",
+            "raw": {
+                "request_id": "a1",
+                "agent_id": "claude",
+                "tool_name": "Bash",
+                "summary": "python -m unittest",
+            },
+        }
+        digested = _digest_event(request, 7)
+        self.assertEqual(digested["text"], "claude: Bash needs approval")
+        self.assertNotIn(" — result ", digested["text"])
+        self.assertIsNone(digested["raw"])
+        self.assertEqual(digested["type"], "approval_request")
+
+        resolved = _digest_event(
+            {
+                "timestamp": "t",
+                "source": "tool",
+                "type": "approval_resolved",
+                "text": "denied: timeout",
+                "raw": {"request_id": "a1", "outcome": "auto_denied", "tool_name": "Bash"},
+            },
+            8,
+        )
+        self.assertEqual(resolved["text"], "denied: timeout")
+        self.assertNotIn(" — result ", resolved["text"])
+        self.assertEqual(resolved["type"], "approval_resolved")
+
+        tool_call = _digest_event(
+            {
+                "timestamp": "t",
+                "source": "tool",
+                "type": "tool_call",
+                "text": "short",
+                "raw": {"name": "Bash", "input": {"command": "ls"}},
+            },
+            9,
+        )
+        self.assertIn(" — result ", tool_call["text"])
+        self.assertIn("[event 9]", tool_call["text"])
+
+        summary = _project_event(request, 7, "summary")
+        self.assertEqual(summary["text"], "claude: Bash needs approval")
+        self.assertNotIn(" — result ", summary["text"])
+        self.assertEqual(summary["raw"]["request_id"], "a1")
+
+        tool_summary = _project_event(
+            {
+                "timestamp": "t",
+                "source": "tool",
+                "type": "tool_call",
+                "text": "short",
+                "raw": {"name": "Bash", "input": {"command": "ls"}},
+            },
+            9,
+            "summary",
+        )
+        self.assertIn(" — result ", tool_summary["text"])
+        self.assertIsNone(tool_summary["raw"])
+
+        # Type-only: a later helper that required source=="tool" would still
+        # pass the cases above. Referee-sourced approval types must keep text.
+        referee_request = {
+            "timestamp": "t",
+            "source": "referee",
+            "type": "approval_request",
+            "text": "claude: Bash needs approval",
+            "raw": {"request_id": "a1", "tool_name": "Bash", "summary": "python -m unittest"},
+        }
+        self.assertTrue(_is_approval_event({"type": "approval_request"}))
+        self.assertTrue(_is_approval_event(referee_request))
+        self.assertFalse(_is_approval_event({"type": "tool_call", "source": "tool"}))
+        referee_digest = _digest_event(referee_request, 11)
+        self.assertEqual(referee_digest["text"], "claude: Bash needs approval")
+        self.assertNotIn(" — result ", referee_digest["text"])
+        referee_summary = _project_event(referee_request, 11, "summary")
+        self.assertEqual(referee_summary["text"], "claude: Bash needs approval")
+        self.assertNotIn(" — result ", referee_summary["text"])
+        self.assertEqual(referee_summary["raw"]["request_id"], "a1")
+
     async def test_types_filter_projects_the_batch_without_holding_back_the_cursor(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1293,6 +1381,53 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
 
                 await manager.stop_session(state.session_id)
 
+    async def test_wait_events_blocks_while_awaiting_approval(self):
+        # LIVE_WAIT membership is the busy-spin gate: wait_events must park
+        # until timeout when status is awaiting_approval and the cursor is at
+        # end. A status-only assertion would still pass if the wait returned
+        # immediately.
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = SessionManager()
+            now = "2026-07-13T00:00:00+00:00"
+            state = manager._state_from_record(
+                {
+                    "session_id": "approval-park",
+                    "status": "awaiting_approval",
+                    "task": "park",
+                    "workflow": "solo",
+                    "workdir": tmp,
+                    "jsonl_path": str(Path(tmp) / "approval-park.jsonl"),
+                    "markdown_path": str(Path(tmp) / "approval-park.md"),
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+            managed = _ManagedSession(
+                request=None,
+                state=state,
+                events=[
+                    {
+                        "timestamp": now,
+                        "source": "referee",
+                        "type": "status",
+                        "text": "go",
+                        "raw": None,
+                    }
+                ],
+                condition=asyncio.Condition(),
+            )
+            manager._sessions[state.session_id] = managed
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            batch = await manager.wait_events(state.session_id, 1, timeout_ms=250)
+            elapsed = loop.time() - started
+
+        self.assertGreaterEqual(elapsed, 0.15)
+        self.assertEqual(batch.status, "awaiting_approval")
+        self.assertFalse(batch.terminal)
+        self.assertEqual(batch.events, [])
+        self.assertEqual(batch.cursor, 1)
+
     async def test_projection_arguments_are_validated(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1311,6 +1446,9 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 manager.read_events(state.session_id, 0, types=["messages"])
             with self.assertRaises(SessionRequestError):
                 manager.read_events(state.session_id, 0, types=[])
+            accepted = manager.read_events(state.session_id, 0, types=["approval_request"])
+            self.assertEqual(accepted.events, [])
+            self.assertGreater(accepted.cursor, 0)
             # A malformed projection fails before wait_events blocks.
             with self.assertRaises(SessionRequestError):
                 await manager.wait_events(state.session_id, 0, 60000, view="brief")
@@ -2804,6 +2942,33 @@ class SessionManagerPruneTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(sorted(r.pruned for r in results), [0, 2])
         self.assertEqual(self.index.load(), {})
+
+
+class TransitionStateTests(unittest.TestCase):
+    def _state(self, status="running"):
+        return SessionState(
+            session_id="s1",
+            status=status,
+            task="t",
+            workflow="w",
+            workdir="wd",
+            jsonl_path="a.jsonl",
+            markdown_path="a.md",
+            created_at="t",
+            updated_at="t",
+        )
+
+    def test_running_and_awaiting_approval_are_live_wait_peers(self):
+        state = self._state("running")
+        self.assertTrue(SessionManager._transition_state(state, "awaiting_approval"))
+        self.assertEqual(state.status, "awaiting_approval")
+        self.assertTrue(SessionManager._transition_state(state, "running"))
+        self.assertEqual(state.status, "running")
+
+    def test_unknown_status_is_rejected(self):
+        state = self._state("running")
+        self.assertFalse(SessionManager._transition_state(state, "archived"))
+        self.assertEqual(state.status, "running")
 
 
 if __name__ == "__main__":

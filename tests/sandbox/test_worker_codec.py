@@ -94,6 +94,22 @@ class WorkerCodecTests(unittest.TestCase):
         failed = TurnOutcome("failed", "provider_transport_failed")
         self.assertEqual(outcome_to_payload(failed)["code"], "provider_transport_failed")
 
+    def test_approval_event_types_round_trip(self) -> None:
+        request = Event.create(
+            "tool",
+            "approval_request",
+            "Bash needs approval",
+            {"request_id": "a1", "tool_name": "Bash"},
+        )
+        restored_request = event_from_payload(event_to_payload(request))
+        self.assertEqual(restored_request.type, "approval_request")
+        self.assertEqual(restored_request.source, "tool")
+        self.assertEqual(restored_request.raw["request_id"], "a1")
+        resolved = Event.create("tool", "approval_resolved", "denied")
+        restored_resolved = event_from_payload(event_to_payload(resolved))
+        self.assertEqual(restored_resolved.type, "approval_resolved")
+        self.assertEqual(restored_resolved.text, "denied")
+
     def test_event_source_for_backend_strips_shape_suffix(self) -> None:
         self.assertEqual(event_source_for_backend("claude_sdk"), "claude")
         self.assertEqual(event_source_for_backend("codex_sdk"), "codex")

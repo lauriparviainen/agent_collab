@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add `approval_request` and `approval_resolved` to the event type vocabulary
+  and `awaiting_approval` as a live wait status (#20).
 - Gate Codex SDK worker `conversation_active()` on a captured thread id rather
   than worker liveness, and soft-drop the worker when a turn finishes without
   one (#61).

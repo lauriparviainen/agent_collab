@@ -334,6 +334,8 @@ def format_activity_indicator(session: Any, tick: int = 0, *, utf8: bool = True)
         return status
     if status == "awaiting_input":
         return "awaiting input"
+    if status == "awaiting_approval":
+        return "awaiting approval"
     if status == "running":
         return f"{spinner_frame(tick, utf8=utf8)} running"
     return status or "live"

@@ -20,12 +20,13 @@ from .durations import parse_whole_duration
 
 RUNNING = "running"
 AWAITING_INPUT = "awaiting_input"
+AWAITING_APPROVAL = "awaiting_approval"
 DONE = "done"
 FAILED = "failed"
 STOPPED = "stopped"
 INTERRUPTED = "interrupted"
 TERMINAL_STATUSES = {DONE, FAILED, STOPPED, INTERRUPTED}
-LIVE_WAIT_STATUSES = {RUNNING, AWAITING_INPUT}
+LIVE_WAIT_STATUSES = {RUNNING, AWAITING_INPUT, AWAITING_APPROVAL}
 
 _DURATION_UNITS = {
     "h": timedelta(hours=1),

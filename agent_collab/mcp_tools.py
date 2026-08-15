@@ -19,6 +19,7 @@ from .daemon import (
     SessionRequestError,
     StartSessionRequest,
 )
+from .events import VALID_TYPES
 from .options import StartOptionsError
 
 
@@ -140,14 +141,7 @@ TOOLS = [
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": [
-                            "message",
-                            "tool_call",
-                            "command",
-                            "file_change",
-                            "status",
-                            "error",
-                        ],
+                        "enum": sorted(VALID_TYPES),
                     },
                 },
             },
@@ -181,14 +175,7 @@ TOOLS = [
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": [
-                            "message",
-                            "tool_call",
-                            "command",
-                            "file_change",
-                            "status",
-                            "error",
-                        ],
+                        "enum": sorted(VALID_TYPES),
                     },
                 },
             },

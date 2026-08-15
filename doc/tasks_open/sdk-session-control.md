@@ -33,15 +33,17 @@ take it:
    requires a captured `thread_id`, and a no-id finish soft-drops the worker.
    Next: Stage 1 shared control plane.
 2. **Stage 1 — shared control plane.** Protocol v2 frames, hello
-   advertisement, out-of-band interrupt writer, and `approval_request`
-   plumbing are on `sdk-session-control`. Remaining: the event/status
-   vocabulary work (`VALID_TYPES`, `LIVE_WAIT_STATUSES`, every hard-coded
-   status enum surface); the registry-keyed settle arm of `_result_settled`;
-   the approval registry and decision operation with deny-by-default —
+   advertisement, out-of-band interrupt writer, `approval_request`
+   plumbing, and the event/status vocabulary (`approval_request` /
+   `approval_resolved` in `VALID_TYPES`; `awaiting_approval` in
+   `LIVE_WAIT_STATUSES` and the hard-coded status enums) are on
+   `sdk-session-control`. Remaining: the registry-keyed settle arm of
+   `_result_settled`; the approval registry with deny-by-default —
    including turn-deadline deny, the `abandoned` outcome, and deny-before-
-   interrupt/close ordering on the stop path. Keep MCP to one decision
-   tool with approve/deny as a parameter; do not add wait_approval,
-   list_approvals, or interrupt/resume MCP in Stage 1.
+   interrupt/close ordering on the stop path; then the one decision
+   operation across REST/MCP/CLI/TUI. Keep MCP to one decision tool with
+   approve/deny as a parameter; do not add wait_approval, list_approvals,
+   or interrupt/resume MCP in Stage 1.
 3. **Capability projection wiring.** `summarize_session_capabilities`'
    production call site passes no capture/eligibility set and freezes
    capabilities at start; the projection must be re-evaluated after capture,
