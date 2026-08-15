@@ -18,8 +18,10 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Protocol
 
 from .worker_codec import (
     FRAME_LIMIT,
+    LIFECYCLE_REQUEST_FRAMES,
     MAX_EVENT_BYTES_PER_RUN,
     MAX_EVENTS_PER_RUN,
+    WORKER_ADVERTISED_CONTROL_FRAMES,
     WorkerProtocolError,
     encode_frame,
     event_to_payload,
@@ -108,7 +110,12 @@ async def _serve(channel: int) -> int:
         None,
         send_frame_sync,
         channel,
-        make_frame("hello", instance=instance, worker_pid=os.getpid()),
+        make_frame(
+            "hello",
+            instance=instance,
+            worker_pid=os.getpid(),
+            control_frames=sorted(WORKER_ADVERTISED_CONTROL_FRAMES),
+        ),
     )
     backend: Optional[WorkerBackend] = None
     event_source = "sdk"
@@ -120,6 +127,7 @@ async def _serve(channel: int) -> int:
     queued_event_bytes = 0
     run_event_bytes = 0
     seen_requests: set[str] = set()
+    pending_approvals: Dict[str, asyncio.Future[Any]] = {}
     sequence = 0
     closed = False
 
@@ -201,7 +209,7 @@ async def _serve(channel: int) -> int:
 
         frame_type = envelope["type"]
         request_id = envelope.get("request_id")
-        if isinstance(request_id, str):
+        if frame_type in LIFECYCLE_REQUEST_FRAMES and isinstance(request_id, str):
             if request_id in seen_requests:
                 await _send_error(loop, channel, "duplicate request_id")
                 return 1
@@ -317,6 +325,26 @@ async def _serve(channel: int) -> int:
             )
             continue
 
+        if frame_type == "interrupt":
+            target = envelope.get("run_id")
+            if not isinstance(target, str) or target != active_run or backend is None:
+                continue
+            interrupt = getattr(backend, "interrupt", None)
+            if callable(interrupt):
+                try:
+                    await interrupt(target)
+                except Exception:
+                    pass
+            continue
+
+        if frame_type == "approval_decision":
+            approval_id = envelope.get("approval_id")
+            if isinstance(approval_id, str):
+                future = pending_approvals.pop(approval_id, None)
+                if future is not None and not future.done():
+                    future.set_result(envelope)
+            continue
+
         if frame_type == "cancel":
             if run_task is not None and not run_task.done():
                 run_task.cancel()
@@ -397,23 +425,35 @@ async def _drain_event_queue(
             item = event_queue.get_nowait()
         except asyncio.QueueEmpty:
             return sequence, queued_event_bytes
-        if isinstance(item, tuple) and len(item) == 2:
+        frame_type = "event"
+        extra: Dict[str, Any] = {}
+        if isinstance(item, tuple) and len(item) == 3 and item[0] == "approval_request":
+            _, payload, encoded_size = item
+            queued_event_bytes = max(0, queued_event_bytes - int(encoded_size))
+            frame_type = "approval_request"
+            extra = {
+                key: value
+                for key, value in dict(payload).items()
+                if key not in {"run_id", "sequence", "type", "protocol", "version"}
+            }
+        elif isinstance(item, tuple) and len(item) == 2:
             payload, encoded_size = item
             queued_event_bytes = max(0, queued_event_bytes - int(encoded_size))
+            extra = {"event": payload}
         else:
             # Back-compat for residual object puts (should not occur in production).
             payload = event_to_payload(item)
-            encoded_size = 0
+            extra = {"event": payload}
         sequence += 1
         await loop.run_in_executor(
             None,
             send_frame_sync,
             channel,
             make_frame(
-                "event",
+                frame_type,
                 run_id=run_id,
                 sequence=sequence,
-                event=payload,
+                **extra,
             ),
         )
 

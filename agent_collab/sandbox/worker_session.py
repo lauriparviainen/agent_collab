@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import secrets
-from typing import Any, Awaitable, Callable, Mapping, Optional, Tuple
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional, Tuple
 
 from ..outcomes import TurnOutcome
 from .specs import SandboxFailure
@@ -21,13 +22,20 @@ from .worker_codec import (
     encode_frame,
     event_from_payload,
     make_frame,
+    parse_hello_control_frames,
     parse_outcome_payload,
     recv_frame,
-    send_frame,
     validate_envelope,
 )
 
 AsyncEventEmit = Callable[[Any], Awaitable[None]]
+ApprovalCallback = Callable[[Mapping[str, Any]], Any]
+
+
+@dataclass(frozen=True)
+class WorkerHello:
+    instance: str
+    control_frames: frozenset[str]
 
 
 class SupervisedWorkerSession:
@@ -40,12 +48,15 @@ class SupervisedWorkerSession:
         writer: asyncio.StreamWriter,
         *,
         instance: str,
+        control_frames: Optional[Iterable[str]] = None,
     ) -> None:
         self._process = process
         self._reader = reader
         self._writer = writer
         self.instance = instance
+        self.control_frames = frozenset(control_frames or ())
         self._lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
         self._opened = False
         self._closed = False
         self._terminal = False
@@ -89,10 +100,7 @@ class SupervisedWorkerSession:
         async with self._lock:
             self._ensure_openable()
             request_id = self._request_id()
-            await send_frame(
-                self._writer,
-                make_frame("open", request_id=request_id, payload=dict(payload)),
-            )
+            await self._send(make_frame("open", request_id=request_id, payload=dict(payload)))
             try:
                 frame = await asyncio.wait_for(
                     self._recv("worker"),
@@ -122,6 +130,7 @@ class SupervisedWorkerSession:
         prompt: str,
         *,
         emit: Optional[AsyncEventEmit] = None,
+        on_approval: Optional[ApprovalCallback] = None,
     ) -> Tuple[list[Any], TurnOutcome]:
         async with self._lock:
             self._ensure_ready()
@@ -133,10 +142,7 @@ class SupervisedWorkerSession:
             event_count = 0
             event_bytes = 0
             try:
-                await send_frame(
-                    self._writer,
-                    make_frame("run", run_id=run_id, prompt=prompt),
-                )
+                await self._send(make_frame("run", run_id=run_id, prompt=prompt))
                 while True:
                     frame = await self._recv("worker")
                     frame_type = frame["type"]
@@ -191,6 +197,12 @@ class SupervisedWorkerSession:
                         else:
                             events.append(event)
                         continue
+                    if frame_type == "approval_request":
+                        if on_approval is not None:
+                            result = on_approval(frame)
+                            if asyncio.iscoroutine(result):
+                                asyncio.create_task(result)
+                        continue
                     if frame_type == "result":
                         outcome_payload = frame.get("outcome")
                         if not isinstance(outcome_payload, dict):
@@ -224,11 +236,44 @@ class SupervisedWorkerSession:
         # ownership contract.
         await self._join_hard_cleanup(task)
 
+    async def interrupt(self, run_id: str) -> None:
+        """Write an out-of-band interrupt; unknown or finished run_id is a no-op."""
+
+        if self._closed or self._terminal or self._active_run != run_id:
+            return
+        try:
+            await self._send(make_frame("interrupt", run_id=run_id))
+        except Exception:
+            return
+
+    async def send_approval_decision(
+        self,
+        *,
+        approval_id: str,
+        decision: str,
+        run_id: Optional[str] = None,
+    ) -> None:
+        """Write an out-of-band approval decision. Unknown ids are a worker no-op."""
+
+        if self._closed or self._terminal:
+            return
+        try:
+            await self._send(
+                make_frame(
+                    "approval_decision",
+                    approval_id=approval_id,
+                    decision=decision,
+                    run_id=run_id or self._active_run,
+                )
+            )
+        except Exception:
+            return
+
     async def reset(self) -> None:
         async with self._lock:
             self._ensure_ready()
             request_id = self._request_id()
-            await send_frame(self._writer, make_frame("reset", request_id=request_id))
+            await self._send(make_frame("reset", request_id=request_id))
             try:
                 frame = await self._recv("worker")
             except WorkerProtocolError:
@@ -255,7 +300,7 @@ class SupervisedWorkerSession:
             try:
                 if self._opened and not self._terminal and self._process.returncode is None:
                     request_id = self._request_id()
-                    await send_frame(self._writer, make_frame("close", request_id=request_id))
+                    await self._send(make_frame("close", request_id=request_id))
                     try:
                         frame = await asyncio.wait_for(self._recv("worker"), 5.0)
                         if frame.get("type") != "closed":
@@ -390,6 +435,12 @@ class SupervisedWorkerSession:
         self._request_ids.add(value)
         return value
 
+    async def _send(self, payload: Mapping[str, Any]) -> None:
+        data = encode_frame(payload)
+        async with self._write_lock:
+            self._writer.write(data)
+            await self._writer.drain()
+
     async def _recv(self, direction: str) -> dict[str, Any]:
         try:
             payload = await recv_frame(self._reader)
@@ -403,7 +454,7 @@ async def handshake_worker(
     writer: asyncio.StreamWriter,
     *,
     timeout: float = HANDSHAKE_TIMEOUT_SECONDS,
-) -> str:
+) -> WorkerHello:
     try:
         payload = await asyncio.wait_for(recv_frame(reader), timeout)
     except asyncio.TimeoutError as exc:
@@ -416,7 +467,8 @@ async def handshake_worker(
     instance = frame.get("instance")
     if not isinstance(instance, str) or not instance:
         raise WorkerProtocolError("worker hello is missing instance")
-    return instance
+    control_frames = parse_hello_control_frames(frame)
+    return WorkerHello(instance=instance, control_frames=control_frames)
 
 
 async def _drain_stream(reader: Any) -> None:

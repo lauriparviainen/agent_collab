@@ -12,7 +12,7 @@ from typing import Any, Mapping
 from .specs import SandboxFailure
 
 PROTOCOL_NAME = "agent-collab-sdk-worker"
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 # Match the provider event transport bound so a single message cannot exceed it.
 FRAME_LIMIT = 8 * 1024 * 1024
 MAX_EVENTS_PER_RUN = 10_000
@@ -23,7 +23,17 @@ EMIT_BACKPRESSURE_TIMEOUT_SECONDS = 5.0
 WORKER_TERMINATE_GRACE_SECONDS = 1.0
 WORKER_KILL_GRACE_SECONDS = 1.0
 
-DAEMON_TO_WORKER = frozenset({"open", "run", "cancel", "reset", "close"})
+DAEMON_TO_WORKER = frozenset(
+    {
+        "open",
+        "run",
+        "cancel",
+        "reset",
+        "close",
+        "interrupt",
+        "approval_decision",
+    }
+)
 WORKER_TO_DAEMON = frozenset(
     {
         "hello",
@@ -34,8 +44,16 @@ WORKER_TO_DAEMON = frozenset(
         "reset_result",
         "closed",
         "error",
+        "approval_request",
     }
 )
+# Inbound control frames a v2 worker must advertise on hello so a later gated
+# start fails at handshake rather than mid-callback. Extra advertised names are
+# allowed; missing required names are not.
+WORKER_ADVERTISED_CONTROL_FRAMES = frozenset({"interrupt", "approval_decision"})
+# Lifecycle frames that use envelope request_id uniqueness. Mid-turn control
+# frames must not join that set: a late duplicate approval_decision is a no-op.
+LIFECYCLE_REQUEST_FRAMES = frozenset({"open", "reset", "close", "cancel"})
 
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*\S+"),
@@ -100,6 +118,30 @@ def validate_envelope(
     if frame_type not in allowed:
         raise WorkerProtocolError(f"worker frame type {frame_type!r} is not allowed")
     return dict(payload)
+
+
+def parse_hello_control_frames(payload: Mapping[str, Any]) -> frozenset[str]:
+    """Return advertised inbound control frames from a v2 hello, or fail closed."""
+
+    raw = payload.get("control_frames")
+    if not isinstance(raw, list) or not raw:
+        raise WorkerProtocolError("worker hello is missing control_frames")
+    frames: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str) or not item:
+            raise WorkerProtocolError("worker hello control_frames is invalid")
+        if item in seen:
+            continue
+        seen.add(item)
+        frames.append(item)
+    advertised = frozenset(frames)
+    missing = WORKER_ADVERTISED_CONTROL_FRAMES - advertised
+    if missing:
+        raise WorkerProtocolError(
+            "worker hello does not advertise required control frames: " + ", ".join(sorted(missing))
+        )
+    return advertised
 
 
 def make_frame(frame_type: str, **fields: Any) -> dict[str, Any]:

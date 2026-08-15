@@ -8,6 +8,8 @@ from agent_collab.events import Event
 from agent_collab.outcomes import TurnOutcome
 from agent_collab.sandbox.sdk_worker import event_source_for_backend
 from agent_collab.sandbox.worker_codec import (
+    PROTOCOL_VERSION,
+    WORKER_ADVERTISED_CONTROL_FRAMES,
     WorkerProtocolError,
     decode_frame,
     encode_frame,
@@ -15,6 +17,7 @@ from agent_collab.sandbox.worker_codec import (
     event_to_payload,
     make_frame,
     outcome_to_payload,
+    parse_hello_control_frames,
     validate_envelope,
 )
 
@@ -36,6 +39,42 @@ class WorkerCodecTests(unittest.TestCase):
         validate_envelope(frame, expected_direction="worker")
         with self.assertRaises(WorkerProtocolError):
             validate_envelope(frame, expected_direction="daemon")
+
+    def test_protocol_version_is_v2_and_rejects_v1(self) -> None:
+        self.assertEqual(PROTOCOL_VERSION, 2)
+        frame = make_frame(
+            "hello", instance="x", control_frames=sorted(WORKER_ADVERTISED_CONTROL_FRAMES)
+        )
+        self.assertEqual(frame["version"], 2)
+        validate_envelope(frame, expected_direction="worker")
+        frame["version"] = 1
+        with self.assertRaises(WorkerProtocolError):
+            validate_envelope(frame, expected_direction="worker")
+
+    def test_control_frames_round_trip_and_hello_gate(self) -> None:
+        frame = make_frame(
+            "interrupt",
+            run_id="r1",
+        )
+        validate_envelope(frame, expected_direction="daemon")
+        decision = make_frame("approval_decision", approval_id="a1", decision="deny")
+        validate_envelope(decision, expected_direction="daemon")
+        request = make_frame("approval_request", run_id="r1", sequence=1, approval_id="a1")
+        validate_envelope(request, expected_direction="worker")
+        advertised = parse_hello_control_frames(
+            make_frame(
+                "hello",
+                instance="x",
+                control_frames=sorted(WORKER_ADVERTISED_CONTROL_FRAMES),
+            )
+        )
+        self.assertEqual(advertised, WORKER_ADVERTISED_CONTROL_FRAMES)
+        with self.assertRaises(WorkerProtocolError):
+            parse_hello_control_frames(make_frame("hello", instance="x"))
+        with self.assertRaises(WorkerProtocolError):
+            parse_hello_control_frames(
+                make_frame("hello", instance="x", control_frames=["interrupt"])
+            )
 
     def test_event_and_outcome_payloads(self) -> None:
         event = Event.create("codex", "message", "hello", {"text": "hello"})

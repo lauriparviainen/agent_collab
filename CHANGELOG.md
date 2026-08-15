@@ -16,6 +16,9 @@ into a detailed work log.
 - Gate Codex SDK worker `conversation_active()` on a captured thread id rather
   than worker liveness, and soft-drop the worker when a turn finishes without
   one (#61).
+- Bump the SDK worker protocol to v2 with out-of-band `interrupt` /
+  `approval_decision` frames and a first-class `approval_request` frame. Hello
+  advertises those control frames so version skew fails at handshake (#20).
 
 ## [0.15.1] - 2026-08-15 - Gemini 3.7 Antigravity default
 

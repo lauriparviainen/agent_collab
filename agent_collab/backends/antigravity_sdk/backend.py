@@ -709,7 +709,7 @@ class AntigravitySdkRunner(AgentRunner):
         try:
             worker_sock.setblocking(False)
             reader, writer = await asyncio.open_connection(sock=worker_sock)
-            instance = await handshake_worker(reader, writer)
+            hello = await handshake_worker(reader, writer)
             adapter = AntigravitySdkSandboxAdapter()
             effective_cwd = getattr(getattr(plan, "context", None), "cwd", None) or resolved
             env_values = dict(
@@ -726,7 +726,13 @@ class AntigravitySdkRunner(AgentRunner):
                 save_dir=env_values.get("ANTIGRAVITY_SAVE_DIR"),
                 app_data_dir=env_values.get("ANTIGRAVITY_APP_DATA_DIR"),
             )
-            session = SupervisedWorkerSession(process, reader, writer, instance=instance)
+            session = SupervisedWorkerSession(
+                process,
+                reader,
+                writer,
+                instance=hello.instance,
+                control_frames=hello.control_frames,
+            )
             session._scratch = process._scratch  # type: ignore[attr-defined]
             await session.open(payload)
         except BaseException:

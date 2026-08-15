@@ -409,7 +409,7 @@ class ClaudeSdkRunner(AgentRunner):
         try:
             worker_sock.setblocking(False)
             reader, writer = await asyncio.open_connection(sock=worker_sock)
-            instance = await handshake_worker(reader, writer)
+            hello = await handshake_worker(reader, writer)
             adapter = ClaudeSdkSandboxAdapter()
             effective_cwd = getattr(getattr(plan, "context", None), "cwd", None) or resolved
             payload = adapter.worker_open_payload_for_agent(
@@ -420,7 +420,13 @@ class ClaudeSdkRunner(AgentRunner):
                 agent_env=agent_environment(self.agent),
                 verbose=self.verbose,
             )
-            session = SupervisedWorkerSession(process, reader, writer, instance=instance)
+            session = SupervisedWorkerSession(
+                process,
+                reader,
+                writer,
+                instance=hello.instance,
+                control_frames=hello.control_frames,
+            )
             session._scratch = process._scratch  # type: ignore[attr-defined]
             await session.open(payload)
         except BaseException:

@@ -49,6 +49,16 @@ class AgentRunner:
 
         return False
 
+    async def interrupt_request(self) -> bool:
+        """Ask the in-flight provider turn to abort.
+
+        Default False: not supported. True means the request was issued; the
+        turn's own outcome is the acknowledgement. CLI and mock runners keep
+        this default.
+        """
+
+        return False
+
     async def close(self) -> None:
         """Release any client or subprocess held across turns. Default no-op;
         must be idempotent and concurrency-safe against an in-flight or adopted

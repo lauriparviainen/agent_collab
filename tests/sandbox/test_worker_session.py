@@ -9,6 +9,7 @@ import unittest
 from agent_collab.events import Event
 from agent_collab.outcomes import TurnOutcome
 from agent_collab.sandbox.worker_codec import (
+    WORKER_ADVERTISED_CONTROL_FRAMES,
     WorkerProtocolError,
     make_frame,
     recv_frame,
@@ -17,6 +18,16 @@ from agent_collab.sandbox.worker_codec import (
 )
 from agent_collab.sandbox.worker_session import SupervisedWorkerSession, handshake_worker
 from agent_collab.sandbox.supervisor import _worker_python_executable
+
+
+def _hello(*, instance: str = "x", worker_pid: int = 1, **fields: object):
+    return make_frame(
+        "hello",
+        instance=instance,
+        worker_pid=worker_pid,
+        control_frames=sorted(WORKER_ADVERTISED_CONTROL_FRAMES),
+        **fields,
+    )
 
 
 class _FakeProcess:
@@ -49,9 +60,16 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         worker_task = asyncio.create_task(self._fake_worker(worker))
         try:
             reader, writer = await asyncio.open_connection(sock=daemon)
-            instance = await handshake_worker(reader, writer)
-            self.assertTrue(instance)
-            session = SupervisedWorkerSession(_FakeProcess(), reader, writer, instance=instance)
+            hello = await handshake_worker(reader, writer)
+            self.assertTrue(hello.instance)
+            self.assertEqual(hello.control_frames, WORKER_ADVERTISED_CONTROL_FRAMES)
+            session = SupervisedWorkerSession(
+                _FakeProcess(),
+                reader,
+                writer,
+                instance=hello.instance,
+                control_frames=hello.control_frames,
+            )
             await session.open({"backend": "fake", "workspace": "/tmp/ws"})
             streamed: list = []
 
@@ -77,7 +95,7 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         async def bad_worker(sock: socket.socket) -> None:
             reader, writer = await asyncio.open_connection(sock=sock)
             try:
-                await send_frame(writer, make_frame("hello", instance="x", worker_pid=1))
+                await send_frame(writer, _hello(instance="x", worker_pid=1))
                 open_frame = await recv_frame(reader)
                 await send_frame(
                     writer,
@@ -101,8 +119,14 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         worker_task = asyncio.create_task(bad_worker(worker))
         try:
             reader, writer = await asyncio.open_connection(sock=daemon)
-            instance = await handshake_worker(reader, writer)
-            session = SupervisedWorkerSession(process, reader, writer, instance=instance)
+            hello = await handshake_worker(reader, writer)
+            session = SupervisedWorkerSession(
+                process,
+                reader,
+                writer,
+                instance=hello.instance,
+                control_frames=hello.control_frames,
+            )
             await session.open({"backend": "fake"})
             with self.assertRaises(WorkerProtocolError):
                 await session.run("prompt")
@@ -120,7 +144,7 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         async def bad_outcome(sock: socket.socket) -> None:
             reader, writer = await asyncio.open_connection(sock=sock)
-            await send_frame(writer, make_frame("hello", instance="x", worker_pid=1))
+            await send_frame(writer, _hello(instance="x", worker_pid=1))
             open_frame = await recv_frame(reader)
             await send_frame(
                 writer,
@@ -142,8 +166,14 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         worker_task = asyncio.create_task(bad_outcome(worker))
         try:
             reader, writer = await asyncio.open_connection(sock=daemon)
-            instance = await handshake_worker(reader, writer)
-            session = SupervisedWorkerSession(process, reader, writer, instance=instance)
+            hello = await handshake_worker(reader, writer)
+            session = SupervisedWorkerSession(
+                process,
+                reader,
+                writer,
+                instance=hello.instance,
+                control_frames=hello.control_frames,
+            )
             await session.open({"backend": "fake"})
             with self.assertRaises(WorkerProtocolError):
                 await session.run("prompt")
@@ -224,7 +254,7 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         async def hang_worker(sock: socket.socket) -> None:
             reader, writer = await asyncio.open_connection(sock=sock)
             try:
-                await send_frame(writer, make_frame("hello", instance="x", worker_pid=1))
+                await send_frame(writer, _hello(instance="x", worker_pid=1))
                 open_frame = await recv_frame(reader)
                 await send_frame(
                     writer,
@@ -239,8 +269,14 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         worker_task = asyncio.create_task(hang_worker(worker))
         try:
             reader, writer = await asyncio.open_connection(sock=daemon)
-            instance = await handshake_worker(reader, writer)
-            session = SupervisedWorkerSession(process, reader, writer, instance=instance)
+            hello = await handshake_worker(reader, writer)
+            session = SupervisedWorkerSession(
+                process,
+                reader,
+                writer,
+                instance=hello.instance,
+                control_frames=hello.control_frames,
+            )
             await session.open({"backend": "fake"})
             run_task = asyncio.create_task(session.run("hang"))
             await asyncio.sleep(0.05)
@@ -257,7 +293,7 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def _fake_worker(self, sock: socket.socket) -> None:
         reader, writer = await asyncio.open_connection(sock=sock)
-        await send_frame(writer, make_frame("hello", instance="fake-instance", worker_pid=1))
+        await send_frame(writer, _hello(instance="fake-instance", worker_pid=1))
         open_frame = await recv_frame(reader)
         self.assertEqual(open_frame["type"], "open")
         await send_frame(
@@ -302,6 +338,253 @@ class WorkerSessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await send_frame(writer, make_frame("closed", request_id=close_frame["request_id"]))
         writer.close()
         await writer.wait_closed()
+
+
+class WorkerProtocolV2ControlTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hello_version_skew_fails_at_handshake(self) -> None:
+        daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        daemon.setblocking(False)
+        worker.setblocking(False)
+
+        async def v1_worker(sock: socket.socket) -> None:
+            reader, writer = await asyncio.open_connection(sock=sock)
+            payload = _hello(instance="x", worker_pid=1)
+            payload["version"] = 1
+            await send_frame(writer, payload)
+            writer.close()
+            await writer.wait_closed()
+
+        worker_task = asyncio.create_task(v1_worker(worker))
+        try:
+            reader, writer = await asyncio.open_connection(sock=daemon)
+            with self.assertRaises(WorkerProtocolError):
+                await handshake_worker(reader, writer)
+        finally:
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
+
+    async def test_hello_missing_control_frames_fails_at_handshake(self) -> None:
+        daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        daemon.setblocking(False)
+        worker.setblocking(False)
+
+        async def bare_hello(sock: socket.socket) -> None:
+            reader, writer = await asyncio.open_connection(sock=sock)
+            await send_frame(writer, make_frame("hello", instance="x", worker_pid=1))
+            writer.close()
+            await writer.wait_closed()
+
+        worker_task = asyncio.create_task(bare_hello(worker))
+        try:
+            reader, writer = await asyncio.open_connection(sock=daemon)
+            with self.assertRaises(WorkerProtocolError):
+                await handshake_worker(reader, writer)
+        finally:
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
+
+    async def test_interrupt_unknown_run_id_is_noop(self) -> None:
+        process = _FakeProcess()
+        daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        daemon.setblocking(False)
+        worker.close()
+        reader, writer = await asyncio.open_connection(sock=daemon)
+        session = SupervisedWorkerSession(process, reader, writer, instance="x")
+        session._opened = True
+        session._active_run = "run-1"
+        sent: list = []
+
+        async def capture(payload):
+            sent.append(payload)
+
+        session._send = capture  # type: ignore[method-assign]
+        await session.interrupt("other")
+        self.assertEqual(sent, [])
+        await session.interrupt("run-1")
+        self.assertEqual(sent[0]["type"], "interrupt")
+        self.assertEqual(sent[0]["run_id"], "run-1")
+        writer.close()
+        await writer.wait_closed()
+
+    async def test_interrupt_frame_delivered_while_run_holds_lock(self) -> None:
+        daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        daemon.setblocking(False)
+        worker.setblocking(False)
+        process = _FakeProcess()
+        received: list = []
+        run_seen = asyncio.Event()
+
+        async def gated_worker(sock: socket.socket) -> None:
+            reader, writer = await asyncio.open_connection(sock=sock)
+            try:
+                await send_frame(writer, _hello())
+                open_frame = await recv_frame(reader)
+                await send_frame(
+                    writer,
+                    make_frame("ready", request_id=open_frame["request_id"], instance="x"),
+                )
+                run_frame = await recv_frame(reader)
+                run_seen.set()
+                interrupt = await recv_frame(reader)
+                received.append(interrupt)
+                await send_frame(
+                    writer,
+                    make_frame(
+                        "result",
+                        run_id=run_frame["run_id"],
+                        sequence=1,
+                        outcome=TurnOutcome("interrupted", "local_turn_interrupted").to_dict(),
+                    ),
+                )
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        worker_task = asyncio.create_task(gated_worker(worker))
+        try:
+            reader, writer = await asyncio.open_connection(sock=daemon)
+            hello = await handshake_worker(reader, writer)
+            session = SupervisedWorkerSession(
+                process,
+                reader,
+                writer,
+                instance=hello.instance,
+                control_frames=hello.control_frames,
+            )
+            await session.open({"backend": "fake"})
+            run_task = asyncio.create_task(session.run("hang"))
+            await run_seen.wait()
+            await session.interrupt(session._active_run or "")
+            _events, outcome = await run_task
+            self.assertEqual(received[0]["type"], "interrupt")
+            self.assertTrue(received[0].get("run_id"))
+            self.assertEqual(outcome.outcome, "interrupted")
+        finally:
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
+
+    async def test_approval_request_dispatches_without_blocking_result(self) -> None:
+        daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        daemon.setblocking(False)
+        worker.setblocking(False)
+        process = _FakeProcess()
+        seen: list = []
+
+        async def approval_worker(sock: socket.socket) -> None:
+            reader, writer = await asyncio.open_connection(sock=sock)
+            try:
+                await send_frame(writer, _hello())
+                open_frame = await recv_frame(reader)
+                await send_frame(
+                    writer,
+                    make_frame("ready", request_id=open_frame["request_id"], instance="x"),
+                )
+                run_frame = await recv_frame(reader)
+                await send_frame(
+                    writer,
+                    make_frame(
+                        "approval_request",
+                        run_id=run_frame["run_id"],
+                        sequence=1,
+                        approval_id="appr-1",
+                        tool_name="Bash",
+                        summary="true",
+                        summary_truncated=False,
+                        decision_options=["approve", "deny"],
+                    ),
+                )
+                await send_frame(
+                    writer,
+                    make_frame(
+                        "result",
+                        run_id=run_frame["run_id"],
+                        sequence=2,
+                        outcome=TurnOutcome("completed").to_dict(),
+                    ),
+                )
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        worker_task = asyncio.create_task(approval_worker(worker))
+        try:
+            reader, writer = await asyncio.open_connection(sock=daemon)
+            hello = await handshake_worker(reader, writer)
+            session = SupervisedWorkerSession(
+                process,
+                reader,
+                writer,
+                instance=hello.instance,
+                control_frames=hello.control_frames,
+            )
+            await session.open({"backend": "fake"})
+
+            def on_approval(frame):
+                seen.append(frame)
+
+            _events, outcome = await session.run("prompt", on_approval=on_approval)
+            self.assertEqual(outcome.outcome, "completed")
+            self.assertEqual(seen[0]["type"], "approval_request")
+            self.assertEqual(seen[0]["approval_id"], "appr-1")
+        finally:
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
+
+    async def test_late_approval_decision_is_noop(self) -> None:
+        daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        daemon.setblocking(False)
+        worker.setblocking(False)
+        process = _FakeProcess()
+
+        async def decision_worker(sock: socket.socket) -> None:
+            reader, writer = await asyncio.open_connection(sock=sock)
+            try:
+                await send_frame(writer, _hello())
+                open_frame = await recv_frame(reader)
+                await send_frame(
+                    writer,
+                    make_frame("ready", request_id=open_frame["request_id"], instance="x"),
+                )
+                run_frame = await recv_frame(reader)
+                decision = await recv_frame(reader)
+                self.assertEqual(decision["type"], "approval_decision")
+                await send_frame(
+                    writer,
+                    make_frame(
+                        "result",
+                        run_id=run_frame["run_id"],
+                        sequence=1,
+                        outcome=TurnOutcome("completed").to_dict(),
+                    ),
+                )
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        worker_task = asyncio.create_task(decision_worker(worker))
+        try:
+            reader, writer = await asyncio.open_connection(sock=daemon)
+            hello = await handshake_worker(reader, writer)
+            session = SupervisedWorkerSession(
+                process,
+                reader,
+                writer,
+                instance=hello.instance,
+                control_frames=hello.control_frames,
+            )
+            await session.open({"backend": "fake"})
+            run_task = asyncio.create_task(session.run("prompt"))
+            for _ in range(50):
+                if session._active_run:
+                    break
+                await asyncio.sleep(0.01)
+            await session.send_approval_decision(approval_id="missing", decision="deny")
+            _events, outcome = await run_task
+            self.assertEqual(outcome.outcome, "completed")
+            self.assertFalse(session.terminal)
+        finally:
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
 
 
 class WorkerCodecHardeningTests(unittest.TestCase):
