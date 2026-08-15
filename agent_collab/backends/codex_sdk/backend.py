@@ -177,6 +177,10 @@ class CodexSdkRunner(AgentRunner):
         self.sandbox_plan: Optional[object] = None
         self._worker_session: Optional[object] = None
         self._worker_terminal = False
+        # Provider continuity is established only after a captured session id,
+        # not merely because a Bubblewrap worker process is still alive.
+        self._worker_provider_active = False
+        self._worker_soft_drop_cancelled = False
 
     def conversation_active(self) -> bool:
         if self._worker_terminal:
@@ -185,7 +189,7 @@ class CodexSdkRunner(AgentRunner):
             session = self._worker_session
             if getattr(session, "terminal", False):
                 return False
-            return True
+            return self._worker_provider_active
         return self._conversation is not None and self._conversation.active()
 
     async def close(self) -> None:
@@ -193,6 +197,7 @@ class CodexSdkRunner(AgentRunner):
             session = self._worker_session
             self._worker_session = None
             self._worker_terminal = True
+            self._worker_provider_active = False
             try:
                 await session.close()  # type: ignore[union-attr]
             except asyncio.CancelledError:
@@ -242,7 +247,24 @@ class CodexSdkRunner(AgentRunner):
             session = await self._worker_for(workdir)
             scratch = getattr(session, "_scratch", None)
             effective_prompt = self.sandbox_plan.render_prompt(prompt, scratch)  # type: ignore[union-attr]
-            _buffered, outcome = await session.run(effective_prompt, emit=emit)
+
+            async def tracking_emit(event: Any) -> None:
+                session_meta = getattr(event, "provider_session", None)
+                if isinstance(session_meta, Mapping) and session_meta.get("provider_session_id"):
+                    self._worker_provider_active = True
+                elif isinstance(getattr(event, "raw", None), Mapping):
+                    raw = event.raw
+                    if raw.get("provider_session_id"):
+                        self._worker_provider_active = True
+                await emit(event)
+
+            _buffered, outcome = await session.run(effective_prompt, emit=tracking_emit)
+            # Without a captured provider session, conversation_active is false
+            # and the referee re-issues a full task. Drop the live worker so
+            # hidden client context or an undelivered prompt cannot join that
+            # full task. Soft-drop keeps the runner eligible for a fresh worker.
+            if not self._worker_provider_active:
+                await self._drop_worker_session()
             return outcome
         except asyncio.CancelledError:
             await self._terminate_worker_session()
@@ -283,8 +305,40 @@ class CodexSdkRunner(AgentRunner):
         except Exception:
             pass
 
+    async def _drop_worker_session(self) -> None:
+        """Kill the current worker but remain eligible for a later relaunch."""
+
+        session = self._worker_session
+        self._worker_session = None
+        self._worker_provider_active = False
+        if session is None:
+            return
+        try:
+            await session.force_teardown()  # type: ignore[union-attr]
+        except asyncio.CancelledError:
+            self._worker_soft_drop_cancelled = True
+            raise
+        except Exception:
+            try:
+                session.kill()  # type: ignore[union-attr]
+            except Exception:
+                try:
+                    session.terminate()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+            try:
+                await asyncio.shield(session.wait())  # type: ignore[union-attr]
+            except asyncio.CancelledError:
+                self._worker_soft_drop_cancelled = True
+                raise
+            except Exception:
+                pass
+
     async def _terminate_worker_session(self) -> None:
         session = self._worker_session
+        if session is None and self._worker_soft_drop_cancelled:
+            self._worker_soft_drop_cancelled = False
+            return
         # Mark terminal and drop the reference only after signals are delivered.
         # Kill synchronously first so sticky CancelledError cannot skip SIGKILL.
         if session is not None:
@@ -297,6 +351,8 @@ class CodexSdkRunner(AgentRunner):
                     pass
         self._worker_session = None
         self._worker_terminal = True
+        self._worker_provider_active = False
+        self._worker_soft_drop_cancelled = False
         if session is None:
             return
         try:
@@ -330,6 +386,7 @@ class CodexSdkRunner(AgentRunner):
             if getattr(self._worker_session, "terminal", False):
                 self._worker_session = None
                 self._worker_terminal = True
+                self._worker_provider_active = False
                 raise RuntimeError("codex sdk worker session is terminal")
             if self._workdir != resolved:
                 raise RuntimeError("codex sdk worker workdir changed between turns")
@@ -385,6 +442,7 @@ class CodexSdkRunner(AgentRunner):
                 except Exception:
                     pass
             self._worker_terminal = True
+            self._worker_provider_active = False
             raise
         self._worker_session = session
         self._workdir = resolved

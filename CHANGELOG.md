@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Gate Codex SDK worker `conversation_active()` on a captured thread id rather
+  than worker liveness, and soft-drop the worker when a turn finishes without
+  one (#61).
+
 ## [0.15.1] - 2026-08-15 - Gemini 3.7 Antigravity default
 
 - Make `gemini-3.7-flash-high` the shipped Antigravity CLI and SDK default

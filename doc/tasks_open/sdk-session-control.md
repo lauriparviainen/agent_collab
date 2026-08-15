@@ -28,14 +28,10 @@ that date); treat the body below as settled and implement against it rather
 than re-deriving it. The outstanding work, in the order the next agent should
 take it:
 
-1. **Fix the shipped `codex_sdk` continuity gate first.** Its
-   `conversation_active()` keys on worker liveness alone — no
-   `_worker_provider_active` gate, no soft-drop — deviating from the #47
-   contract the other two worker SDKs implement (see transport property 4).
-   This is a live defect independent of the stages: a worker turn ending
-   without a `thread_id` feeds hidden context into the next delta prompt.
-   File it as a discrete issue and land the fix plus its hermetic test before
-   or with stage 1.
+1. **Fix the shipped `codex_sdk` continuity gate first.** Landed as #61 on
+   branch `sdk-session-control`: worker-path `conversation_active()` now
+   requires a captured `thread_id`, and a no-id finish soft-drops the worker.
+   Next: Stage 1 shared control plane.
 2. **Stage 1 — shared control plane.** Protocol v2 frames (`approval_request`
    is a first-class frame emitted through the serve loop's single writer; a
    late `approval_decision` is a no-op, never fatal); the event/status
@@ -327,18 +323,12 @@ Four properties of that transport decide the designs below:
    any await, because under sticky cancellation an await before the kill can
    orphan Bubblewrap descendants. This is the teardown contract and must not be
    weakened.
-4. **Continuity is gated on a captured provider id — with one shipped gap.**
-   In `claude_sdk` and `antigravity_sdk`, `conversation_active()` is true only
-   when the worker is live *and* a provider-session event set
+4. **Continuity is gated on a captured provider id.** In `claude_sdk`,
+   `antigravity_sdk`, and `codex_sdk` (#61), `conversation_active()` is true
+   only when the worker is live *and* a provider-session event set
    `_worker_provider_active`; a turn that ends without a captured id
    soft-drops the worker so hidden client context cannot join the next full
-   task. `codex_sdk` deviates today: its `conversation_active()` keys on
-   worker liveness alone, with no provider-id gate and no soft-drop, so a
-   worker turn that ends without a `thread_id` can feed hidden context into
-   the next delta prompt. Stage 2–4 work must not assume this property for
-   `codex_sdk`; closing the gap to match the other two backends is the
-   expected outcome, and its hermetic test lands with the first stage that
-   relies on the gate.
+   task.
 
 ### What is persisted today
 

@@ -5,11 +5,15 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 from agent_collab.backends.codex_sdk.backend import CodexSdkRunner
 from agent_collab.backends.codex_sdk.sandbox import CodexSdkSandboxAdapter
+from agent_collab.backends.common.sdk import provider_session_event
 from agent_collab.config import AgentConfig
+from agent_collab.events import Event
+from agent_collab.outcomes import TurnOutcome
 from agent_collab.sandbox.specs import SandboxContext, SandboxPolicy, SandboxSupport
 
 
@@ -81,6 +85,267 @@ class CodexSdkWorkerLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertEqual(session.force_teardowns, 1)
         self.assertIsNone(runner._worker_session)
+
+    def test_conversation_active_requires_captured_id_while_worker_is_live(self) -> None:
+        runner = CodexSdkRunner(
+            AgentConfig(id="codex", type="codex", backend="sdk"),
+            False,
+            {},
+            lambda _options, _workdir: None,
+        )
+
+        class _Session:
+            terminal = False
+
+        runner._worker_session = _Session()
+        self.assertFalse(runner.conversation_active())
+        runner._worker_provider_active = True
+        self.assertTrue(runner.conversation_active())
+
+    async def test_completed_turn_without_thread_id_soft_drops_worker(self) -> None:
+        runner = CodexSdkRunner(
+            AgentConfig(id="codex", type="codex", backend="sdk"),
+            False,
+            {},
+            lambda _options, _workdir: None,
+        )
+        runner.sandbox_plan = SimpleNamespace(
+            policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+            render_prompt=lambda prompt, _scratch: prompt,
+        )
+
+        class _Session:
+            terminal = False
+            _scratch = None
+
+            def __init__(self) -> None:
+                self.force_teardowns = 0
+
+            async def run(self, _prompt, emit=None):
+                del emit
+                return [], TurnOutcome("completed")
+
+            async def force_teardown(self) -> None:
+                self.force_teardowns += 1
+
+        session = _Session()
+
+        async def worker_for(_workdir):
+            runner._worker_session = session
+            return session
+
+        runner._worker_for = worker_for
+
+        async def emit(_event) -> None:
+            return None
+
+        outcome = await runner.run_turn("prompt", Path("/workspace"), emit)
+
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertEqual(session.force_teardowns, 1)
+        self.assertIsNone(runner._worker_session)
+        self.assertFalse(runner._worker_terminal)
+        self.assertFalse(runner.conversation_active())
+
+    async def test_captured_thread_id_keeps_worker_and_marks_conversation_active(self) -> None:
+        runner = CodexSdkRunner(
+            AgentConfig(id="codex", type="codex", backend="sdk"),
+            False,
+            {},
+            lambda _options, _workdir: None,
+        )
+        runner.sandbox_plan = SimpleNamespace(
+            policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+            render_prompt=lambda prompt, _scratch: prompt,
+        )
+
+        class _Session:
+            terminal = False
+            _scratch = None
+
+            def __init__(self) -> None:
+                self.force_teardowns = 0
+
+            async def run(self, _prompt, emit=None):
+                await emit(provider_session_event("codex", "codex", "thread-1", "thread"))
+                return [], TurnOutcome("completed")
+
+            async def force_teardown(self) -> None:
+                self.force_teardowns += 1
+
+        session = _Session()
+
+        async def worker_for(_workdir):
+            runner._worker_session = session
+            return session
+
+        runner._worker_for = worker_for
+
+        async def emit(_event) -> None:
+            return None
+
+        outcome = await runner.run_turn("prompt", Path("/workspace"), emit)
+
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertEqual(session.force_teardowns, 0)
+        self.assertIs(runner._worker_session, session)
+        self.assertTrue(runner._worker_provider_active)
+        self.assertTrue(runner.conversation_active())
+
+    async def test_tracking_emit_accepts_marked_session_or_raw_id(self) -> None:
+        runner = CodexSdkRunner(
+            AgentConfig(id="codex", type="codex", backend="sdk"),
+            False,
+            {},
+            lambda _options, _workdir: None,
+        )
+        runner.sandbox_plan = SimpleNamespace(
+            policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+            render_prompt=lambda prompt, _scratch: prompt,
+        )
+
+        class _Session:
+            terminal = False
+            _scratch = None
+
+            def __init__(self, event: Event) -> None:
+                self.event = event
+                self.force_teardowns = 0
+
+            async def run(self, _prompt, emit=None):
+                await emit(self.event)
+                return [], TurnOutcome("completed")
+
+            async def force_teardown(self) -> None:
+                self.force_teardowns += 1
+
+        marked = Event.create("codex", "status", "marked only", {}).mark_provider_session(
+            agent_id="codex",
+            session_id="thread-marked",
+            kind="thread",
+        )
+        raw_only = Event.create(
+            "codex",
+            "status",
+            "raw only",
+            {"provider_session_id": "thread-raw", "provider_session_kind": "thread"},
+        )
+        for event in (marked, raw_only):
+            session = _Session(event)
+            runner._worker_session = None
+            runner._worker_provider_active = False
+            runner._worker_terminal = False
+
+            async def worker_for(_workdir, captured=session):
+                runner._worker_session = captured
+                return captured
+
+            runner._worker_for = worker_for
+
+            async def emit(_event) -> None:
+                return None
+
+            outcome = await runner.run_turn("prompt", Path("/workspace"), emit)
+            self.assertEqual(outcome.outcome, "completed")
+            self.assertEqual(session.force_teardowns, 0)
+            self.assertTrue(runner.conversation_active())
+
+    async def test_second_worker_turn_without_reemit_keeps_continuity(self) -> None:
+        runner = CodexSdkRunner(
+            AgentConfig(id="codex", type="codex", backend="sdk"),
+            False,
+            {},
+            lambda _options, _workdir: None,
+        )
+        runner.sandbox_plan = SimpleNamespace(
+            policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+            render_prompt=lambda prompt, _scratch: prompt,
+        )
+
+        class _Session:
+            terminal = False
+            _scratch = None
+
+            def __init__(self) -> None:
+                self.runs = 0
+                self.force_teardowns = 0
+
+            async def run(self, _prompt, emit=None):
+                self.runs += 1
+                if self.runs == 1:
+                    await emit(provider_session_event("codex", "codex", "thread-1", "thread"))
+                    return [], TurnOutcome("completed")
+                return [], TurnOutcome("failed", "provider_terminal_failure")
+
+            async def force_teardown(self) -> None:
+                self.force_teardowns += 1
+
+        session = _Session()
+
+        async def worker_for(_workdir):
+            runner._worker_session = session
+            return session
+
+        runner._worker_for = worker_for
+
+        async def emit(_event) -> None:
+            return None
+
+        first = await runner.run_turn("one", Path("/workspace"), emit)
+        self.assertEqual(first.outcome, "completed")
+        self.assertTrue(runner.conversation_active())
+        second = await runner.run_turn("two", Path("/workspace"), emit)
+        self.assertEqual(second.outcome, "failed")
+        self.assertEqual(session.force_teardowns, 0)
+        self.assertIs(runner._worker_session, session)
+        self.assertTrue(runner.conversation_active())
+
+    async def test_cancel_during_soft_drop_preserves_relaunch_eligibility(self) -> None:
+        runner = CodexSdkRunner(
+            AgentConfig(id="codex", type="codex", backend="sdk"),
+            False,
+            {},
+            lambda _options, _workdir: None,
+        )
+        runner.sandbox_plan = SimpleNamespace(
+            policy=SimpleNamespace(effective=SandboxPolicy.READ_ONLY),
+            render_prompt=lambda prompt, _scratch: prompt,
+        )
+
+        class _Session:
+            terminal = False
+            _scratch = None
+
+            def __init__(self) -> None:
+                self.drop_started = asyncio.Event()
+
+            async def run(self, _prompt, emit=None):
+                del emit
+                return [], TurnOutcome("failed", "provider_empty_response")
+
+            async def force_teardown(self) -> None:
+                self.drop_started.set()
+                await asyncio.Event().wait()
+
+        session = _Session()
+
+        async def worker_for(_workdir):
+            runner._worker_session = session
+            return session
+
+        runner._worker_for = worker_for
+
+        async def emit(_event) -> None:
+            return None
+
+        task = asyncio.create_task(runner.run_turn("prompt", Path("/workspace"), emit))
+        await session.drop_started.wait()
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertIsNone(runner._worker_session)
+        self.assertFalse(runner._worker_terminal)
 
 
 if __name__ == "__main__":
