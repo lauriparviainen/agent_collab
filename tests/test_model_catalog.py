@@ -42,7 +42,7 @@ from agent_collab.model_catalog import (
 from agent_collab.options import describe_options
 from agent_collab.paths import GlobalDataPaths
 
-AGY_OUTPUT = "gemini-3.6-flash-high\ngemini-3.6-flash-medium\ngemini-3.5-flash-low\n"
+AGY_OUTPUT = "gemini-3.7-flash-high\ngemini-3.7-flash-medium\ngemini-3.5-flash-low\n"
 GROK_OUTPUT = (
     "Available models:\n  * grok-4.6 (default)\n  * grok-4.5\n  * grok-composer-2.5-fast\n"
 )
@@ -151,7 +151,7 @@ class ServiceServeTests(unittest.TestCase):
             self.assertEqual(view.served_from, "fresh_probe")
             self.assertTrue(view.probed)
             self.assertTrue(view.authoritative)
-            self.assertEqual(view.models[0], "gemini-3.6-flash-high")
+            self.assertEqual(view.models[0], "gemini-3.7-flash-high")
             path = Path(tmp) / "models_antigravity_cli.json"
             self.assertTrue(path.exists())
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
@@ -412,7 +412,7 @@ class DescribeOptionsIntegrationTests(unittest.TestCase):
 
     def test_cached_serves_seeded_catalog_and_merges_effective_suggestions(self):
         service = _service(self.cache_dir)
-        self._seed(service, "antigravity_cli", ("gemini-3.6-flash-high", "gemini-3.5-flash-low"))
+        self._seed(service, "antigravity_cli", ("gemini-3.7-flash-high", "gemini-3.5-flash-low"))
         payload = self._describe(service)
         self.assertEqual(payload["discovery"]["model_request"], "cached")
         entry = payload["backends"]["antigravity_cli"]
@@ -421,23 +421,23 @@ class DescribeOptionsIntegrationTests(unittest.TestCase):
         self.assertEqual(catalog["status"], "ok")
         self.assertEqual(catalog["served_from"], "cache")
         self.assertTrue(catalog["authoritative"])
-        self.assertEqual(catalog["models"], ["gemini-3.6-flash-high", "gemini-3.5-flash-low"])
+        self.assertEqual(catalog["models"], ["gemini-3.7-flash-high", "gemini-3.5-flash-low"])
         # One namespace (v10): the shipped canonical default is in the
         # catalog, so no warning fires.
         self.assertEqual(catalog["reason_codes"], [])
-        self.assertEqual(catalog["configured_default"], "gemini-3.6-flash-high")
+        self.assertEqual(catalog["configured_default"], "gemini-3.7-flash-high")
         effective = entry["effective"]["option_schema"]["properties"]["model"]
-        self.assertEqual(effective["default"], "gemini-3.6-flash-high")
+        self.assertEqual(effective["default"], "gemini-3.7-flash-high")
         # The configured default leads, then the remaining discovered models,
         # then the static fallback — order-preserving dedup keeps one copy.
         self.assertEqual(
             effective["suggested"][:3],
-            ["gemini-3.6-flash-high", "gemini-3.5-flash-low", "gemini-3.6-flash-medium"],
+            ["gemini-3.7-flash-high", "gemini-3.5-flash-low", "gemini-3.7-flash-medium"],
         )
         static_spec = entry["static"]["option_schema"]["properties"]["model"]
         for suggestion in static_spec["suggested"]:
             self.assertIn(suggestion, effective["suggested"])
-        self.assertEqual(effective["suggested"].count("gemini-3.6-flash-high"), 1)
+        self.assertEqual(effective["suggested"].count("gemini-3.7-flash-high"), 1)
 
     def test_authoritative_catalog_missing_default_warns_but_default_leads(self):
         service = _service(self.cache_dir)
@@ -445,11 +445,11 @@ class DescribeOptionsIntegrationTests(unittest.TestCase):
         entry = self._describe(service)["backends"]["antigravity_cli"]
         catalog = entry["model_catalog"]
         self.assertIn(CONFIGURED_DEFAULT_NOT_IN_CATALOG, catalog["reason_codes"])
-        self.assertEqual(catalog["configured_default"], "gemini-3.6-flash-high")
+        self.assertEqual(catalog["configured_default"], "gemini-3.7-flash-high")
         # Warn-only: the default is passed through unchanged and still leads.
         effective = entry["effective"]["option_schema"]["properties"]["model"]
-        self.assertEqual(effective["default"], "gemini-3.6-flash-high")
-        self.assertEqual(effective["suggested"][0], "gemini-3.6-flash-high")
+        self.assertEqual(effective["default"], "gemini-3.7-flash-high")
+        self.assertEqual(effective["suggested"][0], "gemini-3.7-flash-high")
 
     def test_static_schema_is_not_mutated_by_effective_merge(self):
         service = _service(self.cache_dir)
@@ -465,11 +465,11 @@ class DescribeOptionsIntegrationTests(unittest.TestCase):
 
     def test_no_warning_when_catalog_contains_configured_default(self):
         service = _service(self.cache_dir)
-        self._seed(service, "antigravity_cli", ("gemini-3.6-flash-high", "gemini-3.5-flash-low"))
+        self._seed(service, "antigravity_cli", ("gemini-3.7-flash-high", "gemini-3.5-flash-low"))
         catalog = self._describe(service)["backends"]["antigravity_cli"]["model_catalog"]
         self.assertEqual(catalog["reason_codes"], [])
         self.assertEqual(catalog["warnings"], [])
-        self.assertEqual(catalog["configured_default"], "gemini-3.6-flash-high")
+        self.assertEqual(catalog["configured_default"], "gemini-3.7-flash-high")
 
     def test_stale_catalog_serves_models_but_never_warns(self):
         service = _service(self.cache_dir)
@@ -517,7 +517,7 @@ class DescribeOptionsIntegrationTests(unittest.TestCase):
         self.assertEqual(probed, {"agy", "grok"})
         antigravity = payload["backends"]["antigravity_cli"]["model_catalog"]
         self.assertEqual(antigravity["served_from"], "fresh_probe")
-        self.assertEqual(antigravity["models"][0], "gemini-3.6-flash-high")
+        self.assertEqual(antigravity["models"][0], "gemini-3.7-flash-high")
         xai = payload["backends"]["xai_cli"]["model_catalog"]
         self.assertEqual(xai["models"], ["grok-4.6", "grok-4.5", "grok-composer-2.5-fast"])
         # Both canonical defaults are present in their catalogs: no warnings.
@@ -570,11 +570,11 @@ class StartWarningTests(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertEqual(warnings[0]["code"], CONFIGURED_DEFAULT_NOT_IN_CATALOG)
         self.assertEqual(warnings[0]["canonical_backend"], "antigravity_cli")
-        self.assertEqual(warnings[0]["model"], "gemini-3.6-flash-high")
+        self.assertEqual(warnings[0]["model"], "gemini-3.7-flash-high")
 
     def test_no_warning_when_default_is_in_catalog(self):
         service = _service(self.cache_dir)
-        self._seed(service, "antigravity_cli", ("gemini-3.6-flash-high",))
+        self._seed(service, "antigravity_cli", ("gemini-3.7-flash-high",))
         warnings = start_catalog_warnings(
             self.config,
             {"antigravity_cli": "cli"},

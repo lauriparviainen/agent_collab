@@ -121,9 +121,9 @@ class BuiltinDefaultsCompositionTests(unittest.TestCase):
             "antigravity_cli": (
                 "agy",
                 ["-p"],
-                {"model": "gemini-3.6-flash-high", "mode": "plan"},
+                {"model": "gemini-3.7-flash-high", "mode": "plan"},
             ),
-            "antigravity_sdk": (None, [], {"model": "gemini-3.6-flash-high"}),
+            "antigravity_sdk": (None, [], {"model": "gemini-3.7-flash-high"}),
             "claude_cli": (
                 "claude",
                 ["-p", "--output-format", "stream-json", "--verbose"],

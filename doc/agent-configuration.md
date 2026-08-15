@@ -691,7 +691,7 @@ command = "agy"
 args = ["-p"]
 
 [backends.antigravity_cli.options]
-model = "gemini-3.6-flash-high"
+model = "gemini-3.7-flash-high"
 mode = "plan"
 ```
 
@@ -706,7 +706,7 @@ enabled = true
 env = { GEMINI_API_KEY = "your-gemini-key-here" }
 
 [backends.antigravity_sdk.options]
-model = "gemini-3.6-flash-high"
+model = "gemini-3.7-flash-high"
 ```
 
 For Vertex AI instead, enable its static fields and use Application Default
@@ -722,7 +722,7 @@ project = "my-gcp-project"
 location = "us-central1"
 
 [backends.antigravity_sdk.options]
-model = "gemini-3.6-flash-high"
+model = "gemini-3.7-flash-high"
 ```
 
 Do not combine both examples as duplicate TOML sections. See the

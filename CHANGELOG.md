@@ -13,6 +13,14 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-08-15 - Gemini 3.7 Antigravity default
+
+- Make `gemini-3.7-flash-high` the shipped Antigravity CLI and SDK default
+  (#60). Static suggestions list the 3.7 Flash high/medium/low ids first and
+  keep the existing 3.6 / 3.5 / 3.1 / Claude / GPT-OSS entries. Packaged
+  Event Window cheap targets stay on `gemini-3.5-flash-low`. A user
+  `options.model` override is unchanged.
+
 ## [0.15.0] - 2026-08-12 - Grok 4.6 xAI default
 
 - Make `grok-4.6` the shipped xAI CLI and SDK default (#59). Static suggestions

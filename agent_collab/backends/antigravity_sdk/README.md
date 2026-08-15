@@ -53,7 +53,7 @@ project = "my-gcp-project"
 location = "us-central1"
 
 [backends.antigravity_sdk.options]
-model = "gemini-3.6-flash-high"
+model = "gemini-3.7-flash-high"
 ```
 
 ## Events and identity
