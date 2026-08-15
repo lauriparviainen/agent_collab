@@ -21,6 +21,7 @@ from pathlib import Path
 import shutil
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Protocol
 
+from ...approvals import worker_session_run_kwargs
 from ...config import AgentConfig
 from ...events import Event, compact_json
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
@@ -258,7 +259,9 @@ class CodexSdkRunner(AgentRunner):
                         self._worker_provider_active = True
                 await emit(event)
 
-            _buffered, outcome = await session.run(effective_prompt, emit=tracking_emit)
+            _buffered, outcome = await session.run(
+                effective_prompt, **worker_session_run_kwargs(self, emit=tracking_emit)
+            )
             # Without a captured provider session, conversation_active is false
             # and the referee re-issues a full task. Drop the live worker so
             # hidden client context or an undelivered prompt cannot join that
@@ -335,6 +338,7 @@ class CodexSdkRunner(AgentRunner):
                 pass
 
     async def _terminate_worker_session(self) -> None:
+        self._turn_ended_locally = True
         session = self._worker_session
         if session is None and self._worker_soft_drop_cancelled:
             self._worker_soft_drop_cancelled = False

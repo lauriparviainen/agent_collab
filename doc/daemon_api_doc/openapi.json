@@ -265,6 +265,41 @@
         ],
         "type": "object"
       },
+      "PendingApprovalModel": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "decision_options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "summary_truncated": {
+            "type": "boolean"
+          },
+          "tool_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "agent_id",
+          "tool_name",
+          "summary",
+          "summary_truncated",
+          "decision_options"
+        ],
+        "type": "object"
+      },
       "PostMessageRequestModel": {
         "additionalProperties": false,
         "properties": {
@@ -561,6 +596,16 @@
           "markdown_path": {
             "type": "string"
           },
+          "pending_approvals": {
+            "items": {
+              "$ref": "#/components/schemas/PendingApprovalModel"
+            },
+            "type": "array"
+          },
+          "pending_approvals_omitted": {
+            "minimum": 0,
+            "type": "integer"
+          },
           "session_id": {
             "type": "string"
           },
@@ -609,7 +654,9 @@
           "answers",
           "markdown_path",
           "jsonl_path",
-          "events_tail"
+          "events_tail",
+          "pending_approvals",
+          "pending_approvals_omitted"
         ],
         "type": "object"
       },
@@ -695,6 +742,16 @@
           "mock": {
             "type": "boolean"
           },
+          "pending_approvals": {
+            "items": {
+              "$ref": "#/components/schemas/PendingApprovalModel"
+            },
+            "type": "array"
+          },
+          "pending_approvals_omitted": {
+            "minimum": 0,
+            "type": "integer"
+          },
           "session_id": {
             "type": "string"
           },
@@ -773,7 +830,9 @@
           "turn_outcomes",
           "settings",
           "capabilities",
-          "agent_sessions"
+          "agent_sessions",
+          "pending_approvals",
+          "pending_approvals_omitted"
         ],
         "type": "object"
       },

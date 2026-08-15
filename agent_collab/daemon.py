@@ -11,6 +11,17 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
 import uuid
 
+from .approvals import (
+    ApprovalDecisionError,
+    ApprovalEntry,
+    ApprovalRegistry,
+    DECISION_OPTIONS,
+    WORKER_DECISION_TIMEOUT_SECONDS,
+    build_approval_summary,
+    park_payload,
+    sanitize_request_id,
+    sanitize_tool_name,
+)
 from .config import (
     DEFAULT_WORKFLOW,
     CollaborationConfig,
@@ -41,6 +52,7 @@ from .referee import (
     RequiredTurnFailed,
 )
 from .retention import (
+    AWAITING_APPROVAL,
     AWAITING_INPUT,
     DONE,
     FAILED,
@@ -183,6 +195,10 @@ class SessionState:
     # own term lives in provider_session_kind). Persisted, but nothing resumes it
     # this stage — resume stays capability-false.
     agent_sessions: Optional[Dict[str, Dict[str, Any]]] = None
+    # Park payload for a live approval wait. In-memory view only; stripped
+    # before the session index is written.
+    pending_approvals: List[Dict[str, Any]] = field(default_factory=list)
+    pending_approvals_omitted: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -212,6 +228,9 @@ class SessionResult:
     last ``RESULT_TAIL_EVENTS`` events as digest projections, carried only on a
     settled result whose terminal status is not ``done`` — failure context for
     callers that skipped the watch loop; empty everywhere else.
+    ``pending_approvals`` is the park payload for ``awaiting_approval`` (also on
+    session status); overflow is counted in ``pending_approvals_omitted``.
+    Heartbeats leave both empty. Never present on ``wait_events``.
     """
 
     session_id: str
@@ -226,6 +245,8 @@ class SessionResult:
     markdown_path: str
     jsonl_path: str
     events_tail: List[Dict[str, Any]] = field(default_factory=list)
+    pending_approvals: List[Dict[str, Any]] = field(default_factory=list)
+    pending_approvals_omitted: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -339,6 +360,9 @@ class _ManagedSession:
     # True while a coalesced watcher notification is scheduled but not yet
     # delivered; _schedule_notify skips scheduling another one meanwhile.
     notify_pending: bool = False
+    approvals: ApprovalRegistry = field(default_factory=ApprovalRegistry)
+    # Count of pending approvals the most recent stop path auto-denied.
+    approvals_denied_on_stop: int = 0
 
 
 @dataclass(frozen=True)
@@ -409,6 +433,9 @@ class SessionManager:
     def _state_from_record(record: Dict[str, Any]) -> Optional[SessionState]:
         known = {field.name for field in fields(SessionState)}
         data = {key: value for key, value in record.items() if key in known}
+        # Park payload is a live view only; never restore it from the index.
+        data.pop("pending_approvals", None)
+        data.pop("pending_approvals_omitted", None)
         if not data.get("session_id") or not data.get("status"):
             return None
         if "failure" in data and data["failure"] is not None:
@@ -457,7 +484,10 @@ class SessionManager:
         if self._index is None:
             return
         try:
-            self._index.upsert(state.to_dict())
+            record = state.to_dict()
+            record.pop("pending_approvals", None)
+            record.pop("pending_approvals_omitted", None)
+            self._index.upsert(record)
         except OSError as exc:
             self._log_lifecycle(f"failed to persist session index for {state.session_id}: {exc}")
 
@@ -540,7 +570,7 @@ class SessionManager:
             f"session {session_id} started workflow={state.workflow} max_turns={state.max_turns} "
             f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
         )
-        return self._view_state(state, request.detail)
+        return self._view_state(state, request.detail, managed)
 
     def _prepare_session_start(self, request: StartSessionRequest) -> _PreparedSessionStart:
         """Load and validate start inputs outside the daemon event loop."""
@@ -855,7 +885,11 @@ class SessionManager:
         managed = self._get_managed(session_id)
         task = managed.task
         if managed.state.status in TERMINAL_STATUSES:
-            return self._copy_state(managed.state)
+            return self._view_state(managed.state, "full", managed)
+
+        # Deny every pending approval before cancelling the referee / closing
+        # runners. Interrupt is slice (d); this slice only denies first.
+        managed.approvals_denied_on_stop = await self._auto_deny_pending(managed, reason="stop")
 
         if task is not None and not task.done():
             managed.stop_signal.request()
@@ -867,7 +901,7 @@ class SessionManager:
             await self._set_status(managed, STOPPED)
         else:
             await self._set_status(managed, STOPPED)
-        return self._copy_state(managed.state)
+        return self._view_state(managed.state, "full", managed)
 
     async def prune_sessions(
         self,
@@ -1065,10 +1099,13 @@ class SessionManager:
             )
 
     def list_sessions(self, detail: str = "compact") -> List[SessionState]:
-        return [self._view_state(managed.state, detail) for managed in self._sessions.values()]
+        return [
+            self._view_state(managed.state, detail, managed) for managed in self._sessions.values()
+        ]
 
     def get_session(self, session_id: str, detail: str = "compact") -> SessionState:
-        return self._view_state(self._get_managed(session_id).state, detail)
+        managed = self._get_managed(session_id)
+        return self._view_state(managed.state, detail, managed)
 
     def read_events(
         self,
@@ -1186,13 +1223,15 @@ class SessionManager:
         """Block until the session is *settled*, then return its outcome.
 
         Settled := terminal, or ``awaiting_input`` while the referee is actively
-        accepting input and none is pending or in flight. Same condition-wait
-        shape as ``wait_events``; on timeout the caller gets a heartbeat
-        (``settled: false``, no answers) and re-polls. ``timeout_ms=0`` is the
-        instant peek: no block ever, the current settled-or-heartbeat state —
-        the cheap way to sweep several delegated sessions for the ones that are
-        done. Restored sessions have no live runner, are already terminal, and
-        settle immediately.
+        accepting input and none is pending or in flight, or ``awaiting_approval``
+        while the approval registry holds at least one unresolved request (a
+        registry-keyed arm: ``input_accepting`` and ``input_queue`` are ignored).
+        Same condition-wait shape as ``wait_events``; on timeout the caller gets
+        a heartbeat (``settled: false``, no answers, empty ``pending_approvals``)
+        and re-polls. ``timeout_ms=0`` is the instant peek: no block ever, the
+        current settled-or-heartbeat state — the cheap way to sweep several
+        delegated sessions for the ones that are done. Restored sessions have no
+        live runner, are already terminal, and settle immediately.
         """
 
         managed = self._get_managed(session_id)
@@ -1214,6 +1253,12 @@ class SessionManager:
     def _result_settled(self, managed: _ManagedSession) -> bool:
         status = managed.state.status
         if status in TERMINAL_STATUSES:
+            return True
+        # Approval settle is registry-keyed only. Do not reuse the
+        # awaiting_input arm: that requires input_accepting (never set for
+        # interactive=false review workflows, and not set mid-turn) and an
+        # empty input_queue (post_message may queue during a turn).
+        if status == AWAITING_APPROVAL and managed.approvals.unresolved_count() >= 1:
             return True
         # A live interactive session is settled only while it is genuinely parked
         # for input: status alone is not enough, because the referee leaves its
@@ -1239,6 +1284,9 @@ class SessionManager:
                 _digest_event(event, event_id)
                 for event_id, event in enumerate(managed.events[start:], start=start)
             ]
+        pending, omitted = ([], 0)
+        if settled and state.status == AWAITING_APPROVAL:
+            pending, omitted = park_payload(managed.approvals.pending_in_event_order())
         return SessionResult(
             session_id=state.session_id,
             status=state.status,
@@ -1254,6 +1302,8 @@ class SessionManager:
             markdown_path=state.markdown_path,
             jsonl_path=state.jsonl_path,
             events_tail=events_tail,
+            pending_approvals=pending,
+            pending_approvals_omitted=omitted,
         )
 
     def _session_answers(self, managed: _ManagedSession) -> List[Dict[str, Any]]:
@@ -1394,6 +1444,11 @@ class SessionManager:
             # resolution on the requested policy rather than the configured default.
             sandbox=request.sandbox,
             sandbox_plan=request.sandbox_plan,
+            approval_callback=lambda payload: self._on_worker_approval_frame(managed, payload),
+            turn_approval_release_callback=lambda turn_id, reason: self._auto_deny_turn(
+                managed, turn_id, reason
+            ),
+            turn_approval_abandon_callback=lambda turn_id: self._abandon_turn(managed, turn_id),
         )
 
         try:
@@ -1429,6 +1484,7 @@ class SessionManager:
             failure = SessionFailure(code="provider_transport_failed")
             await self._set_status(managed, FAILED, failure=failure)
         finally:
+            await self._auto_deny_pending(managed, reason="shutdown")
             managed.referee = None
             plan = getattr(managed.request, "sandbox_plan", None) if managed.request else None
             if plan is not None:
@@ -1609,6 +1665,328 @@ class SessionManager:
         managed.notify_pending = False
         async with managed.condition:
             managed.condition.notify_all()
+
+    def _apply_live_status(self, managed: _ManagedSession, status: str) -> None:
+        """Await-free live-wait status change so worker ``on_approval`` can park."""
+
+        if managed.state.status in TERMINAL_STATUSES:
+            return
+        if not self._transition_state(managed.state, status):
+            return
+        managed.state.updated_at = utc_timestamp()
+        self._persist(managed.state)
+        self._schedule_notify(managed)
+
+    def _sync_approval_status(self, managed: _ManagedSession) -> None:
+        if managed.state.status in TERMINAL_STATUSES:
+            return
+        if managed.approvals.unresolved_count() >= 1:
+            self._apply_live_status(managed, AWAITING_APPROVAL)
+        elif managed.state.status == AWAITING_APPROVAL:
+            restore = AWAITING_INPUT if managed.input_accepting else RUNNING
+            self._apply_live_status(managed, restore)
+
+    async def _mint_approval_event(self, managed: _ManagedSession, event: Event) -> None:
+        appender = managed.append_event
+        if appender is not None:
+            await appender(event)
+            return
+        if managed.state.status in TERMINAL_STATUSES:
+            # Session is unwinding: do not append in-memory-only events that
+            # would desync the live cursor from the JSONL transcript.
+            return
+        self._record_event(managed, event)
+
+    def _on_worker_approval_frame(
+        self, managed: _ManagedSession, payload: Mapping[str, Any]
+    ) -> Any:
+        async def _register() -> None:
+            try:
+                await self.register_approval(
+                    managed.state.session_id,
+                    request_id=str(payload.get("request_id") or ""),
+                    agent_id=str(payload.get("agent_id") or ""),
+                    tool_name=str(payload.get("tool_name") or "tool"),
+                    summary=payload.get("summary"),
+                    tool_input=payload.get("tool_input"),
+                    already_truncated=bool(payload.get("summary_truncated")),
+                    turn_id=str(payload.get("turn_id") or ""),
+                    worker_instance=(
+                        payload.get("worker_instance")
+                        if isinstance(payload.get("worker_instance"), str)
+                        else None
+                    ),
+                    approval_id=(
+                        payload.get("approval_id")
+                        if isinstance(payload.get("approval_id"), str)
+                        else None
+                    ),
+                    run_id=payload.get("run_id")
+                    if isinstance(payload.get("run_id"), str)
+                    else None,
+                    send_decision=(
+                        payload.get("send_decision")
+                        if callable(payload.get("send_decision"))
+                        else None
+                    ),
+                )
+            except (SessionNotFoundError, SessionRequestError):
+                # A frame racing session teardown must not kill the worker.
+                return
+
+        return _register()
+
+    async def register_approval(
+        self,
+        session_id: str,
+        *,
+        request_id: str,
+        agent_id: str,
+        tool_name: str,
+        summary: Any = None,
+        tool_input: Any = None,
+        already_truncated: bool = False,
+        turn_id: str = "",
+        worker_instance: Optional[str] = None,
+        approval_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        send_decision: Optional[Callable[..., Any]] = None,
+    ) -> Dict[str, Any]:
+        """Internal/test API: park one approval request. Does not wait for a decision."""
+
+        managed = self._get_managed(session_id)
+        rid = sanitize_request_id(request_id)
+        agent_key = sanitize_request_id(agent_id)
+        if not rid:
+            if worker_instance:
+                return {"request_id": "", "status": "ignored"}
+            rid = uuid.uuid4().hex
+        if managed.state.status in TERMINAL_STATUSES:
+            if send_decision is not None:
+                stale = ApprovalEntry(
+                    request_id=rid,
+                    agent_id=agent_key,
+                    tool_name=sanitize_tool_name(tool_name),
+                    summary="",
+                    summary_truncated=False,
+                    turn_id=str(turn_id or ""),
+                    worker_instance=worker_instance,
+                    approval_id=approval_id or rid,
+                    run_id=run_id,
+                    send_decision=send_decision,
+                    decision_options=DECISION_OPTIONS,
+                )
+                await self._send_worker_decision(stale, "deny")
+            return {"request_id": rid, "status": "stale"}
+        turn_key = str(turn_id or "")
+        if turn_key and managed.approvals.turn_finished(turn_key):
+            entry = ApprovalEntry(
+                request_id=rid,
+                agent_id=agent_key,
+                tool_name=sanitize_tool_name(tool_name),
+                summary="",
+                summary_truncated=False,
+                turn_id=turn_key,
+                worker_instance=worker_instance,
+                approval_id=approval_id or rid,
+                run_id=run_id,
+                send_decision=send_decision,
+                decision_options=DECISION_OPTIONS,
+            )
+            managed.approvals.complete(entry, "auto_denied", "late_frame")
+            await self._send_worker_decision(entry, "deny")
+            return {"request_id": rid, "status": "late_frame"}
+        existing = managed.approvals.get_pending(rid)
+        if existing is not None:
+            return existing.request_raw()
+        if managed.approvals.get_resolved(rid) is not None:
+            return {"request_id": rid, "status": "duplicate"}
+        elided, truncated = build_approval_summary(
+            summary=summary,
+            tool_input=tool_input,
+            already_truncated=already_truncated,
+        )
+        entry = ApprovalEntry(
+            request_id=rid,
+            agent_id=agent_key,
+            tool_name=sanitize_tool_name(tool_name),
+            summary=elided,
+            summary_truncated=truncated,
+            turn_id=str(turn_id or ""),
+            worker_instance=worker_instance,
+            approval_id=approval_id or rid,
+            run_id=run_id,
+            send_decision=send_decision,
+            decision_options=DECISION_OPTIONS,
+        )
+        managed.approvals.add(entry)
+        agent_label = entry.agent_id or "agent"
+        event = Event.create(
+            "tool",
+            "approval_request",
+            f"{agent_label}: {entry.tool_name} needs approval",
+            entry.request_raw(),
+            agent_id=entry.agent_id or None,
+        )
+        await self._mint_approval_event(managed, event)
+        self._sync_approval_status(managed)
+        self._schedule_notify(managed)
+        return entry.request_raw()
+
+    async def resolve_approval(
+        self,
+        session_id: str,
+        request_id: str,
+        decision: str,
+        *,
+        surface: str = "internal",
+    ) -> Dict[str, Any]:
+        """Internal/test API: accept one authorize-or-deny decision.
+
+        Duplicates of the same authorized outcome are idempotent. A different
+        authorized decision is a conflict. A decision after the turn's terminal
+        result (abandoned/auto_denied) is stale. Unknown ids are a structured
+        miss. Authorized resolves deliver ``approval_decision`` through the
+        entry's ``send_decision`` hook when one is bound. An approve that
+        cannot be delivered is recorded as ``auto_denied`` (``delivery_failed``)
+        rather than as approved.
+        """
+
+        managed = self._get_managed(session_id)
+        if decision not in DECISION_OPTIONS:
+            raise SessionRequestError("decision must be 'approve' or 'deny'")
+        outcome = "approved" if decision == "approve" else "denied"
+        pending = managed.approvals.get_pending(request_id)
+        if pending is None:
+            resolved = managed.approvals.get_resolved(request_id)
+            if resolved is None:
+                raise ApprovalDecisionError(
+                    "not_found", f"unknown approval request_id {request_id!r}"
+                )
+            if resolved.outcome in {"approved", "denied"}:
+                if resolved.outcome == outcome:
+                    return {
+                        "request_id": request_id,
+                        "outcome": resolved.outcome,
+                        "reason": resolved.reason,
+                        "status": "idempotent",
+                    }
+                raise ApprovalDecisionError(
+                    "conflict",
+                    f"approval request_id {request_id!r} already {resolved.outcome}",
+                )
+            raise ApprovalDecisionError(
+                "stale",
+                f"approval request_id {request_id!r} is {resolved.outcome}",
+            )
+        if managed.state.status in TERMINAL_STATUSES:
+            raise ApprovalDecisionError("stale", f"approval request_id {request_id!r} is stale")
+        if pending.turn_id and managed.approvals.turn_finished(pending.turn_id):
+            raise ApprovalDecisionError("stale", f"approval request_id {request_id!r} is stale")
+        if pending.send_in_flight:
+            raise ApprovalDecisionError(
+                "conflict",
+                f"approval request_id {request_id!r} already has a decision in flight",
+            )
+        pending.send_in_flight = True
+        try:
+            delivered = await self._send_worker_decision(pending, decision)
+            still = managed.approvals.take_pending(request_id)
+            if still is None:
+                raise ApprovalDecisionError("stale", f"approval request_id {request_id!r} is stale")
+            if decision == "approve" and not delivered:
+                managed.approvals.complete(pending, "auto_denied", "delivery_failed")
+                await self._emit_approval_resolved(managed, pending)
+                await self._send_worker_decision(pending, "deny")
+                self._sync_approval_status(managed)
+                self._schedule_notify(managed)
+                return {
+                    "request_id": request_id,
+                    "outcome": "auto_denied",
+                    "reason": "delivery_failed",
+                    "status": "delivery_failed",
+                }
+            managed.approvals.complete(pending, outcome, surface)
+            await self._emit_approval_resolved(managed, pending)
+            self._sync_approval_status(managed)
+            self._schedule_notify(managed)
+            return {
+                "request_id": request_id,
+                "outcome": outcome,
+                "reason": surface,
+                "status": "ok",
+            }
+        finally:
+            pending.send_in_flight = False
+
+    async def _auto_deny_pending(self, managed: _ManagedSession, reason: str) -> int:
+        entries = managed.approvals.take_all()
+        return await self._finalize_auto_entries(managed, entries, reason)
+
+    async def _auto_deny_turn(self, managed: _ManagedSession, turn_id: str, reason: str) -> int:
+        entries = managed.approvals.take_turn(turn_id)
+        return await self._finalize_auto_entries(managed, entries, reason)
+
+    async def _abandon_turn(self, managed: _ManagedSession, turn_id: str) -> int:
+        entries = managed.approvals.take_turn(turn_id)
+        count = 0
+        for entry in entries:
+            managed.approvals.complete(entry, "abandoned", "result")
+            await self._emit_approval_resolved(managed, entry)
+            await self._send_worker_decision(entry, "deny")
+            count += 1
+        if count:
+            self._sync_approval_status(managed)
+            self._schedule_notify(managed)
+        return count
+
+    async def _finalize_auto_entries(
+        self,
+        managed: _ManagedSession,
+        entries: List[ApprovalEntry],
+        reason: str,
+    ) -> int:
+        count = 0
+        for entry in entries:
+            managed.approvals.complete(entry, "auto_denied", reason)
+            await self._emit_approval_resolved(managed, entry)
+            await self._send_worker_decision(entry, "deny")
+            count += 1
+        if count:
+            self._sync_approval_status(managed)
+            self._schedule_notify(managed)
+        return count
+
+    async def _emit_approval_resolved(self, managed: _ManagedSession, entry: ApprovalEntry) -> None:
+        agent_label = entry.agent_id or "agent"
+        outcome = entry.outcome or "auto_denied"
+        reason = entry.reason or ""
+        text = f"{agent_label}: {entry.tool_name} {outcome}"
+        if reason:
+            text = f"{text} ({reason})"
+        event = Event.create(
+            "tool",
+            "approval_resolved",
+            text,
+            entry.resolved_raw(),
+            agent_id=entry.agent_id or None,
+        )
+        await self._mint_approval_event(managed, event)
+
+    async def _send_worker_decision(self, entry: ApprovalEntry, decision: str) -> bool:
+        sender = entry.send_decision
+        if sender is None:
+            return True
+        try:
+            result = sender(decision)
+            if asyncio.iscoroutine(result):
+                result = await asyncio.wait_for(result, timeout=WORKER_DECISION_TIMEOUT_SECONDS)
+            if result is False:
+                return False
+            entry.send_decision = None
+            return True
+        except Exception:
+            return False
 
     def _get_managed(self, session_id: str) -> _ManagedSession:
         try:
@@ -1804,7 +2182,12 @@ class SessionManager:
     def _copy_state(self, state: SessionState) -> SessionState:
         return SessionState(**state.to_dict())
 
-    def _view_state(self, state: SessionState, detail: str) -> SessionState:
+    def _view_state(
+        self,
+        state: SessionState,
+        detail: str,
+        managed: Optional[_ManagedSession] = None,
+    ) -> SessionState:
         """A detached response view of ``state``. For ``detail != "full"`` the
         copy's ``settings`` content is slimmed to the compact view; the stored
         state is never touched (``_copy_state`` deep-copies via ``asdict``)."""
@@ -1812,6 +2195,13 @@ class SessionManager:
         copied = self._copy_state(state)
         if detail != "full" and copied.settings is not None:
             copied.settings = compact_session_settings(copied.settings)
+        if managed is not None:
+            pending, omitted = park_payload(managed.approvals.pending_in_event_order())
+            copied.pending_approvals = pending
+            copied.pending_approvals_omitted = omitted
+        else:
+            copied.pending_approvals = []
+            copied.pending_approvals_omitted = 0
         return copied
 
     def _log_lifecycle(self, message: str) -> None:

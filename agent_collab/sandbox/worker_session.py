@@ -198,10 +198,30 @@ class SupervisedWorkerSession:
                             events.append(event)
                         continue
                     if frame_type == "approval_request":
+                        # Register only: the callback must not wait for a human
+                        # decision while run() holds ``_lock``. Awaiting the
+                        # register coroutine keeps event order; the park lives
+                        # in the daemon registry, not here. Bound like emit so a
+                        # stalled daemon cannot freeze the receive loop.
+                        approval_id = frame.get("approval_id")
+                        if not isinstance(approval_id, str) or not approval_id.strip():
+                            raise WorkerProtocolError(
+                                "worker approval_request is missing approval_id"
+                            )
                         if on_approval is not None:
                             result = on_approval(frame)
                             if asyncio.iscoroutine(result):
-                                asyncio.create_task(result)
+                                try:
+                                    await asyncio.wait_for(
+                                        result, EMIT_BACKPRESSURE_TIMEOUT_SECONDS
+                                    )
+                                except asyncio.TimeoutError as exc:
+                                    raise SandboxFailure(
+                                        "outer_sandbox_worker_backpressure_exceeded",
+                                        "the worker approval registration exceeded "
+                                        "its backpressure deadline",
+                                        phase="worker",
+                                    ) from exc
                         continue
                     if frame_type == "result":
                         outcome_payload = frame.get("outcome")
@@ -252,11 +272,16 @@ class SupervisedWorkerSession:
         approval_id: str,
         decision: str,
         run_id: Optional[str] = None,
-    ) -> None:
-        """Write an out-of-band approval decision. Unknown ids are a worker no-op."""
+    ) -> bool:
+        """Write an out-of-band approval decision.
+
+        Returns True only after the frame is written. Closed, terminal, or
+        write failure is False so the daemon cannot report an approval as
+        delivered. An unknown id that was written is a worker no-op.
+        """
 
         if self._closed or self._terminal:
-            return
+            return False
         try:
             await self._send(
                 make_frame(
@@ -267,7 +292,8 @@ class SupervisedWorkerSession:
                 )
             )
         except Exception:
-            return
+            return False
+        return True
 
     async def reset(self) -> None:
         async with self._lock:

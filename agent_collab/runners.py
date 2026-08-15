@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, Iterable, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Union
 
 from .config import AgentConfig, ConfigError
 from .events import Event
@@ -58,6 +58,18 @@ class AgentRunner:
         """
 
         return False
+
+    def bind_turn(self, *, turn_id: str, agent_id: str) -> None:
+        """Record the active turn so a worker approval frame can be bound to it."""
+
+        self._bound_turn_id = turn_id
+        self._bound_agent_id = agent_id
+        self._turn_ended_locally = False
+
+    def set_approval_callback(self, callback: Optional[Callable[..., Any]] = None) -> None:
+        """Inject the session registry callback used by worker-backed SDK runners."""
+
+        self._approval_callback = callback
 
     async def close(self) -> None:
         """Release any client or subprocess held across turns. Default no-op;

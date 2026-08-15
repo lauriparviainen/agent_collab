@@ -342,6 +342,8 @@ class ModelRoundTripTests(unittest.TestCase):
             "markdown_path": "/logs/daemon-abc.md",
             "jsonl_path": "/logs/daemon-abc.jsonl",
             "events_tail": [],
+            "pending_approvals": [],
+            "pending_approvals_omitted": 0,
         }
         decoded = SessionResultModel.from_dict(payload)
         self.assertIsInstance(decoded.answers[0], AgentAnswerModel)
@@ -371,12 +373,20 @@ class ModelRoundTripTests(unittest.TestCase):
                     "text": "agent turn failed",
                 }
             ],
+            "pending_approvals": [],
+            "pending_approvals_omitted": 0,
         }
         self.assertEqual(SessionResultModel.from_dict(payload).to_dict(), payload)
         # An older daemon without the field decodes to an empty tail.
         legacy = dict(payload)
         legacy.pop("events_tail")
         self.assertEqual(SessionResultModel.from_dict(legacy).events_tail, [])
+        legacy_park = dict(payload)
+        legacy_park.pop("pending_approvals")
+        legacy_park.pop("pending_approvals_omitted")
+        decoded_park = SessionResultModel.from_dict(legacy_park)
+        self.assertEqual(decoded_park.pending_approvals, [])
+        self.assertEqual(decoded_park.pending_approvals_omitted, 0)
 
     def test_session_result_round_trips_heartbeat(self):
         payload = {
@@ -392,8 +402,40 @@ class ModelRoundTripTests(unittest.TestCase):
             "markdown_path": "",
             "jsonl_path": "",
             "events_tail": [],
+            "pending_approvals": [],
+            "pending_approvals_omitted": 0,
         }
         self.assertEqual(SessionResultModel.from_dict(payload).to_dict(), payload)
+
+    def test_session_result_round_trips_pending_approvals(self):
+        payload = {
+            "session_id": "daemon-abc",
+            "status": "awaiting_approval",
+            "terminal": False,
+            "settled": True,
+            "cursor": 4,
+            "error": None,
+            "failure": None,
+            "turn_outcomes": [],
+            "answers": [],
+            "markdown_path": "/logs/daemon-abc.md",
+            "jsonl_path": "/logs/daemon-abc.jsonl",
+            "events_tail": [],
+            "pending_approvals": [
+                {
+                    "request_id": "a1",
+                    "agent_id": "claude_cli",
+                    "tool_name": "Bash",
+                    "summary": "true",
+                    "summary_truncated": False,
+                    "decision_options": ["approve", "deny"],
+                }
+            ],
+            "pending_approvals_omitted": 2,
+        }
+        decoded = SessionResultModel.from_dict(payload)
+        self.assertEqual(decoded.pending_approvals[0].request_id, "a1")
+        self.assertEqual(decoded.to_dict(), payload)
 
     def test_wait_result_timeout_bounds(self):
         # 45 s clears the 60 s per-tool-call limit MCP clients default to; a

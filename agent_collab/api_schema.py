@@ -235,6 +235,8 @@ class SessionStateModel:
     # Per-agent provider session identity (backend + provider_session_id +
     # provider_session_kind), keyed by agent id. Opaque dict like ``settings``.
     agent_sessions: Optional[Dict[str, Any]] = None
+    pending_approvals: List[PendingApprovalModel] = field(default_factory=list)
+    pending_approvals_omitted: int = 0
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionStateModel":
@@ -261,6 +263,10 @@ class SessionStateModel:
             settings=data.get("settings"),
             capabilities=data.get("capabilities"),
             agent_sessions=data.get("agent_sessions"),
+            pending_approvals=[
+                PendingApprovalModel.from_dict(item) for item in data.get("pending_approvals", [])
+            ],
+            pending_approvals_omitted=_integer(data, "pending_approvals_omitted", 0),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -289,6 +295,8 @@ class SessionStateModel:
             "settings": self.settings,
             "capabilities": self.capabilities,
             "agent_sessions": self.agent_sessions,
+            "pending_approvals": [item.to_dict() for item in self.pending_approvals],
+            "pending_approvals_omitted": self.pending_approvals_omitted,
         }
 
 
@@ -416,6 +424,40 @@ class TranscriptModel:
 
 
 @dataclass
+class PendingApprovalModel:
+    """One parked approval request in ``pending_approvals`` (wait_result / status)."""
+
+    request_id: str
+    agent_id: str
+    tool_name: str
+    summary: str
+    summary_truncated: bool = False
+    decision_options: List[str] = field(default_factory=lambda: ["approve", "deny"])
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PendingApprovalModel":
+        options = data.get("decision_options") or ["approve", "deny"]
+        return cls(
+            request_id=str(data["request_id"]),
+            agent_id=str(data.get("agent_id", "")),
+            tool_name=str(data.get("tool_name", "")),
+            summary=str(data.get("summary", "")),
+            summary_truncated=bool(data.get("summary_truncated", False)),
+            decision_options=[str(item) for item in options],
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "agent_id": self.agent_id,
+            "tool_name": self.tool_name,
+            "summary": self.summary,
+            "summary_truncated": self.summary_truncated,
+            "decision_options": list(self.decision_options),
+        }
+
+
+@dataclass
 class AgentAnswerModel:
     """One agent's latest completed-turn answer in a ``SessionResultModel``.
 
@@ -454,14 +496,22 @@ class SessionResultModel:
 
     ``settled`` is true when the session is terminal, or ``awaiting_input`` while
     the referee is actively accepting input with none pending or in flight (the
-    caller may then post a follow-up). On a long-poll timeout the server returns
-    a heartbeat with ``settled: false`` and no ``answers`` — callers re-poll
-    immediately; the >= 20s pacing rule does not apply because the block is
-    server-side. ``timeout_ms: 0`` never blocks: it returns the current
-    settled-or-heartbeat state (an instant peek). ``cursor`` is the current event
-    count, a ``read_events`` offset. ``events_tail`` carries the last ~20 events
-    as digest projections (capped text, no ``raw``, absolute ``event_id``) only
-    on a settled result whose terminal status is not ``done``; empty otherwise.
+    caller may then post a follow-up), or ``awaiting_approval`` while the
+    approval registry holds at least one unresolved request. On a long-poll
+    timeout the server returns a heartbeat with ``settled: false``, no
+    ``answers``, and empty ``pending_approvals`` — callers re-poll immediately;
+    the >= 20s pacing rule does not apply because the block is server-side.
+    ``timeout_ms: 0`` never blocks: it returns the current settled-or-heartbeat
+    state (an instant peek). ``cursor`` is the current event count, a
+    ``read_events`` offset. ``events_tail`` carries the last ~20 events as digest
+    projections (capped text, no ``raw``, absolute ``event_id``) only on a
+    settled result whose terminal status is not ``done``; empty otherwise.
+    ``pending_approvals`` is the park payload for ``awaiting_approval`` (and the
+    matching session status view): request id, agent, tool, bounded elided
+    summary, truncation flag, decision options, in event order. Overflow past
+    the documented total park-payload budget is counted in
+    ``pending_approvals_omitted``, never silently dropped. Heartbeats do not
+    grow this list. It is never present on ``wait_events``.
     """
 
     session_id: str
@@ -476,6 +526,8 @@ class SessionResultModel:
     markdown_path: str = ""
     jsonl_path: str = ""
     events_tail: List[Dict[str, Any]] = field(default_factory=list)
+    pending_approvals: List[PendingApprovalModel] = field(default_factory=list)
+    pending_approvals_omitted: int = 0
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionResultModel":
@@ -492,6 +544,10 @@ class SessionResultModel:
             markdown_path=str(data.get("markdown_path", "")),
             jsonl_path=str(data.get("jsonl_path", "")),
             events_tail=[dict(item) for item in data.get("events_tail", [])],
+            pending_approvals=[
+                PendingApprovalModel.from_dict(item) for item in data.get("pending_approvals", [])
+            ],
+            pending_approvals_omitted=_integer(data, "pending_approvals_omitted", 0),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -508,6 +564,8 @@ class SessionResultModel:
             "markdown_path": self.markdown_path,
             "jsonl_path": self.jsonl_path,
             "events_tail": self.events_tail,
+            "pending_approvals": [item.to_dict() for item in self.pending_approvals],
+            "pending_approvals_omitted": self.pending_approvals_omitted,
         }
 
 
@@ -1147,6 +1205,7 @@ __all__ = [
     "EventBatchModel",
     "TranscriptModel",
     "AgentAnswerModel",
+    "PendingApprovalModel",
     "SessionResultModel",
     "ErrorModel",
     "PruneResultModel",

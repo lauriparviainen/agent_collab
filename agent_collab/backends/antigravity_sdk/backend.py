@@ -62,6 +62,7 @@ from typing import (
     Sequence,
 )
 
+from ...approvals import worker_session_run_kwargs
 from ...config import AgentConfig
 from ...events import Event, compact_json
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
@@ -525,7 +526,9 @@ class AntigravitySdkRunner(AgentRunner):
                         self._worker_provider_active = True
                 await emit(event)
 
-            _buffered, outcome = await session.run(effective_prompt, emit=tracking_emit)
+            _buffered, outcome = await session.run(
+                effective_prompt, **worker_session_run_kwargs(self, emit=tracking_emit)
+            )
             # Without a captured provider session, conversation_active is false
             # so the referee re-issues a full task. Soft-drop the worker so
             # retained pending prompts / live Agent context cannot join or
@@ -638,6 +641,7 @@ class AntigravitySdkRunner(AgentRunner):
                 pass
 
     async def _terminate_worker_session(self) -> None:
+        self._turn_ended_locally = True
         session = self._worker_session
         if session is None and self._worker_soft_drop_cancelled:
             self._worker_soft_drop_cancelled = False

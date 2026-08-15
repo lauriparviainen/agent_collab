@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import asyncio
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional
 
 from .config import (
     DEFAULT_WORKFLOW,
@@ -138,6 +138,12 @@ class RefereeConfig:
     stop_signal: Optional[RefereeStopSignal] = None
     sandbox: Optional[str] = None
     sandbox_plan: Optional[Any] = None
+    # Session-manager approval registry: worker frames register through
+    # ``approval_callback``; turn teardown denies or abandons via the two
+    # release hooks. All three are no-ops when unset (CLI/mock/direct runs).
+    approval_callback: Optional[Callable[[Mapping[str, Any]], Any]] = None
+    turn_approval_release_callback: Optional[Callable[[str, str], Awaitable[None]]] = None
+    turn_approval_abandon_callback: Optional[Callable[[str], Awaitable[None]]] = None
 
 
 class Referee:
@@ -283,6 +289,8 @@ class Referee:
                     self._backend_for(agent_id),
                     self.sandbox_plan.agents.get(agent_id),
                 )
+            if self.config.approval_callback is not None:
+                runners[agent_id].set_approval_callback(self.config.approval_callback)
         return runners
 
     def _backend_for(self, agent_id: str) -> Optional[str]:
@@ -431,6 +439,14 @@ class Referee:
     async def _set_turn_active(self, active: bool) -> None:
         if self.config.turn_active_callback is not None:
             await self.config.turn_active_callback(active)
+
+    async def _release_turn_approvals(self, turn_id: str, reason: str) -> None:
+        if self.config.turn_approval_release_callback is not None:
+            await self.config.turn_approval_release_callback(turn_id, reason)
+
+    async def _abandon_turn_approvals(self, turn_id: str) -> None:
+        if self.config.turn_approval_abandon_callback is not None:
+            await self.config.turn_approval_abandon_callback(turn_id)
 
     async def _set_input_accepting(self, accepting: bool) -> None:
         if self.config.input_accepting_callback is not None:
@@ -596,6 +612,7 @@ class Referee:
                 event_observer(event)
             await self._emit(logger, transcript, event)
 
+        runner.bind_turn(turn_id=turn_id, agent_id=agent_id)
         runner_task = asyncio.create_task(
             runner.run_turn(prompt, self.workdir, emit),
             name=f"agent-collab-{turn_id}-{agent_id}",
@@ -627,16 +644,33 @@ class Referee:
                     outcome = runner_task.result()
                 except asyncio.CancelledError:
                     outcome = local_outcome or TurnOutcome("failed", "referee_cancelled_unexpected")
+                    await self._release_turn_approvals(turn_id, "stop")
                 except Exception:
                     outcome = TurnOutcome("failed", "provider_transport_failed")
+                    await self._release_turn_approvals(turn_id, "worker_loss")
+                else:
+                    if getattr(runner, "_turn_ended_locally", False):
+                        await self._release_turn_approvals(turn_id, "protocol_error")
+                    else:
+                        await self._abandon_turn_approvals(turn_id)
             else:
                 if local_outcome is None:
                     if deadline_task.done():
                         local_outcome = TurnOutcome("timed_out", "local_turn_timed_out")
+                        release_reason = "turn_deadline"
                     elif stop_task.done():
                         local_outcome = TurnOutcome("interrupted", "local_turn_interrupted")
+                        release_reason = "stop"
                     else:
                         local_outcome = TurnOutcome("failed", "referee_cancelled_unexpected")
+                        release_reason = "stop"
+                elif self.stop_signal.is_set():
+                    release_reason = "stop"
+                else:
+                    release_reason = "turn_deadline"
+                # Deny pending approvals before cancelling the runner so
+                # awaiting_approval cannot outlive this turn.
+                await self._release_turn_approvals(turn_id, release_reason)
                 await asyncio.shield(self._cancel_runner_bounded(runner_task))
                 outcome = local_outcome
 
@@ -1033,10 +1067,9 @@ class Referee:
                     f"workflow={self.config.workflow} max_turns={self.config.max_turns} timeout={self.config.timeout}s workdir={self.workdir}",
                 ),
             )
-            if self.config.interactive:
-                await self._register_event_appender(
-                    lambda event: self._emit(logger, transcript, event)
-                )
+            # Always register so daemon-minted approval events stay in lockstep
+            # with the referee transcript (event_id == transcript index).
+            await self._register_event_appender(lambda event: self._emit(logger, transcript, event))
             try:
                 for turn, stage in enumerate(stages, start=1):
                     if self.config.interactive:
@@ -1110,8 +1143,7 @@ class Referee:
                 else:
                     await self._emit_final_summary(logger, transcript, len(stages))
             finally:
-                if self.config.interactive:
-                    await self._register_event_appender(None)
+                await self._register_event_appender(None)
             return {
                 "session_id": logger.session_id,
                 "jsonl_path": str(logger.jsonl_path),
