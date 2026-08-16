@@ -36,11 +36,13 @@ take it:
    advertisement, out-of-band interrupt writer, `approval_request`
    plumbing, the event/status vocabulary, the session-scoped approval
    registry, deny-by-default (turn-deadline, abandon-on-result, deny-before-
-   stop), the registry-keyed `_result_settled` arm, and the one decision
+   stop), the registry-keyed `_result_settled` arm, the one decision
    operation across REST/MCP/CLI/TUI (including the mcp-guidance
-   delegate-loop rewrite) are on `sdk-session-control`. Remaining Stage 1:
-   **(d)** interrupt seams. Keep MCP free of wait_approval, list_approvals,
-   and interrupt/resume tools in Stage 1.
+   delegate-loop rewrite), and interrupt seams (WorkerBackend hooks,
+   worker-backed `interrupt_request`, deny-then-interrupt-then-bounded-wait
+   stop) are on `sdk-session-control`. Remaining after this slice is item 3
+   capability projection wiring, then Stage 2. Keep MCP free of
+   wait_approval, list_approvals, and interrupt/resume tools until Stage 4.
 3. **Capability projection wiring.** `summarize_session_capabilities`'
    production call site passes no capture/eligibility set and freezes
    capabilities at start; the projection must be re-evaluated after capture,

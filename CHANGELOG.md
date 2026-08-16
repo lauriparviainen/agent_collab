@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add interrupt seams on stop for worker-backed SDK runners, with defaulted
+  WorkerBackend interrupt and approval-bind hooks (#20).
 - Expose one approval decision operation across REST, MCP, CLI, and TUI
   (`approve`/`deny` as a parameter) (#20).
 - Add a session-scoped approval registry and a registry-keyed `awaiting_approval`

@@ -193,6 +193,11 @@ class CodexSdkRunner(AgentRunner):
             return self._worker_provider_active
         return self._conversation is not None and self._conversation.active()
 
+    async def interrupt_request(self) -> bool:
+        from ...sandbox.worker_session import interrupt_active_session
+
+        return await interrupt_active_session(self._worker_session)
+
     async def close(self) -> None:
         if self._worker_session is not None:
             session = self._worker_session

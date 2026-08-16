@@ -203,6 +203,46 @@ class DaemonReadinessModel:
 
 
 @dataclass
+class SessionStopModel:
+    """Sanitized stop-path detail on session status after ``stop``.
+
+    In-memory only: stripped from the session index the same way
+    ``pending_approvals`` is. Default omitted/null before any stop.
+    """
+
+    requested: bool = False
+    provider_acknowledged: bool = False
+    fallback_cancelled: bool = False
+    approvals_denied: int = 0
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SessionStopModel":
+        return cls(
+            requested=bool(data.get("requested", False)),
+            provider_acknowledged=bool(data.get("provider_acknowledged", False)),
+            fallback_cancelled=bool(data.get("fallback_cancelled", False)),
+            approvals_denied=_integer(data, "approvals_denied", 0),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "requested": self.requested,
+            "provider_acknowledged": self.provider_acknowledged,
+            "fallback_cancelled": self.fallback_cancelled,
+            "approvals_denied": self.approvals_denied,
+        }
+
+
+def _optional_stop(data: Dict[str, Any]) -> Optional[SessionStopModel]:
+    value = data.get("stop")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("stop must be an object")
+    return SessionStopModel.from_dict(value)
+
+
+@dataclass
 class SessionStateModel:
     """A daemon session's state; mirrors ``daemon.SessionState.to_dict()``.
 
@@ -237,6 +277,7 @@ class SessionStateModel:
     agent_sessions: Optional[Dict[str, Any]] = None
     pending_approvals: List[PendingApprovalModel] = field(default_factory=list)
     pending_approvals_omitted: int = 0
+    stop: Optional[SessionStopModel] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionStateModel":
@@ -267,6 +308,7 @@ class SessionStateModel:
                 PendingApprovalModel.from_dict(item) for item in data.get("pending_approvals", [])
             ],
             pending_approvals_omitted=_integer(data, "pending_approvals_omitted", 0),
+            stop=_optional_stop(data),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -297,6 +339,7 @@ class SessionStateModel:
             "agent_sessions": self.agent_sessions,
             "pending_approvals": [item.to_dict() for item in self.pending_approvals],
             "pending_approvals_omitted": self.pending_approvals_omitted,
+            "stop": None if self.stop is None else self.stop.to_dict(),
         }
 
 
@@ -1276,6 +1319,7 @@ __all__ = [
     "HealthModel",
     "DaemonReadinessModel",
     "SessionStateModel",
+    "SessionStopModel",
     "SessionListModel",
     "EventModel",
     "EventBatchModel",

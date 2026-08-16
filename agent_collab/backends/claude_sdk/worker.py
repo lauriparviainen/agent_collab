@@ -51,6 +51,7 @@ class ClaudeSdkWorkerBackend:
         self._conversation = conversation
         self._verbose = verbose
         self._workspace = workspace
+        self._request_approval: Optional[Callable[..., Awaitable[Mapping[str, Any]]]] = None
 
     async def run(
         self,
@@ -117,6 +118,12 @@ class ClaudeSdkWorkerBackend:
             await _reset_conversation_bounded(self._conversation)
         # When emit is provided, events already crossed the framed transport.
         return ([] if emit is not None else events), result
+
+    async def interrupt(self, run_id: str) -> None:
+        del run_id
+
+    def bind_approvals(self, request_approval: Callable[..., Awaitable[Mapping[str, Any]]]) -> None:
+        self._request_approval = request_approval
 
     async def reset(self) -> None:
         if self._conversation is not None:

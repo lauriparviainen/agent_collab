@@ -115,6 +115,10 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_approval", names)
         self.assertIn("agent_collab_stop", names)
         self.assertIn("agent_collab_guidance", names)
+        self.assertNotIn("agent_collab_interrupt", names)
+        self.assertNotIn("agent_collab_resume", names)
+        self.assertNotIn("agent_collab_wait_approval", names)
+        self.assertNotIn("agent_collab_list_approvals", names)
 
     def test_start_and_describe_options_require_workdir_in_schema(self):
         response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -192,6 +196,8 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_approval", text)
         self.assertIn("`timeout_ms` is your poll bound, not the approval deadline", text)
         self.assertIn("Gating is for exceptions, not throughput", text)
+        self.assertIn("agent_collab_stop", text)
+        self.assertIn("not a keep-alive turn interrupt", text)
         self.assertNotIn("## Start", text)
 
     def test_watch_topic_includes_approval_park_contract(self):

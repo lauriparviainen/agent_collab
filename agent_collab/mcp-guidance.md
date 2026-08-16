@@ -100,7 +100,8 @@ Run another agent as a subagent and collect its result over MCP alone:
    continues the provider thread natively (only new events sent); when false,
    it re-sends the task and a recent window, costing like a fresh turn.
 6. End with `agent_collab_stop`, or let the session close on its
-   `interactive_idle_timeout` (raise it for long conversations).
+   `interactive_idle_timeout` (raise it for long conversations). Stop ends
+   the session; it is not a keep-alive turn interrupt.
 
 ## Workflows
 

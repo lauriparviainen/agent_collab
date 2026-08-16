@@ -266,6 +266,18 @@ class SupervisedWorkerSession:
         except Exception:
             return
 
+    async def interrupt_active(self) -> bool:
+        """Write interrupt for the live run. False when none or the write is skipped."""
+
+        run_id = self._active_run
+        if self._closed or self._terminal or not isinstance(run_id, str) or not run_id:
+            return False
+        try:
+            await self._send(make_frame("interrupt", run_id=run_id))
+        except Exception:
+            return False
+        return True
+
     async def send_approval_decision(
         self,
         *,
@@ -473,6 +485,24 @@ class SupervisedWorkerSession:
         except asyncio.IncompleteReadError as exc:
             raise WorkerProtocolError("worker control connection closed") from exc
         return validate_envelope(payload, expected_direction=direction)
+
+
+async def interrupt_active_session(session: Any) -> bool:
+    """Issue an out-of-band interrupt for a live worker run.
+
+    True means the request was written. False if there is no session or no
+    active run — in-process and CLI paths stay not-supported.
+    """
+
+    if session is None:
+        return False
+    method = getattr(session, "interrupt_active", None)
+    if not callable(method):
+        return False
+    result = method()
+    if asyncio.iscoroutine(result):
+        result = await result
+    return result is True
 
 
 async def handshake_worker(

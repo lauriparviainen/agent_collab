@@ -406,6 +406,29 @@ class WorkerProtocolV2ControlTests(unittest.IsolatedAsyncioTestCase):
         writer.close()
         await writer.wait_closed()
 
+    async def test_interrupt_active_is_noop_without_live_run(self) -> None:
+        process = _FakeProcess()
+        daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        daemon.setblocking(False)
+        worker.close()
+        reader, writer = await asyncio.open_connection(sock=daemon)
+        session = SupervisedWorkerSession(process, reader, writer, instance="x")
+        session._opened = True
+        sent: list = []
+
+        async def capture(payload):
+            sent.append(payload)
+
+        session._send = capture  # type: ignore[method-assign]
+        self.assertFalse(await session.interrupt_active())
+        self.assertEqual(sent, [])
+        session._active_run = "run-1"
+        self.assertTrue(await session.interrupt_active())
+        self.assertEqual(sent[0]["type"], "interrupt")
+        self.assertEqual(sent[0]["run_id"], "run-1")
+        writer.close()
+        await writer.wait_closed()
+
     async def test_interrupt_frame_delivered_while_run_holds_lock(self) -> None:
         daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         daemon.setblocking(False)

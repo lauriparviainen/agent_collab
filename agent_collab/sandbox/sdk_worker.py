@@ -51,6 +51,12 @@ class WorkerBackend(Protocol):
 
     async def close(self) -> None: ...
 
+    async def interrupt(self, run_id: str) -> None: ...
+
+    def bind_approvals(
+        self, request_approval: Callable[..., Awaitable[Mapping[str, Any]]]
+    ) -> None: ...
+
 
 BackendFactory = Callable[[], WorkerBackend]
 
@@ -130,6 +136,40 @@ async def _serve(channel: int) -> int:
     pending_approvals: Dict[str, asyncio.Future[Any]] = {}
     sequence = 0
     closed = False
+
+    async def request_approval(approval_id: str, **payload_fields: Any) -> Mapping[str, Any]:
+        """Park one worker-minted approval and await the matching decision.
+
+        Duplicate ``approval_id`` reuses the existing Future and does not
+        enqueue a second ``approval_request`` frame. Stage 1 does not invoke
+        this from a provider callback; the serve loop binds it after open.
+        """
+
+        nonlocal queued_event_bytes
+        if not isinstance(approval_id, str) or not approval_id:
+            raise ValueError("approval_id is required")
+        payload: Dict[str, Any] = {"approval_id": approval_id, **payload_fields}
+        future, newly_parked = _register_pending_approval(pending_approvals, approval_id)
+        if newly_parked:
+            run_id = active_run or ""
+            extras = {
+                key: value
+                for key, value in payload.items()
+                if key not in {"run_id", "sequence", "type", "protocol", "version"}
+            }
+            try:
+                frame_bytes = encode_frame(
+                    make_frame("approval_request", run_id=run_id, sequence=1, **extras)
+                )
+            except WorkerProtocolError as exc:
+                pending_approvals.pop(approval_id, None)
+                raise RuntimeError(
+                    "worker approval_request exceeds the transport frame size limit"
+                ) from exc
+            encoded_size = len(frame_bytes)
+            await event_queue.put(("approval_request", payload, encoded_size))
+            queued_event_bytes += encoded_size
+        return await future
 
     while not closed:
         if run_task is not None and active_run is not None:
@@ -231,6 +271,7 @@ async def _serve(channel: int) -> int:
             try:
                 backend = factories[backend_id]()
                 await backend.open(open_payload)
+                backend.bind_approvals(request_approval)
             except Exception as exc:
                 await _send_error(
                     loop,
@@ -329,12 +370,10 @@ async def _serve(channel: int) -> int:
             target = envelope.get("run_id")
             if not isinstance(target, str) or target != active_run or backend is None:
                 continue
-            interrupt = getattr(backend, "interrupt", None)
-            if callable(interrupt):
-                try:
-                    await interrupt(target)
-                except Exception:
-                    pass
+            try:
+                await backend.interrupt(target)
+            except Exception:
+                pass
             continue
 
         if frame_type == "approval_decision":
@@ -409,6 +448,22 @@ async def _serve(channel: int) -> int:
         return 1
 
     return 0
+
+
+def _register_pending_approval(
+    pending_approvals: Dict[str, asyncio.Future[Any]],
+    approval_id: str,
+) -> tuple[asyncio.Future[Any], bool]:
+    """Return ``(future, newly_parked)``. Duplicate ids reuse the parked Future."""
+
+    existing = pending_approvals.get(approval_id)
+    if existing is not None:
+        return existing, False
+    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+    parked = pending_approvals.setdefault(approval_id, future)
+    if parked is not future:
+        return parked, False
+    return future, True
 
 
 async def _drain_event_queue(

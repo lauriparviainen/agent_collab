@@ -272,7 +272,10 @@ TOOLS = [
     },
     {
         "name": "agent_collab_stop",
-        "description": "Request cancellation of a running daemon-owned session.",
+        "description": (
+            "Request cancellation of a running daemon-owned session. Stop ends the session; "
+            "it is not a keep-alive turn interrupt."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {"session_id": {"type": "string"}},

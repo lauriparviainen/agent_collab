@@ -441,6 +441,26 @@ class ModelRoundTripTests(unittest.TestCase):
         self.assertEqual(decoded.pending_approvals[0].request_id, "a1")
         self.assertEqual(decoded.to_dict(), payload)
 
+    def test_session_state_round_trips_stop_detail(self):
+        base = SessionStateModel.from_dict({"session_id": "s1", "status": "stopped"}).to_dict()
+        self.assertIsNone(base["stop"])
+        payload = dict(base)
+        payload["stop"] = {
+            "requested": True,
+            "provider_acknowledged": False,
+            "fallback_cancelled": True,
+            "approvals_denied": 2,
+        }
+        decoded = SessionStateModel.from_dict(payload)
+        self.assertTrue(decoded.stop.requested)
+        self.assertFalse(decoded.stop.provider_acknowledged)
+        self.assertTrue(decoded.stop.fallback_cancelled)
+        self.assertEqual(decoded.stop.approvals_denied, 2)
+        self.assertEqual(decoded.to_dict(), payload)
+        legacy = dict(payload)
+        legacy.pop("stop")
+        self.assertIsNone(SessionStateModel.from_dict(legacy).stop)
+
     def test_approval_decision_response_round_trips_binding_fields(self):
         payload = {
             "session_id": "s1",

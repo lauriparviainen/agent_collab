@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import asyncio
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Set
 
 from .config import (
     DEFAULT_WORKFLOW,
@@ -68,15 +68,25 @@ class RefereeStopSignal:
 
     def __init__(self) -> None:
         self._requested = False
+        self._session_stopping = False
         self._event: Optional[asyncio.Event] = None
+
+    def mark_session_stopping(self) -> None:
+        """Session will terminate stopped; do not abort the in-flight runner yet."""
+
+        self._session_stopping = True
 
     def request(self) -> None:
         self._requested = True
+        self._session_stopping = True
         if self._event is not None:
             self._event.set()
 
     def is_set(self) -> bool:
         return self._requested
+
+    def session_stopping(self) -> bool:
+        return self._session_stopping or self._requested
 
     async def wait(self) -> None:
         if self._requested:
@@ -169,6 +179,8 @@ class Referee:
         self.sandbox_plan = config.sandbox_plan
         if self.sandbox_plan is None:
             self.sandbox_plan = self._resolve_direct_sandbox_plan()
+        self._live_runners: Dict[str, AgentRunner] = {}
+        self._in_flight_runner_tasks: Set[asyncio.Task] = set()
 
     def _resolve_direct_sandbox_plan(self) -> Any:
         from . import backends as backend_registry
@@ -221,6 +233,21 @@ class Referee:
 
     def request_stop(self) -> None:
         self.stop_signal.request()
+
+    async def interrupt_in_flight(self) -> bool:
+        """Ask every live runner to interrupt its active turn. True if any issued."""
+
+        requested = False
+        for runner in list(self._live_runners.values()):
+            try:
+                if await runner.interrupt_request():
+                    requested = True
+            except Exception:
+                continue
+        return requested
+
+    def in_flight_runner_tasks(self) -> List[asyncio.Task]:
+        return [task for task in self._in_flight_runner_tasks if not task.done()]
 
     async def _preflight_direct_sandbox_plan(self) -> None:
         """Run the engine control omitted by daemon-owned prepared starts.
@@ -617,6 +644,7 @@ class Referee:
             runner.run_turn(prompt, self.workdir, emit),
             name=f"agent-collab-{turn_id}-{agent_id}",
         )
+        self._in_flight_runner_tasks.add(runner_task)
         deadline_task = asyncio.create_task(asyncio.sleep(max(0, self.config.timeout)))
         stop_task = asyncio.create_task(self.stop_signal.wait())
         local_outcome: Optional[TurnOutcome] = None
@@ -696,12 +724,13 @@ class Referee:
             # A provider result that was already complete at arbitration keeps
             # its truthful outcome, but a concurrent registered stop still
             # ends this workflow now instead of launching another turn.
-            if self.stop_signal.is_set():
+            if self.stop_signal.session_stopping():
                 raise asyncio.CancelledError
             if unexpected_cancel:
                 raise RequiredTurnFailed(record)
             return record
         finally:
+            self._in_flight_runner_tasks.discard(runner_task)
             for task in (deadline_task, stop_task):
                 if not task.done():
                     task.cancel()
@@ -767,7 +796,7 @@ class Referee:
         finally:
             await self._set_turn_active(False)
 
-        if self.stop_signal.is_set():
+        if self.stop_signal.session_stopping():
             raise asyncio.CancelledError
 
         records: Dict[str, TurnOutcomeRecord] = {}
@@ -1005,6 +1034,7 @@ class Referee:
         try:
             await self._preflight_direct_sandbox_plan()
             runners = self._runners()
+            self._live_runners = runners
             return await self._run_stages(task, transcript, runners, stages)
         finally:
             # Close every runner within a bound, shielded so it runs on normal
@@ -1046,6 +1076,8 @@ class Referee:
             if not drain_task.done():
                 await self._await_task_until(drain_task, REAPER_DRAIN_SECONDS)
             self._cleanup_sandbox_plan_private_roots()
+            self._live_runners = {}
+            self._in_flight_runner_tasks.clear()
 
     async def _run_stages(
         self,

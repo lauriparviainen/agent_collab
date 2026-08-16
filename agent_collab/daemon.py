@@ -50,6 +50,7 @@ from .referee import (
     RefereeInput,
     RefereeStopSignal,
     RequiredTurnFailed,
+    RUNNER_CLEANUP_GRACE_SECONDS,
 )
 from .retention import (
     AWAITING_APPROVAL,
@@ -78,6 +79,9 @@ MAX_DIGEST_TEXT_CHARS = 200
 # read_events round trip. Digest lines are capped, so the worst case is small.
 RESULT_TAIL_EVENTS = 20
 CANONICAL_SAFE_ERRORS = frozenset(CANONICAL_MESSAGES.values())
+# Bounded interrupt acknowledgement on stop: order of runner-close grace, not
+# a human-scale park. If this expires, stop falls back to kill-first cancel.
+INTERRUPT_ACKNOWLEDGE_SECONDS = RUNNER_CLEANUP_GRACE_SECONDS
 
 
 class SessionNotFoundError(KeyError):
@@ -199,6 +203,8 @@ class SessionState:
     # before the session index is written.
     pending_approvals: List[Dict[str, Any]] = field(default_factory=list)
     pending_approvals_omitted: int = 0
+    # In-memory stop-path detail; stripped from the session index like park payload.
+    stop: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -436,6 +442,7 @@ class SessionManager:
         # Park payload is a live view only; never restore it from the index.
         data.pop("pending_approvals", None)
         data.pop("pending_approvals_omitted", None)
+        data.pop("stop", None)
         if not data.get("session_id") or not data.get("status"):
             return None
         if "failure" in data and data["failure"] is not None:
@@ -487,6 +494,7 @@ class SessionManager:
             record = state.to_dict()
             record.pop("pending_approvals", None)
             record.pop("pending_approvals_omitted", None)
+            record.pop("stop", None)
             self._index.upsert(record)
         except OSError as exc:
             self._log_lifecycle(f"failed to persist session index for {state.session_id}: {exc}")
@@ -887,15 +895,44 @@ class SessionManager:
         if managed.state.status in TERMINAL_STATUSES:
             return self._view_state(managed.state, "full", managed)
 
-        # Deny every pending approval before cancelling the referee / closing
-        # runners. Interrupt is slice (d); this slice only denies first.
-        managed.approvals_denied_on_stop = await self._auto_deny_pending(managed, reason="stop")
+        # Deny every pending approval before interrupt or cancelling the
+        # referee / closing runners. An interrupt delivered while the SDK is
+        # blocked in a permission callback may not release that callback.
+        denied = await self._auto_deny_pending(managed, reason="stop")
+        managed.approvals_denied_on_stop = denied
+        managed.stop_signal.mark_session_stopping()
+
+        requested = False
+        acknowledged = False
+        fallback = True
+        referee = managed.referee
+        if referee is not None:
+            requested = await referee.interrupt_in_flight()
+        if requested:
+            in_flight = referee.in_flight_runner_tasks() if referee is not None else []
+            if in_flight:
+                _done, pending = await asyncio.wait(
+                    set(in_flight),
+                    timeout=INTERRUPT_ACKNOWLEDGE_SECONDS,
+                )
+                acknowledged = not pending
+            else:
+                acknowledged = True
+            fallback = not acknowledged
+
+        managed.state.stop = {
+            "requested": bool(requested),
+            "provider_acknowledged": bool(acknowledged),
+            "fallback_cancelled": bool(fallback),
+            "approvals_denied": int(denied),
+        }
 
         if task is not None and not task.done():
             managed.stop_signal.request()
             if managed.referee is not None:
                 managed.referee.request_stop()
-            task.cancel()
+            if not task.done():
+                task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
             await self._set_status(managed, STOPPED)
@@ -1458,13 +1495,13 @@ class SessionManager:
             state.jsonl_path = result.get("jsonl_path", state.jsonl_path)
             state.markdown_path = result.get("markdown_path", state.markdown_path)
             self._persist(state)
-            if state.status in LIVE_WAIT_STATUSES and not managed.stop_signal.is_set():
+            if state.status in LIVE_WAIT_STATUSES and not managed.stop_signal.session_stopping():
                 await self._set_status(managed, DONE)
         except asyncio.CancelledError:
             # Explicit stop has one publisher: stop_session, after this task
             # settles. A cancellation without that registered cause is a
             # canonical daemon failure.
-            if not managed.stop_signal.is_set():
+            if not managed.stop_signal.session_stopping():
                 failure = SessionFailure(code="referee_cancelled_unexpected")
                 await self._set_status(managed, FAILED, failure=failure)
         except RequiredTurnFailed as exc:

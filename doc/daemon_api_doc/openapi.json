@@ -863,6 +863,16 @@
             ],
             "type": "string"
           },
+          "stop": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionStopModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "task": {
             "type": "string"
           },
@@ -917,7 +927,33 @@
           "capabilities",
           "agent_sessions",
           "pending_approvals",
-          "pending_approvals_omitted"
+          "pending_approvals_omitted",
+          "stop"
+        ],
+        "type": "object"
+      },
+      "SessionStopModel": {
+        "additionalProperties": false,
+        "properties": {
+          "approvals_denied": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fallback_cancelled": {
+            "type": "boolean"
+          },
+          "provider_acknowledged": {
+            "type": "boolean"
+          },
+          "requested": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requested",
+          "provider_acknowledged",
+          "fallback_cancelled",
+          "approvals_denied"
         ],
         "type": "object"
       },
