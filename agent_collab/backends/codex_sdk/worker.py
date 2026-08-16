@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Awaitable, Callable, List, Mapping, Optional, Tuple
 
@@ -14,6 +15,7 @@ from .backend import (
     _should_reset_after_outcome,
     iter_codex_turn_events,
 )
+from .permissions import make_sync_approval_handler, park_codex_tool_approval
 
 EventEmit = Callable[[Any], Awaitable[None]]
 
@@ -26,6 +28,9 @@ class CodexSdkWorkerBackend:
         self._verbose = False
         self._workspace: Optional[Path] = None
         self._agent_id = "codex_sdk"
+        self._request_approval: Optional[Callable[..., Awaitable[Mapping[str, Any]]]] = None
+        self._approval_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._sync_approval_handler: Optional[Callable[..., Mapping[str, Any]]] = None
 
     async def open(self, payload: Mapping[str, Any]) -> None:
         workspace = Path(str(payload["workspace"])).resolve()
@@ -47,11 +52,23 @@ class CodexSdkWorkerBackend:
             command=codex_bin if isinstance(codex_bin, str) else None,
         )
         # Codex thread cwd is the effective agent cwd, not only the session root.
-        conversation = _default_conversation(agent, options, cwd)
+        # Worker serve always binds approvals; install the host handler so the
+        # SDK default accept cannot shadow the gate. Capture the serve loop
+        # here, not inside the reader-thread handler.
+        self._approval_loop = asyncio.get_running_loop()
+        self._sync_approval_handler = make_sync_approval_handler(
+            loop=self._approval_loop,
+            park_async=self._park_tool_approval,
+        )
+        conversation = _default_conversation(
+            agent,
+            options,
+            cwd,
+            approval_handler=self._sync_approval_handler,
+        )
         self._conversation = conversation
         self._verbose = verbose
         self._workspace = workspace
-        self._request_approval: Optional[Callable[..., Awaitable[Mapping[str, Any]]]] = None
 
     async def run(
         self,
@@ -125,8 +142,27 @@ class CodexSdkWorkerBackend:
             return
         await method()
 
+    async def _park_tool_approval(self, method: str, params: Any) -> Mapping[str, Any]:
+        """Worker ``approval_handler`` park: enqueue via the serve loop."""
+
+        return await park_codex_tool_approval(
+            request_approval=self._request_approval,
+            method=method,
+            params=params,
+        )
+
     def bind_approvals(self, request_approval: Callable[..., Awaitable[Mapping[str, Any]]]) -> None:
         self._request_approval = request_approval
+        if self._approval_loop is None:
+            try:
+                self._approval_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+        if self._sync_approval_handler is None:
+            self._sync_approval_handler = make_sync_approval_handler(
+                loop=self._approval_loop,
+                park_async=self._park_tool_approval,
+            )
 
     async def reset(self) -> None:
         if self._conversation is not None:

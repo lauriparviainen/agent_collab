@@ -725,12 +725,44 @@ class CodexProductionFactoryTests(unittest.TestCase):
 
             async def run(self):
                 self._thread.assert_open()
+                await self._invoke_host_handler()
+                if state.get("hang_after_decision"):
+                    release = state.setdefault("hang_release", asyncio.Event())
+                    await release.wait()
+                    return _turn_result(status=_TurnStatus.interrupted)
                 result = state["results"].pop(0)
                 if callable(result):
                     result = await result()
                 if isinstance(result, BaseException):
                     raise result
                 return result
+
+            async def _invoke_host_handler(self):
+                owner = getattr(self._thread, "_owner", None)
+                sync = getattr(getattr(owner, "_client", None), "_sync", None)
+                handler = getattr(sync, "_approval_handler", None)
+                if not callable(handler):
+                    return
+                mode = state.get("gate_mode", "park")
+                command = ("item/commandExecution/requestApproval", {"command": "true"})
+                file_change = (
+                    "item/fileChange/requestApproval",
+                    {"changes": [{"path": "a.py"}]},
+                )
+                if mode == "abandon":
+                    loop = asyncio.get_running_loop()
+                    state["park_task"] = loop.run_in_executor(None, handler, *command)
+                    await state["release_result"].wait()
+                    return
+                calls = [command]
+                if mode == "sequential":
+                    calls.append(file_change)
+                for method, params in calls:
+                    result = await asyncio.to_thread(handler, method, params)
+                    state.setdefault("approval_results", []).append(result)
+                    if isinstance(result, dict) and result.get("decision") == "accept":
+                        name = "command" if "commandExecution" in method else "file_change"
+                        state.setdefault("executed", []).append(name)
 
             async def interrupt(self):
                 if state["open"] <= 0:
@@ -742,13 +774,16 @@ class CodexProductionFactoryTests(unittest.TestCase):
                 gate = state.get("interrupt_gate")
                 if gate is not None:
                     gate.set()
+                if state.get("hang_after_decision"):
+                    state.setdefault("hang_release", asyncio.Event()).set()
                 delay = state.get("interrupt_delay")
                 if delay is not None:
                     await asyncio.sleep(delay)
 
         class FakeThread:
-            def __init__(self, thread_id="thread-production"):
+            def __init__(self, thread_id="thread-production", owner=None):
                 self.id = thread_id
+                self._owner = owner
 
             async def turn(self, prompt, **kwargs):
                 state["runs"].append((prompt, kwargs))
@@ -764,11 +799,17 @@ class CodexProductionFactoryTests(unittest.TestCase):
                 if state["open"] <= 0:
                     raise AssertionError("provider thread used after client close")
 
+        class _FakeSyncClient:
+            def __init__(self):
+                self._approval_handler = None
+
         class FakeAsyncCodex:
             def __init__(self, config=None):
                 state["clients"] += 1
                 state["client_config"] = config
                 self.is_open = False
+                self._client = SimpleNamespace(_sync=_FakeSyncClient())
+                state.setdefault("async_codex_clients", []).append(self)
 
             async def __aenter__(self):
                 state["entered"] += 1
@@ -788,14 +829,14 @@ class CodexProductionFactoryTests(unittest.TestCase):
 
             async def thread_start(self, **kwargs):
                 state["starts"].append(kwargs)
-                return FakeThread()
+                return FakeThread(owner=self)
 
             async def thread_resume(self, thread_id, **kwargs):
                 state["resumes"].append((thread_id, kwargs))
                 error = state.get("resume_error")
                 if error is not None:
                     raise error
-                return FakeThread(thread_id)
+                return FakeThread(thread_id, owner=self)
 
         module.AsyncCodex = FakeAsyncCodex
         module.CodexConfig = FakeCodexConfig

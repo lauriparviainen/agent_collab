@@ -13,6 +13,9 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Wire Codex SDK `approval_handler` on the worker and gated in-process
+  paths (120 s fail-closed deny, serialized parks). Production
+  `codex_sdk.tool_gate` stays false pending credentialed coverage (#20).
 - Map Codex SDK `turn/interrupt` on worker and in-process turns onto
   `interrupted` when the abort is distinguishable; production
   `codex_sdk.interrupt` stays false pending credentialed coverage (#20).

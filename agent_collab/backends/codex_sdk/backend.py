@@ -29,6 +29,11 @@ from ...events import Event, compact_json
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
 from ...runners import AgentRunner, AsyncEventSink
 from ...sandbox.specs import SandboxPolicy
+from .permissions import (
+    install_host_approval_handler,
+    make_sync_approval_handler,
+    park_in_process_codex_approval,
+)
 from .sandbox import CodexSdkSandboxAdapter
 from ..base import (
     BackendCapabilities,
@@ -517,14 +522,36 @@ class CodexSdkRunner(AgentRunner):
             await emit(Event.create("codex", "status", "codex sdk turn complete"))
         return result
 
+    async def _park_tool_approval(self, method: str, params: Any) -> Mapping[str, Any]:
+        """In-process ``approval_handler`` park: session registry, no frames."""
+
+        return await park_in_process_codex_approval(
+            callback=getattr(self, "_approval_callback", None),
+            agent_id=getattr(self, "_bound_agent_id", None) or self.name,
+            turn_id=getattr(self, "_bound_turn_id", None) or "",
+            method=method,
+            params=params,
+        )
+
     def _conversation_for(self, workdir: Path) -> CodexConversation:
         resolved = workdir.resolve()
         if self._conversation is None:
-            self._conversation = self._conversation_factory(
-                self.agent,
-                self.options,
-                resolved,
-            )
+            factory = self._conversation_factory
+            approval_handler = None
+            if getattr(self, "_approval_callback", None) is not None:
+                approval_handler = make_sync_approval_handler(
+                    loop=asyncio.get_running_loop(),
+                    park_async=self._park_tool_approval,
+                )
+            if factory is _default_conversation:
+                self._conversation = factory(
+                    self.agent,
+                    self.options,
+                    resolved,
+                    approval_handler=approval_handler,
+                )
+            else:
+                self._conversation = factory(self.agent, self.options, resolved)
             self._workdir = resolved
         elif self._workdir != resolved:
             raise RuntimeError("codex sdk conversation workdir changed between turns")
@@ -794,8 +821,16 @@ def _default_conversation(
     agent: AgentConfig,
     options: Dict[str, Any],
     workdir: Path,
+    *,
+    approval_handler: Any = None,
 ) -> CodexConversation:
-    """Build one lazy-imported persistent conversation for a runner."""
+    """Build one lazy-imported persistent conversation for a runner.
+
+    ``approval_handler`` is the host sync adapter installed on the private
+    ``AsyncCodex._client._sync._approval_handler`` hook after the client
+    exists. Omit it for ungated in-process sessions so the SDK default
+    accept remains.
+    """
 
     try:
         import openai_codex  # type: ignore
@@ -861,6 +896,7 @@ def _default_conversation(
         client_config,
         start_kwargs,
         run_kwargs,
+        approval_handler=approval_handler,
     )
 
 
@@ -873,11 +909,14 @@ class _PersistentCodexConversation:
         client_config: Any,
         thread_kwargs: Dict[str, Any],
         run_kwargs: Dict[str, Any],
+        *,
+        approval_handler: Any = None,
     ) -> None:
         self._client_factory = client_factory
         self._client_config = client_config
         self._thread_kwargs = dict(thread_kwargs)
         self._run_kwargs = dict(run_kwargs)
+        self._host_approval_handler = approval_handler
         self._lock = asyncio.Lock()
         self._client: Any = None
         self._thread: Any = None
@@ -988,6 +1027,11 @@ class _PersistentCodexConversation:
         )
         try:
             await client.__aenter__()
+            if self._host_approval_handler is not None:
+                try:
+                    install_host_approval_handler(client, self._host_approval_handler)
+                except AttributeError as exc:
+                    raise _backend_unavailable(str(exc)) from exc
             resume_id = self._thread_id
             if resume_id is None:
                 thread = await client.thread_start(**self._thread_kwargs)

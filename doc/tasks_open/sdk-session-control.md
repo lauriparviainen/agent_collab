@@ -89,8 +89,12 @@ take it:
    `TurnStatus.interrupted` → `TurnOutcome("interrupted",
    "local_turn_interrupted")`; retain). Production `codex_sdk.interrupt`
    stays false pending credentialed coverage / continue-after-interrupt
-   (same honesty as Claude). Remaining Stage 3: Codex tool_gate (open
-   questions 5, 9, and 10), Antigravity, and xAI (open question 2, plus
+   (same honesty as Claude). Codex tool_gate *mapping* also landed:
+   host `approval_handler` is wired on the worker (always) and on
+   in-process only when `_approval_callback` is set; questions 5, 9, and
+   10 are recorded in the Codex Decision below. Production
+   `codex_sdk.tool_gate` stays false pending credentialed parks on both
+   paths. Remaining Stage 3: Antigravity and xAI (open question 2, plus
    remaining 5, 9, and 10; record negatives explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Mind the pieces added in review: keyed-merge identity
@@ -479,6 +483,54 @@ clock exclusion on worker and in-process). The worker no longer forces
 `bypassPermissions`; hermetic tests invoke `can_use_tool` on both paths.
 Production `claude_sdk.tool_gate` is true. Live two-at-once /
 abort-during-park remain unverified and are not a flip blocker.
+
+### Decision (2026-08-16): Codex Stage 3 tool-gate policy
+
+Settled as product policy for `codex_sdk` from static inspect of pin
+`openai-codex` 0.144.4. The host `approval_handler` is wired on both
+production paths (worker always; in-process only when a session
+callback is bound). Production `codex_sdk.tool_gate` stays false
+pending credentialed parks. Antigravity and xAI keep questions 5, 9,
+and 10 open.
+
+**Open question 5 (Codex):** The Python handler is not account/plan
+gated. Silent skip is approval-policy / default-accept shadowing:
+`ApprovalMode.deny_all` never asks; the installed default handler
+auto-accepts both `item/commandExecution/requestApproval` and
+`item/fileChange/requestApproval`; `auto_review` may auto-decide some
+items (unverified live). Replacing the default accept handler when a
+host gate is bound is the analog of Claude dropping worker
+`bypassPermissions`. Worker `danger-full-access` is the outer-sandbox
+filesystem posture, not a permission-mode skip. A later never-parked
+credentialed test must **fail**, not skip-and-flip.
+
+**Open question 9 (Codex):** No Python-side callback timer on 0.144.4.
+Do not clamp. Do not keep `tool_gate` false because of clocks.
+Agent-collab owns the existing 120 s fail-closed deny and 2×
+park-exclusion cap. App-server timeout on a pending `requestApproval`
+is **unverified** (do not invent a clamp). Live abort-during-park
+remains unverified. Because the handler blocks the reader,
+interrupt-during-park must go through the shipped
+**deny-then-interrupt** path (deny unblocks the reader, then
+`turn/interrupt` can be read). Do not claim a live abort-during-park
+proof.
+
+**Open question 10 (Codex):** Serialized at the transport. Keep
+`pending_approvals` as a **list** (same public surface as Claude). Do
+**not** implement fake concurrent parks. Hermetic coverage is
+sequential parks and/or proving a second handler call cannot start
+until the first returns. Live two-at-once is not expected.
+
+*Rejected alternatives:* passing `ApprovalMode.deny_all` (it never
+asks); inventing a public `approval_mode` start option; clamping to a
+guessed app-server deadline; keeping `tool_gate` false because of
+clocks; treating a never-parked credentialed test as skip; faking
+concurrent parks the transport cannot dispatch.
+
+**Hard blocker for flipping `tool_gate`:** credentialed parks on both
+production paths. A never-parked credentialed test fails rather than
+skips. Live two-at-once is not expected. Live abort-during-park
+remains unverified and is not a flip blocker once parks are proven.
 
 ### Aggregation
 
@@ -1436,7 +1488,16 @@ the feature. A skipped provider keeps the production capability false.
    / allow-list shadowing. The production worker no longer forces
    `bypassPermissions`; an explicit operator `bypassPermissions` still
    skips the callback. A never-parked credentialed test fails rather than
-   skips. Codex, Antigravity, and xAI remain open. (Stage 3)
+   skips. **Codex: no.** The Python handler is not plan-gated; silent
+   skip is approval-policy / default-accept shadowing
+   (`ApprovalMode.deny_all` never asks; the default handler
+   auto-accepts both `requestApproval` methods; `auto_review` may
+   auto-decide some items, unverified live). Replacing the default
+   accept handler when a host gate is bound is the analog of Claude
+   dropping worker `bypassPermissions`. Worker `danger-full-access` is
+   the outer-sandbox filesystem posture, not a permission-mode skip. A
+   never-parked credentialed test must fail, not skip-and-flip.
+   Antigravity and xAI remain open. (Stage 3)
 6. Can `agy -p` emit the exact conversation id it just used through a stable
    machine-readable surface? CLI 1.1.8 added typed `init`, `step_update`, and
    `result` events after the current backend was designed; inspect a root turn,
@@ -1462,14 +1523,22 @@ the feature. A skipped provider keeps the production capability false.
    default fail-closed deny (configurable start setting); per-turn
    park-exclusion cap is twice that deadline. Treat CLI
    `control_cancel_request` / stream-close as abandon/auto-deny. Live
-   abort-during-park is still unverified. Codex, Antigravity, and xAI
-   remain open. (Stage 3)
+   abort-during-park is still unverified. **Codex: no Python-side
+   timer.** Do not clamp; do not keep `tool_gate` false because of
+   clocks. Agent-collab owns the 120 s fail-closed deny and 2×
+   park-exclusion cap. App-server timeout on a pending
+   `requestApproval` is unverified. Because the handler blocks the
+   reader, interrupt-during-park must go through deny-then-interrupt.
+   Live abort-during-park is unverified; do not claim that proof.
+   Antigravity and xAI remain open. (Stage 3)
 10. Can each SDK fire multiple permission callbacks concurrently within one
     turn, or are they serialized? The plural `pending_approvals` surface
     assumes concurrency is possible. **Claude: keep the list; implement
     overlap.** The SDK can spawn concurrent `can_use_tool` tasks; live
-    two-at-once is still unverified. Codex, Antigravity, and xAI remain
-    open. (Stage 3)
+    two-at-once is still unverified. **Codex: serialized at the
+    transport.** Keep the list; do not implement fake concurrent parks.
+    Hermetic coverage is sequential parks. Live two-at-once is not
+    expected. Antigravity and xAI remain open. (Stage 3)
 
 ---
 
@@ -1688,9 +1757,26 @@ the tests, not this document, are their guarantee.
   Mapping landed; production `codex_sdk.interrupt` stays false pending
   credentialed coverage / continue-after-interrupt. API inspect was the
   0.144.4 wheel, not the configured local CLI 0.147.0. See open question 1.
-- *[tool_gate]* Command/file-change approval notifications and response methods
-  on the app-server are unverified — including callback concurrency and any
-  provider-side decision deadline (open questions 9–10).
+- *[tool_gate]* Installed `openai-codex` 0.144.4 `CodexClient` accepts
+  `approval_handler`. Public `AsyncCodex` / `AsyncCodexClient` do not;
+  the host installs on `async_codex._client._sync._approval_handler`.
+  Default handler auto-accepts both
+  `item/commandExecution/requestApproval` and
+  `item/fileChange/requestApproval` with `{"decision": "accept"}`. The
+  handler is synchronous on the stdout reader thread; blocking it
+  blocks further JSON-RPC including `turn/interrupt`. No Python-side
+  callback timer. App-server timeout on a pending `requestApproval` is
+  unverified. Parks are serialized at the transport (open question 10).
+  The wheel does not name a deny decision token; host deny uses
+  `{"decision": "decline"}` (guessed from item
+  `CommandExecutionStatus` / `PatchApplyStatus` `declined`; anything
+  other than explicit `accept` is deny). Worker always installs the
+  host handler; in-process installs only when `_approval_callback` is
+  set. Worker `danger-full-access` remains the outer-sandbox filesystem
+  posture, not a permission-mode skip. Production `codex_sdk.tool_gate`
+  stays false pending credentialed parks on both paths. A never-parked
+  credentialed test must fail, not skip-and-flip. See *Decision
+  (2026-08-16): Codex Stage 3 tool-gate policy*.
 - *[all]* Two-pin ambiguity: the inspected API is the `openai-codex` 0.144.4
   wheel (bundled `openai-codex-cli-bin` 0.144.4). The configured local CLI
   reports `codex-cli` 0.147.0. This re-verification exercised the 0.144.4
