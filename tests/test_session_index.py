@@ -80,18 +80,21 @@ class SessionIndexTests(unittest.TestCase):
 
 
 class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
-    async def _run_session_to_done(self, manager, root, task="index task"):
-        state = await manager.start_session(
-            StartSessionRequest(task=task, mock=True, max_turns=1, timeout=5, workdir=root)
-        )
+    async def _wait_until_not_running(self, manager, session_id):
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 2.0
         while loop.time() < deadline:
-            current = manager.get_session(state.session_id)
+            current = manager.get_session(session_id)
             if current.status != "running":
                 return current
             await asyncio.sleep(0.02)
         self.fail("session did not finish")
+
+    async def _run_session_to_done(self, manager, root, task="index task"):
+        state = await manager.start_session(
+            StartSessionRequest(task=task, mock=True, max_turns=1, timeout=5, workdir=root)
+        )
+        return await self._wait_until_not_running(manager, state.session_id)
 
     async def test_sessions_survive_manager_restart_with_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,7 +124,8 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
                 manager = SessionManager(index_path=index_path)
                 final = await self._run_session_to_done(manager, root)
-                # Every session this stage honestly reports all-false capabilities.
+                # Default mock CLI cross-review (claude_cli/codex_cli) stays
+                # all-false: those backends have no continuity/resume/interrupt.
                 self.assertEqual(
                     final.capabilities,
                     {"resumable": False, "interruptible": False, "continuity": False},
@@ -134,6 +138,215 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
                 restored.capabilities,
                 {"resumable": False, "interruptible": False, "continuity": False},
             )
+
+    async def test_sdk_continuity_is_true_at_start_and_on_restore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            home.mkdir()
+            (home / "config.toml").write_text(
+                "schema_version = 8\n\n"
+                "[backends.claude_sdk]\nenabled = true\n\n"
+                '[workflows.solo-sdk]\nsequence = ["claude_sdk"]\n',
+                encoding="utf-8",
+            )
+            index_path = home / "data" / "session-index.json"
+            expected = {"resumable": False, "interruptible": False, "continuity": True}
+
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
+                manager = SessionManager(index_path=index_path)
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task="sdk continuity",
+                        workflow="solo-sdk",
+                        mock=True,
+                        max_turns=1,
+                        timeout=5,
+                        workdir=root,
+                    )
+                )
+                final = await self._wait_until_not_running(manager, state.session_id)
+                self.assertEqual(state.capabilities, expected)
+                self.assertEqual(final.capabilities, expected)
+                self.assertEqual(
+                    SessionIndex(index_path).load()[final.session_id]["capabilities"],
+                    expected,
+                )
+
+                restarted = SessionManager(index_path=index_path)
+
+            restored = restarted.get_session(final.session_id)
+            self.assertEqual(restored.capabilities, expected)
+            self.assertEqual(
+                SessionIndex(index_path).load()[final.session_id]["capabilities"],
+                expected,
+            )
+
+    async def test_restore_re_reduces_from_agent_sessions_and_live_backend_flags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            index = SessionIndex(index_path)
+            index.upsert(
+                {
+                    "session_id": "stale-pin",
+                    "status": "done",
+                    "task": "captured sdk",
+                    "workflow": "solo-sdk",
+                    "workdir": str(root),
+                    "jsonl_path": str(root / "stale-pin.jsonl"),
+                    "markdown_path": str(root / "stale-pin.md"),
+                    "created_at": "2026-07-08T00:00:00+00:00",
+                    "updated_at": "2026-07-08T00:00:00+00:00",
+                    # Start-time pin that contradicts captures and live SDK continuity.
+                    "capabilities": {
+                        "resumable": True,
+                        "interruptible": True,
+                        "continuity": False,
+                    },
+                    "settings": {
+                        "agents": {
+                            "claude_sdk": {
+                                "type": "claude",
+                                "backend": "sdk",
+                                "capabilities": {
+                                    "resume": True,
+                                    "interrupt": True,
+                                    "tool_gate": True,
+                                    "continuity": True,
+                                },
+                            }
+                        }
+                    },
+                    "agent_sessions": {
+                        "claude_sdk": {
+                            "backend": "sdk",
+                            "provider_session_id": "sess-1",
+                            "provider_session_kind": "session",
+                        }
+                    },
+                }
+            )
+
+            manager = SessionManager(index_path=index_path)
+            restored = manager.get_session("stale-pin")
+            expected = {"resumable": False, "interruptible": False, "continuity": True}
+            self.assertEqual(restored.capabilities, expected)
+            self.assertEqual(index.load()["stale-pin"]["capabilities"], expected)
+
+    async def test_restore_with_resume_stub_uses_capture_set_not_start_pin(self):
+        from agent_collab import backends as backend_registry
+        from agent_collab.backends.base import BackendCapabilities
+
+        real_capabilities_for = backend_registry.capabilities_for
+
+        def resume_stub(agent_type, backend_id):
+            caps = real_capabilities_for(agent_type, backend_id)
+            return BackendCapabilities(
+                resume=True,
+                interrupt=caps.interrupt,
+                tool_gate=caps.tool_gate,
+                continuity=caps.continuity,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            index = SessionIndex(index_path)
+            index.upsert(
+                {
+                    "session_id": "captured-resume",
+                    "status": "done",
+                    "task": "captured sdk",
+                    "workflow": "solo-sdk",
+                    "workdir": str(root),
+                    "jsonl_path": str(root / "captured-resume.jsonl"),
+                    "markdown_path": str(root / "captured-resume.md"),
+                    "created_at": "2026-07-08T00:00:00+00:00",
+                    "updated_at": "2026-07-08T00:00:00+00:00",
+                    "capabilities": {
+                        "resumable": False,
+                        "interruptible": False,
+                        "continuity": True,
+                    },
+                    "settings": {"agents": {"claude_sdk": {"type": "claude", "backend": "sdk"}}},
+                    "agent_sessions": {
+                        "claude_sdk": {
+                            "backend": "sdk",
+                            "provider_session_id": "sess-1",
+                            "provider_session_kind": "session",
+                        }
+                    },
+                }
+            )
+
+            with mock.patch(
+                "agent_collab.backends.capabilities_for",
+                side_effect=resume_stub,
+            ):
+                manager = SessionManager(index_path=index_path)
+                restored = manager.get_session("captured-resume")
+
+            expected = {"resumable": True, "interruptible": False, "continuity": True}
+            self.assertEqual(restored.capabilities, expected)
+            self.assertEqual(index.load()["captured-resume"]["capabilities"], expected)
+
+    async def test_restore_mock_session_stays_not_resumable_with_resume_stub(self):
+        from agent_collab import backends as backend_registry
+        from agent_collab.backends.base import BackendCapabilities
+
+        real_capabilities_for = backend_registry.capabilities_for
+
+        def resume_stub(agent_type, backend_id):
+            caps = real_capabilities_for(agent_type, backend_id)
+            return BackendCapabilities(
+                resume=True,
+                interrupt=caps.interrupt,
+                tool_gate=caps.tool_gate,
+                continuity=caps.continuity,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            index = SessionIndex(index_path)
+            index.upsert(
+                {
+                    "session_id": "mock-captured",
+                    "status": "done",
+                    "task": "mock sdk",
+                    "workflow": "solo-sdk",
+                    "workdir": str(root),
+                    "jsonl_path": str(root / "mock-captured.jsonl"),
+                    "markdown_path": str(root / "mock-captured.md"),
+                    "created_at": "2026-07-08T00:00:00+00:00",
+                    "updated_at": "2026-07-08T00:00:00+00:00",
+                    "mock": True,
+                    "capabilities": {
+                        "resumable": False,
+                        "interruptible": False,
+                        "continuity": True,
+                    },
+                    "settings": {"agents": {"claude_sdk": {"type": "claude", "backend": "sdk"}}},
+                    "agent_sessions": {
+                        "claude_sdk": {
+                            "backend": "sdk",
+                            "provider_session_id": "sess-1",
+                            "provider_session_kind": "session",
+                        }
+                    },
+                }
+            )
+
+            with mock.patch(
+                "agent_collab.backends.capabilities_for",
+                side_effect=resume_stub,
+            ):
+                manager = SessionManager(index_path=index_path)
+                restored = manager.get_session("mock-captured")
+
+            self.assertFalse(restored.capabilities["resumable"])
+            self.assertTrue(restored.capabilities["continuity"])
 
     async def test_running_sessions_marked_interrupted_on_restart(self):
         with tempfile.TemporaryDirectory() as tmp:

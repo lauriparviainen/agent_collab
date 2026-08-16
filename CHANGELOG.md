@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Re-evaluate session capability summaries after identity capture, turn commit,
+  and restore so live status matches the conservative reducer (#20).
 - Add interrupt seams on stop for worker-backed SDK runners, with defaulted
   WorkerBackend interrupt and approval-bind hooks (#20).
 - Expose one approval decision operation across REST, MCP, CLI, and TUI

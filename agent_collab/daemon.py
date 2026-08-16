@@ -8,7 +8,19 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 import uuid
 
 from .approvals import (
@@ -190,8 +202,10 @@ class SessionState:
     # session starts with a packed append-only list.
     turn_outcomes: Optional[List[Dict[str, Any]]] = None
     settings: Optional[Dict[str, Any]] = None
-    # Honest session-level capability summary derived from the backends actually
-    # in use (all false this stage); persisted so it survives daemon restart.
+    # Honest session-level capability summary: conservative AND of live backend
+    # flags plus the current capture set. Continuity can be true for all-SDK
+    # sessions at start; resumable/interruptible stay false until those backend
+    # flags flip. Re-evaluated after capture, turn commit, and restore.
     capabilities: Optional[Dict[str, bool]] = None
     # Per-agent provider session identity captured from runner events, keyed by
     # workflow agent id: {agent_id: {backend, provider_session_id,
@@ -417,6 +431,7 @@ class SessionManager:
             state = self._state_from_record(record)
             if state is None or state.session_id in self._sessions:
                 continue
+            capabilities_changed = record.get("capabilities") != state.capabilities
             if state.status not in TERMINAL_STATUSES:
                 now = utc_timestamp()
                 self._transition_state(state, INTERRUPTED)
@@ -428,6 +443,10 @@ class SessionManager:
                 state.ended_at = now
                 self._persist(state)
                 self._log_lifecycle(f"session {state.session_id} interrupted by daemon restart")
+            elif capabilities_changed:
+                # Overwrite a start-time pin that contradicts captures / live
+                # backend flags; interrupt-by-restart already persists above.
+                self._persist(state)
             self._sessions[state.session_id] = _ManagedSession(
                 request=None,
                 state=state,
@@ -483,9 +502,12 @@ class SessionManager:
                 )
             data["settings"] = settings
         try:
-            return SessionState(**data)
+            state = SessionState(**data)
         except TypeError:
             return None
+        # Do not keep a stale frozen summary from the index record.
+        state.capabilities = SessionManager._project_session_capabilities(state)
+        return state
 
     def _persist(self, state: SessionState) -> None:
         if self._index is None:
@@ -830,13 +852,86 @@ class SessionManager:
             return []
 
     def _session_capabilities(self, config: Any, agent_backends: Dict[str, str]) -> Dict[str, bool]:
+        """Start-time summary with an empty capture set — no descriptor exists yet.
+
+        Live sessions re-evaluate through ``_project_session_capabilities`` after
+        identity capture, turn commit, and restore.
+        """
+
         from . import backends as backend_registry
 
         per_agent = {
             agent_id: backend_registry.capabilities_for(config.agents[agent_id].type, backend_id)
             for agent_id, backend_id in agent_backends.items()
         }
-        return backend_registry.summarize_session_capabilities(per_agent)
+        return backend_registry.summarize_session_capabilities(per_agent, frozenset())
+
+    @staticmethod
+    def _captured_resume_agent_ids(state: SessionState) -> FrozenSet[str]:
+        """Agent ids that currently hold a captured ``provider_session_id``.
+
+        Today's eligibility is capture alone. Stage 4 replaces "has a captured
+        id" with "holds a fully eligible resume descriptor" (captured id,
+        eligible last_turn_status, valid cursor, compatible fingerprint, not
+        quarantined, mock agents excluded).
+        """
+
+        # Mock/dry-run sessions cannot produce a true resumable; they contribute
+        # no capture set even if a provider id was recorded.
+        if state.mock or state.dry_run:
+            return frozenset()
+        agents = (state.settings or {}).get("agents") or {}
+        if not isinstance(agents, dict):
+            agents = {}
+        sessions = state.agent_sessions or {}
+        if not isinstance(sessions, dict):
+            return frozenset()
+        captured: Set[str] = set()
+        for agent_id, entry in sessions.items():
+            if not isinstance(agent_id, str) or not agent_id or not isinstance(entry, dict):
+                continue
+            provider_session_id = entry.get("provider_session_id")
+            if not isinstance(provider_session_id, str) or not provider_session_id:
+                continue
+            agent_entry = agents.get(agent_id)
+            if isinstance(agent_entry, dict) and agent_entry.get("type") == "mock":
+                continue
+            captured.add(agent_id)
+        return frozenset(captured)
+
+    @staticmethod
+    def _project_session_capabilities(state: SessionState) -> Dict[str, bool]:
+        """Re-evaluate the session summary from live backend flags plus captures.
+
+        Reads ``capabilities_for(type, backend)`` from persisted
+        ``settings.agents`` type/backend — not the frozen per-agent capabilities
+        dict and not a previously pinned ``SessionState.capabilities``.
+        """
+
+        from . import backends as backend_registry
+
+        per_agent = {}
+        agents = (state.settings or {}).get("agents") or {}
+        if isinstance(agents, dict):
+            for agent_id, entry in agents.items():
+                if not isinstance(agent_id, str) or not agent_id or not isinstance(entry, dict):
+                    continue
+                agent_type = entry.get("type")
+                backend_id = entry.get("backend")
+                if agent_type == "mock":
+                    continue
+                if not isinstance(agent_type, str) or not agent_type:
+                    continue
+                if not isinstance(backend_id, str) or not backend_id:
+                    continue
+                per_agent[agent_id] = backend_registry.capabilities_for(agent_type, backend_id)
+        return backend_registry.summarize_session_capabilities(
+            per_agent,
+            SessionManager._captured_resume_agent_ids(state),
+        )
+
+    def _refresh_session_capabilities(self, state: SessionState) -> None:
+        state.capabilities = self._project_session_capabilities(state)
 
     def _backend_health(self, agent_type: str, backend_id: str) -> Any:
         # Start requests always re-probe fresh (bypass the TTL cache) so gating
@@ -1553,6 +1648,7 @@ class SessionManager:
         # the event-loop thread before the single watcher notification.
         managed.events.append(boundary_event.to_dict())
         self._maybe_capture_provider_session(managed, boundary_event)
+        self._refresh_session_capabilities(managed.state)
         self._persist(managed.state)
         self._schedule_notify(managed)
 
@@ -1594,6 +1690,7 @@ class SessionManager:
         sessions[agent_id] = entry
         managed.state.agent_sessions = sessions
         managed.state.updated_at = utc_timestamp()
+        self._refresh_session_capabilities(managed.state)
         self._persist(managed.state)
 
     async def _set_event_appender(

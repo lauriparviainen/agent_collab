@@ -156,6 +156,18 @@ class DescribeOptionsTests(unittest.TestCase):
             self.assertIn("health", entry["probe"])
             self.assertIn("capabilities", entry["static"])
 
+    def test_describe_options_capabilities_are_static_backend_facts(self):
+        from agent_collab import backends
+
+        payload = describe_options(_config())
+        for agent_type in backends.registered_agent_types():
+            for backend_id in backends.registered_backends(agent_type):
+                name = backends.backend_name(agent_type, backend_id)
+                self.assertEqual(
+                    payload["backends"][name]["static"]["capabilities"],
+                    backends.capabilities_for(agent_type, backend_id).to_dict(),
+                )
+
     def test_discovery_reports_canonical_effective_agent_and_workflow_backends(self):
         payload = describe_options(_config())
         self.assertEqual(payload["discovery"]["protocol_version"], 2)

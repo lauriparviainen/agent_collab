@@ -40,14 +40,13 @@ take it:
    operation across REST/MCP/CLI/TUI (including the mcp-guidance
    delegate-loop rewrite), and interrupt seams (WorkerBackend hooks,
    worker-backed `interrupt_request`, deny-then-interrupt-then-bounded-wait
-   stop) are on `sdk-session-control`. Remaining after this slice is item 3
-   capability projection wiring, then Stage 2. Keep MCP free of
+   stop) are on `sdk-session-control`. Capability projection wiring (item 3)
+   landed on `sdk-session-control`. Remaining is Stage 2. Keep MCP free of
    wait_approval, list_approvals, and interrupt/resume tools until Stage 4.
-3. **Capability projection wiring.** `summarize_session_capabilities`'
-   production call site passes no capture/eligibility set and freezes
-   capabilities at start; the projection must be re-evaluated after capture,
-   turn commit, and restore (see *Aggregation*). Without this every later
-   capability flip projects wrongly.
+3. **Capability projection wiring.** Landed on `sdk-session-control`: the
+   production projection re-evaluates after identity capture, turn commit,
+   and restore through the same conservative reducer (see *Aggregation*).
+   Remaining is Stage 2.
 4. **Stage 2 — Claude SDK interrupt + tool gating**, including the clocks
    design (re-armed remaining-budget loop, per-park and per-turn caps) and
    resolving open questions 9–10 (provider-side decision deadlines, callback
@@ -401,24 +400,23 @@ roots pass through the outer sandbox adapter.
 
 Capabilities remain facts declared by each concrete backend; the reducer
 (`summarize_session_capabilities`) keeps its conservative AND shape when
-inputs flip, but its shipped second input is capture alone
-(`captured_session_ids`) — and the sole production call site
-(`SessionManager._session_capabilities`) does not pass it at all, so live
-sessions always reduce over an empty capture set today. Stage 4 must wire
-that call site to supply, per agent, "holds a fully eligible resume
-descriptor" — captured id, eligible `last_turn_status`, valid
-`prompt_event_cursor`, compatible fingerprint, not quarantined, mock agents
-excluded — not merely reinterpret an argument that is never provided, or the
-projection will report `resumable` wrongly in both directions: stuck false
-because nothing is wired, or true for sessions the operation must reject.
-Wiring the start-time call site alone is still wrong, because
-`_session_capabilities` runs during start preparation and freezes
-`SessionState.capabilities` — at that moment no descriptor can exist, so the
-frozen value would pin `resumable` false for the session's life and survive
-reload stale. The projection must be re-evaluated through the same reducer
-after every identity capture and turn commit and when a persisted session is
-restored, so the projected fact always matches what the operation would
-decide. Session `resume` requires every selected non-mock
+inputs flip, but its shipped second input is still capture alone
+(`captured_session_ids`). Start-time `_session_capabilities` still passes an
+empty set — no descriptor exists yet. The live production projection
+re-evaluates through the same reducer after identity capture, turn commit,
+and restore, supplying the agent ids that currently hold a captured
+`provider_session_id`. Stage 4 must replace that capture-only set with, per
+agent, "holds a fully eligible resume descriptor" — captured id, eligible
+`last_turn_status`, valid `prompt_event_cursor`, compatible fingerprint, not
+quarantined, mock agents excluded — or the projection will report
+`resumable` wrongly in both directions: stuck false because nothing is
+eligible, or true for sessions the operation must reject.
+Wiring the start-time call site alone remains wrong: `_session_capabilities`
+runs during start preparation and would freeze `SessionState.capabilities`
+with no descriptor possible, pinning `resumable` false for the session's
+life and surviving reload stale. Re-evaluation after capture, turn commit,
+and restore is what keeps the projected fact matched to what the operation
+would decide. Session `resume` requires every selected non-mock
 backend to support resume *and* every required descriptor to be eligible in
 exactly that sense. Capture alone is not readiness. One consequence stated plainly rather than left to be derived from
 three sections: with rebind out of scope, a single quarantined agent (see

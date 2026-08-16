@@ -8,9 +8,12 @@ central session state under one uniform schema.
 """
 
 import asyncio
-
 import unittest
+from unittest import mock
 
+from agent_collab import backends as backend_registry
+from agent_collab.backends.base import BackendCapabilities
+from agent_collab.backends.common.sdk import provider_session_event
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.daemon import (
     SessionManager,
@@ -18,13 +21,25 @@ from agent_collab.daemon import (
     StartSessionRequest,
     _ManagedSession,
 )
-from agent_collab.backends.common.sdk import provider_session_event
 from agent_collab.events import Event
-from agent_collab.outcomes import TurnOutcome
 from agent_collab.options import (
     StartOptionsError,
     validate_start_backends,
 )
+from agent_collab.outcomes import TurnOutcome, TurnOutcomeRecord
+
+
+_REAL_CAPABILITIES_FOR = backend_registry.capabilities_for
+
+
+def _capabilities_for_with_resume(agent_type, backend_id):
+    caps = _REAL_CAPABILITIES_FOR(agent_type, backend_id)
+    return BackendCapabilities(
+        resume=True,
+        interrupt=caps.interrupt,
+        tool_gate=caps.tool_gate,
+        continuity=caps.continuity,
+    )
 
 
 def _config(agent_type, backend="sdk"):
@@ -151,18 +166,30 @@ class ProviderSessionCaptureTests(unittest.TestCase):
     def _manager():
         manager = SessionManager.__new__(SessionManager)  # no index/filesystem
         manager._index = None
+        manager._notify_tasks = set()
         return manager
 
     @staticmethod
-    def _managed(resolved_backends):
+    def _managed(resolved_backends, *, mock=False, dry_run=False, agents=None):
+        if agents is None:
+            agents = {"claude": AgentConfig(id="claude", type="claude", backend="sdk")}
         config = CollaborationConfig(
-            agents={"claude": AgentConfig(id="claude", type="claude", backend="sdk")},
-            workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+            agents=agents,
+            workflows={"solo": WorkflowConfig(id="solo", sequence=list(agents))},
         )
+        settings_agents = {}
+        for agent_id, agent in agents.items():
+            entry = {"type": agent.type}
+            backend_id = resolved_backends.get(agent_id) or agent.backend
+            if agent.type != "mock" and isinstance(backend_id, str) and backend_id:
+                entry["backend"] = backend_id
+            settings_agents[agent_id] = entry
         request = StartSessionRequest(
             task="t",
             resolved_backends=resolved_backends,
             collab_config=config,
+            mock=mock,
+            dry_run=dry_run,
         )
         state = SessionState(
             session_id="s1",
@@ -174,17 +201,30 @@ class ProviderSessionCaptureTests(unittest.TestCase):
             markdown_path="s1.md",
             created_at="2026-01-01T00:00:00Z",
             updated_at="2026-01-01T00:00:00Z",
+            mock=mock,
+            dry_run=dry_run,
+            settings={"agents": settings_agents},
+            capabilities={"resumable": False, "interruptible": False, "continuity": False},
         )
         return _ManagedSession(
             request=request, state=state, events=[], condition=asyncio.Condition()
         )
 
-    def _capture(self, resolved_backends, event):
+    def _capture(self, resolved_backends, event, **managed_kwargs):
         async def run():
             manager = self._manager()
-            managed = self._managed(resolved_backends)
+            managed = self._managed(resolved_backends, **managed_kwargs)
             manager._maybe_capture_provider_session(managed, event)
             return managed.state.agent_sessions
+
+        return asyncio.run(run())
+
+    def _capture_state(self, resolved_backends, event, **managed_kwargs):
+        async def run():
+            manager = self._manager()
+            managed = self._managed(resolved_backends, **managed_kwargs)
+            manager._maybe_capture_provider_session(managed, event)
+            return managed.state
 
         return asyncio.run(run())
 
@@ -236,6 +276,187 @@ class ProviderSessionCaptureTests(unittest.TestCase):
             provider_session_event("codex", "claude", "sess-1", "session"),
         )
         self.assertIsNone(result)
+
+    def test_capture_projects_sdk_continuity_without_claiming_resumable(self):
+        state = self._capture_state(
+            {"claude": "sdk"},
+            provider_session_event("claude", "claude", "sess-xyz", "session"),
+        )
+        self.assertEqual(
+            state.capabilities,
+            {"resumable": False, "interruptible": False, "continuity": True},
+        )
+
+    def test_capture_of_every_agent_with_resume_stub_becomes_resumable(self):
+        agents = {
+            "claude": AgentConfig(id="claude", type="claude", backend="sdk"),
+            "codex": AgentConfig(id="codex", type="codex", backend="sdk"),
+        }
+        resolved = {"claude": "sdk", "codex": "sdk"}
+
+        async def run():
+            manager = self._manager()
+            managed = self._managed(resolved, agents=agents)
+            with mock.patch(
+                "agent_collab.backends.capabilities_for",
+                side_effect=_capabilities_for_with_resume,
+            ):
+                manager._maybe_capture_provider_session(
+                    managed,
+                    provider_session_event("claude", "claude", "sess-c", "session"),
+                )
+                after_one = dict(managed.state.capabilities)
+                manager._maybe_capture_provider_session(
+                    managed,
+                    provider_session_event("codex", "codex", "sess-x", "thread"),
+                )
+                return after_one, dict(managed.state.capabilities)
+
+        after_one, after_both = asyncio.run(run())
+        self.assertFalse(after_one["resumable"])
+        self.assertTrue(after_one["continuity"])
+        self.assertEqual(
+            after_both,
+            {"resumable": True, "interruptible": False, "continuity": True},
+        )
+
+    def test_mock_and_dry_run_cannot_become_resumable(self):
+        event = provider_session_event("claude", "claude", "sess-xyz", "session")
+        with mock.patch(
+            "agent_collab.backends.capabilities_for",
+            side_effect=_capabilities_for_with_resume,
+        ):
+            mocked = self._capture_state({"claude": "sdk"}, event, mock=True)
+            dry = self._capture_state({"claude": "sdk"}, event, dry_run=True)
+        self.assertTrue(mocked.agent_sessions)
+        self.assertTrue(dry.agent_sessions)
+        self.assertFalse(mocked.capabilities["resumable"])
+        self.assertFalse(dry.capabilities["resumable"])
+
+    def test_mock_type_agent_is_excluded_from_resumable(self):
+        agents = {
+            "claude": AgentConfig(id="claude", type="claude", backend="sdk"),
+            "mocker": AgentConfig(id="mocker", type="mock"),
+        }
+
+        async def run():
+            manager = self._manager()
+            managed = self._managed({"claude": "sdk"}, agents=agents)
+            with mock.patch(
+                "agent_collab.backends.capabilities_for",
+                side_effect=_capabilities_for_with_resume,
+            ):
+                manager._maybe_capture_provider_session(
+                    managed,
+                    provider_session_event("claude", "claude", "sess-c", "session"),
+                )
+            return managed.state.capabilities
+
+        summary = asyncio.run(run())
+        self.assertTrue(summary["resumable"])
+        self.assertTrue(summary["continuity"])
+
+    def test_turn_commit_refreshes_projection_from_boundary_capture(self):
+        record = TurnOutcomeRecord.from_outcome(
+            turn_id="turn-1",
+            stage_index=1,
+            agent_id="claude",
+            backend="claude_sdk",
+            outcome=TurnOutcome("completed"),
+        )
+        boundary = provider_session_event("claude", "claude", "sess-xyz", "session")
+
+        async def run():
+            manager = self._manager()
+            managed = self._managed({"claude": "sdk"})
+            with mock.patch(
+                "agent_collab.backends.capabilities_for",
+                side_effect=_capabilities_for_with_resume,
+            ):
+                await manager._record_turn_outcome(managed, record, boundary)
+            return managed.state
+
+        state = asyncio.run(run())
+        self.assertEqual(
+            state.agent_sessions["claude"]["provider_session_id"],
+            "sess-xyz",
+        )
+        self.assertEqual(
+            state.capabilities,
+            {"resumable": True, "interruptible": False, "continuity": True},
+        )
+
+    def test_turn_commit_refreshes_projection_without_new_capture(self):
+        record = TurnOutcomeRecord.from_outcome(
+            turn_id="turn-1",
+            stage_index=1,
+            agent_id="claude",
+            backend="claude_sdk",
+            outcome=TurnOutcome("completed"),
+        )
+
+        async def run():
+            manager = self._manager()
+            managed = self._managed({"claude": "sdk"})
+            managed.state.capabilities = {
+                "resumable": True,
+                "interruptible": True,
+                "continuity": False,
+            }
+            await manager._record_turn_outcome(
+                managed, record, Event.create("claude", "status", "turn done")
+            )
+            return managed.state.capabilities
+
+        summary = asyncio.run(run())
+        self.assertEqual(
+            summary,
+            {"resumable": False, "interruptible": False, "continuity": True},
+        )
+
+
+class SessionCapabilityStartTests(unittest.TestCase):
+    def test_start_time_empty_capture_keeps_resumable_false_when_resume_stubbed(self):
+        manager = SessionManager.__new__(SessionManager)
+        config = CollaborationConfig(
+            agents={
+                "claude": AgentConfig(id="claude", type="claude", backend="sdk"),
+                "codex": AgentConfig(id="codex", type="codex", backend="sdk"),
+            },
+            workflows={"pair": WorkflowConfig(id="pair", sequence=["claude", "codex"])},
+        )
+        with mock.patch(
+            "agent_collab.backends.capabilities_for",
+            side_effect=_capabilities_for_with_resume,
+        ):
+            summary = manager._session_capabilities(config, {"claude": "sdk", "codex": "sdk"})
+        self.assertEqual(
+            summary,
+            {"resumable": False, "interruptible": False, "continuity": True},
+        )
+
+    def test_start_time_continuity_is_true_only_for_all_sdk_selection(self):
+        manager = SessionManager.__new__(SessionManager)
+        sdk = CollaborationConfig(
+            agents={"claude": AgentConfig(id="claude", type="claude", backend="sdk")},
+            workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+        )
+        cli = CollaborationConfig(
+            agents={"claude": AgentConfig(id="claude", type="claude", backend="cli")},
+            workflows={"solo": WorkflowConfig(id="solo", sequence=["claude"])},
+        )
+        mixed = CollaborationConfig(
+            agents={
+                "claude": AgentConfig(id="claude", type="claude", backend="sdk"),
+                "codex": AgentConfig(id="codex", type="codex", backend="cli"),
+            },
+            workflows={"pair": WorkflowConfig(id="pair", sequence=["claude", "codex"])},
+        )
+        self.assertTrue(manager._session_capabilities(sdk, {"claude": "sdk"})["continuity"])
+        self.assertFalse(manager._session_capabilities(cli, {"claude": "cli"})["continuity"])
+        self.assertFalse(
+            manager._session_capabilities(mixed, {"claude": "sdk", "codex": "cli"})["continuity"]
+        )
 
 
 if __name__ == "__main__":
