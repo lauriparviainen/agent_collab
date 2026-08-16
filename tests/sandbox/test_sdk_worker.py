@@ -101,10 +101,10 @@ class WorkerBackendHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(await second, first.result())
 
     @asynccontextmanager
-    async def _drive(self, backend: _FakeWorkerBackend):
+    async def _drive(self, backend: Any, backend_id: str = "fake"):
         daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         daemon.setblocking(False)
-        with mock.patch.object(sdk_worker, "_registry", return_value={"fake": lambda: backend}):
+        with mock.patch.object(sdk_worker, "_registry", return_value={backend_id: lambda: backend}):
             serve_task = asyncio.create_task(_serve(worker.fileno()))
             reader, writer = await asyncio.open_connection(sock=daemon)
             try:
@@ -115,12 +115,13 @@ class WorkerBackendHookTests(unittest.IsolatedAsyncioTestCase):
                     make_frame(
                         "open",
                         request_id="open-1",
-                        payload={"backend": "fake", "workspace": "/tmp"},
+                        payload={"backend": backend_id, "workspace": "/tmp"},
                     ),
                 )
                 ready = await recv_frame(reader)
                 self.assertEqual(ready["type"], "ready")
-                self.assertIsNotNone(backend.bound)
+                if hasattr(backend, "bound"):
+                    self.assertIsNotNone(backend.bound)
                 yield reader, writer
             finally:
                 writer.close()
@@ -175,6 +176,30 @@ class WorkerBackendHookTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(backend.park_results), 2)
             self.assertEqual(backend.park_results[0].get("decision"), "deny")
             self.assertEqual(backend.park_results[1].get("decision"), "deny")
+            await send_frame(writer, make_frame("close", request_id="close-1"))
+            closed = await recv_frame(reader)
+            self.assertEqual(closed["type"], "closed")
+
+    async def test_unknown_late_approval_decision_during_run_is_noop(self) -> None:
+        backend = _FakeWorkerBackend()
+        async with self._drive(backend) as (reader, writer):
+            await send_frame(writer, make_frame("run", run_id="run-1", prompt="hang"))
+            started = await recv_frame(reader)
+            self.assertEqual(started["type"], "event")
+            await send_frame(
+                writer,
+                make_frame(
+                    "approval_decision",
+                    approval_id="no-such-id",
+                    decision="approve",
+                    run_id="run-1",
+                ),
+            )
+            await asyncio.sleep(0.05)
+            await send_frame(writer, make_frame("interrupt", run_id="run-1"))
+            result = await recv_frame(reader)
+            self.assertEqual(result["type"], "result")
+            self.assertEqual(backend.interrupts, ["run-1"])
             await send_frame(writer, make_frame("close", request_id="close-1"))
             closed = await recv_frame(reader)
             self.assertEqual(closed["type"], "closed")

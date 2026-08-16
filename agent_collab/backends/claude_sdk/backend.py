@@ -50,6 +50,7 @@ from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutco
 from ...runners import AgentRunner, AsyncEventSink
 from ...sandbox.specs import SandboxPolicy
 from .sandbox import ClaudeSdkSandboxAdapter
+from .permissions import park_in_process_tool_permission
 from ..base import (
     BackendCapabilities,
     BackendHealth,
@@ -193,6 +194,18 @@ class ClaudeSdkRunner(AgentRunner):
         # not merely because a Bubblewrap worker process is still alive.
         self._worker_provider_active = False
         self._worker_soft_drop_cancelled = False
+
+    async def _can_use_tool(self, tool_name: str, tool_input: dict, context: Any = None) -> Any:
+        """In-process ``can_use_tool``: park in the session registry, no frames."""
+
+        return await park_in_process_tool_permission(
+            callback=getattr(self, "_approval_callback", None),
+            agent_id=str(getattr(self, "_bound_agent_id", None) or self.name),
+            turn_id=str(getattr(self, "_bound_turn_id", None) or ""),
+            tool_name=tool_name,
+            tool_input=tool_input,
+            context=context,
+        )
 
     def conversation_active(self) -> bool:
         if self._worker_terminal:
@@ -530,11 +543,21 @@ class ClaudeSdkRunner(AgentRunner):
     def _conversation_for(self, workdir: Path) -> ClaudeConversation:
         resolved = workdir.resolve()
         if self._conversation is None:
-            self._conversation = self._conversation_factory(
-                self.agent,
-                self.options,
-                resolved,
+            factory = self._conversation_factory
+            can_use_tool = (
+                self._can_use_tool
+                if getattr(self, "_approval_callback", None) is not None
+                else None
             )
+            if factory is _default_conversation:
+                self._conversation = factory(
+                    self.agent,
+                    self.options,
+                    resolved,
+                    can_use_tool=can_use_tool,
+                )
+            else:
+                self._conversation = factory(self.agent, self.options, resolved)
             self._workdir = resolved
         elif self._workdir != resolved:
             raise RuntimeError("claude sdk conversation workdir changed between turns")
@@ -751,6 +774,7 @@ def build_claude_agent_options(
     resume_session_id: Optional[str] = None,
     *,
     suppress_ambient_mcp: bool = False,
+    can_use_tool: Any = None,
 ) -> Any:
     """Construct the verified ``ClaudeAgentOptions`` coding-agent configuration.
 
@@ -778,6 +802,11 @@ def build_claude_agent_options(
         # Match claude_cli outer read-only: --strict-mcp-config with empty map.
         kwargs["strict_mcp_config"] = True
         kwargs["mcp_servers"] = {}
+    if can_use_tool is not None:
+        # Combined with permission_mode default (not bypassPermissions) this
+        # is the combo the installed SDK actually invokes. Omit rather than
+        # passing None so constructors that do not accept the kwarg stay valid.
+        kwargs["can_use_tool"] = can_use_tool
     return options_cls(**kwargs)
 
 
@@ -791,6 +820,7 @@ def _default_conversation(
     workdir: Path,
     *,
     suppress_ambient_mcp: bool = False,
+    can_use_tool: Any = None,
 ) -> ClaudeConversation:
     """Build one lazy-imported persistent conversation for a runner."""
 
@@ -810,6 +840,7 @@ def _default_conversation(
         options,
         workdir,
         suppress_ambient_mcp=suppress_ambient_mcp,
+        can_use_tool=can_use_tool,
     )
 
 
@@ -824,12 +855,14 @@ class _PersistentClaudeConversation:
         workdir: Path,
         *,
         suppress_ambient_mcp: bool = False,
+        can_use_tool: Any = None,
     ) -> None:
         self._client_cls = client_cls
         self._options_cls = options_cls
         self._options = dict(options)
         self._workdir = workdir
         self._suppress_ambient_mcp = suppress_ambient_mcp
+        self._can_use_tool = can_use_tool
         self._lock = asyncio.Lock()
         self._client: Any = None
         self._session_id: Optional[str] = None
@@ -934,6 +967,7 @@ class _PersistentClaudeConversation:
                 self._workdir,
                 resume_session_id=resume_id,
                 suppress_ambient_mcp=self._suppress_ambient_mcp,
+                can_use_tool=self._can_use_tool,
             )
         )
         try:

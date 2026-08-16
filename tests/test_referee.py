@@ -6,7 +6,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from agent_collab.referee import ParallelStageFailed, Referee, RefereeConfig, RefereeInput
+from agent_collab.referee import (
+    ParallelStageFailed,
+    Referee,
+    RefereeConfig,
+    RefereeInput,
+    _TurnBudget,
+)
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.runners import AgentRunner, BackendDryRunRunner
 from agent_collab.events import Event
@@ -268,7 +274,7 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
             workflows={"test": WorkflowConfig(id="test", sequence=list(sequence))},
         )
 
-    async def _referee(self, root, sequence, runners, *, timeout=5):
+    async def _referee(self, root, sequence, runners, *, timeout=5, **config_kwargs):
         records = []
 
         async def commit(record, boundary):
@@ -285,6 +291,7 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
                 timeout=timeout,
                 color=False,
                 outcome_commit_callback=commit,
+                **config_kwargs,
             ),
             printer=lambda event: None,
         )
@@ -363,6 +370,124 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
             )
             await referee.run("task")
         self.assertEqual(records[0][0].outcome, "completed")
+
+    def test_turn_budget_caps_exclusion_per_request_and_per_turn(self):
+        budget = _TurnBudget(timeout=5, approval_deadline=1)
+        self.assertEqual(budget.exclusion_budget, 2.0)
+        budget.sync_caps(["a1", "a2"])
+        self.assertEqual(budget.exclusion_slice(["a1", "a2"]), 1.0)
+        budget.consume_exclusion(["a1", "a2"], 1.0)
+        self.assertIsNone(budget.exclusion_slice(["a1", "a2"]))
+        self.assertEqual(budget.remaining, 5)
+        budget.consume_running(0.5)
+        self.assertEqual(budget.remaining, 4.5)
+
+    async def test_parked_interval_is_excluded_from_turn_clock(self):
+        pending: list[str] = []
+        generation = {"n": 0}
+        changed = asyncio.Condition()
+
+        class ParkingRunner(AgentRunner):
+            name = "claude"
+
+            async def run_turn(self, prompt, workdir, emit):
+                pending.append("a1")
+                generation["n"] += 1
+                async with changed:
+                    changed.notify_all()
+                await asyncio.sleep(0.25)
+                pending.clear()
+                generation["n"] += 1
+                async with changed:
+                    changed.notify_all()
+                await emit(Event.create("claude", "message", "done after park"))
+                return TurnOutcome("completed")
+
+        async def wait_gen(seen):
+            async with changed:
+                while generation["n"] == seen:
+                    await changed.wait()
+                return generation["n"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee, records = await self._referee(
+                Path(tmp),
+                ["claude"],
+                {"claude": ParkingRunner()},
+                timeout=0.08,
+                approval_deadline=1.0,
+                pending_turn_approvals=lambda turn_id: list(pending),
+                approval_generation=lambda: generation["n"],
+                wait_approval_generation=wait_gen,
+            )
+            await referee.run("task")
+        self.assertEqual(records[0][0].outcome, "completed")
+
+    async def test_park_exclusion_cap_still_times_out(self):
+        pending: list[str] = []
+        generation = {"n": 0}
+        changed = asyncio.Condition()
+
+        class ForeverParked(AgentRunner):
+            name = "claude"
+
+            async def run_turn(self, prompt, workdir, emit):
+                pending.append("a1")
+                generation["n"] += 1
+                async with changed:
+                    changed.notify_all()
+                await asyncio.Event().wait()
+                return TurnOutcome("completed")
+
+        async def wait_gen(seen):
+            async with changed:
+                while generation["n"] == seen:
+                    await changed.wait()
+                return generation["n"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee, records = await self._referee(
+                Path(tmp),
+                ["claude"],
+                {"claude": ForeverParked()},
+                timeout=0.08,
+                approval_deadline=0.05,
+                pending_turn_approvals=lambda turn_id: list(pending),
+                approval_generation=lambda: generation["n"],
+                wait_approval_generation=wait_gen,
+            )
+            with self.assertRaises(RequiredTurnFailed):
+                await asyncio.wait_for(referee.run("task"), timeout=1.0)
+        self.assertEqual(
+            (records[0][0].outcome, records[0][0].code),
+            ("timed_out", "local_turn_timed_out"),
+        )
+
+    async def test_missing_or_raising_approval_query_resumes_the_clock(self):
+        class SlowRunner(AgentRunner):
+            name = "claude"
+
+            async def run_turn(self, prompt, workdir, emit):
+                await asyncio.Event().wait()
+                return TurnOutcome("completed")
+
+        def boom(_turn_id):
+            raise RuntimeError("registry gone")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            referee, records = await self._referee(
+                Path(tmp),
+                ["claude"],
+                {"claude": SlowRunner()},
+                timeout=0,
+                pending_turn_approvals=boom,
+            )
+            with self.assertRaises(RequiredTurnFailed):
+                await referee.run("task")
+        self.assertEqual(
+            (records[0][0].outcome, records[0][0].code),
+            ("timed_out", "local_turn_timed_out"),
+        )
 
     async def test_concurrent_stop_preserves_completed_outcome_without_starting_next_turn(self):
         calls = []

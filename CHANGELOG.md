@@ -13,6 +13,12 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Wire Claude SDK `can_use_tool` on the worker and in-process paths, drop the
+  worker `bypassPermissions` force, and pause the per-turn clock while parked
+  (120 s default fail-closed deny). A worker park with no listener is
+  fail-closed denied immediately. Production `claude_sdk.tool_gate` stays
+  false pending credentialed coverage (#20).
+
 - Map Claude SDK `interrupt()` on worker and in-process turns onto
   `interrupted` when the abort is distinguishable; production
   `claude_sdk.interrupt` stays false pending credentialed coverage (#20).

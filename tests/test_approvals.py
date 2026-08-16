@@ -11,13 +11,18 @@ import unittest
 from unittest import mock
 
 from agent_collab.approvals import (
+    DEFAULT_APPROVAL_DEADLINE_SECONDS,
+    MAX_APPROVAL_DEADLINE_SECONDS,
     MAX_PENDING_APPROVALS_PAYLOAD_BYTES,
+    MIN_APPROVAL_DEADLINE_SECONDS,
     ApprovalDecisionError,
     ApprovalEntry,
     ApprovalRegistry,
     build_approval_summary,
+    cancel_approval_deadline,
     dispatch_worker_approval,
     middle_elide,
+    normalize_approval_deadline,
     park_payload,
     worker_session_run_kwargs,
 )
@@ -174,6 +179,22 @@ class DispatchWorkerApprovalTests(unittest.TestCase):
         self.assertIsNotNone(wired["on_approval"])
 
 
+class ApprovalDeadlineNormalizeTests(unittest.TestCase):
+    def test_default_and_bounds(self):
+        self.assertEqual(
+            normalize_approval_deadline(DEFAULT_APPROVAL_DEADLINE_SECONDS),
+            120.0,
+        )
+        self.assertEqual(normalize_approval_deadline(MIN_APPROVAL_DEADLINE_SECONDS), 0.05)
+        self.assertEqual(normalize_approval_deadline(MAX_APPROVAL_DEADLINE_SECONDS), 3600.0)
+        with self.assertRaises(ValueError):
+            normalize_approval_deadline(0)
+        with self.assertRaises(ValueError):
+            normalize_approval_deadline(3601)
+        with self.assertRaises(ValueError):
+            normalize_approval_deadline("soon")
+
+
 class ApprovalRegistrySettleTests(unittest.IsolatedAsyncioTestCase):
     def _state(self, session_id="s-approval", status="running"):
         return SessionState(
@@ -235,6 +256,36 @@ class ApprovalRegistrySettleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(request["source"], "tool")
                 self.assertNotIn("input", request.get("raw") or {})
                 self.assertNotIn("tool_input", request.get("raw") or {})
+
+    async def test_approval_deadline_expires_auto_denied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(Path(tmp) / "home")}):
+                manager = SessionManager()
+                managed = self._managed(manager)
+                managed.request.approval_deadline = 0.05
+                decided = asyncio.Event()
+
+                async def send_decision(decision):
+                    decided.set()
+                    return True
+
+                await manager.register_approval(
+                    managed.state.session_id,
+                    request_id="a1",
+                    agent_id="claude_cli",
+                    tool_name="Bash",
+                    summary="true",
+                    send_decision=send_decision,
+                )
+                await asyncio.wait_for(decided.wait(), timeout=1.0)
+                self.assertEqual(managed.approvals.unresolved_count(), 0)
+                resolved = [
+                    event for event in managed.events if event.get("type") == "approval_resolved"
+                ]
+                self.assertTrue(resolved)
+                self.assertEqual(resolved[0]["raw"]["outcome"], "auto_denied")
+                self.assertEqual(resolved[0]["raw"]["reason"], "deadline")
+                self.assertEqual(managed.state.status, "running")
 
     async def test_result_settled_ignores_input_accepting_and_queued_messages(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -814,6 +865,7 @@ class LiveApprovalParkTests(unittest.IsolatedAsyncioTestCase):
                             max_turns=1,
                             timeout=1,
                             workdir=root,
+                            approval_deadline=1.0,
                         )
                     )
                     await turn_started.wait()
@@ -826,12 +878,18 @@ class LiveApprovalParkTests(unittest.IsolatedAsyncioTestCase):
                             summary="true",
                             turn_id="turn-1",
                         )
+                        managed = manager._sessions[state.session_id]
+                        pending = managed.approvals.get_pending("a1")
+                        self.assertIsNotNone(pending)
+                        # Cancel the per-request expire so the remaining-budget
+                        # path can win after the park-exclusion cap.
+                        cancel_approval_deadline(pending)
                         await self._wait_until(
                             lambda: (
                                 manager.get_session(state.session_id).status
                                 in {"done", "failed", "stopped"}
                             ),
-                            timeout=3.0,
+                            timeout=5.0,
                             message="session terminal after turn deadline",
                         )
                         managed = manager._sessions[state.session_id]

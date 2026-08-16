@@ -29,6 +29,12 @@ WORKER_DECISION_TIMEOUT_SECONDS = 1.0
 DECISION_OPTIONS = ("approve", "deny")
 AUTHORIZED_OUTCOMES = {"approved": "approve", "denied": "deny"}
 RESOLUTION_OUTCOMES = frozenset({"approved", "denied", "auto_denied", "abandoned"})
+# Fail-closed tool-approval deadline (start setting). Expiry auto-denies.
+DEFAULT_APPROVAL_DEADLINE_SECONDS = 120.0
+MIN_APPROVAL_DEADLINE_SECONDS = 0.05
+MAX_APPROVAL_DEADLINE_SECONDS = 3600.0
+# Per-turn park-exclusion cap is twice the configured approval deadline.
+APPROVAL_PARK_EXCLUSION_FACTOR = 2.0
 
 
 class ApprovalDecisionError(ValueError):
@@ -119,6 +125,7 @@ class ApprovalEntry:
     run_id: Optional[str] = None
     send_decision: Optional[Callable[[str], Any]] = field(default=None, repr=False, compare=False)
     send_in_flight: bool = field(default=False, repr=False, compare=False)
+    deadline_task: Optional[asyncio.Task[Any]] = field(default=None, repr=False, compare=False)
     decision_options: Tuple[str, ...] = DECISION_OPTIONS
     seq: int = 0
     outcome: Optional[str] = None
@@ -150,6 +157,30 @@ class ApprovalEntry:
             "outcome": self.outcome,
             "reason": self.reason,
         }
+
+
+def cancel_approval_deadline(entry: ApprovalEntry) -> None:
+    """Cancel a pending per-request deadline task. Safe if none or already done."""
+
+    task = entry.deadline_task
+    entry.deadline_task = None
+    if task is not None and not task.done():
+        task.cancel()
+
+
+def normalize_approval_deadline(value: Any, *, label: str = "approval_deadline") -> float:
+    """Validate the bounded start setting. Default 120 s; expiry auto-denies."""
+
+    try:
+        deadline = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a number") from exc
+    if deadline < MIN_APPROVAL_DEADLINE_SECONDS or deadline > MAX_APPROVAL_DEADLINE_SECONDS:
+        raise ValueError(
+            f"{label} must be >= {MIN_APPROVAL_DEADLINE_SECONDS} and "
+            f"<= {MAX_APPROVAL_DEADLINE_SECONDS}"
+        )
+    return deadline
 
 
 class ApprovalRegistry:

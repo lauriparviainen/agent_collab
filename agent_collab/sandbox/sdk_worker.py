@@ -141,8 +141,9 @@ async def _serve(channel: int) -> int:
         """Park one worker-minted approval and await the matching decision.
 
         Duplicate ``approval_id`` reuses the existing Future and does not
-        enqueue a second ``approval_request`` frame. Stage 1 does not invoke
-        this from a provider callback; the serve loop binds it after open.
+        enqueue a second ``approval_request`` frame. The serve loop is the
+        sole socket writer: backends park here from ``can_use_tool`` and
+        never write the worker socket themselves. Bind happens after open.
         """
 
         nonlocal queued_event_bytes

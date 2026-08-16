@@ -28,8 +28,11 @@ from .approvals import (
     ApprovalEntry,
     ApprovalRegistry,
     DECISION_OPTIONS,
+    DEFAULT_APPROVAL_DEADLINE_SECONDS,
     WORKER_DECISION_TIMEOUT_SECONDS,
     build_approval_summary,
+    cancel_approval_deadline,
+    normalize_approval_deadline,
     park_payload,
     sanitize_request_id,
     sanitize_tool_name,
@@ -125,6 +128,7 @@ class StartSessionRequest:
     members: Optional[Dict[str, str]] = None
     interactive: bool = False
     interactive_idle_timeout: float = 600.0
+    approval_deadline: float = DEFAULT_APPROVAL_DEADLINE_SECONDS
     # Response-view selector for the start response ("compact" default, "full"
     # opt-in). A wire field that shapes only the returned SessionState settings,
     # never execution.
@@ -170,6 +174,7 @@ class StartSessionRequest:
             dry_run=model.dry_run,
             interactive=model.interactive,
             interactive_idle_timeout=model.interactive_idle_timeout,
+            approval_deadline=model.approval_deadline,
             backend_options=model.backend_options,
             backend=model.backend,
             sandbox=model.sandbox,
@@ -195,6 +200,7 @@ class SessionState:
     dry_run: bool = False
     interactive: bool = False
     interactive_idle_timeout: float = 600.0
+    approval_deadline: float = DEFAULT_APPROVAL_DEADLINE_SECONDS
     ended_at: Optional[str] = None
     error: Optional[str] = None
     failure: Optional[Dict[str, Any]] = None
@@ -383,6 +389,9 @@ class _ManagedSession:
     approvals: ApprovalRegistry = field(default_factory=ApprovalRegistry)
     # Count of pending approvals the most recent stop path auto-denied.
     approvals_denied_on_stop: int = 0
+    # Generation counter so the referee clock can wait for park/unpark without
+    # missing a change that lands between query and wait.
+    approval_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -396,6 +405,7 @@ class _PreparedSessionStart:
     settings: Dict[str, Any]
     capabilities: Dict[str, bool]
     interactive_idle_timeout: float
+    approval_deadline: float
     sandbox_plan: Any
 
 
@@ -545,6 +555,7 @@ class SessionManager:
         request.sandbox_plan = prepared.sandbox_plan
         request.interactive = bool(request.interactive)
         request.interactive_idle_timeout = prepared.interactive_idle_timeout
+        request.approval_deadline = prepared.approval_deadline
 
         session_id = request.session_id or self._new_session_id()
         try:
@@ -578,6 +589,7 @@ class SessionManager:
             dry_run=bool(request.dry_run),
             interactive=bool(request.interactive),
             interactive_idle_timeout=float(request.interactive_idle_timeout),
+            approval_deadline=float(request.approval_deadline),
             settings=prepared.settings,
             capabilities=prepared.capabilities,
             turn_outcomes=[],
@@ -704,6 +716,10 @@ class SessionManager:
             interactive_idle_timeout = self._normalize_idle_timeout(
                 request.interactive_idle_timeout
             )
+            try:
+                approval_deadline = normalize_approval_deadline(request.approval_deadline)
+            except ValueError as exc:
+                raise SessionRequestError(str(exc)) from exc
             catalog_warnings = self._model_catalog_warnings(request, collab_config, selection)
             settings = build_session_settings(
                 collab_config,
@@ -714,6 +730,7 @@ class SessionManager:
                 warnings=[*collab_config.warnings, *selection.warnings, *catalog_warnings],
                 interactive=interactive,
                 interactive_idle_timeout=interactive_idle_timeout,
+                approval_deadline=approval_deadline,
                 turn_timeout=int(request.timeout),
                 workdir=workdir,
                 sandbox_plan=sandbox_plan,
@@ -729,6 +746,7 @@ class SessionManager:
                 settings=settings,
                 capabilities=capabilities,
                 interactive_idle_timeout=interactive_idle_timeout,
+                approval_deadline=approval_deadline,
                 sandbox_plan=sandbox_plan,
             )
         except Exception as exc:
@@ -1581,6 +1599,14 @@ class SessionManager:
                 managed, turn_id, reason
             ),
             turn_approval_abandon_callback=lambda turn_id: self._abandon_turn(managed, turn_id),
+            approval_deadline=float(request.approval_deadline),
+            pending_turn_approvals=lambda turn_id: [
+                entry.request_id
+                for entry in managed.approvals.pending_in_event_order()
+                if entry.turn_id == turn_id
+            ],
+            approval_generation=lambda: managed.approval_generation,
+            wait_approval_generation=lambda seen: self._wait_approval_generation(managed, seen),
         )
 
         try:
@@ -1954,6 +1980,14 @@ class SessionManager:
             decision_options=DECISION_OPTIONS,
         )
         managed.approvals.add(entry)
+        delay = DEFAULT_APPROVAL_DEADLINE_SECONDS
+        if managed.request is not None:
+            delay = float(managed.request.approval_deadline)
+        entry.deadline_task = asyncio.create_task(
+            self._expire_approval(session_id, rid, delay),
+            name=f"agent-collab-approval-deadline-{rid}",
+        )
+        self._bump_approval_generation(managed)
         agent_label = entry.agent_id or "agent"
         event = Event.create(
             "tool",
@@ -2029,10 +2063,12 @@ class SessionManager:
             still = managed.approvals.take_pending(request_id)
             if still is None:
                 raise ApprovalDecisionError("stale", f"approval request_id {request_id!r} is stale")
+            cancel_approval_deadline(pending)
             if decision == "approve" and not delivered:
                 managed.approvals.complete(pending, "auto_denied", "delivery_failed")
                 await self._emit_approval_resolved(managed, pending)
                 await self._send_worker_decision(pending, "deny")
+                self._bump_approval_generation(managed)
                 self._sync_approval_status(managed)
                 self._schedule_notify(managed)
                 return self._approval_decision_payload(
@@ -2044,6 +2080,7 @@ class SessionManager:
                 )
             managed.approvals.complete(pending, outcome, surface)
             await self._emit_approval_resolved(managed, pending)
+            self._bump_approval_generation(managed)
             self._sync_approval_status(managed)
             self._schedule_notify(managed)
             return self._approval_decision_payload(
@@ -2089,11 +2126,13 @@ class SessionManager:
         entries = managed.approvals.take_turn(turn_id)
         count = 0
         for entry in entries:
+            cancel_approval_deadline(entry)
             managed.approvals.complete(entry, "abandoned", "result")
             await self._emit_approval_resolved(managed, entry)
             await self._send_worker_decision(entry, "deny")
             count += 1
         if count:
+            self._bump_approval_generation(managed)
             self._sync_approval_status(managed)
             self._schedule_notify(managed)
         return count
@@ -2106,11 +2145,13 @@ class SessionManager:
     ) -> int:
         count = 0
         for entry in entries:
+            cancel_approval_deadline(entry)
             managed.approvals.complete(entry, "auto_denied", reason)
             await self._emit_approval_resolved(managed, entry)
             await self._send_worker_decision(entry, "deny")
             count += 1
         if count:
+            self._bump_approval_generation(managed)
             self._sync_approval_status(managed)
             self._schedule_notify(managed)
         return count
@@ -2145,6 +2186,33 @@ class SessionManager:
             return True
         except Exception:
             return False
+
+    def _bump_approval_generation(self, managed: _ManagedSession) -> None:
+        managed.approval_generation += 1
+
+    async def _wait_approval_generation(self, managed: _ManagedSession, seen: int) -> int:
+        async with managed.condition:
+            while managed.approval_generation == seen:
+                await managed.condition.wait()
+            return managed.approval_generation
+
+    async def _expire_approval(self, session_id: str, request_id: str, delay: float) -> None:
+        try:
+            await asyncio.sleep(max(0.0, float(delay)))
+        except asyncio.CancelledError:
+            return
+        try:
+            managed = self._get_managed(session_id)
+        except SessionNotFoundError:
+            return
+        pending = managed.approvals.get_pending(request_id)
+        if pending is None or pending.send_in_flight:
+            return
+        taken = managed.approvals.take_pending(request_id)
+        if taken is None:
+            return
+        taken.deadline_task = None
+        await self._finalize_auto_entries(managed, [taken], "deadline")
 
     def _get_managed(self, session_id: str) -> _ManagedSession:
         try:

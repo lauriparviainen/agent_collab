@@ -18,6 +18,7 @@ from .backend import (
     _should_reset_after_outcome,
     iter_claude_events,
 )
+from .permissions import park_claude_tool_permission
 
 EventEmit = Callable[[Any], Awaitable[None]]
 
@@ -30,6 +31,7 @@ class ClaudeSdkWorkerBackend:
         self._verbose = False
         self._workspace: Optional[Path] = None
         self._agent_id = "claude_sdk"
+        self._request_approval: Optional[Callable[..., Awaitable[Mapping[str, Any]]]] = None
 
     async def open(self, payload: Mapping[str, Any]) -> None:
         workspace = Path(str(payload["workspace"])).resolve()
@@ -49,11 +51,11 @@ class ClaudeSdkWorkerBackend:
             options,
             cwd,
             suppress_ambient_mcp=True,
+            can_use_tool=self._can_use_tool,
         )
         self._conversation = conversation
         self._verbose = verbose
         self._workspace = workspace
-        self._request_approval: Optional[Callable[..., Awaitable[Mapping[str, Any]]]] = None
 
     async def run(
         self,
@@ -127,6 +129,16 @@ class ClaudeSdkWorkerBackend:
         if not callable(method):
             return
         await method()
+
+    async def _can_use_tool(self, tool_name: str, tool_input: dict, context: Any = None) -> Any:
+        """Worker ``can_use_tool``: enqueue via the serve loop, never write the socket."""
+
+        return await park_claude_tool_permission(
+            request_approval=self._request_approval,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            context=context,
+        )
 
     def bind_approvals(self, request_approval: Callable[..., Awaitable[Mapping[str, Any]]]) -> None:
         self._request_approval = request_approval

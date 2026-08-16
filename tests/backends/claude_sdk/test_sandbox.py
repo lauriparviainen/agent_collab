@@ -56,13 +56,11 @@ class ClaudeSdkSandboxAdapterTests(unittest.TestCase):
                 spec.accounting_peer_roots,
                 (workspace / "claude-temp" / f"claude-{os.getuid()}",),
             )
-            self.assertEqual(
-                dict(spec.native_profile.sdk_options).get("permission_mode"),
-                "bypassPermissions",
-            )
+            self.assertNotIn("permission_mode", dict(spec.native_profile.sdk_options))
             self.assertIs(dict(spec.native_profile.sdk_options).get("strict_mcp_config"), True)
             self.assertEqual(dict(spec.native_profile.sdk_options).get("mcp_servers"), {})
             self.assertEqual(spec.native_profile.summary.get("mcp"), "strict_empty_configuration")
+            self.assertEqual(spec.native_profile.summary.get("permissions"), "can_use_tool")
 
             payload = adapter.worker_open_payload_for_agent(
                 agent_id="reviewer",
@@ -74,9 +72,40 @@ class ClaudeSdkSandboxAdapterTests(unittest.TestCase):
             )
             self.assertEqual(payload["backend"], "claude_sdk")
             self.assertEqual(payload["agent_id"], "reviewer")
+            self.assertEqual(payload["options"]["permission_mode"], "default")
+            self.assertEqual(payload["native"]["permission_mode"], "default")
+            self.assertEqual(payload["cwd"], str(workspace / "sub"))
+
+    def test_worker_open_payload_defaults_missing_permission_mode(self) -> None:
+        adapter = ClaudeSdkSandboxAdapter()
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            payload = adapter.worker_open_payload_for_agent(
+                agent_id="reviewer",
+                options={"model": "sonnet"},
+                workspace=workspace,
+                cwd=workspace,
+                agent_env={},
+                verbose=False,
+            )
+            self.assertEqual(payload["options"]["permission_mode"], "default")
+            self.assertEqual(payload["native"]["permission_mode"], "default")
+            self.assertNotEqual(payload["options"]["permission_mode"], "bypassPermissions")
+
+    def test_worker_open_payload_preserves_explicit_bypass(self) -> None:
+        adapter = ClaudeSdkSandboxAdapter()
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            payload = adapter.worker_open_payload_for_agent(
+                agent_id="reviewer",
+                options={"model": "sonnet", "permission_mode": "bypassPermissions"},
+                workspace=workspace,
+                cwd=workspace,
+                agent_env={},
+                verbose=False,
+            )
             self.assertEqual(payload["options"]["permission_mode"], "bypassPermissions")
             self.assertEqual(payload["native"]["permission_mode"], "bypassPermissions")
-            self.assertEqual(payload["cwd"], str(workspace / "sub"))
 
     def test_empty_or_home_config_dir_fails_closed(self) -> None:
         adapter = ClaudeSdkSandboxAdapter()

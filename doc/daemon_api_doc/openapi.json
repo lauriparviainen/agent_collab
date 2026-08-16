@@ -759,6 +759,11 @@
               }
             ]
           },
+          "approval_deadline": {
+            "maximum": 3600.0,
+            "minimum": 0.05,
+            "type": "number"
+          },
           "capabilities": {
             "anyOf": [
               {
@@ -919,6 +924,7 @@
           "dry_run",
           "interactive",
           "interactive_idle_timeout",
+          "approval_deadline",
           "ended_at",
           "error",
           "failure",
@@ -960,6 +966,12 @@
       "StartSessionRequestModel": {
         "additionalProperties": false,
         "properties": {
+          "approval_deadline": {
+            "default": 120.0,
+            "maximum": 3600.0,
+            "minimum": 0.05,
+            "type": "number"
+          },
           "backend": {
             "anyOf": [
               {

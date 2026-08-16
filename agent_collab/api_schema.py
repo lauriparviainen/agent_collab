@@ -28,6 +28,10 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 from .config import DEFAULT_WORKFLOW
+from .approvals import (
+    DEFAULT_APPROVAL_DEADLINE_SECONDS,
+    normalize_approval_deadline,
+)
 
 
 # --- Versioning -------------------------------------------------------------
@@ -73,6 +77,14 @@ def _number(data: Dict[str, Any], key: str, default: float) -> float:
         return float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} must be a number") from exc
+
+
+def _approval_deadline(data: Dict[str, Any]) -> float:
+    value = data.get("approval_deadline", DEFAULT_APPROVAL_DEADLINE_SECONDS)
+    try:
+        return normalize_approval_deadline(value)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _tool_output(data: Dict[str, Any]) -> str:
@@ -266,6 +278,7 @@ class SessionStateModel:
     dry_run: bool = False
     interactive: bool = False
     interactive_idle_timeout: float = 600.0
+    approval_deadline: float = DEFAULT_APPROVAL_DEADLINE_SECONDS
     ended_at: Optional[str] = None
     error: Optional[str] = None
     failure: Optional[Dict[str, Any]] = None
@@ -297,6 +310,7 @@ class SessionStateModel:
             dry_run=bool(data.get("dry_run", False)),
             interactive=bool(data.get("interactive", False)),
             interactive_idle_timeout=_number(data, "interactive_idle_timeout", 600.0),
+            approval_deadline=_approval_deadline(data),
             ended_at=data.get("ended_at"),
             error=data.get("error"),
             failure=data.get("failure"),
@@ -330,6 +344,7 @@ class SessionStateModel:
             "dry_run": self.dry_run,
             "interactive": self.interactive,
             "interactive_idle_timeout": self.interactive_idle_timeout,
+            "approval_deadline": self.approval_deadline,
             "ended_at": self.ended_at,
             "error": self.error,
             "failure": self.failure,
@@ -772,6 +787,7 @@ class StartSessionRequestModel:
     dry_run: bool = False
     interactive: bool = False
     interactive_idle_timeout: float = 600.0
+    approval_deadline: float = DEFAULT_APPROVAL_DEADLINE_SECONDS
     backend_options: Dict[str, Any] = field(default_factory=dict)
     backend: Optional[str] = None
     sandbox: Optional[str] = None
@@ -795,6 +811,7 @@ class StartSessionRequestModel:
         "dry_run",
         "interactive",
         "interactive_idle_timeout",
+        "approval_deadline",
         "backend_options",
         "backend",
         "sandbox",
@@ -831,6 +848,7 @@ class StartSessionRequestModel:
             dry_run=bool(data.get("dry_run", False)),
             interactive=bool(data.get("interactive", False)),
             interactive_idle_timeout=_number(data, "interactive_idle_timeout", 600.0),
+            approval_deadline=_approval_deadline(data),
             backend_options=_optional_object(data, "backend_options"),
             backend=str(backend) if backend is not None else None,
             sandbox=str(sandbox) if sandbox is not None else None,
@@ -849,6 +867,7 @@ class StartSessionRequestModel:
             "dry_run": self.dry_run,
             "interactive": self.interactive,
             "interactive_idle_timeout": self.interactive_idle_timeout,
+            "approval_deadline": self.approval_deadline,
             "backend_options": self.backend_options,
             "detail": self.detail,
         }

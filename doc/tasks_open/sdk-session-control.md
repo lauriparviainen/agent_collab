@@ -47,22 +47,20 @@ take it:
    production projection re-evaluates after identity capture, turn commit,
    and restore through the same conservative reducer (see *Aggregation*).
    Remaining is Stage 2.
-4. **Stage 2 — Claude SDK interrupt mapping** is in progress on
-   `sdk-session-control` (worker + in-process issue of `interrupt()`;
-   distinguishable `ResultMessage.terminal_reason` `aborted_streaming` /
-   `aborted_tools` → `TurnOutcome("interrupted", "local_turn_interrupted")`).
-   The mapping issues `client.interrupt()` without awaiting the SDK's 60 s
-   control ACK so the worker serve loop can harvest the turn `result`
-   within the daemon's 2 s bound; that ACK-vs-harvest inversion is part of
-   the mapping. Production `claude_sdk.interrupt` stays false until
-   credentialed coverage on both paths. Open questions 5, 9, and 10 are
-   **decided for `claude_sdk`** (see *Decision (2026-08-16)*); they are
-   not reopened for this backend. Remaining in this stage: tool_gate
-   mapping plus the clocks loop against that decision (120 s default
-   fail-closed deny, list-shaped concurrent parks, no provider-clock
-   clamp), stop forcing `bypassPermissions` on the worker so
-   `can_use_tool` is no longer shadowed, then credentialed coverage on
-   both paths before any `tool_gate` / `interrupt` flag flip.
+4. **Stage 2 — Claude SDK tool_gate mapping + clocks.** Interrupt mapping
+   landed earlier on `sdk-session-control` (worker + in-process
+   `interrupt()`; distinguishable `ResultMessage.terminal_reason`
+   `aborted_streaming` / `aborted_tools` →
+   `TurnOutcome("interrupted", "local_turn_interrupted")`; production
+   `claude_sdk.interrupt` stays false). This increment wires `can_use_tool`
+   on both production paths, stops forcing worker `bypassPermissions`, and
+   replaces the fire-and-forget turn sleep with a re-armed remaining-budget
+   loop that excludes parked intervals (120 s default fail-closed deny,
+   list-shaped overlap, no provider-clock clamp). Hermetic coverage is in
+   place. Remaining before any `tool_gate` / `interrupt` flag flip:
+   **credentialed coverage on both paths**. Live park / two-at-once /
+   abort-during-park are still unverified. Keep MCP free of wait_approval,
+   list_approvals, and interrupt/resume tools until Stage 4.
 5. **Stage 3 — Codex, Antigravity, and xAI SDK controls** (open questions
    1–2, plus remaining 5, 9, and 10; record negatives explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
@@ -419,11 +417,11 @@ Antigravity, and xAI keep questions 5, 9, and 10 open at Stage 3.
 
 **Open question 5 (Claude):** `can_use_tool` is not gated by account or plan
 entitlements in the SDK or CLI source. Silent skip is a **permission-mode /
-allow-list shadowing** problem, not an entitlement skip. The production
-worker currently forces `permission_mode=bypassPermissions` after the outer
-ack; the SDK documents that mode as skipping `can_use_tool`, so the default
-worker path cannot prove a park. A credentialed test that never parks
-**fails**; it does not skip and flip the flag.
+allow-list shadowing** problem, not an entitlement skip. The worker no
+longer forces `permission_mode=bypassPermissions` after the outer ack;
+both paths pass `can_use_tool` with the operator mode (shipped default
+`"default"`). A credentialed test that never parks **fails**; it does not
+skip and flip the flag.
 
 **Open question 9 (Claude):** Neither the Python SDK nor the bundled CLI
 holds a Python-side decision timer on a pending `can_use_tool`. Do **not**
@@ -445,10 +443,10 @@ waits 60 s (different control path); serializing parks because live overlap
 is unproven; keeping `tool_gate` false due to clocks when clocks are not the
 blocker; treating a never-parked credentialed test as skip.
 
-**Hard blocker for flipping `tool_gate`:** the worker path must stop forcing
-`bypassPermissions` (or otherwise still invoke `can_use_tool`) so both
-worker and in-process paths deliver the callback — the same every-path bar
-as interrupt.
+**Hard blocker for flipping `tool_gate`:** credentialed coverage on both
+paths. The worker no longer forces `bypassPermissions`; hermetic tests
+invoke `can_use_tool` on worker and in-process. Live park / two-at-once /
+abort-during-park remain unverified.
 
 ### Aggregation
 
@@ -613,10 +611,12 @@ findings that must inform it.
 
 ## Design: tool gating
 
-Not yet implemented. The `can_use_tool` callback fires **inside the worker**, in
-the middle of `backend.run()`. The clean shape keeps one receive loop and reuses
-the bounded out-of-band control writer from interrupt; it never parks that loop
-or the turn lock on a human decision.
+Hermetic mapping and clocks are implemented on both Claude SDK paths; live
+park is still unverified and production `claude_sdk.tool_gate` stays false
+pending credentialed coverage. The `can_use_tool` callback fires **inside
+the worker**, in the middle of `backend.run()`. The clean shape keeps one
+receive loop and reuses the bounded out-of-band control writer from
+interrupt; it never parks that loop or the turn lock on a human decision.
 
 **Worker side.** When the SDK invokes the permission callback, the worker backend
 mints a request id, enqueues an `approval_request` payload onto the same
@@ -640,11 +640,15 @@ returns the SDK's approve/deny result type and the turn continues — no restart
 no new client.
 
 **Daemon side.** `SupervisedWorkerSession.run()` gains an optional injected
-`on_approval` callback. When an `approval_request` arrives, the receive loop
-registers it and starts a bounded decision task; it does **not** await the
-registry while holding `_lock`. The task parks in the daemon's approval
-registry, then sends the correlated `approval_decision` through the same small
-out-of-band writer and write lock used by `interrupt`. The receive loop remains
+`on_approval` callback. When an `approval_request` arrives and `on_approval`
+is bound, the receive loop registers it and starts a bounded decision task;
+it does **not** await the registry while holding `_lock`. When `on_approval`
+is unset, it fail-closed denies immediately (writes `approval_decision`
+deny for that `approval_id` / `run_id`) instead of dropping the frame —
+there is no registry clock if nobody is listening. The bound-listener task
+parks in the daemon's approval registry, then sends the correlated
+`approval_decision` through the same small out-of-band writer and write
+lock used by `interrupt`. The receive loop remains
 able to observe a terminal result, while stop/close can deny and release the
 pending decision without waiting for the turn lock. Finalization cancels and
 denies any unresolved registry entry and waits only a bounded time for its task
@@ -1392,9 +1396,10 @@ the feature. A skipped provider keeps the production capability false.
 5. Do any providers gate tool-approval callbacks behind account or plan
    entitlements that a credentialed test would silently skip? **Claude:
    no.** `can_use_tool` is not plan-gated; silent skip is permission-mode
-   / allow-list shadowing (`bypassPermissions` on the production worker).
-   A never-parked credentialed test fails rather than skips. Codex,
-   Antigravity, and xAI remain open. (Stage 3)
+   / allow-list shadowing. The production worker no longer forces
+   `bypassPermissions`; an explicit operator `bypassPermissions` still
+   skips the callback. A never-parked credentialed test fails rather than
+   skips. Codex, Antigravity, and xAI remain open. (Stage 3)
 6. Can `agy -p` emit the exact conversation id it just used through a stable
    machine-readable surface? CLI 1.1.8 added typed `init`, `step_update`, and
    `result` events after the current backend was designed; inspect a root turn,
@@ -1589,16 +1594,19 @@ the tests, not this document, are their guarantee.
   settled (see *Decision (2026-08-16)*): no provider decision timer, so no
   clamp; agent-collab owns a 120 s fail-closed deny; `pending_approvals`
   stays a list; implement overlap, do not serialize; `can_use_tool` is not
-  plan-gated.   Static inspect of pin 0.2.126 / CLI 2.1.218 found no
+  plan-gated. Static inspect of pin 0.2.126 / CLI 2.1.218 found no
   Python-side callback timer; the SDK can spawn concurrent
-  `can_use_tool` tasks.
-  Live proof still missing: whether a real turn emits `can_use_tool`,
-  whether two fire at once, and whether the CLI aborts a park during the
-  120 s window. Production worker currently forces
-  `permission_mode=bypassPermissions` after the outer ack, which the SDK
-  documents as skipping `can_use_tool` — that shadowing is the hard
-  blocker for flipping the flag, not clocks. Request id, tool input
-  shape, and result types remain unverified until the mapping lands.
+  `can_use_tool` tasks. Both production paths now pass `can_use_tool`
+  together with the operator `permission_mode` (shipped default
+  `"default"`). The worker no longer forces `bypassPermissions` after the
+  outer ack; outer Bubblewrap remains the filesystem barrier. Hermetic
+  tests cover park / approve / deny / overlap / deadline / abandon /
+  deny-before-stop / clocks on both paths. Live proof still missing:
+  whether a real turn emits `can_use_tool`, whether two fire at once, and
+  whether the CLI aborts a park during the 120 s window.
+  `claude_sdk.tool_gate` stays false until credentialed coverage on both
+  paths. Request id, tool input shape, and live result types remain
+  unverified against a real CLI.
 - *[all]* The client is loop-scoped but usable across tasks in one loop (its
   reader is detached via `spawn_detached` -> `loop.create_task`); an `atexit`
   child killer reaps orphaned CLI subprocesses. `disconnect()` is idempotent,

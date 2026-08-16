@@ -553,6 +553,74 @@ class WorkerProtocolV2ControlTests(unittest.IsolatedAsyncioTestCase):
             worker_task.cancel()
             await asyncio.gather(worker_task, return_exceptions=True)
 
+    async def test_approval_request_without_listener_is_denied(self) -> None:
+        daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        daemon.setblocking(False)
+        worker.setblocking(False)
+        process = _FakeProcess()
+        captured: dict = {}
+
+        async def approval_worker(sock: socket.socket) -> None:
+            reader, writer = await asyncio.open_connection(sock=sock)
+            try:
+                await send_frame(writer, _hello())
+                open_frame = await recv_frame(reader)
+                await send_frame(
+                    writer,
+                    make_frame("ready", request_id=open_frame["request_id"], instance="x"),
+                )
+                run_frame = await recv_frame(reader)
+                captured["run_id"] = run_frame["run_id"]
+                await send_frame(
+                    writer,
+                    make_frame(
+                        "approval_request",
+                        run_id=run_frame["run_id"],
+                        sequence=1,
+                        approval_id="appr-unheard",
+                        tool_name="Bash",
+                        summary="true",
+                        summary_truncated=False,
+                        decision_options=["approve", "deny"],
+                    ),
+                )
+                captured["decision"] = await recv_frame(reader)
+                await send_frame(
+                    writer,
+                    make_frame(
+                        "result",
+                        run_id=run_frame["run_id"],
+                        sequence=2,
+                        outcome=TurnOutcome("completed").to_dict(),
+                    ),
+                )
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        worker_task = asyncio.create_task(approval_worker(worker))
+        try:
+            reader, writer = await asyncio.open_connection(sock=daemon)
+            hello = await handshake_worker(reader, writer)
+            session = SupervisedWorkerSession(
+                process,
+                reader,
+                writer,
+                instance=hello.instance,
+                control_frames=hello.control_frames,
+            )
+            await session.open({"backend": "fake"})
+            _events, outcome = await asyncio.wait_for(session.run("prompt"), timeout=2)
+            self.assertEqual(outcome.outcome, "completed")
+            decision = captured["decision"]
+            self.assertEqual(decision["type"], "approval_decision")
+            self.assertEqual(decision["approval_id"], "appr-unheard")
+            self.assertEqual(decision["decision"], "deny")
+            self.assertEqual(decision["run_id"], captured["run_id"])
+        finally:
+            worker_task.cancel()
+            await asyncio.gather(worker_task, return_exceptions=True)
+
     async def test_approval_request_missing_id_is_protocol_error(self) -> None:
         daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         daemon.setblocking(False)

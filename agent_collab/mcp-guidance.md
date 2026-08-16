@@ -179,7 +179,8 @@ Start a session with `agent_collab_start`:
 ```
 
 Optional fields: `max_turns`, `timeout`, `mock`, `dry_run`, `interactive`,
-`interactive_idle_timeout`, `backend_options`, `backend`, `members`, `sandbox`.
+`interactive_idle_timeout`, `approval_deadline`, `backend_options`, `backend`,
+`members`, `sandbox`.
 The top-level `sandbox` is agent-collab's outer filesystem policy and accepts
 `read-only` or `none`; it is distinct from provider-native values inside
 `backend_options`. All shipped backends support outer `read-only`; configured

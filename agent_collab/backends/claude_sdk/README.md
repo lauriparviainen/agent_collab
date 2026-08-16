@@ -64,10 +64,12 @@ Agent-collab launches a supervised Bubblewrap namespace, proves establishment,
 then runs `python -I -m agent_collab.sandbox.sdk_worker`. The worker owns the
 complete Claude SDK client, Claude Code runtime, and local tool descendants.
 The complete effective `CLAUDE_CONFIG_DIR` is the persistent writable state
-root (same contract as `claude_cli`). After outer proof, the worker forces
-`permission_mode=bypassPermissions` for non-interactive tool use and forces
-`strict_mcp_config` with an empty MCP map so ambient project/user MCP is not
-inherited on the worker path. Outer `sandbox = "none"` keeps historical
+root (same contract as `claude_cli`). After outer proof, the worker keeps the
+operator `permission_mode` (shipped default `"default"`) and registers
+`can_use_tool` so tool calls can park for approval. It does **not** force
+`bypassPermissions` — that mode skips the callback. Outer Bubblewrap remains
+the filesystem barrier. The worker still forces `strict_mcp_config` with an
+empty MCP map so ambient project/user MCP is not inherited on the worker path. Outer `sandbox = "none"` keeps historical
 in-process behavior (including ambient MCP when the SDK would load it).
 Admin-managed settings under `/etc/claude-code` fail closed. Legacy
 `~/.claude.json` remains outside the writable state mount when using the

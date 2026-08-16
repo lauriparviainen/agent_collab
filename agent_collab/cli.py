@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from . import __version__
 from .cli_output import error, fail, info, ok, print_kv, step, warn
+from .approvals import DEFAULT_APPROVAL_DEADLINE_SECONDS
 from .config import DEFAULT_WORKFLOW
 from .referee import RefereeConfig, run_sync
 
@@ -60,6 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-turns", type=int, default=3)
     parser.add_argument(
         "--timeout", type=int, default=900, help="Per-agent turn timeout in seconds."
+    )
+    parser.add_argument(
+        "--approval-deadline",
+        type=float,
+        default=DEFAULT_APPROVAL_DEADLINE_SECONDS,
+        help="Seconds to wait for a parked tool approval before auto-denying (default 120).",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Print commands without running configured agents."
@@ -185,6 +192,12 @@ def build_start_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workdir", type=Path, default=Path("."))
     parser.add_argument("--max-turns", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=900)
+    parser.add_argument(
+        "--approval-deadline",
+        type=float,
+        default=DEFAULT_APPROVAL_DEADLINE_SECONDS,
+        help="Seconds to wait for a parked tool approval before auto-denying (default 120).",
+    )
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -559,6 +572,7 @@ def _main_start(argv) -> int:
             "workdir": str(args.workdir.expanduser().resolve()),
             "max_turns": args.max_turns,
             "timeout": args.timeout,
+            "approval_deadline": args.approval_deadline,
             "mock": args.mock,
             "dry_run": args.dry_run,
             "backend_options": backend_options,
@@ -1466,6 +1480,7 @@ def main(argv=None) -> int:
         workflow=args.workflow,
         max_turns=args.max_turns,
         timeout=args.timeout,
+        approval_deadline=args.approval_deadline,
         dry_run=args.dry_run,
         mock=args.mock,
         verbose=args.verbose,

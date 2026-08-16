@@ -807,6 +807,21 @@ class ClaudeOptionMappingTests(unittest.TestCase):
         self.assertNotIn("resume", captured)
         self.assertNotIn("fork_session", captured)
 
+    def test_build_agent_options_passes_can_use_tool_only_when_set(self):
+        captured = {}
+
+        class FakeOptions:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        async def gate(tool_name, tool_input, context=None):
+            del tool_name, tool_input, context
+
+        build_claude_agent_options(FakeOptions, {"model": "sonnet"}, Path("/w"))
+        self.assertNotIn("can_use_tool", captured)
+        build_claude_agent_options(FakeOptions, {"model": "sonnet"}, Path("/w"), can_use_tool=gate)
+        self.assertIs(captured["can_use_tool"], gate)
+
     def test_build_agent_options_continues_captured_session_on_reconnect(self):
         captured = {}
 
@@ -998,11 +1013,31 @@ class ClaudeProductionFactoryTests(unittest.TestCase):
         self.assertEqual(fresh["effort"], "low")
         self.assertNotIn("resume", fresh)
         self.assertNotIn("fork_session", fresh)
+        self.assertNotIn("can_use_tool", fresh)
         for events, _outcome in (first, second):
             self.assertTrue(
                 any((event.raw or {}).get("provider_session_id") == "sess-live" for event in events)
             )
         self.assertFalse(runner.conversation_active())
+
+    def test_bound_approval_callback_passes_can_use_tool_into_agent_options(self):
+        state = {}
+        module = self._fake_module(state, [[_result(session_id="sess-live")]])
+        runner = self._runner(options={"permission_mode": "default"})
+        runner.set_approval_callback(lambda payload: None)
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                _events, outcome = await self._collect(runner, "one")
+                await runner.close()
+                return outcome
+
+            outcome = asyncio.run(scenario())
+
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertIn("can_use_tool", state["clients"][0])
+        self.assertIs(state["clients"][0]["can_use_tool"].__func__, runner._can_use_tool.__func__)
 
     def test_abnormal_turn_resets_once_then_reconnects_with_captured_id(self):
         state = {}

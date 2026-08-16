@@ -601,6 +601,7 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(payload["dry_run"], False)
         self.assertEqual(payload["interactive"], False)
         self.assertEqual(payload["interactive_idle_timeout"], 600.0)
+        self.assertEqual(payload["approval_deadline"], 120.0)
         self.assertEqual(payload["backend_options"], {})
 
         interactive_payload = build_new_session_payload(
@@ -613,6 +614,7 @@ class TuiCoreTests(unittest.TestCase):
 
         self.assertEqual(interactive_payload["interactive"], True)
         self.assertEqual(interactive_payload["interactive_idle_timeout"], 30.0)
+        self.assertEqual(interactive_payload["approval_deadline"], 120.0)
 
     def test_new_session_payload_carries_members_only_when_substituted(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -15,6 +15,7 @@ from .config import (
     workflow_members,
 )
 from .backend_contract import BackendOptionError, OptionSpec
+from .approvals import DEFAULT_APPROVAL_DEADLINE_SECONDS
 
 
 @dataclass(frozen=True)
@@ -1239,6 +1240,7 @@ def build_session_settings(
     warnings: Optional[Sequence[Mapping[str, str]]] = None,
     interactive: bool = False,
     interactive_idle_timeout: float = 600.0,
+    approval_deadline: float = DEFAULT_APPROVAL_DEADLINE_SECONDS,
     turn_timeout: Optional[int] = None,
     workdir: Optional[Path] = None,
     sandbox_plan: Optional[Any] = None,
@@ -1313,6 +1315,7 @@ def build_session_settings(
         "agents": agents,
         "interactive": bool(interactive),
         "interactive_idle_timeout": float(interactive_idle_timeout),
+        "approval_deadline": float(approval_deadline),
     }
     if warnings:
         settings["warnings"] = [dict(warning) for warning in warnings]

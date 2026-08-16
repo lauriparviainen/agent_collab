@@ -516,6 +516,7 @@ def format_session_details(session: Any) -> Tuple[str, ...]:
         "dry_run",
         "interactive",
         "interactive_idle_timeout",
+        "approval_deadline",
         "jsonl_path",
         "markdown_path",
     ):
@@ -921,6 +922,7 @@ def build_new_session_payload(
     dry_run: bool = False,
     interactive: bool = False,
     interactive_idle_timeout: float = 600.0,
+    approval_deadline: float = 120.0,
     backend_options: Optional[Mapping[str, Mapping[str, Any]]] = None,
     members: Optional[Mapping[str, str]] = None,
     sandbox: Optional[str] = None,
@@ -942,6 +944,7 @@ def build_new_session_payload(
         "dry_run": bool(dry_run),
         "interactive": bool(interactive),
         "interactive_idle_timeout": float(interactive_idle_timeout),
+        "approval_deadline": float(approval_deadline),
         "backend_options": {key: dict(value) for key, value in (backend_options or {}).items()},
     }
     # Only a real substitution goes on the wire; Enter-through-defaults keeps

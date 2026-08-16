@@ -425,6 +425,7 @@ class SessionSettingsTests(unittest.TestCase):
         for entry in settings["agents"].values():
             self.assertIn("command_preview", entry)
             self.assertNotIn("Task", entry["command_preview"])
+        self.assertEqual(settings["approval_deadline"], 120.0)
 
     def test_sdk_settings_have_no_command_preview(self):
         config = CollaborationConfig(

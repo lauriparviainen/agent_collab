@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import asyncio
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Set
+
+from .approvals import APPROVAL_PARK_EXCLUSION_FACTOR, DEFAULT_APPROVAL_DEADLINE_SECONDS
 
 from .config import (
     DEFAULT_WORKFLOW,
@@ -154,6 +156,57 @@ class RefereeConfig:
     approval_callback: Optional[Callable[[Mapping[str, Any]], Any]] = None
     turn_approval_release_callback: Optional[Callable[[str, str], Awaitable[None]]] = None
     turn_approval_abandon_callback: Optional[Callable[[str], Awaitable[None]]] = None
+    # Fail-closed tool-approval deadline (seconds). Expiry auto-denies.
+    approval_deadline: float = DEFAULT_APPROVAL_DEADLINE_SECONDS
+    # Clock exclusion: pending request ids for this turn. None = never parked
+    # (fail-closed: the turn clock keeps running).
+    pending_turn_approvals: Optional[Callable[[str], Sequence[str]]] = None
+    approval_generation: Optional[Callable[[], int]] = None
+    wait_approval_generation: Optional[Callable[[int], Awaitable[Any]]] = None
+
+
+# Poll when a park is active but no generation waiter is wired (fail-closed).
+_PARK_CLOCK_POLL_SECONDS = 0.05
+
+
+class _TurnBudget:
+    """Remaining turn timeout plus fail-closed park-exclusion caps."""
+
+    def __init__(self, timeout: float, approval_deadline: float) -> None:
+        self.remaining = max(0.0, float(timeout))
+        self.approval_deadline = max(0.0, float(approval_deadline))
+        self.exclusion_budget = APPROVAL_PARK_EXCLUSION_FACTOR * self.approval_deadline
+        self.request_caps: Dict[str, float] = {}
+
+    def sync_caps(self, pending: Sequence[str]) -> None:
+        pending_set = set(pending)
+        for request_id in list(self.request_caps):
+            if request_id not in pending_set:
+                del self.request_caps[request_id]
+        for request_id in pending:
+            self.request_caps.setdefault(request_id, self.approval_deadline)
+
+    def exclusion_slice(self, pending: Sequence[str]) -> Optional[float]:
+        if not pending or self.exclusion_budget <= 0:
+            return None
+        caps = [
+            self.request_caps[request_id]
+            for request_id in pending
+            if self.request_caps.get(request_id, 0) > 0
+        ]
+        if not caps:
+            return None
+        return min(self.exclusion_budget, min(caps))
+
+    def consume_exclusion(self, pending: Sequence[str], elapsed: float) -> None:
+        used = max(0.0, float(elapsed))
+        self.exclusion_budget = max(0.0, self.exclusion_budget - used)
+        for request_id in pending:
+            if request_id in self.request_caps:
+                self.request_caps[request_id] = max(0.0, self.request_caps[request_id] - used)
+
+    def consume_running(self, elapsed: float) -> None:
+        self.remaining = max(0.0, self.remaining - max(0.0, float(elapsed)))
 
 
 class Referee:
@@ -645,18 +698,18 @@ class Referee:
             name=f"agent-collab-{turn_id}-{agent_id}",
         )
         self._in_flight_runner_tasks.add(runner_task)
-        deadline_task = asyncio.create_task(asyncio.sleep(max(0, self.config.timeout)))
+        budget = _TurnBudget(self.config.timeout, self.config.approval_deadline)
         stop_task = asyncio.create_task(self.stop_signal.wait())
         local_outcome: Optional[TurnOutcome] = None
         unexpected_cancel = False
+        deadline_fired = False
 
         if manage_turn_active:
             await self._set_turn_active(True)
         try:
             try:
-                await asyncio.wait(
-                    {runner_task, deadline_task, stop_task},
-                    return_when=asyncio.FIRST_COMPLETED,
+                deadline_fired = await self._wait_turn_with_park_exclusion(
+                    runner_task, stop_task, budget, turn_id
                 )
             except asyncio.CancelledError:
                 if runner_task.done():
@@ -683,7 +736,7 @@ class Referee:
                         await self._abandon_turn_approvals(turn_id)
             else:
                 if local_outcome is None:
-                    if deadline_task.done():
+                    if deadline_fired or (budget.remaining <= 0 and not stop_task.done()):
                         local_outcome = TurnOutcome("timed_out", "local_turn_timed_out")
                         release_reason = "turn_deadline"
                     elif stop_task.done():
@@ -731,12 +784,87 @@ class Referee:
             return record
         finally:
             self._in_flight_runner_tasks.discard(runner_task)
-            for task in (deadline_task, stop_task):
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(deadline_task, stop_task, return_exceptions=True)
+            if not stop_task.done():
+                stop_task.cancel()
+            await asyncio.gather(stop_task, return_exceptions=True)
             if manage_turn_active:
                 await self._set_turn_active(False)
+
+    def _pending_turn_approval_ids(self, turn_id: str) -> List[str]:
+        query = self.config.pending_turn_approvals
+        if query is None:
+            return []
+        try:
+            ids = query(turn_id)
+        except Exception:
+            return []
+        if not ids:
+            return []
+        return [item for item in ids if isinstance(item, str) and item]
+
+    def _make_park_wait_task(self) -> Optional[asyncio.Task[Any]]:
+        waiter = self.config.wait_approval_generation
+        if waiter is None:
+            return None
+        gen = 0
+        getter = self.config.approval_generation
+        if getter is not None:
+            try:
+                gen = int(getter())
+            except Exception:
+                return None
+        return asyncio.create_task(waiter(gen))
+
+    async def _wait_turn_with_park_exclusion(
+        self,
+        runner_task: asyncio.Task[Any],
+        stop_task: asyncio.Task[Any],
+        budget: _TurnBudget,
+        turn_id: str,
+    ) -> bool:
+        """Wait until the runner, stop, or remaining turn budget wins.
+
+        Parked intervals are excluded from the turn clock, capped at one
+        approval deadline per request and twice that deadline per turn.
+        Ambiguity (no registry, query failure, unknown/empty pending set)
+        resumes the clock. Returns True when the local turn budget expired.
+        """
+
+        loop = asyncio.get_running_loop()
+        # Let an already-complete runner win timeout=0 arbitration.
+        await asyncio.sleep(0)
+        while not runner_task.done() and not stop_task.done():
+            pending = self._pending_turn_approval_ids(turn_id)
+            budget.sync_caps(pending)
+            slice_cap = budget.exclusion_slice(pending)
+            parked = slice_cap is not None
+            if not parked and budget.remaining <= 0:
+                return True
+            duration = slice_cap if parked else budget.remaining
+            park_task = self._make_park_wait_task()
+            if parked and park_task is None:
+                duration = min(duration, _PARK_CLOCK_POLL_SECONDS)
+            sleep_task = asyncio.create_task(asyncio.sleep(max(0.0, float(duration))))
+            waiters = {runner_task, stop_task, sleep_task}
+            if park_task is not None:
+                waiters.add(park_task)
+            started = loop.time()
+            try:
+                await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for task in (sleep_task, park_task):
+                    if task is not None and not task.done():
+                        task.cancel()
+                await asyncio.gather(
+                    *(task for task in (sleep_task, park_task) if task is not None),
+                    return_exceptions=True,
+                )
+            elapsed = max(0.0, loop.time() - started)
+            if parked:
+                budget.consume_exclusion(pending, elapsed)
+            else:
+                budget.consume_running(elapsed)
+        return False
 
     async def _run_parallel_stage(
         self,

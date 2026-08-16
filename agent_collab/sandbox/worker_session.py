@@ -198,11 +198,14 @@ class SupervisedWorkerSession:
                             events.append(event)
                         continue
                     if frame_type == "approval_request":
-                        # Register only: the callback must not wait for a human
-                        # decision while run() holds ``_lock``. Awaiting the
-                        # register coroutine keeps event order; the park lives
-                        # in the daemon registry, not here. Bound like emit so a
-                        # stalled daemon cannot freeze the receive loop.
+                        # Register only when a listener is bound: the callback
+                        # must not wait for a human decision while run() holds
+                        # ``_lock``. Awaiting the register coroutine keeps
+                        # event order; the park lives in the daemon registry,
+                        # not here. Bound like emit so a stalled daemon cannot
+                        # freeze the receive loop. With no listener, fail-closed
+                        # deny immediately — dropping the frame parks the
+                        # worker with no deadline clock.
                         approval_id = frame.get("approval_id")
                         if not isinstance(approval_id, str) or not approval_id.strip():
                             raise WorkerProtocolError(
@@ -222,6 +225,18 @@ class SupervisedWorkerSession:
                                         "its backpressure deadline",
                                         phase="worker",
                                     ) from exc
+                        else:
+                            run_id = frame.get("run_id")
+                            if not isinstance(run_id, str) or not run_id:
+                                run_id = self._active_run
+                            await self._send(
+                                make_frame(
+                                    "approval_decision",
+                                    approval_id=approval_id,
+                                    decision="deny",
+                                    run_id=run_id,
+                                )
+                            )
                         continue
                     if frame_type == "result":
                         outcome_payload = frame.get("outcome")

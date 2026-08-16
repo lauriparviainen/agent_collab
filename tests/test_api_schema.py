@@ -132,6 +132,7 @@ class StartPayloadSyncTests(unittest.TestCase):
             "dry_run": False,
             "interactive": False,
             "interactive_idle_timeout": 1.0,
+            "approval_deadline": 120.0,
             "backend_options": {},
             "backend": "cli",
             "sandbox": "read-only",
@@ -215,6 +216,9 @@ class StartPayloadSyncTests(unittest.TestCase):
             ("max_turns", None),
             ("timeout", []),
             ("interactive_idle_timeout", {}),
+            ("approval_deadline", {}),
+            ("approval_deadline", 0),
+            ("approval_deadline", 3601),
         ):
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
                 StartSessionRequestModel.from_dict({**base, field: value})

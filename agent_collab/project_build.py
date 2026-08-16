@@ -49,6 +49,7 @@ from .api_schema import (
     WaitEventsRequestModel,
     WaitResultRequestModel,
 )
+from .approvals import MAX_APPROVAL_DEADLINE_SECONDS, MIN_APPROVAL_DEADLINE_SECONDS
 from .config import load_config
 
 
@@ -138,6 +139,14 @@ _FIELD_SCHEMAS: Dict[Tuple[type, str], Dict[str, Any]] = {
             {"type": "string", "enum": ["read-only", "none"]},
             {"type": "null"},
         ]
+    },
+    (StartSessionRequestModel, "approval_deadline"): {
+        "minimum": MIN_APPROVAL_DEADLINE_SECONDS,
+        "maximum": MAX_APPROVAL_DEADLINE_SECONDS,
+    },
+    (SessionStateModel, "approval_deadline"): {
+        "minimum": MIN_APPROVAL_DEADLINE_SECONDS,
+        "maximum": MAX_APPROVAL_DEADLINE_SECONDS,
     },
     (OptionsRequestModel, "workdir"): {"minLength": 1, "pattern": r".*\S.*"},
     (OptionsRequestModel, "health_refresh"): {"enum": ["cached", "fresh"]},

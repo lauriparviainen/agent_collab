@@ -72,7 +72,7 @@ class ClaudeSdkSandboxAdapter:
             native_profile=NativeSandboxProfile(
                 summary={
                     "shape": "sdk_worker",
-                    "permissions": "bypassPermissions_after_outer_ack",
+                    "permissions": "can_use_tool",
                     "setting_sources": "none",
                     "mcp": "strict_empty_configuration",
                     "managed_configuration": "incompatible",
@@ -80,7 +80,6 @@ class ClaudeSdkSandboxAdapter:
                     "runtime": "complete_sdk_and_claude_code_in_worker",
                 },
                 sdk_options={
-                    "permission_mode": "bypassPermissions",
                     "strict_mcp_config": True,
                     "mcp_servers": {},
                 },
@@ -113,8 +112,15 @@ class ClaudeSdkSandboxAdapter:
         verbose: bool,
     ) -> dict[str, Any]:
         mapped = dict(options)
-        # Inside the proven outer boundary, force non-interactive approval bypass.
-        mapped["permission_mode"] = "bypassPermissions"
+        # Outer Bubblewrap is the filesystem barrier. Do not force
+        # bypassPermissions: that mode skips can_use_tool. Pass the operator's
+        # permission_mode through (shipped default is "default") so the callback
+        # is actually invoked. Fill the default only when the operator omitted
+        # a mode; an explicit bypassPermissions remains the operator's choice.
+        mode = mapped.get("permission_mode")
+        if not isinstance(mode, str) or not mode.strip():
+            mode = "default"
+        mapped["permission_mode"] = mode
         return {
             "backend": "claude_sdk",
             "agent_id": agent_id,
@@ -123,7 +129,7 @@ class ClaudeSdkSandboxAdapter:
             "options": mapped,
             "agent_env": dict(agent_env),
             "verbose": bool(verbose),
-            "native": {"permission_mode": "bypassPermissions"},
+            "native": {"permission_mode": mode},
         }
 
 
