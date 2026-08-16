@@ -83,8 +83,15 @@ take it:
    abort (Stage 4 turn-level interrupt parks at `awaiting_input` instead of
    raising `RequiredTurnFailed`). Keep MCP free of wait_approval,
    list_approvals, and interrupt/resume tools until Stage 4.
-5. **Stage 3 — Codex, Antigravity, and xAI SDK controls** (open questions
-   1–2, plus remaining 5, 9, and 10; record negatives explicitly).
+5. **Stage 3 — Codex, Antigravity, and xAI SDK controls.** Codex interrupt
+   *mapping* landed on `sdk-session-control` (worker + in-process
+   `AsyncTurnHandle.interrupt()` / `turn/interrupt`; collected
+   `TurnStatus.interrupted` → `TurnOutcome("interrupted",
+   "local_turn_interrupted")`; retain). Production `codex_sdk.interrupt`
+   stays false pending credentialed coverage / continue-after-interrupt
+   (same honesty as Claude). Remaining Stage 3: Codex tool_gate (open
+   questions 5, 9, and 10), Antigravity, and xAI (open question 2, plus
+   remaining 5, 9, and 10; record negatives explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Mind the pieces added in review: keyed-merge identity
    capture (the shipped capture write full-replaces the descriptor), the
@@ -1411,8 +1418,11 @@ the feature. A skipped provider keeps the production capability false.
 
 ## Open questions
 
-1. Does the installed Codex app-server expose a turn-cancellation method at all?
-   If not, `codex_sdk.interrupt` stays false. (Stage 3)
+1. Yes. Installed `openai-codex` 0.144.4 exposes `turn/interrupt` via
+   `AsyncTurnHandle.interrupt()`. Hermetic mapping landed on worker and
+   in-process paths (`interrupted` / `local_turn_interrupted`, retain).
+   Production `codex_sdk.interrupt` stays false pending credentialed
+   coverage / continue-after-interrupt. Live proof is not claimed. (Stage 3)
 2. Is an Antigravity conversation still usable for a following turn after
    `ChatResponse.cancel()`? If not, interrupt degrades to a reset and the flag
    stays false. (Stage 3)
@@ -1647,13 +1657,12 @@ the tests, not this document, are their guarantee.
   `receive_response()`. A cancelled `connect()` unwinds via the SDK's own
   failure-path `disconnect()`.
 
-### codex_sdk — `openai-codex` 0.1.0b3 + `openai-codex-cli-bin` 0.137.0a4; configured local CLI 0.144.4 (verified 2026-07-23)
+### codex_sdk — `openai-codex` 0.144.4 + `openai-codex-cli-bin` 0.144.4; configured local CLI 0.147.0 (verified 2026-08-16)
 
 - *[continuity — shipped]* One open `AsyncCodex` owns an `AsyncThread` whose
   public `run()` accepts repeated collected turns with provider-held memory.
   Pinned by
   `integration_tests/backends/codex_sdk/test_live.py::test_provider_memory_across_interactive_turns`.
-  The public 0.144.4 wheel has the same relevant APIs.
 - *[resume]* `AsyncCodex.thread_resume(thread_id, ...)` reopens a materialized
   thread after the first client closes; a one-turn fixture resumed the exact id
   and read its persisted turn.
@@ -1662,16 +1671,30 @@ the tests, not this document, are their guarantee.
   turn is the minimum reconnect fixture. Starting a new thread with the same
   transcript is not thread resume; a rejected or expired `thread_resume` fails
   structurally and never falls back to `thread_start`.
-- *[interrupt]* `AsyncThread.run()` waits through `asyncio.to_thread` on a
-  synchronous notification queue; cancelling that waiter does **not** interrupt
-  the provider worker, and cleanup requires `AsyncCodex.close()` to terminate the
-  app-server transport. No turn-cancellation API has been located — see open
-  question 1.
+- *[interrupt]* Installed `openai-codex` 0.144.4 exposes
+  `AsyncThread.turn(...)` → `AsyncTurnHandle`;
+  `AsyncTurnHandle.interrupt()` issues JSON-RPC `"turn/interrupt"` with
+  `{threadId, turnId}` via `AsyncCodexClient.turn_interrupt`.
+  `TurnStatus.interrupted` is a first-class collected-turn status
+  (`completed` / `interrupted` / `failed` / `inProgress`).
+  `AsyncThread.run()` internally does `turn()` + collect and discards the
+  handle, so a live `run()` cannot be interrupted. The adapter starts turns
+  through `turn()`, publishes the handle, and maps collected `interrupted` to
+  `TurnOutcome("interrupted", "local_turn_interrupted")` on both worker and
+  in-process paths, retaining the conversation. Cancelling the local asyncio
+  waiter still does **not** stop the provider worker; interrupt must go
+  through `turn/interrupt`. Cleanup of an uninterruptible waiter still
+  requires `AsyncCodex.close()` to terminate the app-server transport.
+  Mapping landed; production `codex_sdk.interrupt` stays false pending
+  credentialed coverage / continue-after-interrupt. API inspect was the
+  0.144.4 wheel, not the configured local CLI 0.147.0. See open question 1.
 - *[tool_gate]* Command/file-change approval notifications and response methods
   on the app-server are unverified — including callback concurrency and any
   provider-side decision deadline (open questions 9–10).
-- *[all]* Note the two-pin ambiguity above: the bundled CLI binary and the
-  configured local CLI differ. Re-verification must state which one it exercised.
+- *[all]* Two-pin ambiguity: the inspected API is the `openai-codex` 0.144.4
+  wheel (bundled `openai-codex-cli-bin` 0.144.4). The configured local CLI
+  reports `codex-cli` 0.147.0. This re-verification exercised the 0.144.4
+  wheel, not the 0.147.0 CLI.
 
 ### xai_sdk — `xai-sdk` 1.17.0 (verified 2026-07-24)
 

@@ -31,27 +31,29 @@ status. The thread id is captured with identity kind `thread`. A configured
 local `codex` binary is preferred over the SDK-pinned runtime when available.
 An abnormal turn closes the live client but keeps the id; the next turn calls
 native `thread_resume`. A rejected resume fails structurally and never starts a
-fresh thread. A prompt that could not reach `thread.run()` because connect or
+fresh thread. A prompt that could not reach `thread.turn()` because connect or
 resume failed is retained and prepended after a later successful reconnect, so
 the referee's already-advanced delta watermark cannot discard it.
 
 ## Turn outcome
 
-Collected `TurnStatus.completed` completes, `interrupted` maps to provider
-`cancelled`, and `failed` fails. An in-progress/unknown collected status,
-missing result, SDK exception, or uncertain bounded reset fails. Item-level
-command failures are diagnostic unless the collected turn itself fails.
-Reset cleanup never overwrites an already definitive provider cancellation or
-terminal failure; an over-grace reset continues under background ownership.
+Collected `TurnStatus.completed` completes, `interrupted` maps to
+`interrupted` / `local_turn_interrupted` and retains the conversation, and
+`failed` fails. An in-progress/unknown collected status, missing result, SDK
+exception, or uncertain bounded reset fails. Item-level command failures are
+diagnostic unless the collected turn itself fails. Reset cleanup never
+overwrites an already definitive terminal failure; an over-grace reset
+continues under background ownership.
 
 ## Capabilities and security
 
 `continuity` is true: follow-up turns within one live agent-collab session use
 the held provider thread and receive delta prompts. `resume`, `interrupt`, and
-`tool_gate` remain false under their stricter public definitions. The adapter
-serializes run/reset/close; cancelling the asyncio waiter does not claim a
-provider interrupt. Missing/incompatible runtime setup fails probing or produces
-an error event.
+`tool_gate` remain false under their stricter public definitions (no
+restart-safe resume, no credentialed interrupt proof). The adapter serializes
+run/reset/close; cancelling the asyncio waiter does not stop the provider —
+interrupt must go through `turn/interrupt`. Missing/incompatible runtime setup
+fails probing or produces an error event.
 
 ## Outer filesystem sandbox
 

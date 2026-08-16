@@ -8,8 +8,9 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from agent_collab.backends.codex_sdk.backend import CodexSdkRunner
+from agent_collab.backends.codex_sdk.backend import CodexSdkRunner, CodexTurnOutcome
 from agent_collab.backends.codex_sdk.sandbox import CodexSdkSandboxAdapter
+from agent_collab.backends.codex_sdk.worker import CodexSdkWorkerBackend
 from agent_collab.backends.common.sdk import provider_session_event
 from agent_collab.config import AgentConfig
 from agent_collab.events import Event
@@ -346,6 +347,112 @@ class CodexSdkWorkerLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertIsNone(runner._worker_session)
         self.assertFalse(runner._worker_terminal)
+
+    async def test_interrupt_without_conversation_is_noop(self) -> None:
+        backend = CodexSdkWorkerBackend()
+        await backend.interrupt("run-1")
+
+    async def test_interrupt_calls_conversation_once_and_maps_interrupted_status(self) -> None:
+        class _Conversation:
+            def __init__(self) -> None:
+                self.interrupt_calls = 0
+                self.reset_calls = 0
+                self.started = asyncio.Event()
+                self._release = asyncio.Event()
+
+            async def run(self, prompt: str):
+                del prompt
+                self.started.set()
+                await self._release.wait()
+                return CodexTurnOutcome(
+                    "thread-1",
+                    SimpleNamespace(
+                        id="turn-1",
+                        status=SimpleNamespace(value="interrupted"),
+                        error=None,
+                        final_response=None,
+                        items=[],
+                    ),
+                )
+
+            def note_session_id(self, thread_id: str) -> None:
+                del thread_id
+
+            async def interrupt(self) -> bool:
+                self.interrupt_calls += 1
+                self._release.set()
+                return True
+
+            async def reset(self) -> None:
+                self.reset_calls += 1
+
+            async def close(self) -> None:
+                return None
+
+        conversation = _Conversation()
+        backend = CodexSdkWorkerBackend()
+        backend._conversation = conversation
+        task = asyncio.create_task(backend.run("hello", run_id="r1"))
+        await conversation.started.wait()
+        await backend.interrupt("r1")
+        _residual, outcome = await task
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertIs(backend._conversation, conversation)
+
+    async def test_interrupt_completion_race_keeps_completed_outcome(self) -> None:
+        class _Conversation:
+            def __init__(self) -> None:
+                self.interrupt_calls = 0
+                self.reset_calls = 0
+                self.started = asyncio.Event()
+                self._release = asyncio.Event()
+
+            async def run(self, prompt: str):
+                del prompt
+                self.started.set()
+                await self._release.wait()
+                return CodexTurnOutcome(
+                    "thread-1",
+                    SimpleNamespace(
+                        id="turn-1",
+                        status=SimpleNamespace(value="completed"),
+                        error=None,
+                        final_response="Done.",
+                        items=[],
+                    ),
+                )
+
+            def note_session_id(self, thread_id: str) -> None:
+                del thread_id
+
+            async def interrupt(self) -> bool:
+                self.interrupt_calls += 1
+                self._release.set()
+                return True
+
+            async def reset(self) -> None:
+                self.reset_calls += 1
+
+            async def close(self) -> None:
+                return None
+
+        conversation = _Conversation()
+        backend = CodexSdkWorkerBackend()
+        backend._conversation = conversation
+        task = asyncio.create_task(backend.run("hello", run_id="r1"))
+        await conversation.started.wait()
+        await backend.interrupt("r1")
+        _residual, outcome = await task
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertIsNone(outcome.code)
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertIs(backend._conversation, conversation)
 
 
 if __name__ == "__main__":

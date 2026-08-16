@@ -1,11 +1,13 @@
 """The Codex ``sdk`` backend (``openai-codex``), lazy + first-class.
 
-The installed ``openai-codex==0.1.0b3`` surface keeps one ``AsyncCodex`` client
-and ``AsyncThread`` open across collected ``thread.run(...)`` calls. A captured
-thread id reconnects through ``AsyncCodex.thread_resume(...)`` after an abnormal
-turn resets the live client. The conversation adapter serializes run/reset/close
-because SDK cancellation stops only the asyncio waiter while its blocking worker
-continues until the provider turn or client transport settles.
+The installed ``openai-codex==0.144.4`` surface keeps one ``AsyncCodex`` client
+and ``AsyncThread`` open across collected turns. Each turn starts through
+``AsyncThread.turn(...)`` so the live ``AsyncTurnHandle`` can issue
+``turn/interrupt``. A captured thread id reconnects through
+``AsyncCodex.thread_resume(...)`` after an abnormal turn resets the live
+client. The conversation adapter serializes run/reset/close because cancelling
+the local asyncio waiter does not stop the provider worker; interrupt must go
+through the handle.
 
 ``run`` returns one collected ``TurnResult``. Its ``final_response`` is the
 stable, message-first surface; its ``items`` are ``ThreadItem`` root models.
@@ -81,6 +83,8 @@ class CodexConversation(Protocol):
     async def run(self, prompt: str) -> CodexTurnOutcome: ...
 
     def note_session_id(self, thread_id: str) -> None: ...
+
+    async def interrupt(self) -> bool: ...
 
     async def reset(self) -> None: ...
 
@@ -196,7 +200,15 @@ class CodexSdkRunner(AgentRunner):
     async def interrupt_request(self) -> bool:
         from ...sandbox.worker_session import interrupt_active_session
 
-        return await interrupt_active_session(self._worker_session)
+        if self._worker_session is not None:
+            return await interrupt_active_session(self._worker_session)
+        conversation = self._conversation
+        if conversation is None:
+            return False
+        interrupt = getattr(conversation, "interrupt", None)
+        if not callable(interrupt):
+            return False
+        return bool(await interrupt())
 
     async def close(self) -> None:
         if self._worker_session is not None:
@@ -480,21 +492,11 @@ class CodexSdkRunner(AgentRunner):
                 thread_id = outcome.thread_id
                 conversation.note_session_id(thread_id)
                 await emit(provider_session_event("codex", self.name, thread_id, "thread"))
-            status = _enum_value(getattr(outcome.result, "status", None))
-            if status == "completed":
-                evidence.add(TerminalEvidence("completed"))
-            elif status == "interrupted":
-                evidence.add(
-                    TerminalEvidence(
-                        "cancelled",
-                        "provider_turn_cancelled",
-                        provider_stop_reason="interrupted",
-                    )
-                )
-            elif status == "failed":
-                evidence.add(TerminalEvidence("failed", "provider_terminal_failure"))
-            else:
+            mapped = _collected_turn_evidence(outcome.result)
+            if mapped is None:
                 exception_code = "provider_output_invalid"
+            else:
+                evidence.add(mapped)
             for event in iter_codex_turn_events(outcome.result, self.verbose):
                 await emit(event)
         except asyncio.CancelledError:
@@ -509,7 +511,7 @@ class CodexSdkRunner(AgentRunner):
             exception_code = "provider_transport_failed"
 
         result = evidence.resolve(exception_code=exception_code)
-        if result.outcome != "completed" and conversation is not None:
+        if _should_reset_after_outcome(result.outcome) and conversation is not None:
             await _reset_conversation_bounded(conversation)
         if self.verbose:
             await emit(Event.create("codex", "status", "codex sdk turn complete"))
@@ -527,6 +529,31 @@ class CodexSdkRunner(AgentRunner):
         elif self._workdir != resolved:
             raise RuntimeError("codex sdk conversation workdir changed between turns")
         return self._conversation
+
+
+def _collected_turn_evidence(result: Any) -> Optional[TerminalEvidence]:
+    """Map one collected ``TurnResult.status`` onto turn evidence.
+
+    Distinguishable ``interrupted`` becomes ``interrupted`` /
+    ``local_turn_interrupted``. Other known statuses keep the shipped
+    completed/failed mapping. Unknown shapes return None so the caller
+    can fail closed as ``provider_output_invalid``.
+    """
+
+    status = _enum_value(getattr(result, "status", None))
+    if status == "completed":
+        return TerminalEvidence("completed")
+    if status == "interrupted":
+        return TerminalEvidence("interrupted", "local_turn_interrupted")
+    if status == "failed":
+        return TerminalEvidence("failed", "provider_terminal_failure")
+    return None
+
+
+def _should_reset_after_outcome(outcome: str) -> bool:
+    # A clean interrupt win keeps the live thread so the next delta can
+    # continue the same provider session. Transport/failure still resets.
+    return outcome not in ("completed", "interrupted")
 
 
 def iter_codex_turn_events(result: Any, verbose: bool) -> Iterator[Event]:
@@ -855,6 +882,7 @@ class _PersistentCodexConversation:
         self._client: Any = None
         self._thread: Any = None
         self._thread_id: Optional[str] = None
+        self._live_handle: Any = None
         self._pending_prompt: Optional[str] = None
         self._closed = False
 
@@ -875,7 +903,7 @@ class _PersistentCodexConversation:
         # Referee watermarks advance when a prompt is built, before transport
         # delivery. Queue it before waiting for the lifecycle lock so a failed
         # connect/resume—or cancellation behind a slow reset—cannot orphan that
-        # delta. Once handed to thread.run(), delivery is uncertain and replay
+        # delta. Once handed to thread.turn(), delivery is uncertain and replay
         # would risk duplication, so clear it at that boundary.
         self._pending_prompt = _join_pending_prompt(self._pending_prompt, prompt)
         async with self._lock:
@@ -884,17 +912,58 @@ class _PersistentCodexConversation:
             if self._thread is None:
                 await self._connect_locked()
             thread_id = stringify(getattr(self._thread, "id", None))
-            run = getattr(self._thread, "run", None)
-            if not thread_id or not callable(run):
+            turn = getattr(self._thread, "turn", None)
+            if not thread_id or not callable(turn):
                 raise _backend_unavailable("openai_codex returned an incompatible AsyncThread")
             effective_prompt = self._pending_prompt
             if effective_prompt is None:
                 raise RuntimeError("codex sdk pending prompt was lost")
             self._pending_prompt = None
-            result = await _await_provider_run(run(effective_prompt, **self._run_kwargs))
-            if not hasattr(result, "final_response") or not hasattr(result, "items"):
-                raise _backend_unavailable("openai_codex returned an incompatible TurnResult")
-            return CodexTurnOutcome(thread_id=thread_id, result=result)
+            handle = await turn(effective_prompt, **self._run_kwargs)
+            collect = getattr(handle, "run", None)
+            if not callable(collect):
+                raise _backend_unavailable("openai_codex returned an incompatible AsyncTurnHandle")
+            # Publish before collect so interrupt() can fire without _lock.
+            self._live_handle = handle
+            try:
+                result = await _await_provider_run(collect())
+                if not hasattr(result, "final_response") or not hasattr(result, "items"):
+                    raise _backend_unavailable("openai_codex returned an incompatible TurnResult")
+                return CodexTurnOutcome(thread_id=thread_id, result=result)
+            finally:
+                self._live_handle = None
+
+    async def interrupt(self) -> bool:
+        """Issue a provider abort on the live turn handle, if any.
+
+        Must not take ``_lock``: ``run()`` holds it for the whole turn, so
+        an in-band acquire would deadlock with the consumer we need to
+        unblock. Idle, closed, or missing-handle is a no-op, not an error.
+
+        Starts ``handle.interrupt()`` as a background task and does not
+        await the SDK's ``turn/interrupt`` ACK. Acknowledgement is the
+        turn's own collected result. An immediate raise is not treated
+        as issued.
+        """
+
+        if self._closed:
+            return False
+        handle = self._live_handle
+        if handle is None:
+            return False
+        method = getattr(handle, "interrupt", None)
+        if not callable(method):
+            return False
+        task = asyncio.create_task(method())
+        await asyncio.sleep(0)
+        if task.done():
+            try:
+                task.result()
+            except BaseException:
+                return False
+            return True
+        task.add_done_callback(_consume_background_result)
+        return True
 
     async def reset(self) -> None:
         async with self._lock:
@@ -925,7 +994,7 @@ class _PersistentCodexConversation:
             else:
                 thread = await client.thread_resume(resume_id, **self._thread_kwargs)
             thread_id = stringify(getattr(thread, "id", None))
-            if not thread_id or not callable(getattr(thread, "run", None)):
+            if not thread_id or not callable(getattr(thread, "turn", None)):
                 raise _backend_unavailable("openai_codex returned an incompatible AsyncThread")
             if resume_id is not None and thread_id != resume_id:
                 raise _backend_unavailable("openai_codex resumed a different provider thread")
@@ -940,6 +1009,7 @@ class _PersistentCodexConversation:
         client = self._client
         self._client = None
         self._thread = None
+        self._live_handle = None
         if not keep_thread_id:
             self._thread_id = None
             self._pending_prompt = None

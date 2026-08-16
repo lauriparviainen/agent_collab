@@ -13,6 +13,9 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Map Codex SDK `turn/interrupt` on worker and in-process turns onto
+  `interrupted` when the abort is distinguishable; production
+  `codex_sdk.interrupt` stays false pending credentialed coverage (#20).
 - Add credentialed Claude SDK interrupt tests on the worker and in-process
   paths. Both paths produced a distinguishable abort (`interrupted` /
   `local_turn_interrupted`). Continue-after-interrupt did not: the session

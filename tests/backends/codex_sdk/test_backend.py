@@ -1,10 +1,10 @@
 """Codex ``sdk`` backend tests (real-shape fakes; no live model call).
 
-The fake object graph mirrors ``openai-codex==0.1.0b3``: a collected
+The fake object graph mirrors ``openai-codex==0.144.4``: a collected
 ``TurnResult`` owns ``ThreadItem`` roots, and one ``AsyncThread`` accepts several
-``run`` calls. Production tests replace the lazy SDK import with a persistent
-client/thread fake, including resume after reset and cancellation-insensitive
-provider work.
+``turn`` calls whose handles collect via ``run``. Production tests replace the
+lazy SDK import with a persistent client/thread fake, including resume after
+reset, ``turn/interrupt``, and cancellation-insensitive provider work.
 """
 
 import asyncio
@@ -134,6 +134,7 @@ class _FakeConversation:
         self.noted_ids = []
         self.reset_calls = 0
         self.close_calls = 0
+        self.interrupt_calls = 0
         self.is_active = False
         self.is_closed = False
 
@@ -151,6 +152,12 @@ class _FakeConversation:
 
     def note_session_id(self, thread_id):
         self.noted_ids.append(thread_id)
+
+    async def interrupt(self):
+        if self.is_closed or not self.is_active:
+            return False
+        self.interrupt_calls += 1
+        return True
 
     async def reset(self):
         self.reset_calls += 1
@@ -214,7 +221,8 @@ class CodexEventMappingTests(unittest.TestCase):
         self.assertEqual(_outcome(_turn_result()).outcome, "completed")
         interrupted = _outcome(_turn_result(status=_TurnStatus.interrupted))
         self.assertEqual(
-            (interrupted.outcome, interrupted.code), ("cancelled", "provider_turn_cancelled")
+            (interrupted.outcome, interrupted.code),
+            ("interrupted", "local_turn_interrupted"),
         )
         failed = _outcome(_turn_result(status=_TurnStatus.failed))
         self.assertEqual((failed.outcome, failed.code), ("failed", "provider_terminal_failure"))
@@ -250,6 +258,35 @@ class CodexEventMappingTests(unittest.TestCase):
                 await asyncio.sleep(0.05)
 
         conversation = SlowResetConversation(
+            [CodexTurnOutcome("thread-9", _turn_result(status=_TurnStatus.failed))]
+        )
+        runner = CodexSdkRunner(
+            AGENT,
+            False,
+            {},
+            conversation_factory=_conversation_factory(conversation),
+        )
+
+        async def scenario():
+            async def emit(_event):
+                return None
+
+            return await runner.run_turn("fail", Path("."), emit)
+
+        with mock.patch(
+            "agent_collab.backends.codex_sdk.backend.SDK_CLOSE_GRACE_SECONDS",
+            0.001,
+        ):
+            outcome = asyncio.run(scenario())
+
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("failed", "provider_terminal_failure"),
+        )
+        self.assertEqual(conversation.reset_calls, 1)
+
+    def test_interrupted_result_retains_conversation(self):
+        conversation = _FakeConversation(
             [CodexTurnOutcome("thread-9", _turn_result(status=_TurnStatus.interrupted))]
         )
         runner = CodexSdkRunner(
@@ -263,19 +300,194 @@ class CodexEventMappingTests(unittest.TestCase):
             async def emit(_event):
                 return None
 
-            return await runner.run_turn("interrupt", Path("."), emit)
+            outcome = await runner.run_turn("stop", Path("."), emit)
+            return outcome, runner.conversation_active()
 
-        with mock.patch(
-            "agent_collab.backends.codex_sdk.backend.SDK_CLOSE_GRACE_SECONDS",
-            0.001,
-        ):
-            outcome = asyncio.run(scenario())
-
+        outcome, active = asyncio.run(scenario())
         self.assertEqual(
             (outcome.outcome, outcome.code),
-            ("cancelled", "provider_turn_cancelled"),
+            ("interrupted", "local_turn_interrupted"),
         )
-        self.assertEqual(conversation.reset_calls, 1)
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertTrue(active)
+
+    def test_in_process_interrupt_request_issues_when_conversation_is_live(self):
+        conversation = _FakeConversation([CodexTurnOutcome("thread-9", _turn_result())])
+        conversation.is_active = True
+        runner = CodexSdkRunner(
+            AGENT,
+            False,
+            {},
+            conversation_factory=_conversation_factory(conversation),
+        )
+        runner._conversation = conversation
+
+        async def scenario():
+            return await runner.interrupt_request()
+
+        self.assertTrue(asyncio.run(scenario()))
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertIsNone(runner._worker_session)
+
+    def test_in_process_interrupt_request_idle_or_missing_is_false(self):
+        idle = _FakeConversation([CodexTurnOutcome("thread-9", _turn_result())])
+        runner = CodexSdkRunner(
+            AGENT,
+            False,
+            {},
+            conversation_factory=_conversation_factory(idle),
+        )
+        runner._conversation = idle
+
+        async def idle_request():
+            return await runner.interrupt_request()
+
+        self.assertFalse(asyncio.run(idle_request()))
+        self.assertEqual(idle.interrupt_calls, 0)
+
+        empty = CodexSdkRunner(
+            AGENT,
+            False,
+            {},
+            conversation_factory=_conversation_factory(
+                _FakeConversation([CodexTurnOutcome("thread-9", _turn_result())])
+            ),
+        )
+
+        async def missing_request():
+            return await empty.interrupt_request()
+
+        self.assertFalse(asyncio.run(missing_request()))
+
+    def test_worker_session_interrupt_is_preferred_over_in_process(self):
+        conversation = _FakeConversation([CodexTurnOutcome("thread-9", _turn_result())])
+        conversation.is_active = True
+        runner = CodexSdkRunner(
+            AGENT,
+            False,
+            {},
+            conversation_factory=_conversation_factory(conversation),
+        )
+        runner._conversation = conversation
+
+        class _Session:
+            def __init__(self):
+                self.calls = []
+
+            async def interrupt_active(self):
+                self.calls.append("run-9")
+                return True
+
+        session = _Session()
+        runner._worker_session = session
+
+        async def scenario():
+            return await runner.interrupt_request()
+
+        self.assertTrue(asyncio.run(scenario()))
+        self.assertEqual(session.calls, ["run-9"])
+        self.assertEqual(conversation.interrupt_calls, 0)
+
+    def test_interrupt_during_blocked_run_unblocks_and_ends_interrupted(self):
+        async def scenario():
+            entered = asyncio.Event()
+
+            class BlockingConversation(_FakeConversation):
+                def __init__(self):
+                    super().__init__([])
+                    self._blocked = asyncio.Event()
+
+                async def run(self, prompt):
+                    self.prompts.append(prompt)
+                    self.is_active = True
+                    entered.set()
+                    await self._blocked.wait()
+                    return CodexTurnOutcome(
+                        "thread-9",
+                        _turn_result(status=_TurnStatus.interrupted),
+                    )
+
+                async def interrupt(self):
+                    self.interrupt_calls += 1
+                    self._blocked.set()
+                    return True
+
+            conversation = BlockingConversation()
+            runner = CodexSdkRunner(
+                AGENT,
+                False,
+                {},
+                conversation_factory=_conversation_factory(conversation),
+            )
+
+            async def collect():
+                async def emit(_event):
+                    return None
+
+                return await runner.run_turn("stop me", Path("."), emit)
+
+            turn = asyncio.create_task(collect())
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            issued = await runner.interrupt_request()
+            outcome = await asyncio.wait_for(turn, timeout=1.0)
+            return issued, outcome, conversation
+
+        issued, outcome, conversation = asyncio.run(scenario())
+        self.assertTrue(issued)
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertEqual(conversation.reset_calls, 0)
+
+    def test_interrupt_completion_race_keeps_completed_outcome(self):
+        async def scenario():
+            entered = asyncio.Event()
+
+            class BlockingConversation(_FakeConversation):
+                def __init__(self):
+                    super().__init__([])
+                    self._blocked = asyncio.Event()
+
+                async def run(self, prompt):
+                    self.prompts.append(prompt)
+                    self.is_active = True
+                    entered.set()
+                    await self._blocked.wait()
+                    return CodexTurnOutcome("thread-9", _turn_result())
+
+                async def interrupt(self):
+                    self.interrupt_calls += 1
+                    self._blocked.set()
+                    return True
+
+            conversation = BlockingConversation()
+            runner = CodexSdkRunner(
+                AGENT,
+                False,
+                {},
+                conversation_factory=_conversation_factory(conversation),
+            )
+
+            async def collect():
+                async def emit(_event):
+                    return None
+
+                return await runner.run_turn("finish first", Path("."), emit)
+
+            turn = asyncio.create_task(collect())
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            issued = await runner.interrupt_request()
+            outcome = await asyncio.wait_for(turn, timeout=1.0)
+            return issued, outcome, conversation
+
+        issued, outcome, conversation = asyncio.run(scenario())
+        self.assertTrue(issued)
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertIsNone(outcome.code)
+        self.assertEqual(conversation.reset_calls, 0)
 
     def test_provider_id_is_fed_back_and_close_is_idempotent_at_runner_seam(self):
         conversation = _FakeConversation([CodexTurnOutcome("thread-9", _turn_result())])
@@ -506,19 +718,46 @@ class CodexProductionFactoryTests(unittest.TestCase):
             high = object()
             xhigh = object()
 
-        class FakeThread:
-            def __init__(self, thread_id="thread-production"):
-                self.id = thread_id
+        class FakeTurnHandle:
+            def __init__(self, thread):
+                self.id = "turn-1"
+                self._thread = thread
 
-            async def run(self, prompt, **kwargs):
-                state["runs"].append((prompt, kwargs))
-                self.assert_open()
+            async def run(self):
+                self._thread.assert_open()
                 result = state["results"].pop(0)
                 if callable(result):
                     result = await result()
                 if isinstance(result, BaseException):
                     raise result
                 return result
+
+            async def interrupt(self):
+                if state["open"] <= 0:
+                    raise RuntimeError("Not connected. Call connect() first.")
+                error = state.get("interrupt_error")
+                if error is not None:
+                    raise error
+                state["interrupts"] = state.get("interrupts", 0) + 1
+                gate = state.get("interrupt_gate")
+                if gate is not None:
+                    gate.set()
+                delay = state.get("interrupt_delay")
+                if delay is not None:
+                    await asyncio.sleep(delay)
+
+        class FakeThread:
+            def __init__(self, thread_id="thread-production"):
+                self.id = thread_id
+
+            async def turn(self, prompt, **kwargs):
+                state["runs"].append((prompt, kwargs))
+                self.assert_open()
+                return FakeTurnHandle(self)
+
+            async def run(self, prompt, **kwargs):
+                handle = await self.turn(prompt, **kwargs)
+                return await handle.run()
 
             @staticmethod
             def assert_open():
@@ -805,6 +1044,164 @@ class CodexProductionFactoryTests(unittest.TestCase):
 
         self.assertEqual(state["closed"], 1)
         self.assertEqual(state["open"], 0)
+
+    def test_idle_and_closed_interrupt_are_noop(self):
+        state = {}
+        module, _, _ = self._fake_module(state, [_turn_result(final_response="one")])
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"openai_codex": module}):
+
+            async def scenario():
+                conv = _default_conversation(AGENT, {}, Path("/workspace"))
+                idle = await conv.interrupt()
+                await self._collect(runner, "one")
+                await runner.close()
+                closed = await runner.interrupt_request()
+                return idle, closed
+
+            idle, closed = asyncio.run(scenario())
+
+        self.assertFalse(idle)
+        self.assertFalse(closed)
+        self.assertEqual(state.get("interrupts", 0), 0)
+
+    def test_interrupt_during_blocked_handle_run_unblocks_and_retains(self):
+        state = {}
+        started = asyncio.Event()
+        interrupt_gate = asyncio.Event()
+
+        async def blocking_result():
+            started.set()
+            await interrupt_gate.wait()
+            return _turn_result(status=_TurnStatus.interrupted)
+
+        module, _, _ = self._fake_module(state, [blocking_result])
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"openai_codex": module}):
+
+            async def scenario():
+                state["interrupt_gate"] = interrupt_gate
+                turn = asyncio.create_task(self._collect(runner, "block"))
+                await started.wait()
+                issued = await runner.interrupt_request()
+                events, outcome = await turn
+                active = runner.conversation_active()
+                await runner.close()
+                return issued, outcome, active
+
+            issued, outcome, active = asyncio.run(scenario())
+
+        self.assertTrue(issued)
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertTrue(active)
+        self.assertEqual(state.get("interrupts"), 1)
+        # Close only: a clean interrupt win must not reset the client.
+        self.assertEqual(state["closed"], 1)
+        self.assertEqual(state["entered"], 1)
+
+    def test_interrupt_completion_race_on_live_client_stays_completed(self):
+        state = {}
+        started = asyncio.Event()
+        interrupt_gate = asyncio.Event()
+
+        async def blocking_result():
+            started.set()
+            await interrupt_gate.wait()
+            return _turn_result()
+
+        module, _, _ = self._fake_module(state, [blocking_result])
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"openai_codex": module}):
+
+            async def scenario():
+                state["interrupt_gate"] = interrupt_gate
+                turn = asyncio.create_task(self._collect(runner, "race"))
+                await started.wait()
+                issued = await runner.interrupt_request()
+                events, outcome = await turn
+                await runner.close()
+                return issued, outcome
+
+            issued, outcome = asyncio.run(scenario())
+
+        self.assertTrue(issued)
+        self.assertEqual(state.get("interrupts"), 1)
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertIsNone(outcome.code)
+        self.assertEqual(state["closed"], 1)
+
+    def test_interrupt_returns_before_long_control_ack(self):
+        state = {}
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocking_result():
+            started.set()
+            await release.wait()
+            return _turn_result()
+
+        module, _, _ = self._fake_module(state, [blocking_result])
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"openai_codex": module}):
+
+            async def scenario():
+                turn = asyncio.create_task(self._collect(runner, "block"))
+                await started.wait()
+                state["interrupt_delay"] = 5.0
+                issued_adapter = await asyncio.wait_for(
+                    runner._conversation.interrupt(), timeout=0.2
+                )
+                issued_request = await asyncio.wait_for(runner.interrupt_request(), timeout=0.2)
+                release.set()
+                _events, outcome = await turn
+                await runner.close()
+                return issued_adapter, issued_request, outcome
+
+            issued_adapter, issued_request, outcome = asyncio.run(scenario())
+
+        self.assertTrue(issued_adapter)
+        self.assertTrue(issued_request)
+        self.assertEqual(state.get("interrupts"), 2)
+        self.assertEqual(outcome.outcome, "completed")
+
+    def test_interrupt_immediate_failure_is_not_issued(self):
+        state = {}
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocking_result():
+            started.set()
+            await release.wait()
+            return _turn_result()
+
+        module, _, _ = self._fake_module(state, [blocking_result])
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"openai_codex": module}):
+
+            async def scenario():
+                turn = asyncio.create_task(self._collect(runner, "block"))
+                await started.wait()
+                state["interrupt_error"] = RuntimeError("Not connected. Call connect() first.")
+                issued_adapter = await runner._conversation.interrupt()
+                issued_request = await runner.interrupt_request()
+                release.set()
+                await turn
+                await runner.close()
+                return issued_adapter, issued_request
+
+            issued_adapter, issued_request = asyncio.run(scenario())
+
+        self.assertFalse(issued_adapter)
+        self.assertFalse(issued_request)
+        self.assertEqual(state.get("interrupts", 0), 0)
 
     def test_default_conversation_reports_missing_or_incompatible_module(self):
         with mock.patch.dict(sys.modules, {"openai_codex": None}):

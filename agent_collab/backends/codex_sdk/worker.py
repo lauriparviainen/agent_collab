@@ -5,12 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Awaitable, Callable, List, Mapping, Optional, Tuple
 
-from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
+from ...outcomes import TerminalEvidenceAccumulator, TurnOutcome
 from .backend import (
     CodexTurnOutcome,
+    _collected_turn_evidence,
     _default_conversation,
-    _enum_value,
     _reset_conversation_bounded,
+    _should_reset_after_outcome,
     iter_codex_turn_events,
 )
 
@@ -66,7 +67,7 @@ class CodexSdkWorkerBackend:
         exception_code: Optional[str] = None
         events: List[Any] = []
         try:
-            # Codex settles thread.run before events are available, so residual
+            # Codex settles handle.run before events are available, so residual
             # return-list delivery remains the primary path; emit is optional.
             outcome: CodexTurnOutcome = await self._conversation.run(prompt)
             if outcome.thread_id:
@@ -81,21 +82,11 @@ class CodexSdkWorkerBackend:
                         "thread",
                     )
                 )
-            status = _enum_value(getattr(outcome.result, "status", None))
-            if status == "completed":
-                evidence.add(TerminalEvidence("completed"))
-            elif status == "interrupted":
-                evidence.add(
-                    TerminalEvidence(
-                        "cancelled",
-                        "provider_turn_cancelled",
-                        provider_stop_reason="interrupted",
-                    )
-                )
-            elif status == "failed":
-                evidence.add(TerminalEvidence("failed", "provider_terminal_failure"))
-            else:
+            mapped = _collected_turn_evidence(outcome.result)
+            if mapped is None:
                 exception_code = "provider_output_invalid"
+            else:
+                evidence.add(mapped)
             events.extend(list(iter_codex_turn_events(outcome.result, self._verbose)))
         except Exception as exc:
             from ...sandbox.worker_codec import sanitize_error_text
@@ -116,7 +107,7 @@ class CodexSdkWorkerBackend:
             )
             exception_code = "provider_transport_failed"
         result = evidence.resolve(exception_code=exception_code)
-        if result.outcome != "completed" and self._conversation is not None:
+        if _should_reset_after_outcome(result.outcome) and self._conversation is not None:
             await _reset_conversation_bounded(self._conversation)
         if emit is not None:
             for event in events:
@@ -126,6 +117,13 @@ class CodexSdkWorkerBackend:
 
     async def interrupt(self, run_id: str) -> None:
         del run_id
+        conversation = self._conversation
+        if conversation is None:
+            return
+        method = getattr(conversation, "interrupt", None)
+        if not callable(method):
+            return
+        await method()
 
     def bind_approvals(self, request_approval: Callable[..., Awaitable[Mapping[str, Any]]]) -> None:
         self._request_approval = request_approval
