@@ -73,9 +73,12 @@ full-prompt user turn may open a new conversation.
 
 ## Turn outcome
 
-A resolved response with a non-empty text result completes. Empty resolved
-buffers, resolve/transport exceptions, or uncertain bounded response close
-fail conservatively. Tool-result prose is never interpreted as cancellation or
+A resolved response with a non-empty text result completes. A distinguishable
+`AntigravityCancelledError` from `ChatResponse.cancel()` maps to
+`interrupted` / `local_turn_interrupted` and retains the conversation. A host
+`asyncio.CancelledError` is not that mapping. Empty resolved buffers,
+resolve/transport exceptions, or uncertain bounded response close fail
+conservatively. Tool-result prose is never interpreted as cancellation or
 refusal.
 
 ## Capabilities and security
@@ -85,8 +88,13 @@ source-verified on 0.1.8, covered hermetically, and passed a credentialed
 two-turn Vertex provider-memory proof with `gemini-2.5-flash`: the follow-up
 delta prompt omitted the original task and generated codeword, the response
 recalled the codeword, and both turns reported one stable conversation id.
-`resume`, `interrupt`, and `tool_gate` remain false.
-`LocalAgentConfig(workspaces=[...])` receives only the resolved workspace.
+The adapter publishes the live `ChatResponse` and issues
+`ChatResponse.cancel()` out of band on both worker and in-process paths
+without taking the run lock. `resume`, `interrupt`, and `tool_gate` remain
+false under their stricter public definitions (no restart-safe resume, no
+credentialed interrupt proof / continue-after-cancel, no permission
+callback). `LocalAgentConfig(workspaces=[...])` receives only the resolved
+workspace.
 
 ## Outer filesystem sandbox
 

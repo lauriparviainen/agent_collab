@@ -89,7 +89,16 @@ take it:
    `TurnStatus.interrupted` → `TurnOutcome("interrupted",
    "local_turn_interrupted")`; retain). Production `codex_sdk.interrupt`
    stays false pending credentialed coverage / continue-after-interrupt
-   (same honesty as Claude). Codex tool_gate *mapping* also landed:
+   (same honesty as Claude). Antigravity interrupt *mapping* also landed
+   (worker + in-process live `ChatResponse.cancel()`;
+   `AntigravityCancelledError` → `TurnOutcome("interrupted",
+   "local_turn_interrupted")`; retain). Production
+   `antigravity_sdk.interrupt` stays false: open question 2 is still
+   unproven, and continue-after-interrupt at the session layer still hits
+   `RequiredTurnFailed` / rejected `post_message` (same as Claude). Do
+   not claim live interrupt proof. Do not implement Antigravity
+   `tool_gate` in the same increment (worker still forces `allow_all`).
+   Codex tool_gate *mapping* also landed:
    host `approval_handler` is wired on the worker (always) and on
    in-process only when `_approval_callback` is set; questions 5, 9, and
    10 are recorded in the Codex Decision below. Gated starts force
@@ -113,8 +122,9 @@ take it:
    never-parked test fails rather than skips. Production
    `codex_sdk.tool_gate` stays false. Remaining Stage 3: a worker
    combo that emits `requestApproval` inside outer Bubblewrap
-   without suppressing tools, then Antigravity and xAI (open
-   question 2, plus remaining 5, 9, and 10; record negatives
+   without suppressing tools; Antigravity `tool_gate` (worker still
+   forces `allow_all`; later increment); and xAI (open question 2
+   still open, plus remaining 5, 9, and 10; record negatives
    explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Mind the pieces added in review: keyed-merge identity
@@ -1518,8 +1528,14 @@ the feature. A skipped provider keeps the production capability false.
    Production `codex_sdk.interrupt` stays false pending credentialed
    coverage / continue-after-interrupt. Live proof is not claimed. (Stage 3)
 2. Is an Antigravity conversation still usable for a following turn after
-   `ChatResponse.cancel()`? If not, interrupt degrades to a reset and the flag
-   stays false. (Stage 3)
+   `ChatResponse.cancel()`? Hermetic mapping landed on worker and
+   in-process paths (`interrupted` / `local_turn_interrupted`, retain).
+   Wheel `test_cancel_e2e_raises_cancelled_error` proves halt +
+   `AntigravityCancelledError`; it does not prove a following `chat()`
+   on the same conversation. Live following-turn proof is not claimed.
+   Continue-after-interrupt at the session layer still hits
+   `RequiredTurnFailed` / rejected `post_message` (same as Claude).
+   Production `antigravity_sdk.interrupt` stays false. (Stage 3)
 3. Antigravity's unknown/expired-id rejection has never been exercised against a
    live provider — only the documented `RESUME` contract backs it. (Stage 4)
 4. What retention policy governs durable trajectory roots once they outlive the
@@ -1884,7 +1900,7 @@ the tests, not this document, are their guarantee.
   protobuf-major gate. Re-check on any `xai-sdk` bump whether upstream accepts
   protobuf 7 so the shim can retire.
 
-### antigravity_sdk — `google-antigravity` 0.1.8, Python 3.14.4 (verified 2026-07-24)
+### antigravity_sdk — `google-antigravity` 0.1.8, Python 3.14.4 (verified 2026-08-16)
 
 - *[continuity — shipped]* One entered `Agent` owns one stateful
   `Conversation`/localharness connection; `chat()` sends on that connection,
@@ -1910,12 +1926,27 @@ the tests, not this document, are their guarantee.
 - *[tool_gate]* No permission-callback surface has been verified for the
   localharness connection; callback concurrency and any provider-side decision
   deadline are likewise unrecorded (open questions 9–10).
-- *[interrupt]* `Agent.chat()` returns a lazy `ChatResponse`; cancelling a local
-  `resolve()` consumer does not invoke provider cancellation, while
-  `ChatResponse.cancel()` delegates to `Conversation.cancel()` (local
-  `halt_request`, then `AntigravityCancelledError` on the receive path). Used
-  today only as best-effort abnormal-turn cleanup; whether the conversation
-  survives it is open question 2.
+- *[interrupt]* `Agent.chat()` returns a lazy `ChatResponse`. Cancelling a
+  local `resolve()` consumer does not invoke provider cancellation.
+  `ChatResponse.cancel()` delegates to `Conversation.cancel()` →
+  `LocalConnection.cancel()`, which sends `InputEvent(halt_request=True)`
+  and sets `_client_cancelled`. The receive path raises
+  `types.AntigravityCancelledError`, which subclasses
+  `asyncio.CancelledError` and must be distinguished from a host cancel.
+  Wheel test `test_cancel_e2e_raises_cancelled_error` proves halt +
+  `AntigravityCancelledError`; it does not prove a following `chat()` on
+  the same conversation (open question 2). Agent-collab publishes the live
+  `ChatResponse` while `run()` is in flight, issues
+  `ChatResponse.cancel()` out of band on both worker and in-process
+  adapters without taking the conversation run lock and without awaiting
+  a long ACK, and maps a distinguishable `AntigravityCancelledError` to
+  `TurnOutcome("interrupted", "local_turn_interrupted")`, retaining the
+  conversation. A generic host `asyncio.CancelledError` is not treated as
+  a successful provider interrupt. Continue-after-interrupt at the
+  session layer still hits `RequiredTurnFailed` / rejected `post_message`
+  (same as Claude). Mapping landed; production
+  `antigravity_sdk.interrupt` stays false. Do not claim live interrupt
+  proof. See open question 2.
 - *[all]* `Agent.__aexit__()` disconnects: processor tasks and reader cancelled,
   WebSocket close bounded to 0.5 s, stdin closed, native process waited up to
   180 s before terminate/kill escalation. Disconnect is not safe to race with

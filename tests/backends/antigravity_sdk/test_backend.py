@@ -5,8 +5,9 @@ google-antigravity 0.1.8 (see
 tests/fixtures/antigravity/sdk-introspection.json). The event mapper and
 persistent conversation adapter are driven by fakes built to that protocol:
 async ``resolve()`` returns typed Text/Thought/ToolCall/ToolResult values,
-thoughts/tool_calls are independent async cursor properties, and strict reopen
-uses ``conversation_id`` plus ``SessionContinuationMode.RESUME``. No hermetic
+thoughts/tool_calls are independent async cursor properties, strict reopen
+uses ``conversation_id`` plus ``SessionContinuationMode.RESUME``, and
+``ChatResponse.cancel()`` raises ``AntigravityCancelledError``. No hermetic
 test imports the SDK or calls a model.
 """
 
@@ -20,12 +21,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from agent_collab import backends
 from agent_collab.backends.antigravity_sdk.backend import (
     AntigravitySdkBackend,
     AntigravitySdkRunner,
+    AntigravityTurn,
     _PersistentAntigravityConversation,
     _default_agent_factory,
     _default_conversation,
+    _is_provider_cancelled,
     assess_native_runtime,
     map_antigravity_turn,
 )
@@ -152,6 +156,68 @@ class _FakeResponse:
                     yield chunk
 
         return cursor()
+
+
+class AntigravityCancelledError(asyncio.CancelledError):
+    """Mirrors ``google.antigravity.types.AntigravityCancelledError``."""
+
+    def __init__(self, message="The request was cancelled by the client."):
+        super().__init__(message)
+
+
+class _FakeConversation:
+    """Runner-level conversation fake with optional in-flight interrupt."""
+
+    def __init__(self, turns=None, *, error=None):
+        self.turns = list(turns or [])
+        self.error = error
+        self.prompts = []
+        self.noted_ids = []
+        self.reset_calls = 0
+        self.close_calls = 0
+        self.interrupt_calls = 0
+        self.is_active = False
+        self.is_closed = False
+
+    def active(self):
+        return not self.is_closed and (self.is_active or bool(self.noted_ids))
+
+    async def run(self, prompt):
+        self.prompts.append(prompt)
+        self.is_active = True
+        if self.error is not None:
+            raise self.error
+        if not self.turns:
+            raise RuntimeError("no fake turn")
+        return self.turns.pop(0)
+
+    def note_session_id(self, conversation_id):
+        self.noted_ids.append(conversation_id)
+
+    async def interrupt(self):
+        if self.is_closed or not self.is_active:
+            return False
+        self.interrupt_calls += 1
+        return True
+
+    async def reset(self):
+        self.reset_calls += 1
+        self.is_active = False
+
+    async def close(self):
+        if self.is_closed:
+            return
+        self.is_closed = True
+        self.close_calls += 1
+        self.is_active = False
+
+
+def _completed_turn(text="Done.", conversation_id="conv-9"):
+    return AntigravityTurn([Text(0, text)], None, conversation_id, True)
+
+
+def _conversation_factory(conversation):
+    return lambda _agent, _options, _workdir: conversation
 
 
 class _FakeAgent:
@@ -923,6 +989,374 @@ class AntigravityConversationLifecycleTests(unittest.TestCase):
 
         outcome = asyncio.run(scenario())
         self.assertEqual(outcome.outcome, "completed")
+
+
+class SdkInterruptMappingTests(unittest.TestCase):
+    @staticmethod
+    async def _turn(runner, prompt):
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        outcome = await runner.run_turn(prompt, Path("/workspace"), emit)
+        return events, outcome
+
+    @staticmethod
+    def _runner(conversation):
+        return AntigravitySdkRunner(
+            AGENT,
+            False,
+            {},
+            conversation_factory=_conversation_factory(conversation),
+        )
+
+    def test_provider_cancelled_error_maps_to_interrupted_and_retains(self):
+        conversation = _FakeConversation(error=AntigravityCancelledError())
+        conversation.is_active = True
+        runner = self._runner(conversation)
+
+        async def scenario():
+            events, outcome = await self._turn(runner, "stop")
+            return outcome, runner.conversation_active()
+
+        outcome, active = asyncio.run(scenario())
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertTrue(active)
+
+    def test_in_process_interrupt_request_issues_when_conversation_is_live(self):
+        conversation = _FakeConversation([_completed_turn()])
+        conversation.is_active = True
+        runner = self._runner(conversation)
+        runner._conversation = conversation
+
+        async def scenario():
+            return await runner.interrupt_request()
+
+        self.assertTrue(asyncio.run(scenario()))
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertIsNone(runner._worker_session)
+
+    def test_in_process_interrupt_request_idle_or_missing_is_false(self):
+        idle = _FakeConversation([_completed_turn()])
+        runner = self._runner(idle)
+        runner._conversation = idle
+
+        async def idle_request():
+            return await runner.interrupt_request()
+
+        self.assertFalse(asyncio.run(idle_request()))
+        self.assertEqual(idle.interrupt_calls, 0)
+
+        empty = AntigravitySdkRunner(
+            AGENT,
+            False,
+            {},
+            conversation_factory=_conversation_factory(_FakeConversation([_completed_turn()])),
+        )
+
+        async def missing_request():
+            return await empty.interrupt_request()
+
+        self.assertFalse(asyncio.run(missing_request()))
+
+    def test_worker_session_interrupt_is_preferred_over_in_process(self):
+        conversation = _FakeConversation([_completed_turn()])
+        conversation.is_active = True
+        runner = self._runner(conversation)
+        runner._conversation = conversation
+
+        class _Session:
+            def __init__(self):
+                self.calls = []
+
+            async def interrupt_active(self):
+                self.calls.append("run-9")
+                return True
+
+        session = _Session()
+        runner._worker_session = session
+
+        async def scenario():
+            return await runner.interrupt_request()
+
+        self.assertTrue(asyncio.run(scenario()))
+        self.assertEqual(session.calls, ["run-9"])
+        self.assertEqual(conversation.interrupt_calls, 0)
+
+    def test_interrupt_during_blocked_run_unblocks_and_ends_interrupted(self):
+        async def scenario():
+            entered = asyncio.Event()
+
+            class BlockingConversation(_FakeConversation):
+                def __init__(self):
+                    super().__init__([])
+                    self._blocked = asyncio.Event()
+
+                async def run(self, prompt):
+                    self.prompts.append(prompt)
+                    self.is_active = True
+                    entered.set()
+                    await self._blocked.wait()
+                    raise AntigravityCancelledError()
+
+                async def interrupt(self):
+                    self.interrupt_calls += 1
+                    self._blocked.set()
+                    return True
+
+            conversation = BlockingConversation()
+            runner = self._runner(conversation)
+            turn = asyncio.create_task(self._turn(runner, "stop me"))
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            issued = await runner.interrupt_request()
+            _events, outcome = await asyncio.wait_for(turn, timeout=1.0)
+            return issued, outcome, conversation
+
+        issued, outcome, conversation = asyncio.run(scenario())
+        self.assertTrue(issued)
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertEqual(conversation.reset_calls, 0)
+
+    def test_interrupt_completion_race_keeps_completed_outcome(self):
+        async def scenario():
+            entered = asyncio.Event()
+
+            class BlockingConversation(_FakeConversation):
+                def __init__(self):
+                    super().__init__([])
+                    self._blocked = asyncio.Event()
+
+                async def run(self, prompt):
+                    self.prompts.append(prompt)
+                    self.is_active = True
+                    entered.set()
+                    await self._blocked.wait()
+                    return _completed_turn()
+
+                async def interrupt(self):
+                    self.interrupt_calls += 1
+                    self._blocked.set()
+                    return True
+
+            conversation = BlockingConversation()
+            runner = self._runner(conversation)
+            turn = asyncio.create_task(self._turn(runner, "race"))
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            issued = await runner.interrupt_request()
+            _events, outcome = await asyncio.wait_for(turn, timeout=1.0)
+            return issued, outcome, conversation
+
+        issued, outcome, conversation = asyncio.run(scenario())
+        self.assertTrue(issued)
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertIsNone(outcome.code)
+        self.assertEqual(conversation.reset_calls, 0)
+
+    def test_idle_and_closed_interrupt_are_noop(self):
+        async def scenario():
+            conversation = _PersistentAntigravityConversation(
+                lambda _resume_id: _FakeAgent(
+                    _FakeResponse({"chunks": [{"type": "Text", "step_index": 0, "text": "one"}]})
+                )
+            )
+            idle = await conversation.interrupt()
+            runner = AntigravitySdkRunner(
+                AGENT,
+                False,
+                {},
+                conversation_factory=lambda *_args: conversation,
+            )
+            await self._turn(runner, "one")
+            await runner.close()
+            closed = await runner.interrupt_request()
+            return idle, closed
+
+        idle, closed = asyncio.run(scenario())
+        self.assertFalse(idle)
+        self.assertFalse(closed)
+
+    def test_interrupt_during_blocked_resolve_unblocks_and_retains(self):
+        async def scenario():
+            entered = asyncio.Event()
+
+            class CancellableResponse:
+                def __init__(self):
+                    self._blocked = asyncio.Event()
+                    self.cancel_calls = 0
+                    self.usage_metadata = None
+
+                async def resolve(self):
+                    entered.set()
+                    await self._blocked.wait()
+                    raise AntigravityCancelledError()
+
+                async def cancel(self):
+                    self.cancel_calls += 1
+                    self._blocked.set()
+
+            response = CancellableResponse()
+            agent = _FakeAgent(response, conversation_id="conv-" + ("i" * 32))
+            conversation = _PersistentAntigravityConversation(lambda _resume_id: agent)
+            runner = AntigravitySdkRunner(
+                AGENT,
+                False,
+                {},
+                conversation_factory=lambda *_args: conversation,
+            )
+            turn = asyncio.create_task(self._turn(runner, "stop me"))
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            issued = await runner.interrupt_request()
+            events, outcome = await asyncio.wait_for(turn, timeout=1.0)
+            active = runner.conversation_active()
+            retained = not agent.exited
+            await runner.close()
+            return issued, outcome, active, retained, response.cancel_calls, events
+
+        issued, outcome, active, retained, cancel_calls, events = asyncio.run(scenario())
+        self.assertTrue(issued)
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertTrue(active)
+        self.assertTrue(retained)
+        self.assertGreaterEqual(cancel_calls, 1)
+        self.assertTrue(
+            any(
+                (event.raw or {}).get("provider_session_id") == "conv-" + ("i" * 32)
+                for event in events
+            )
+        )
+
+    def test_interrupt_returns_before_long_control_ack(self):
+        async def scenario():
+            entered = asyncio.Event()
+            release = asyncio.Event()
+
+            class SlowCancelResponse:
+                def __init__(self):
+                    self.cancel_calls = 0
+                    self.usage_metadata = None
+
+                async def resolve(self):
+                    entered.set()
+                    await release.wait()
+                    return [Text(0, "done")]
+
+                async def cancel(self):
+                    self.cancel_calls += 1
+                    await asyncio.sleep(5.0)
+
+            response = SlowCancelResponse()
+            conversation = _PersistentAntigravityConversation(
+                lambda _resume_id: _FakeAgent(response)
+            )
+            runner = AntigravitySdkRunner(
+                AGENT,
+                False,
+                {},
+                conversation_factory=lambda *_args: conversation,
+            )
+            turn = asyncio.create_task(self._turn(runner, "block"))
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            issued_adapter = await asyncio.wait_for(conversation.interrupt(), timeout=0.2)
+            issued_request = await asyncio.wait_for(runner.interrupt_request(), timeout=0.2)
+            release.set()
+            _events, outcome = await turn
+            await runner.close()
+            return issued_adapter, issued_request, outcome, response.cancel_calls
+
+        issued_adapter, issued_request, outcome, cancel_calls = asyncio.run(scenario())
+        self.assertTrue(issued_adapter)
+        self.assertTrue(issued_request)
+        self.assertEqual(cancel_calls, 2)
+        self.assertEqual(outcome.outcome, "completed")
+
+    def test_interrupt_immediate_failure_is_not_issued(self):
+        async def scenario():
+            entered = asyncio.Event()
+            release = asyncio.Event()
+
+            class FailingCancelResponse:
+                usage_metadata = None
+
+                async def resolve(self):
+                    entered.set()
+                    await release.wait()
+                    return [Text(0, "done")]
+
+                async def cancel(self):
+                    raise RuntimeError("not connected")
+
+            conversation = _PersistentAntigravityConversation(
+                lambda _resume_id: _FakeAgent(FailingCancelResponse())
+            )
+            runner = AntigravitySdkRunner(
+                AGENT,
+                False,
+                {},
+                conversation_factory=lambda *_args: conversation,
+            )
+            turn = asyncio.create_task(self._turn(runner, "block"))
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            issued_adapter = await conversation.interrupt()
+            issued_request = await runner.interrupt_request()
+            release.set()
+            await turn
+            await runner.close()
+            return issued_adapter, issued_request
+
+        issued_adapter, issued_request = asyncio.run(scenario())
+        self.assertFalse(issued_adapter)
+        self.assertFalse(issued_request)
+
+    def test_host_cancelled_error_is_not_provider_interrupt(self):
+        async def scenario():
+            entered = asyncio.Event()
+
+            class BlockingResponse:
+                usage_metadata = None
+
+                async def resolve(self):
+                    entered.set()
+                    await asyncio.Event().wait()
+
+            agent = _FakeAgent(BlockingResponse())
+            conversation = _PersistentAntigravityConversation(lambda _resume_id: agent)
+            runner = AntigravitySdkRunner(
+                AGENT,
+                False,
+                {},
+                conversation_factory=lambda *_args: conversation,
+            )
+            turn = asyncio.create_task(self._turn(runner, "block"))
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            turn.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await turn
+            return agent.exited
+
+        self.assertTrue(asyncio.run(scenario()))
+        self.assertFalse(_is_provider_cancelled(asyncio.CancelledError()))
+        self.assertTrue(_is_provider_cancelled(AntigravityCancelledError()))
+
+    def test_production_interrupt_capability_stays_false(self):
+        caps = backends.capabilities_for("antigravity", "sdk")
+        self.assertEqual(
+            caps.to_dict(),
+            {"resume": False, "interrupt": False, "tool_gate": False, "continuity": True},
+        )
+        self.assertFalse(AntigravitySdkBackend().capabilities.interrupt)
 
 
 class SdkMissingExtraTests(unittest.TestCase):

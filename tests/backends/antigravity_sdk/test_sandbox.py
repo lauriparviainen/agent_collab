@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 import tempfile
@@ -420,6 +421,144 @@ class AntigravitySdkWorkerBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(session_events), 1)
         self.assertTrue(any(event.type == "error" for event in streamed))
         self.assertEqual(backend._conversation.reset_calls, 1)
+
+    async def test_interrupt_without_conversation_is_noop(self) -> None:
+        from agent_collab.backends.antigravity_sdk.worker import AntigravitySdkWorkerBackend
+
+        backend = AntigravitySdkWorkerBackend()
+        await backend.interrupt("run-1")
+
+    async def test_interrupt_calls_conversation_once_and_maps_cancelled_error(self) -> None:
+        from agent_collab.backends.antigravity_sdk.worker import AntigravitySdkWorkerBackend
+
+        class AntigravityCancelledError(asyncio.CancelledError):
+            pass
+
+        class _Conversation:
+            def __init__(self) -> None:
+                self.interrupt_calls = 0
+                self.reset_calls = 0
+                self.started = asyncio.Event()
+                self._release = asyncio.Event()
+                self._conversation_id = "conv-1"
+
+            async def run(self, prompt: str):
+                del prompt
+                self.started.set()
+                await self._release.wait()
+                raise AntigravityCancelledError()
+
+            def note_session_id(self, conversation_id: str) -> None:
+                self._conversation_id = conversation_id
+
+            async def interrupt(self) -> bool:
+                self.interrupt_calls += 1
+                self._release.set()
+                return True
+
+            async def reset(self) -> None:
+                self.reset_calls += 1
+
+            async def close(self) -> None:
+                return None
+
+        conversation = _Conversation()
+        backend = AntigravitySdkWorkerBackend()
+        backend._conversation = conversation
+        backend._agent_id = "reviewer"
+        task = asyncio.create_task(backend.run("hello", run_id="r1"))
+        await conversation.started.wait()
+        await backend.interrupt("r1")
+        residual, outcome = await task
+        self.assertTrue(
+            any(
+                (getattr(event, "raw", None) or {}).get("provider_session_id") == "conv-1"
+                for event in residual
+            )
+        )
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertIs(backend._conversation, conversation)
+
+    async def test_interrupt_completion_race_keeps_completed_outcome(self) -> None:
+        from agent_collab.backends.antigravity_sdk.backend import AntigravityTurn
+        from agent_collab.backends.antigravity_sdk.worker import AntigravitySdkWorkerBackend
+
+        class _Text:
+            def __init__(self) -> None:
+                self.step_index = 0
+                self.text = "Done."
+
+        class _Conversation:
+            def __init__(self) -> None:
+                self.interrupt_calls = 0
+                self.reset_calls = 0
+                self.started = asyncio.Event()
+                self._release = asyncio.Event()
+
+            async def run(self, prompt: str):
+                del prompt
+                self.started.set()
+                await self._release.wait()
+                return AntigravityTurn([_Text()], None, "conv-1", True)
+
+            def note_session_id(self, conversation_id: str) -> None:
+                del conversation_id
+
+            async def interrupt(self) -> bool:
+                self.interrupt_calls += 1
+                self._release.set()
+                return True
+
+            async def reset(self) -> None:
+                self.reset_calls += 1
+
+            async def close(self) -> None:
+                return None
+
+        conversation = _Conversation()
+        backend = AntigravitySdkWorkerBackend()
+        backend._conversation = conversation
+        task = asyncio.create_task(backend.run("hello", run_id="r1"))
+        await conversation.started.wait()
+        await backend.interrupt("r1")
+        _residual, outcome = await task
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertIsNone(outcome.code)
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertIs(backend._conversation, conversation)
+
+    async def test_host_cancelled_error_is_not_provider_interrupt(self) -> None:
+        from agent_collab.backends.antigravity_sdk.worker import AntigravitySdkWorkerBackend
+
+        class _Conversation:
+            def __init__(self) -> None:
+                self.reset_calls = 0
+                self.started = asyncio.Event()
+
+            async def run(self, prompt: str):
+                del prompt
+                self.started.set()
+                raise asyncio.CancelledError()
+
+            async def reset(self) -> None:
+                self.reset_calls += 1
+
+            async def close(self) -> None:
+                return None
+
+        conversation = _Conversation()
+        backend = AntigravitySdkWorkerBackend()
+        backend._conversation = conversation
+        with self.assertRaises(asyncio.CancelledError):
+            await backend.run("hello", run_id="r1")
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertIs(backend._conversation, conversation)
 
 
 class AntigravitySdkPlanCleanupTests(unittest.TestCase):

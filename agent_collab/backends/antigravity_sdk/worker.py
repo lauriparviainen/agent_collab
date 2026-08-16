@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Awaitable, Callable, List, Mapping, Optional, Tuple
 
@@ -11,7 +12,9 @@ from ...sandbox.worker_codec import sanitize_error_text
 from ..common.sdk import provider_session_event
 from .backend import (
     _default_conversation,
+    _is_provider_cancelled,
     _reset_conversation_bounded,
+    _should_reset_after_outcome,
     map_antigravity_turn,
 )
 
@@ -117,23 +120,16 @@ class AntigravitySdkWorkerBackend:
                         "conversation",
                     ),
                 )
+        except asyncio.CancelledError as exc:
+            if not _is_provider_cancelled(exc):
+                raise
+            await _emit_captured_conversation_id(self, emit, events)
+            evidence.add(TerminalEvidence("interrupted", "local_turn_interrupted"))
         except Exception as exc:
             # If chat() assigned a conversation id before resolve failed, surface
             # it so the daemon marks continuity and does not soft-drop a
             # resumable worker / block relaunch incorrectly.
-            if self._conversation is not None:
-                cid = getattr(self._conversation, "_conversation_id", None)
-                if isinstance(cid, str) and cid:
-                    await _deliver(
-                        emit,
-                        events,
-                        provider_session_event(
-                            "antigravity",
-                            self._agent_id,
-                            cid,
-                            "conversation",
-                        ),
-                    )
+            await _emit_captured_conversation_id(self, emit, events)
             await _deliver(
                 emit,
                 events,
@@ -152,12 +148,19 @@ class AntigravitySdkWorkerBackend:
         if not clean_close and exception_code is None:
             exception_code = "provider_transport_failed"
         result = evidence.resolve(exception_code=exception_code)
-        if result.outcome != "completed" and self._conversation is not None:
+        if _should_reset_after_outcome(result.outcome) and self._conversation is not None:
             await _reset_conversation_bounded(self._conversation)
         return ([] if emit is not None else events), result
 
     async def interrupt(self, run_id: str) -> None:
         del run_id
+        conversation = self._conversation
+        if conversation is None:
+            return
+        method = getattr(conversation, "interrupt", None)
+        if not callable(method):
+            return
+        await method()
 
     def bind_approvals(self, request_approval: Callable[..., Awaitable[Mapping[str, Any]]]) -> None:
         self._request_approval = request_approval
@@ -170,6 +173,28 @@ class AntigravitySdkWorkerBackend:
         if self._conversation is not None:
             await self._conversation.close()
             self._conversation = None
+
+
+async def _emit_captured_conversation_id(
+    backend: AntigravitySdkWorkerBackend,
+    emit: Optional[EventEmit],
+    events: List[Any],
+) -> None:
+    conversation = backend._conversation
+    if conversation is None:
+        return
+    conversation_id = getattr(conversation, "_conversation_id", None)
+    if isinstance(conversation_id, str) and conversation_id:
+        await _deliver(
+            emit,
+            events,
+            provider_session_event(
+                "antigravity",
+                backend._agent_id,
+                conversation_id,
+                "conversation",
+            ),
+        )
 
 
 async def _deliver(

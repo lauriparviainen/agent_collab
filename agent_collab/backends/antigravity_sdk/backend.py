@@ -122,6 +122,8 @@ class AntigravityConversation(Protocol):
 
     def note_session_id(self, conversation_id: str) -> None: ...
 
+    async def interrupt(self) -> bool: ...
+
     async def reset(self) -> None: ...
 
     async def close(self) -> None: ...
@@ -427,7 +429,15 @@ class AntigravitySdkRunner(AgentRunner):
     async def interrupt_request(self) -> bool:
         from ...sandbox.worker_session import interrupt_active_session
 
-        return await interrupt_active_session(self._worker_session)
+        if self._worker_session is not None:
+            return await interrupt_active_session(self._worker_session)
+        conversation = self._conversation
+        if conversation is None:
+            return False
+        interrupt = getattr(conversation, "interrupt", None)
+        if not callable(interrupt):
+            return False
+        return bool(await interrupt())
 
     async def close(self) -> None:
         session = self._worker_session
@@ -806,10 +816,14 @@ class AntigravitySdkRunner(AgentRunner):
                         "conversation",
                     )
                 )
-        except asyncio.CancelledError:
-            if conversation is not None:
-                await _reset_conversation_bounded(conversation)
-            raise
+        except asyncio.CancelledError as exc:
+            if _is_provider_cancelled(exc):
+                evidence.add(TerminalEvidence("interrupted", "local_turn_interrupted"))
+                await _emit_captured_conversation_id(conversation, self.name, emit)
+            else:
+                if conversation is not None:
+                    await _reset_conversation_bounded(conversation)
+                raise
         except BackendUnavailable as exc:
             await emit(backend_unavailable_event(exc))
             exception_code = "provider_transport_failed"
@@ -819,7 +833,7 @@ class AntigravitySdkRunner(AgentRunner):
         if not clean_close and exception_code is None:
             exception_code = "provider_transport_failed"
         result = evidence.resolve(exception_code=exception_code)
-        if result.outcome != "completed" and conversation is not None:
+        if _should_reset_after_outcome(result.outcome) and conversation is not None:
             await _reset_conversation_bounded(conversation)
         if self.verbose:
             await emit(Event.create("antigravity", "status", "antigravity sdk turn complete"))
@@ -887,6 +901,48 @@ def map_antigravity_turn(
             "status",
             f"antigravity sdk usage {compact_json(usage)}",
             {"usage": usage},
+        )
+
+
+def _is_provider_cancelled(exc: BaseException) -> bool:
+    """True only for the SDK abort, not a host ``asyncio.CancelledError``.
+
+    ``AntigravityCancelledError`` subclasses ``asyncio.CancelledError``.
+    Match the public type name (hermetic fakes) or the installed class
+    (lazy import). Generic host cancellation must not win this check.
+    """
+
+    if type(exc).__name__ == "AntigravityCancelledError":
+        return True
+    try:
+        from google.antigravity.types import AntigravityCancelledError
+    except ImportError:
+        return False
+    return isinstance(exc, AntigravityCancelledError)
+
+
+def _should_reset_after_outcome(outcome: str) -> bool:
+    # A clean interrupt win keeps the live Agent so the next delta can
+    # continue the same provider conversation. Transport/failure still resets.
+    return outcome not in ("completed", "interrupted")
+
+
+async def _emit_captured_conversation_id(
+    conversation: Optional[AntigravityConversation],
+    agent_id: str,
+    emit: AsyncEventSink,
+) -> None:
+    if conversation is None:
+        return
+    conversation_id = getattr(conversation, "_conversation_id", None)
+    if isinstance(conversation_id, str) and conversation_id:
+        await emit(
+            provider_session_event(
+                "antigravity",
+                agent_id,
+                conversation_id,
+                "conversation",
+            )
         )
 
 
@@ -1165,6 +1221,7 @@ class _PersistentAntigravityConversation:
         self._turn_handed_off = False
         self._resume_missing_id = False
         self._closed = False
+        self._live_response: Any = None
 
     def active(self) -> bool:
         # A reset drops only the live Agent. A retained id still names
@@ -1238,16 +1295,19 @@ class _PersistentAntigravityConversation:
             clean_close = True
             try:
                 response = await chat(effective_prompt)
+                # Publish before resolve so interrupt() can fire without _lock.
+                self._live_response = response
                 self._capture_agent_id_locked()
                 chunks = await _resolve_chunks(response)
                 self._capture_agent_id_locked()
                 usage_metadata = getattr(response, "usage_metadata", None)
-            except BaseException:
+            except BaseException as exc:
                 self._capture_agent_id_locked()
-                if response is not None:
+                if response is not None and not _is_provider_cancelled(exc):
                     await _cancel_response_bounded(response)
                 raise
             finally:
+                self._live_response = None
                 clean_close = await close_async_stream(response)
             return AntigravityTurn(
                 chunks=chunks,
@@ -1255,6 +1315,38 @@ class _PersistentAntigravityConversation:
                 conversation_id=self._conversation_id,
                 response_clean_close=clean_close,
             )
+
+    async def interrupt(self) -> bool:
+        """Issue a provider abort on the live ChatResponse, if any.
+
+        Must not take ``_lock``: ``run()`` holds it for the whole turn, so
+        an in-band acquire would deadlock with the consumer we need to
+        unblock. Idle, closed, or missing-response is a no-op, not an error.
+
+        Starts ``ChatResponse.cancel()`` as a background task and does not
+        await a long ACK. Acknowledgement is the turn's own
+        ``AntigravityCancelledError``. An immediate raise is not treated
+        as issued.
+        """
+
+        if self._closed:
+            return False
+        response = self._live_response
+        if response is None:
+            return False
+        method = getattr(response, "cancel", None)
+        if not callable(method):
+            return False
+        task = asyncio.create_task(method())
+        await asyncio.sleep(0)
+        if task.done():
+            try:
+                task.result()
+            except BaseException:
+                return False
+            return True
+        task.add_done_callback(_consume_background_result)
+        return True
 
     async def reset(self) -> None:
         async with self._lock:

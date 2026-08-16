@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Map Antigravity SDK `ChatResponse.cancel()` on worker and in-process
+  turns onto `interrupted` when the abort is distinguishable; production
+  `antigravity_sdk.interrupt` stays false pending credentialed coverage
+  (#20).
 - Record that Codex SDK worker `tool_gate` parks remain unproven after
   gated-sandbox, `untrusted`, `externalSandbox`, and legacy-Landlock
   trials (all reverted). In-process parks still pass. Production
