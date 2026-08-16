@@ -497,6 +497,7 @@ class HttpServerDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("agent_collab_start", names)
         self.assertIn("agent_collab_wait_events", names)
         self.assertIn("agent_collab_post_message", names)
+        self.assertIn("agent_collab_approval", names)
 
     async def test_options_route_describes_start_options(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1246,6 +1247,156 @@ class RetentionSchedulerTests(unittest.IsolatedAsyncioTestCase):
             await self._cancel(task)
 
         self.assertTrue(any("simulated retention failure" in line for line in logs))
+
+
+class ApprovalRouteTests(unittest.IsolatedAsyncioTestCase):
+    def _decision_payload(self, **fields):
+        data = {
+            "session_id": "s1",
+            "request_id": "a1",
+            "outcome": "approved",
+            "reason": "rest",
+            "status": "ok",
+            "turn_id": "turn-1",
+            "worker_instance": "inst-1",
+        }
+        data.update(fields)
+        return data
+
+    async def test_approval_route_passes_rest_surface(self):
+        manager = mock.Mock()
+        manager.resolve_approval = mock.AsyncMock(return_value=self._decision_payload())
+        server = AgentCollabHttpServer(manager=manager)
+        response = await server._dispatch(
+            "POST",
+            "/sessions/s1/approvals",
+            {},
+            json.dumps({"request_id": "a1", "decision": "approve"}).encode(),
+        )
+        manager.resolve_approval.assert_called_once_with("s1", "a1", "approve", surface="rest")
+        self.assertEqual(response["session_id"], "s1")
+        self.assertEqual(response["request_id"], "a1")
+        self.assertEqual(response["turn_id"], "turn-1")
+        self.assertEqual(response["worker_instance"], "inst-1")
+
+    async def test_approval_route_ignores_body_surface(self):
+        manager = mock.Mock()
+        manager.resolve_approval = mock.AsyncMock(return_value=self._decision_payload())
+        server = AgentCollabHttpServer(manager=manager)
+        await server._dispatch(
+            "POST",
+            "/sessions/s1/approvals",
+            {},
+            json.dumps({"request_id": "a1", "decision": "approve", "surface": "cli"}).encode(),
+        )
+        manager.resolve_approval.assert_called_once_with("s1", "a1", "approve", surface="rest")
+
+    async def test_approval_duplicate_conflict_not_found_and_stale(self):
+        from agent_collab.approvals import ApprovalDecisionError
+        from agent_collab.daemon import SessionState, StartSessionRequest, _ManagedSession
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(Path(tmp) / "home")}):
+                manager = SessionManager()
+                state = SessionState(
+                    session_id="s1",
+                    status="running",
+                    task="t",
+                    workflow="solo",
+                    workdir=".",
+                    jsonl_path="a.jsonl",
+                    markdown_path="a.md",
+                    created_at="t",
+                    updated_at="t",
+                )
+                managed = _ManagedSession(
+                    request=StartSessionRequest(task="t"),
+                    state=state,
+                    events=[],
+                    condition=asyncio.Condition(),
+                )
+                manager._sessions[state.session_id] = managed
+                server = AgentCollabHttpServer(manager=manager)
+                await manager.register_approval(
+                    "s1",
+                    request_id="a1",
+                    agent_id="claude_cli",
+                    tool_name="Bash",
+                    summary="true",
+                )
+                first = await server._dispatch(
+                    "POST",
+                    "/sessions/s1/approvals",
+                    {},
+                    json.dumps({"request_id": "a1", "decision": "approve"}).encode(),
+                )
+                self.assertEqual(first["status"], "ok")
+                again = await server._dispatch(
+                    "POST",
+                    "/sessions/s1/approvals",
+                    {},
+                    json.dumps({"request_id": "a1", "decision": "approve"}).encode(),
+                )
+                self.assertEqual(again["status"], "idempotent")
+                with self.assertRaises(ApprovalDecisionError) as conflict:
+                    await server._dispatch(
+                        "POST",
+                        "/sessions/s1/approvals",
+                        {},
+                        json.dumps({"request_id": "a1", "decision": "deny"}).encode(),
+                    )
+                self.assertEqual(conflict.exception.code, "conflict")
+                with self.assertRaises(ApprovalDecisionError) as missing:
+                    await server._dispatch(
+                        "POST",
+                        "/sessions/s1/approvals",
+                        {},
+                        json.dumps({"request_id": "nope", "decision": "approve"}).encode(),
+                    )
+                self.assertEqual(missing.exception.code, "not_found")
+                await manager.register_approval(
+                    "s1",
+                    request_id="a2",
+                    agent_id="claude_cli",
+                    tool_name="Bash",
+                    summary="true",
+                    turn_id="turn-1",
+                )
+                await manager._abandon_turn(managed, "turn-1")
+                with self.assertRaises(ApprovalDecisionError) as stale:
+                    await server._dispatch(
+                        "POST",
+                        "/sessions/s1/approvals",
+                        {},
+                        json.dumps({"request_id": "a2", "decision": "approve"}).encode(),
+                    )
+                self.assertEqual(stale.exception.code, "stale")
+
+    async def test_approval_errors_map_to_404_and_409(self):
+        from agent_collab.approvals import ApprovalDecisionError
+
+        manager = mock.Mock()
+        server = AgentCollabHttpServer(manager=manager)
+        cases = (
+            (ApprovalDecisionError("not_found", "unknown approval request_id 'nope'"), 404),
+            (ApprovalDecisionError("conflict", "already approved"), 409),
+            (ApprovalDecisionError("stale", "approval request_id 'a2' is stale"), 409),
+        )
+        for exc, status in cases:
+            manager.resolve_approval = mock.AsyncMock(side_effect=exc)
+            writer = _CaptureWriter()
+            body = json.dumps({"request_id": "a1", "decision": "approve"}).encode()
+            request = (
+                b"POST /sessions/s1/approvals HTTP/1.1\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode()
+                + body
+            )
+            await server._handle_connection(_request_reader(request), writer)
+            head, response_body = bytes(writer.buffer).split(b"\r\n\r\n", 1)
+            self.assertIn(f"HTTP/1.1 {status}".encode(), head)
+            payload = json.loads(response_body)
+            self.assertEqual(payload["code"], exc.code)
+            self.assertEqual(payload["error"], str(exc))
 
 
 if __name__ == "__main__":

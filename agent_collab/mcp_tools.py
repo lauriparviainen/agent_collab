@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol, Sequence
 
 from .api_schema import (
+    ApprovalDecisionRequestModel,
     GetSessionRequestModel,
     ReadEventsRequestModel,
     TranscriptRequestModel,
     WaitEventsRequestModel,
     WaitResultRequestModel,
 )
+from .approvals import ApprovalDecisionError
 from .client import ClientError
 from .daemon import (
     SessionManager,
@@ -155,7 +157,8 @@ TOOLS = [
             "bounded polls keep you steerable, because your user's message reaches you only when a "
             "tool call returns — timeout_ms 20000-30000, never above 45000 (clients kill tool calls "
             "near 60 s). Cheap watch loop: view='digest' (drops raw, caps text, stamps event_id) plus "
-            "types=['message','error']; re-fetch any event whole via read_events(cursor=event_id, "
+            "types=['message','error','approval_request','approval_resolved']; re-fetch any event "
+            "whole via read_events(cursor=event_id, "
             "limit=1, tool_output='full'). types filters the returned batch only — the cursor still "
             "advances over every scanned event and the wait still wakes on any event or status change, "
             "so an empty batch can mean filtered-out rather than idle. Always advance to the returned "
@@ -187,7 +190,9 @@ TOOLS = [
         "description": (
             "Block until a session settles, then return its result. Settled = terminal, or "
             "awaiting_input while accepting input (none pending) — then you may post_message a "
-            "follow-up. Result carries status, terminal, settled, answers (each agent's latest "
+            "follow-up — or awaiting_approval (decide from pending_approvals; terminal=false; "
+            "this is a park, not a harvest). Result carries status, terminal, settled, answers "
+            "(each agent's latest "
             "completed-turn answer plus event_id to re-fetch full via read_events), failure, and "
             "cursor; a settled non-done terminal result also carries events_tail — the last ~20 "
             "events as digest lines, usually enough to debug a failure; use read_events when an "
@@ -243,6 +248,26 @@ TOOLS = [
                 "target": {"type": "string"},
             },
             "required": ["session_id", "text"],
+        },
+    },
+    {
+        "name": "agent_collab_approval",
+        "description": (
+            "Approve or deny one parked tool-approval request. Look up by session_id + request_id "
+            "from wait_result or status pending_approvals (request_id, agent_id, tool_name, "
+            "summary, summary_truncated, decision_options). One request per call; duplicates of "
+            "the same decision are idempotent; a different decision is a conflict. Remaining "
+            "unresolved requests stay parked. timeout_ms on wait_events/wait_result is not the "
+            "approval deadline."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "request_id": {"type": "string"},
+                "decision": {"type": "string", "enum": ["approve", "deny"]},
+            },
+            "required": ["session_id", "request_id", "decision"],
         },
     },
     {
@@ -303,6 +328,10 @@ class ToolBackend(Protocol):
     async def read_transcript(self, session_id: str, tool_output: str) -> str: ...
 
     async def post_message(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    async def resolve_approval(
+        self, session_id: str, request_id: str, decision: str
+    ) -> Dict[str, Any]: ...
 
     async def stop_session(self, session_id: str) -> Dict[str, Any]: ...
 
@@ -377,6 +406,11 @@ class SessionManagerToolBackend:
                 target=payload.get("target"),
             )
         ).to_dict()
+
+    async def resolve_approval(
+        self, session_id: str, request_id: str, decision: str
+    ) -> Dict[str, Any]:
+        return await self.manager.resolve_approval(session_id, request_id, decision, surface="mcp")
 
     async def stop_session(self, session_id: str) -> Dict[str, Any]:
         return (await self.manager.stop_session(session_id)).to_dict()
@@ -458,6 +492,11 @@ class HttpClientToolBackend:
             )
             .to_dict()
         )
+
+    async def resolve_approval(
+        self, session_id: str, request_id: str, decision: str
+    ) -> Dict[str, Any]:
+        return self.client_factory().resolve_approval(session_id, request_id, decision).to_dict()
 
     async def stop_session(self, session_id: str) -> Dict[str, Any]:
         return self.client_factory().stop_session(session_id).to_dict()
@@ -615,10 +654,20 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
             return text_content(await backend.read_transcript(session_id, request.tool_output))
         if name == "agent_collab_post_message":
             return content(await backend.post_message(session_id, _post_message_payload(args)))
+        if name == "agent_collab_approval":
+            request = _parse_tool_request(
+                ApprovalDecisionRequestModel.from_dict,
+                {key: args[key] for key in ("request_id", "decision") if key in args},
+            )
+            return content(
+                await backend.resolve_approval(session_id, request.request_id, request.decision)
+            )
         if name == "agent_collab_stop":
             return content(await backend.stop_session(session_id))
     except StartOptionsError as exc:
         return content(exc.to_dict(), is_error=True)
+    except ApprovalDecisionError as exc:
+        return content({"error": str(exc), "code": exc.code}, is_error=True)
     except (McpToolError, SessionNotFoundError, SessionRequestError) as exc:
         return content({"error": str(exc)}, is_error=True)
     except ClientError as exc:
@@ -652,16 +701,16 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                     "agent_collab_describe_options; agent_collab_guidance with no topic is the "
                     "full contract, topic 'delegate' just this flow. To delegate: "
                     "agent_collab_start, then watch with agent_collab_wait_events (timeout_ms "
-                    "20000-30000, view='digest', types=['message','error']), always advancing the "
-                    "returned cursor, never stopping on an empty batch. Short polls keep you "
-                    "steerable; clients kill calls near 60 s. Pace ~20s only after an early "
-                    "routine return. Stop on terminal or awaiting_input (interactive sessions "
-                    "park there), then harvest with agent_collab_wait_result: immediate, carries "
-                    "each agent's answer; never rebuild one from message events. Outcome only, "
-                    "no steering needed: wait_result alone. Interactive: post_message, then "
-                    "wait_result. Confirm models, backends, options before a paid start. "
-                    "interactive=false for parallel review workflows. On validation errors, fix "
-                    "the named field paths."
+                    "20000-30000, view='digest', types=['message','error','approval_request',"
+                    "'approval_resolved']), always advancing the returned cursor, never stopping "
+                    "on an empty batch. Short polls keep you steerable; clients kill calls near "
+                    "60 s. Pace ~20s only after an early routine return. Stop on terminal, "
+                    "awaiting_input, or awaiting_approval. wait_result: terminal harvests "
+                    "answers; awaiting_input is ready for post_message; awaiting_approval is a "
+                    "park (terminal=false, pending_approvals) — one agent_collab_approval per "
+                    "request_id. timeout_ms is not the approval deadline. Confirm models, "
+                    "backends, options before a paid start. interactive=false for parallel "
+                    "review workflows. On validation errors, fix the named field paths."
                 ),
                 "serverInfo": {"name": "agent-collab", "version": "0.1"},
             },

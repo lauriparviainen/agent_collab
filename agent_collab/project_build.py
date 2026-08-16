@@ -25,6 +25,8 @@ from .api_schema import (
     API_VERSION_HEADER,
     ROUTES,
     AgentAnswerModel,
+    ApprovalDecisionRequestModel,
+    ApprovalDecisionResponseModel,
     DaemonReadinessModel,
     ErrorModel,
     EventBatchModel,
@@ -65,6 +67,8 @@ _MODELS = (
     AgentAnswerModel,
     SessionResultModel,
     PendingApprovalModel,
+    ApprovalDecisionRequestModel,
+    ApprovalDecisionResponseModel,
     ErrorModel,
     PruneResultModel,
     PruneSessionDetailModel,
@@ -81,6 +85,7 @@ _REQUEST_MODELS = {
     StartSessionRequestModel,
     OptionsRequestModel,
     PostMessageRequestModel,
+    ApprovalDecisionRequestModel,
     PruneSessionsRequestModel,
     ReadEventsRequestModel,
     WaitEventsRequestModel,
@@ -136,6 +141,10 @@ _FIELD_SCHEMAS: Dict[Tuple[type, str], Dict[str, Any]] = {
     (OptionsRequestModel, "model_refresh"): {"enum": ["none", "cached", "fresh"]},
     (PostMessageRequestModel, "text"): {"minLength": 1, "pattern": r".*\S.*"},
     (PostMessageRequestModel, "source"): {"enum": ["human", "referee"]},
+    (ApprovalDecisionRequestModel, "request_id"): {"minLength": 1, "pattern": r".*\S.*"},
+    (ApprovalDecisionRequestModel, "decision"): {"enum": ["approve", "deny"]},
+    (ApprovalDecisionResponseModel, "outcome"): {"enum": ["approved", "denied", "auto_denied"]},
+    (ApprovalDecisionResponseModel, "status"): {"enum": ["ok", "idempotent", "delivery_failed"]},
     (ReadEventsRequestModel, "cursor"): {"minimum": 0},
     (ReadEventsRequestModel, "limit"): {"minimum": 1},
     (ReadEventsRequestModel, "tool_output"): {"enum": ["summary", "full"]},
@@ -304,6 +313,8 @@ def _operation(route: Any) -> Dict[str, Any]:
     responses: Dict[str, Any] = {"200": success, "400": error, "404": error, "default": error}
     if protected:
         responses["401"] = error
+    if route.handler == "resolve_approval":
+        responses["409"] = error
 
     operation: Dict[str, Any] = {
         "operationId": f"{route.handler}_{route.method.lower()}",
@@ -337,6 +348,7 @@ def _summary(route: Any) -> str:
         "wait_result": "Long-poll until a session settles and return its result",
         "post_message": "Post input to an interactive session",
         "read_transcript": "Read a session transcript",
+        "resolve_approval": "Approve or deny one parked tool-approval request",
         "stop_session": "Stop a live session",
         "prune_sessions": "Preview or apply terminal-session retention",
     }
@@ -401,7 +413,7 @@ def _model_schema(model: type, *, request: bool) -> Dict[str, Any]:
                 and item.default_factory is MISSING
             ):
                 required.append(item.name)
-        elif not (model is ErrorModel and item.name == "details"):
+        elif not (model is ErrorModel and item.name in {"details", "code"}):
             required.append(item.name)
         properties[item.name] = field_schema
         properties[item.name].update(_FIELD_SCHEMAS.get((model, item.name), {}))

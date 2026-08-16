@@ -26,6 +26,81 @@
         ],
         "type": "object"
       },
+      "ApprovalDecisionRequestModel": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "enum": [
+              "approve",
+              "deny"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "minLength": 1,
+            "pattern": ".*\\S.*",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "ApprovalDecisionResponseModel": {
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "enum": [
+              "approved",
+              "denied",
+              "auto_denied"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "idempotent",
+              "delivery_failed"
+            ],
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          },
+          "worker_instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id",
+          "request_id",
+          "outcome",
+          "reason",
+          "status",
+          "turn_id",
+          "worker_instance"
+        ],
+        "type": "object"
+      },
       "DaemonReadinessModel": {
         "additionalProperties": false,
         "properties": {
@@ -55,6 +130,16 @@
       "ErrorModel": {
         "additionalProperties": false,
         "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "details": {
             "anyOf": [
               {
@@ -1947,6 +2032,154 @@
           }
         ],
         "summary": "Read one session"
+      }
+    },
+    "/sessions/{session_id}/approvals": {
+      "post": {
+        "operationId": "resolve_approval_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionRequestModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalDecisionResponseModel"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error response",
+            "headers": {
+              "X-Agent-Collab-API": {
+                "description": "Daemon REST API major version",
+                "schema": {
+                  "const": 2,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Approve or deny one parked tool-approval request"
       }
     },
     "/sessions/{session_id}/events": {

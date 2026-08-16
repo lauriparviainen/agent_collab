@@ -542,6 +542,7 @@ class RenderIntegrationTests(unittest.TestCase):
             "/follow",
             "/refresh",
             "/stop",
+            "/approval",
             "/quit",
         ):
             self.assertIn(name, out)

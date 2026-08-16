@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 from .api_schema import (
     API_VERSION,
     API_VERSION_HEADER,
+    ApprovalDecisionResponseModel,
     EventBatchModel,
     HealthModel,
     PruneResultModel,
@@ -148,6 +149,20 @@ class AgentCollabClient:
             "GET", f"/sessions/{session_id}/transcript", {"tool_output": tool_output}
         )
         return TranscriptModel.from_dict(result).transcript
+
+    def resolve_approval(
+        self,
+        session_id: str,
+        request_id: str,
+        decision: str,
+    ) -> ApprovalDecisionResponseModel:
+        payload: Dict[str, Any] = {
+            "request_id": request_id,
+            "decision": decision,
+        }
+        return ApprovalDecisionResponseModel.from_dict(
+            self._request("POST", f"/sessions/{session_id}/approvals", payload)
+        )
 
     def stop_session(self, session_id: str) -> SessionStateModel:
         return SessionStateModel.from_dict(self._request("POST", f"/sessions/{session_id}/stop"))

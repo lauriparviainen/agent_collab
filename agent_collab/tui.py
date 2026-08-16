@@ -91,6 +91,7 @@ HELP_LINES = (
     "/follow                  jump to tail and resume follow",
     "/refresh                 re-read active session from cursor 0",
     "/stop                    stop active daemon session",
+    "/approval REQ approve|deny  decide a parked tool request",
     "/quit                    exit",
     "",
     "input",
@@ -683,6 +684,24 @@ class TuiApp:
                 self._stop_poller()
                 self._catch_up_and_rotate_epoch()
                 self.message = f"stopped {self.session_id}"
+            except Exception as exc:
+                self.message = str(exc)
+        elif command == "approval":
+            if not self.session_id:
+                self.message = "no active session"
+                return
+            if len(parsed.args) < 2:
+                self.message = "usage: /approval REQUEST_ID approve|deny"
+                return
+            request_id = parsed.args[0]
+            decision = parsed.args[1].lower()
+            if decision not in {"approve", "deny"}:
+                self.message = "usage: /approval REQUEST_ID approve|deny"
+                return
+            try:
+                result = self.client.resolve_approval(self.session_id, request_id, decision)
+                self._refresh_session_status()
+                self.message = f"{result.outcome} {request_id}"
             except Exception as exc:
                 self.message = str(exc)
         elif command == "quit":

@@ -13,9 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Expose one approval decision operation across REST, MCP, CLI, and TUI
+  (`approve`/`deny` as a parameter) (#20).
 - Add a session-scoped approval registry and a registry-keyed `awaiting_approval`
   settle arm for `wait_result`, with deny-by-default, abandon-on-result, and
-  deny-before-stop (no public decision operation yet) (#20).
+  deny-before-stop (#20).
 - Add `approval_request` and `approval_resolved` to the event type vocabulary
   and `awaiting_approval` as a live wait status (#20).
 - Gate Codex SDK worker `conversation_active()` on a captured thread id rather

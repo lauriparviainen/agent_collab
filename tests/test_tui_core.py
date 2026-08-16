@@ -153,6 +153,27 @@ class TuiCoreTests(unittest.TestCase):
         )
         self.assertIn("outcome turn-1: claude completed", lines)
 
+    def test_details_list_pending_approvals_when_parked(self):
+        session = {
+            "session_id": "s1",
+            "status": "awaiting_approval",
+            "pending_approvals": [
+                {
+                    "request_id": "a1",
+                    "agent_id": "claude_cli",
+                    "tool_name": "Bash",
+                    "summary": "true",
+                    "summary_truncated": False,
+                    "decision_options": ["approve", "deny"],
+                }
+            ],
+            "pending_approvals_omitted": 1,
+        }
+        lines = format_session_details(session)
+        self.assertIn("pending_approvals:", lines)
+        self.assertIn("  a1 claude_cli Bash: true", lines)
+        self.assertIn("pending_approvals_omitted: 1", lines)
+
     def test_details_format_uses_top_level_state_and_settings_agents(self):
         session = {
             "session_id": "s1",
@@ -209,6 +230,10 @@ class TuiCoreTests(unittest.TestCase):
         self.assertEqual(parse_input("#reviewer take a look").kind, "text")
         self.assertEqual(parse_input("/ask claude anything").kind, "invalid")
         self.assertEqual(parse_input("/unknown").kind, "invalid")
+        approval = parse_input("/approval a1 deny")
+        self.assertEqual(approval.kind, "slash")
+        self.assertEqual(approval.command, "approval")
+        self.assertEqual(approval.args, ("a1", "deny"))
 
     def test_slash_command_completion_filters_deterministically(self):
         all_matches = filter_slash_commands("/")

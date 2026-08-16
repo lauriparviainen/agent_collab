@@ -168,6 +168,35 @@ class StopPollerTests(unittest.TestCase):
         self.assertEqual(app.session.status, "stopped")
         self.assertEqual(app.message, f"stopped {SESSION_ID}")
 
+    def test_approval_slash_dispatches_decision(self):
+        from agent_collab.api_schema import ApprovalDecisionResponseModel
+
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def resolve_approval(self, session_id, request_id, decision):
+                self.calls.append((session_id, request_id, decision))
+                return ApprovalDecisionResponseModel.from_dict(
+                    {
+                        "session_id": session_id,
+                        "request_id": request_id,
+                        "outcome": "denied",
+                        "reason": "rest",
+                        "status": "ok",
+                    }
+                )
+
+            def get_session(self, session_id, detail="compact"):
+                return _session("awaiting_approval")
+
+        client = Client()
+        app = _app(client)
+        app._dispatch(parse_input("/approval a1 deny"))
+
+        self.assertEqual(client.calls, [(SESSION_ID, "a1", "deny")])
+        self.assertEqual(app.message, "denied a1")
+
     def test_error_from_stopped_poller_is_ignored(self):
         class Client:
             def __init__(self):

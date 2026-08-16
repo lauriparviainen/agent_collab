@@ -31,6 +31,7 @@ PUBLIC_COMMANDS = (
     ("result", "Wait for a daemon-owned session to settle and print its result."),
     ("watch", "Watch a live session or stored JSONL transcript."),
     ("stop", "Stop a daemon-owned session."),
+    ("approval", "Approve or deny a parked tool-approval request."),
     ("sessions", "Manage stored sessions, including pruning old terminal sessions."),
     ("config", "Show the merged config files for a workdir, or create the user config."),
     ("mcp", "Run the stdio MCP adapter (direct Streamable HTTP is preferred)."),
@@ -375,7 +376,8 @@ def build_result_parser() -> argparse.ArgumentParser:
         "agent-collab result",
         "Wait for a daemon session to settle and print its result. Loops through "
         "server-side heartbeats and exits only when the session is settled "
-        "(terminal, or awaiting_input and ready for a follow-up). Ideal as a "
+        "(terminal, awaiting_input and ready for a follow-up, or awaiting_approval "
+        "with pending tool requests). Ideal as a "
         "background process: your harness wakes you when it exits with the result.",
     )
     parser.add_argument(
@@ -1288,6 +1290,7 @@ def _print_result(result) -> None:
                 f"  [{event.get('event_id')}] {event.get('source')}"
                 f"{agent} {event.get('type')}: {event.get('text')}"
             )
+    _print_pending_approvals(result)
 
 
 def _main_stop(argv) -> int:
@@ -1295,6 +1298,51 @@ def _main_stop(argv) -> int:
     args = parser.parse_args(argv)
     try:
         _print_session(_client(args.server_url).stop_session(args.session_id))
+    except Exception as exc:
+        error(str(exc))
+        return 1
+    return 0
+
+
+def build_approval_parser() -> argparse.ArgumentParser:
+    parser = build_session_parser(
+        "agent-collab approval",
+        "Approve or deny one parked tool-approval request.",
+    )
+    parser.add_argument("request_id", help="Request id from pending_approvals.")
+    parser.add_argument(
+        "--decision",
+        required=True,
+        choices=("approve", "deny"),
+        help="Authorize or deny the parked tool request.",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="Print the decision result as JSON on stdout."
+    )
+    return parser
+
+
+def _main_approval(argv) -> int:
+    parser = build_approval_parser()
+    args = parser.parse_args(argv)
+    try:
+        result = _client(args.server_url).resolve_approval(
+            args.session_id, args.request_id, args.decision
+        )
+        if args.json:
+            print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        else:
+            print_kv(
+                [
+                    ("session_id", result.session_id),
+                    ("request_id", result.request_id),
+                    ("outcome", result.outcome),
+                    ("reason", result.reason),
+                    ("status", result.status),
+                    ("turn_id", result.turn_id or "—"),
+                    ("worker_instance", result.worker_instance or "—"),
+                ]
+            )
     except Exception as exc:
         error(str(exc))
         return 1
@@ -1310,26 +1358,59 @@ def _print_session(session) -> None:
         turn = f" {failure.get('turn_id')}" if failure.get("turn_id") else ""
         print(f"failure{turn}: {failure.get('code')} — {failure.get('message')}")
     settings = session.settings
-    if not settings:
+    if settings:
+        sequence = (settings.get("workflow") or {}).get("sequence")
+        if sequence:
+            print(f"sequence: {' -> '.join(sequence)}")
+        sandbox = settings.get("sandbox")
+        if isinstance(sandbox, dict):
+            print(
+                "outer_sandbox: "
+                f"effective={sandbox.get('effective')} source={sandbox.get('source')} "
+                f"engine={sandbox.get('engine')} establishment={sandbox.get('establishment')}"
+            )
+        for agent_id, agent in (settings.get("agents") or {}).items():
+            details = [
+                f"{key}={value}" for key, value in agent.items() if key not in {"command_preview"}
+            ]
+            print(f"agent {agent_id}: {' '.join(details)}")
+            preview = agent.get("command_preview")
+            if preview:
+                print(f"  command_preview: {' '.join(str(part) for part in preview)}")
+    _print_pending_approvals(session)
+
+
+def _print_pending_approvals(payload) -> None:
+    """Print bounded pending_approvals when status is awaiting_approval."""
+
+    if getattr(payload, "status", None) != "awaiting_approval":
         return
-    sequence = (settings.get("workflow") or {}).get("sequence")
-    if sequence:
-        print(f"sequence: {' -> '.join(sequence)}")
-    sandbox = settings.get("sandbox")
-    if isinstance(sandbox, dict):
-        print(
-            "outer_sandbox: "
-            f"effective={sandbox.get('effective')} source={sandbox.get('source')} "
-            f"engine={sandbox.get('engine')} establishment={sandbox.get('establishment')}"
-        )
-    for agent_id, agent in (settings.get("agents") or {}).items():
-        details = [
-            f"{key}={value}" for key, value in agent.items() if key not in {"command_preview"}
-        ]
-        print(f"agent {agent_id}: {' '.join(details)}")
-        preview = agent.get("command_preview")
-        if preview:
-            print(f"  command_preview: {' '.join(str(part) for part in preview)}")
+    pending = getattr(payload, "pending_approvals", None) or []
+    omitted = int(getattr(payload, "pending_approvals_omitted", 0) or 0)
+    if not pending:
+        print("pending_approvals: (none)")
+    else:
+        print("pending_approvals:")
+        for item in pending:
+            request_id = _approval_field(item, "request_id")
+            agent_id = _approval_field(item, "agent_id")
+            tool_name = _approval_field(item, "tool_name")
+            summary = _approval_field(item, "summary")
+            truncated = bool(
+                getattr(item, "summary_truncated", None)
+                if not isinstance(item, dict)
+                else item.get("summary_truncated")
+            )
+            flag = " [truncated]" if truncated else ""
+            print(f"  {request_id} {agent_id} {tool_name}: {summary}{flag}")
+    if omitted:
+        print(f"pending_approvals_omitted: {omitted}")
+
+
+def _approval_field(item, name: str) -> str:
+    if isinstance(item, dict):
+        return str(item.get(name, ""))
+    return str(getattr(item, name, "") or "")
 
 
 def _format_agents_summary(settings) -> str:
@@ -1431,6 +1512,7 @@ def _command_handlers():
         "events": _main_events,
         "result": _main_result,
         "stop": _main_stop,
+        "approval": _main_approval,
         "sessions": _main_sessions,
         "config": _main_config,
         "mcp": _main_mcp,

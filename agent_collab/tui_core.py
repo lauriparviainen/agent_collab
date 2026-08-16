@@ -17,6 +17,7 @@ SLASH_COMMANDS = {
     "follow": "jump to tail and follow",
     "refresh": "re-read the active session",
     "stop": "stop the active session",
+    "approval": "approve or deny a parked tool request",
     "quit": "exit",
 }
 
@@ -526,6 +527,24 @@ def format_session_details(session: Any) -> Tuple[str, ...]:
         lines.append(f"failure{turn}: {failure.get('code')} — {failure.get('message')}")
     else:
         _append_present(lines, "error", session)
+
+    if _value(session, "status", None) == "awaiting_approval":
+        pending = _value(session, "pending_approvals", None) or []
+        omitted = int(_value(session, "pending_approvals_omitted", 0) or 0)
+        if not pending:
+            lines.append("pending_approvals: (none)")
+        elif isinstance(pending, Sequence) and not isinstance(pending, (str, bytes)):
+            lines.append("pending_approvals:")
+            for item in pending:
+                request_id = _value(item, "request_id", "")
+                agent_id = _value(item, "agent_id", "")
+                tool_name = _value(item, "tool_name", "")
+                summary = _value(item, "summary", "")
+                truncated = bool(_value(item, "summary_truncated", False))
+                flag = " [truncated]" if truncated else ""
+                lines.append(f"  {request_id} {agent_id} {tool_name}: {summary}{flag}")
+        if omitted:
+            lines.append(f"pending_approvals_omitted: {omitted}")
 
     outcomes = _value(session, "turn_outcomes", None)
     if isinstance(outcomes, Sequence) and not isinstance(outcomes, (str, bytes)):

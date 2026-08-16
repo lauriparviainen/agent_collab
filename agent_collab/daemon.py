@@ -1865,12 +1865,13 @@ class SessionManager:
                 )
             if resolved.outcome in {"approved", "denied"}:
                 if resolved.outcome == outcome:
-                    return {
-                        "request_id": request_id,
-                        "outcome": resolved.outcome,
-                        "reason": resolved.reason,
-                        "status": "idempotent",
-                    }
+                    return self._approval_decision_payload(
+                        managed,
+                        resolved,
+                        outcome=resolved.outcome or outcome,
+                        reason=resolved.reason or surface,
+                        status="idempotent",
+                    )
                 raise ApprovalDecisionError(
                     "conflict",
                     f"approval request_id {request_id!r} already {resolved.outcome}",
@@ -1900,24 +1901,47 @@ class SessionManager:
                 await self._send_worker_decision(pending, "deny")
                 self._sync_approval_status(managed)
                 self._schedule_notify(managed)
-                return {
-                    "request_id": request_id,
-                    "outcome": "auto_denied",
-                    "reason": "delivery_failed",
-                    "status": "delivery_failed",
-                }
+                return self._approval_decision_payload(
+                    managed,
+                    pending,
+                    outcome="auto_denied",
+                    reason="delivery_failed",
+                    status="delivery_failed",
+                )
             managed.approvals.complete(pending, outcome, surface)
             await self._emit_approval_resolved(managed, pending)
             self._sync_approval_status(managed)
             self._schedule_notify(managed)
-            return {
-                "request_id": request_id,
-                "outcome": outcome,
-                "reason": surface,
-                "status": "ok",
-            }
+            return self._approval_decision_payload(
+                managed,
+                pending,
+                outcome=outcome,
+                reason=surface,
+                status="ok",
+            )
         finally:
             pending.send_in_flight = False
+
+    @staticmethod
+    def _approval_decision_payload(
+        managed: _ManagedSession,
+        entry: ApprovalEntry,
+        *,
+        outcome: str,
+        reason: str,
+        status: str,
+    ) -> Dict[str, Any]:
+        """Bind a public decision to session, request, turn, and worker instance."""
+
+        return {
+            "session_id": managed.state.session_id,
+            "request_id": entry.request_id,
+            "outcome": outcome,
+            "reason": reason,
+            "status": status,
+            "turn_id": entry.turn_id or "",
+            "worker_instance": entry.worker_instance,
+        }
 
     async def _auto_deny_pending(self, managed: _ManagedSession, reason: str) -> int:
         entries = managed.approvals.take_all()

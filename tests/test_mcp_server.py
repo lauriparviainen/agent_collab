@@ -112,6 +112,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_wait_result", names)
         self.assertIn("agent_collab_read_transcript", names)
         self.assertIn("agent_collab_post_message", names)
+        self.assertIn("agent_collab_approval", names)
         self.assertIn("agent_collab_stop", names)
         self.assertIn("agent_collab_guidance", names)
 
@@ -186,7 +187,21 @@ class McpServerTests(unittest.TestCase):
             self.assertIn(required, text)
         # The follow-up-cost note names the continuity capability (Stage 3).
         self.assertIn("continuity", text)
+        self.assertIn("awaiting_approval", text)
+        self.assertIn("pending_approvals", text)
+        self.assertIn("agent_collab_approval", text)
+        self.assertIn("`timeout_ms` is your poll bound, not the approval deadline", text)
+        self.assertIn("Gating is for exceptions, not throughput", text)
         self.assertNotIn("## Start", text)
+
+    def test_watch_topic_includes_approval_park_contract(self):
+        text = handle_tool("agent_collab_guidance", {"topic": "watch"})["content"][0]["text"]
+        self.assertTrue(text.startswith("## Watch"))
+        self.assertIn("awaiting_approval", text)
+        self.assertIn("pending_approvals", text)
+        self.assertIn("approval_request", text)
+        self.assertIn("not the approval deadline", text)
+        self.assertNotIn("## Delegate", text)
 
     def test_start_and_status_schemas_expose_detail(self):
         response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -233,6 +248,11 @@ class McpServerTests(unittest.TestCase):
         # a topic returns only its own section (see guidance_text).
         self.assertIn("no topic is the full contract", instructions)
         self.assertNotIn("'delegate') has the full contract", instructions)
+        self.assertIn("awaiting_approval", instructions)
+        self.assertIn("pending_approvals", instructions)
+        self.assertIn("timeout_ms is not the approval deadline", instructions)
+        self.assertIn("agent_collab_approval", instructions)
+        self.assertIn("approval_request", instructions)
 
     def test_event_tools_advertise_projection_arguments(self):
         tools = {tool["name"]: tool for tool in TOOLS}
@@ -246,12 +266,15 @@ class McpServerTests(unittest.TestCase):
         # wait_result is advertised as the harvest that follows it rather than
         # a competitor to it.
         self.assertIn("Preferred way to follow", tools["agent_collab_wait_events"]["description"])
+        self.assertIn("approval_request", tools["agent_collab_wait_events"]["description"])
         result_description = tools["agent_collab_wait_result"]["description"]
         self.assertIn("harvest", result_description)
         self.assertIn("unresponsive", result_description)
         # The instant peek and the failure tail are contract facts, not prose.
         self.assertIn("timeout_ms=0", result_description)
         self.assertIn("events_tail", result_description)
+        self.assertIn("awaiting_approval", result_description)
+        self.assertIn("pending_approvals", result_description)
 
     def test_start_maps_to_client_start_session(self):
         args = {
@@ -584,6 +607,74 @@ class McpServerTests(unittest.TestCase):
             "s1", "hello", source="referee", target="claude"
         )
         _assert_tool_result(self, result, batch.to_dict())
+
+    def test_approval_maps_to_client_resolve_approval(self):
+        from agent_collab.api_schema import ApprovalDecisionResponseModel
+
+        payload = {
+            "session_id": "s1",
+            "request_id": "a1",
+            "outcome": "approved",
+            "reason": "rest",
+            "status": "ok",
+            "turn_id": "turn-1",
+            "worker_instance": "inst-1",
+        }
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            client.resolve_approval.return_value = ApprovalDecisionResponseModel.from_dict(payload)
+
+            result = handle_tool(
+                "agent_collab_approval",
+                {"session_id": "s1", "request_id": "a1", "decision": "approve"},
+            )
+
+        client.resolve_approval.assert_called_once_with("s1", "a1", "approve")
+        _assert_tool_result(self, result, payload)
+
+    def test_approval_rejects_invalid_decision(self):
+        result = handle_tool(
+            "agent_collab_approval",
+            {"session_id": "s1", "request_id": "a1", "decision": "maybe"},
+        )
+        self.assertTrue(result["isError"])
+        self.assertIn("decision", _payload(result)["error"])
+
+    def test_session_manager_backend_passes_mcp_surface(self):
+        from agent_collab.approvals import ApprovalDecisionError
+        from agent_collab.mcp_tools import SessionManagerToolBackend, handle_tool_sync
+
+        manager = mock.Mock()
+        manager.resolve_approval = mock.AsyncMock(
+            return_value={
+                "session_id": "s1",
+                "request_id": "a1",
+                "outcome": "denied",
+                "reason": "mcp",
+                "status": "ok",
+                "turn_id": "",
+                "worker_instance": None,
+            }
+        )
+        backend = SessionManagerToolBackend(manager)
+        result = handle_tool_sync(
+            "agent_collab_approval",
+            {"session_id": "s1", "request_id": "a1", "decision": "deny"},
+            backend,
+        )
+        manager.resolve_approval.assert_called_once_with("s1", "a1", "deny", surface="mcp")
+        self.assertFalse(result.get("isError"))
+
+        manager.resolve_approval = mock.AsyncMock(
+            side_effect=ApprovalDecisionError("conflict", "already approved")
+        )
+        conflicted = handle_tool_sync(
+            "agent_collab_approval",
+            {"session_id": "s1", "request_id": "a1", "decision": "deny"},
+            SessionManagerToolBackend(manager),
+        )
+        self.assertTrue(conflicted["isError"])
+        self.assertEqual(_payload(conflicted)["code"], "conflict")
 
     def test_stop_maps_to_client_stop_session(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:

@@ -13,6 +13,8 @@ from urllib.parse import parse_qs, urlparse
 from .api_schema import (
     API_VERSION,
     API_VERSION_HEADER,
+    ApprovalDecisionRequestModel,
+    ApprovalDecisionResponseModel,
     DaemonReadinessModel,
     GetSessionRequestModel,
     HealthModel,
@@ -26,6 +28,7 @@ from .api_schema import (
     WaitEventsRequestModel,
     WaitResultRequestModel,
 )
+from .approvals import ApprovalDecisionError
 from .config import CollaborationConfig, SessionsConfig
 from .daemon import (
     SessionManager,
@@ -220,6 +223,10 @@ class AgentCollabHttpServer:
         except SessionNotFoundError as exc:
             self._log_request(f"request error 404 {exc}")
             await self._write_json(writer, 404, {"error": str(exc)})
+        except ApprovalDecisionError as exc:
+            status = 404 if exc.code == "not_found" else 409
+            self._log_request(f"request error {status} {exc}")
+            await self._write_json(writer, status, {"error": str(exc), "code": exc.code})
         except StartOptionsError as exc:
             self._log_request(f"request error 400 {exc.code}")
             await self._write_json(writer, 400, exc.to_dict())
@@ -452,6 +459,19 @@ class AgentCollabHttpServer:
             )
         }
 
+    async def _route_resolve_approval(
+        self, _route: Route, path: Dict[str, str], _query: Dict[str, str], body: bytes
+    ) -> Any:
+        request = _parse(ApprovalDecisionRequestModel.from_dict, _decode_json_object(body))
+        return ApprovalDecisionResponseModel.from_dict(
+            await self.manager.resolve_approval(
+                path["session_id"],
+                request.request_id,
+                request.decision,
+                surface="rest",
+            )
+        ).to_dict()
+
     async def _route_stop_session(
         self, _route: Route, path: Dict[str, str], _query: Dict[str, str], _body: bytes
     ) -> Any:
@@ -630,6 +650,7 @@ def _http_reason(status: int) -> str:
         403: "Forbidden",
         404: "Not Found",
         405: "Method Not Allowed",
+        409: "Conflict",
         413: "Payload Too Large",
         431: "Request Header Fields Too Large",
         500: "Internal Server Error",

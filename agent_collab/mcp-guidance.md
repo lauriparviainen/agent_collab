@@ -40,24 +40,41 @@ Run another agent as a subagent and collect its result over MCP alone:
 2. `agent_collab_start` — `solo` with `members` picks the agent; add
    `interactive: true` for a back-and-forth.
 3. **Watch** with `agent_collab_wait_events` (see Watch): bounded 20000–30000
-   polls, `view: "digest"`, `types: ["message", "error"]`. You block inside
-   whichever call you make and your user reaches you only when it returns, so
-   this bound is your steering latency — you see progress, you can intervene,
-   and your user can redirect you between polls. Stop when `terminal` is true
-   **or** `status` is `awaiting_input`: an interactive session parks there
-   instead of going terminal, so a loop that waits for `terminal` alone would
-   poll until the idle timeout closes a session that was already done talking.
-4. **Harvest** with `agent_collab_wait_result`. On a terminal or parked session
-   it settles immediately — no block, no waiting — and its `answers` carry each
-   agent's latest completed-turn answer, so you never reconstruct the result
-   from digest text. Do not re-fetch every message event to rebuild it: that
-   costs more than the whole watch loop did. Answer `text` is preview-bounded
-   (large answers carry a truncation notice and an `event_id` to re-fetch), and
-   an agent whose turns all failed contributes no answer at all — read
-   `turn_outcomes` and `failure` for those. A settled result whose terminal
-   status is not `done` also carries `events_tail`: the last ~20 events as
-   digest lines (capped text, `event_id` re-fetchable), usually enough to
-   debug the failure without `read_events`.
+   polls, `view: "digest"`, `types: ["message", "error", "approval_request",
+   "approval_resolved"]`. You block inside whichever call you make and your
+   user reaches you only when it returns, so this bound is your steering
+   latency — you see progress, you can intervene, and your user can redirect
+   you between polls. Stop when `terminal` is true, `status` is
+   `awaiting_input`, **or** `status` is `awaiting_approval`: an interactive
+   session parks at `awaiting_input` instead of going terminal, and a gated
+   tool parks mid-turn at `awaiting_approval`. A loop that waits for
+   `terminal` alone would poll until the idle timeout closes a session that
+   was already done talking, or miss a parked approval. An empty batch while
+   parked is normal (`types` filters the returned events, not the cursor).
+   `timeout_ms` is your poll bound, not the approval deadline.
+4. **Harvest or decide** with `agent_collab_wait_result`. On a terminal or
+   parked session it settles immediately — no block, no waiting.
+
+   - `settled` + terminal: `answers` carry each agent's latest completed-turn
+     answer. Do not re-fetch every message event to rebuild it: that costs
+     more than the whole watch loop did. Answer `text` is preview-bounded
+     (large answers carry a truncation notice and an `event_id` to re-fetch),
+     and an agent whose turns all failed contributes no answer at all — read
+     `turn_outcomes` and `failure` for those. A settled result whose terminal
+     status is not `done` also carries `events_tail`: the last ~20 events as
+     digest lines (capped text, `event_id` re-fetchable), usually enough to
+     debug the failure without `read_events`.
+   - `settled` + `awaiting_input`: you may `post_message` a follow-up.
+   - `settled` + `awaiting_approval` is a **park, not a harvest**:
+     `terminal` is false, `pending_approvals` is present, and `answers` are
+     not the final result. Decide from that park payload — blocks of
+     `request_id`, `agent_id`, `tool_name`, `summary`, `summary_truncated`,
+     `decision_options`, with overflow counted in `pending_approvals_omitted`.
+     One wait, then one `agent_collab_approval` per request (`decision`
+     `approve` or `deny`). Remaining unresolved requests stay parked; decide
+     those from the next `wait_result`. Do not add `wait_approval` or
+     `list_approvals`. Gating is for exceptions, not throughput: preconfigured
+     permission posture at start is the throughput path.
 
    Use `wait_result` *instead of* the watch loop only when you want nothing but
    the outcome and need not stay responsive: it then blocks until the session
@@ -65,8 +82,8 @@ Run another agent as a subagent and collect its result over MCP alone:
    calls near 60 s. On a heartbeat (`settled: false`) re-poll immediately; no
    pacing delay, the block is server-side. `timeout_ms: 0` never blocks — an
    instant peek at the current state, the cheap way to sweep several delegated
-   sessions for the ones that have settled. `settled` with status
-   `awaiting_input` means you may post a follow-up.
+   sessions for the ones that have settled. `timeout_ms` is not the approval
+   deadline.
 
    For one specific event rather than the answers — a finding whose digest text
    was cut — re-fetch it with `agent_collab_read_events` (`cursor: event_id`,
@@ -237,13 +254,18 @@ Read events incrementally with a cursor:
    when the user asks or an actionable event needs immediate follow-up,
 4. inspect `status`, `terminal`, `error`, `failure`, and `turn_outcomes` on
    every response, including ones with `events: []`; stop when `terminal` is
-   true. `awaiting_input` is live, not terminal — an interactive session parks
-   there when it has finished and is waiting for you, and only reaches a
-   terminal status once `interactive_idle_timeout` expires or you stop it. So a
-   watch loop over an interactive session must stop on `awaiting_input` too and
-   hand over to `agent_collab_wait_result`: waiting for `terminal` means waiting
-   out the whole idle window, and by the time it arrives the session is closed
-   and `post_message` is rejected. If the daemon predates this additive view,
+   true, `status` is `awaiting_input`, or `status` is `awaiting_approval`.
+   `awaiting_input` is live, not terminal — an interactive session parks there
+   when it has finished and is waiting for you, and only reaches a terminal
+   status once `interactive_idle_timeout` expires or you stop it. So a watch
+   loop over an interactive session must stop on `awaiting_input` too and hand
+   over to `agent_collab_wait_result`: waiting for `terminal` means waiting out
+   the whole idle window, and by the time it arrives the session is closed and
+   `post_message` is rejected. `awaiting_approval` is a mid-turn park: stop,
+   harvest `wait_result` for `pending_approvals`, and call
+   `agent_collab_approval` — do not treat that settled payload as the final
+   result. An empty batch while parked is normal. `timeout_ms` is the poll
+   bound, not the approval deadline. If the daemon predates this additive view,
    fall back to `agent_collab_status`.
 
 Never make one unbounded blocking call. Always pass the cursor from the
@@ -255,16 +277,21 @@ Cheap watching, two independent controls:
   event with its absolute `event_id`. `tool_output` has no effect here — a
   digest never carries a tool payload.
 - `types` keeps only the listed event types, for example
-  `["message", "error"]`. It filters the returned batch only: the `cursor`
-  still advances over every scanned event, and the wait still wakes on any
-  event or status change. So an empty batch can mean everything new was
-  filtered out, not that the session is idle — read `status`, not `events`.
+  `["message", "error", "approval_request", "approval_resolved"]`. It filters
+  the returned batch only: the `cursor` still advances over every scanned
+  event, and the wait still wakes on any event or status change. So an empty
+  batch can mean everything new was filtered out, not that the session is
+  idle — read `status`, not `events`. An empty batch while parked on
+  `awaiting_approval` is likewise normal.
 
 Digest `text` is a scent, not the content: enough to see what arrived and
 decide whether to intervene. Do not rebuild a result from it, and do not page
-back over every message event to recover the full text — once the session is
-terminal or parked, `agent_collab_wait_result` returns immediately with each
-agent's answer, and that is the cheapest complete result there is.
+back over every message event to recover the full text. Once the session is
+terminal, `agent_collab_wait_result` returns immediately with each agent's
+answer, and that is the cheapest complete result there is. `awaiting_input`
+is a follow-up park (`post_message`). `awaiting_approval` is a mid-turn park:
+decide from `pending_approvals` with `agent_collab_approval`; do not harvest
+`answers` as the gated turn's result.
 
 Any event is re-fetchable whole with `cursor: EVENT_ID`, `limit: 1`,
 `tool_output: "full"` (do not pass `types` on such a re-fetch: `limit` counts
@@ -381,13 +408,14 @@ batch = agent_collab_read_events(
 cursor = batch.cursor
 consume(batch.events)
 
-while not batch.terminal:
+while not batch.terminal and batch.status not in (
+        "awaiting_input", "awaiting_approval"):
     batch = agent_collab_wait_events(
         session_id=session.session_id,
         cursor=cursor,
         timeout_ms=20000,
         view="digest",                    # raw dropped, text capped, event_id kept
-        types=["message", "error"],       # filters the batch, not the cursor
+        types=["message", "error", "approval_request", "approval_resolved"],
     )
     cursor = batch.cursor                 # always advance to returned cursor
     consume(batch.events)
@@ -396,7 +424,12 @@ while not batch.terminal:
         wait ~20 seconds before the next call
 ```
 
-Then harvest: `agent_collab_wait_result` on the now-terminal session returns
+If `status` is `awaiting_approval`, call `agent_collab_wait_result` for the
+park payload (`pending_approvals`) and `agent_collab_approval` once per
+`request_id`, then resume the watch loop. Do not harvest `answers` there —
+`terminal` is false and the gated turn is still running.
+
+When `terminal` is true, harvest: `agent_collab_wait_result` returns
 immediately with each reviewer's full answer under `answers`, keyed by
 `agent_id`. Read a single finding whole with `read_events(cursor=event_id,
 limit=1, tool_output="full")` when a capped digest line is not enough to triage

@@ -308,6 +308,10 @@ class ApprovalRegistrySettleTests(unittest.IsolatedAsyncioTestCase):
                 )
                 first = await manager.resolve_approval(managed.state.session_id, "a1", "approve")
                 self.assertEqual(first["status"], "ok")
+                self.assertEqual(first["session_id"], managed.state.session_id)
+                self.assertEqual(first["request_id"], "a1")
+                self.assertIn("turn_id", first)
+                self.assertIn("worker_instance", first)
                 again = await manager.resolve_approval(managed.state.session_id, "a1", "approve")
                 self.assertEqual(again["status"], "idempotent")
                 with self.assertRaises(ApprovalDecisionError) as conflict:

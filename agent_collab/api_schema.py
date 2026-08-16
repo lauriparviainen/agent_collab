@@ -571,30 +571,36 @@ class SessionResultModel:
 
 @dataclass
 class ErrorModel:
-    """The single REST error envelope: ``{"error": ..., "details"?: [...]}``.
+    """The single REST error envelope: ``{"error": ..., "details"?: [...], "code"?: ...}``.
 
     Covers every non-2xx REST response and the transport-level ``/mcp`` errors
     (bad Origin/method/protocol), which render through the same ``{"error": ...}``
-    envelope (no ``details``). ``details`` is therefore optional. It does NOT
-    cover JSON-RPC error objects inside a 200/202 ``/mcp`` body — those keep
-    their JSON-RPC shape.
+    envelope (no ``details``). ``details`` and ``code`` are therefore optional.
+    ``code`` is used by structured approval conflicts (``not_found`` /
+    ``conflict`` / ``stale``). It does NOT cover JSON-RPC error objects inside a
+    200/202 ``/mcp`` body — those keep their JSON-RPC shape.
     """
 
     error: Any
     details: Optional[List[Any]] = None
+    code: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ErrorModel":
         details = data.get("details")
+        code = data.get("code")
         return cls(
             error=data.get("error", data),
             details=list(details) if isinstance(details, list) else None,
+            code=str(code) if code is not None else None,
         )
 
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {"error": self.error}
         if self.details is not None:
             out["details"] = self.details
+        if self.code is not None:
+            out["code"] = self.code
         return out
 
 
@@ -852,6 +858,68 @@ class OptionsRequestModel:
             "workdir": self.workdir,
             "health_refresh": self.health_refresh,
             "model_refresh": self.model_refresh,
+        }
+
+
+@dataclass
+class ApprovalDecisionRequestModel:
+    """``POST /sessions/{id}/approvals`` request.
+
+    ``decision`` is approve or deny on this one operation. The HTTP handler
+    stamps audit ``surface="rest"``; callers cannot set it.
+    """
+
+    request_id: str
+    decision: str
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ApprovalDecisionRequestModel":
+        request_id = _required_str(data, "request_id")
+        decision = data.get("decision")
+        if not isinstance(decision, str) or decision not in {"approve", "deny"}:
+            raise ValueError("decision must be 'approve' or 'deny'")
+        return cls(request_id=request_id, decision=decision)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"request_id": self.request_id, "decision": self.decision}
+
+
+@dataclass
+class ApprovalDecisionResponseModel:
+    """``POST /sessions/{id}/approvals`` response: one bound decision."""
+
+    session_id: str
+    request_id: str
+    outcome: str
+    reason: str
+    status: str
+    turn_id: str = ""
+    worker_instance: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ApprovalDecisionResponseModel":
+        worker_instance = data.get("worker_instance")
+        if worker_instance is not None:
+            worker_instance = str(worker_instance)
+        return cls(
+            session_id=str(data["session_id"]),
+            request_id=str(data["request_id"]),
+            outcome=str(data["outcome"]),
+            reason=str(data.get("reason", "")),
+            status=str(data["status"]),
+            turn_id=str(data.get("turn_id", "")),
+            worker_instance=worker_instance,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "request_id": self.request_id,
+            "outcome": self.outcome,
+            "reason": self.reason,
+            "status": self.status,
+            "turn_id": self.turn_id,
+            "worker_instance": self.worker_instance,
         }
 
 
@@ -1171,6 +1239,14 @@ ROUTES: Tuple[Route, ...] = (
     ),
     Route(
         "POST",
+        "/sessions/{session_id}/approvals",
+        "resolve_approval",
+        "resolve_approval",
+        ApprovalDecisionRequestModel,
+        ApprovalDecisionResponseModel,
+    ),
+    Route(
+        "POST",
         "/sessions/{session_id}/stop",
         "stop_session",
         "stop_session",
@@ -1207,6 +1283,8 @@ __all__ = [
     "AgentAnswerModel",
     "PendingApprovalModel",
     "SessionResultModel",
+    "ApprovalDecisionRequestModel",
+    "ApprovalDecisionResponseModel",
     "ErrorModel",
     "PruneResultModel",
     "PruneSessionDetailModel",

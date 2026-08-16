@@ -25,6 +25,8 @@ from agent_collab.api_schema import (
     ROUTES,
     SERVER_ONLY_ROUTES,
     AgentAnswerModel,
+    ApprovalDecisionRequestModel,
+    ApprovalDecisionResponseModel,
     DaemonReadinessModel,
     EventBatchModel,
     EventModel,
@@ -243,6 +245,8 @@ class ModelRoundTripTests(unittest.TestCase):
             "details": [{"path": "backend_options.codex_cli.model", "message": "unknown field"}],
         }
         self.assertEqual(ErrorModel.from_dict(with_details).to_dict(), with_details)
+        with_code = {"error": "already approved", "code": "conflict"}
+        self.assertEqual(ErrorModel.from_dict(with_code).to_dict(), with_code)
 
     def test_error_model_matches_real_server_error_producers(self):
         # Tie ErrorModel to the actual error shapes the server emits, not just
@@ -437,6 +441,31 @@ class ModelRoundTripTests(unittest.TestCase):
         self.assertEqual(decoded.pending_approvals[0].request_id, "a1")
         self.assertEqual(decoded.to_dict(), payload)
 
+    def test_approval_decision_response_round_trips_binding_fields(self):
+        payload = {
+            "session_id": "s1",
+            "request_id": "a1",
+            "outcome": "approved",
+            "reason": "rest",
+            "status": "ok",
+            "turn_id": "turn-1",
+            "worker_instance": "inst-9",
+        }
+        decoded = ApprovalDecisionResponseModel.from_dict(payload)
+        self.assertEqual(decoded.to_dict(), payload)
+        self.assertEqual(decoded.worker_instance, "inst-9")
+
+    def test_approval_decision_request_validates_decision(self):
+        parsed = ApprovalDecisionRequestModel.from_dict({"request_id": "a1", "decision": "approve"})
+        self.assertEqual(parsed.to_dict(), {"request_id": "a1", "decision": "approve"})
+        ignored = ApprovalDecisionRequestModel.from_dict(
+            {"request_id": "a1", "decision": "approve", "surface": "cli"}
+        )
+        self.assertEqual(ignored.to_dict(), {"request_id": "a1", "decision": "approve"})
+        with self.assertRaisesRegex(ValueError, "decision"):
+            ApprovalDecisionRequestModel.from_dict({"request_id": "a1", "decision": "maybe"})
+        # Extra body.surface is ignored; audit surface is transport-stamped.
+
     def test_wait_result_timeout_bounds(self):
         # 45 s clears the 60 s per-tool-call limit MCP clients default to; a
         # longer block is killed client-side before the daemon ever answers.
@@ -483,6 +512,8 @@ class ModelRoundTripTests(unittest.TestCase):
             ),
             (PostMessageRequestModel, {"text": "go"}),
             (PostMessageRequestModel, {"text": "go", "source": "human", "target": "codex"}),
+            (ApprovalDecisionRequestModel, {"request_id": "a1", "decision": "approve"}),
+            (ApprovalDecisionRequestModel, {"request_id": "a1", "decision": "deny"}),
             (ReadEventsRequestModel, {"cursor": 4, "limit": 1, "tool_output": "full"}),
             (ReadEventsRequestModel, {"cursor": 4, "view": "digest", "types": "message,error"}),
             (WaitEventsRequestModel, {"cursor": 4, "timeout_ms": 10}),

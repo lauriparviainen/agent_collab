@@ -4,6 +4,8 @@ import unittest
 from unittest import mock
 
 from agent_collab.api_schema import (
+    ApprovalDecisionResponseModel,
+    PendingApprovalModel,
     PruneResultModel,
     PruneSessionDetailModel,
     SessionResultModel,
@@ -270,6 +272,92 @@ class ResultCliTests(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("unknown session_id", err)
+
+
+class ApprovalCliTests(unittest.TestCase):
+    def test_approval_dispatches_decision(self):
+        client = mock.Mock()
+        client.resolve_approval.return_value = ApprovalDecisionResponseModel.from_dict(
+            {
+                "session_id": "s1",
+                "request_id": "a1",
+                "outcome": "approved",
+                "reason": "cli",
+                "status": "ok",
+                "turn_id": "turn-1",
+                "worker_instance": None,
+            }
+        )
+
+        code, out, _err = _run(["approval", "s1", "a1", "--decision", "approve"], client)
+
+        self.assertEqual(code, 0)
+        client.resolve_approval.assert_called_once_with("s1", "a1", "approve")
+        self.assertIn("approved", out)
+        self.assertIn("a1", out)
+
+    def test_approval_errors_use_error_prefix_and_exit_1(self):
+        client = mock.Mock()
+        client.resolve_approval.side_effect = ClientError(
+            "unknown approval request_id 'nope'",
+            payload={"error": "unknown approval request_id 'nope'", "code": "not_found"},
+        )
+
+        code, _out, err = _run(["approval", "s1", "nope", "--decision", "deny"], client)
+
+        self.assertEqual(code, 1)
+        self.assertIn("Error:", err)
+        self.assertIn("unknown approval request_id", err)
+
+    def test_result_prints_pending_approvals_when_awaiting_approval(self):
+        client = mock.Mock()
+        client.wait_result.return_value = _session_result(
+            True,
+            status="awaiting_approval",
+            terminal=False,
+            answers=[],
+            pending_approvals=[
+                {
+                    "request_id": "a1",
+                    "agent_id": "claude_cli",
+                    "tool_name": "Bash",
+                    "summary": "true",
+                    "summary_truncated": False,
+                    "decision_options": ["approve", "deny"],
+                }
+            ],
+            pending_approvals_omitted=2,
+        )
+
+        code, out, _err = _run(["result", "s1"], client)
+
+        self.assertEqual(code, 0)
+        self.assertIn("pending_approvals:", out)
+        self.assertIn("a1", out)
+        self.assertIn("claude_cli", out)
+        self.assertIn("pending_approvals_omitted: 2", out)
+
+    def test_status_prints_pending_approvals_when_awaiting_approval(self):
+        client = mock.Mock()
+        session = _session_state()
+        session.status = "awaiting_approval"
+        session.pending_approvals = [
+            PendingApprovalModel(
+                request_id="a1",
+                agent_id="claude_cli",
+                tool_name="Bash",
+                summary="true",
+            )
+        ]
+        session.pending_approvals_omitted = 1
+        client.get_session.return_value = session
+
+        code, out, _err = _run(["status", "s1"], client)
+
+        self.assertEqual(code, 0)
+        self.assertIn("pending_approvals:", out)
+        self.assertIn("a1", out)
+        self.assertIn("pending_approvals_omitted: 1", out)
 
 
 if __name__ == "__main__":
