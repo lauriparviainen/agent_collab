@@ -50,8 +50,11 @@ continues under background ownership.
 `continuity` is true: follow-up turns within one live agent-collab session use
 the held provider thread and receive delta prompts. The host
 `approval_handler` is wired on the worker path and on in-process sessions
-that have a session approval callback; production `tool_gate` remains false
-pending credentialed parks (issue #20). `resume` and `interrupt` remain
+that have a session approval callback. Gated sessions start/resume through
+the installed client with `approvalPolicy=on-request` and
+`approvalsReviewer=user` so the public `auto_review` default cannot decide
+without the host handler. Production `tool_gate` remains false pending
+credentialed parks on both paths (issue #20). `resume` and `interrupt` remain
 false under their stricter public definitions (no restart-safe resume, no
 credentialed interrupt proof). The adapter serializes run/reset/close;
 cancelling the asyncio waiter does not stop the provider — interrupt must

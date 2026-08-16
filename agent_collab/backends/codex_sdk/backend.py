@@ -30,6 +30,7 @@ from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutco
 from ...runners import AgentRunner, AsyncEventSink
 from ...sandbox.specs import SandboxPolicy
 from .permissions import (
+    host_review_start_payload,
     install_host_approval_handler,
     make_sync_approval_handler,
     park_in_process_codex_approval,
@@ -900,6 +901,71 @@ def _default_conversation(
     )
 
 
+def _require_host_review_types() -> None:
+    """Fail closed if the installed pin lost ``on-request`` / ``user``."""
+
+    try:
+        from openai_codex.types import ApprovalsReviewer, AskForApproval
+    except ImportError as exc:
+        raise _backend_unavailable("openai_codex has no host-review approval start params") from exc
+    try:
+        AskForApproval.model_validate("on-request")
+    except Exception as exc:
+        raise _backend_unavailable(
+            "openai_codex AskForApproval does not accept on-request"
+        ) from exc
+    if getattr(ApprovalsReviewer, "user", None) is None:
+        raise _backend_unavailable("openai_codex has no ApprovalsReviewer.user")
+
+
+async def _thread_start(client: Any, thread_kwargs: Dict[str, Any], *, host_review: bool) -> Any:
+    """Start a thread; gated sessions force host review on the inner client."""
+
+    if host_review:
+        inner_start = getattr(getattr(client, "_client", None), "thread_start", None)
+        if not callable(inner_start):
+            raise _backend_unavailable("openai_codex has no inner thread_start for host review")
+        _require_host_review_types()
+        started = await inner_start(host_review_start_payload(thread_kwargs))
+        return _wrap_started_thread(client, started)
+    return await client.thread_start(**thread_kwargs)
+
+
+async def _thread_resume(
+    client: Any,
+    resume_id: str,
+    thread_kwargs: Dict[str, Any],
+    *,
+    host_review: bool,
+) -> Any:
+    """Resume a thread; gated sessions force host review on the inner client."""
+
+    if host_review:
+        inner_resume = getattr(getattr(client, "_client", None), "thread_resume", None)
+        if not callable(inner_resume):
+            raise _backend_unavailable("openai_codex has no inner thread_resume for host review")
+        _require_host_review_types()
+        payload = host_review_start_payload(thread_kwargs)
+        payload["threadId"] = resume_id
+        resumed = await inner_resume(resume_id, payload)
+        return _wrap_started_thread(client, resumed)
+    return await client.thread_resume(resume_id, **thread_kwargs)
+
+
+def _wrap_started_thread(client: Any, started: Any) -> Any:
+    thread_id = stringify(getattr(getattr(started, "thread", None), "id", None))
+    if not thread_id:
+        raise _backend_unavailable("openai_codex host-review start returned no thread id")
+    try:
+        import openai_codex  # type: ignore
+    except ImportError as exc:
+        raise _backend_unavailable(f"{MODULE_NAME} is not importable") from exc
+    async_thread = getattr(openai_codex, "AsyncThread", None)
+    if async_thread is None:
+        raise _backend_unavailable("openai_codex has no compatible AsyncThread")
+    return async_thread(client, thread_id)
+
+
 class _PersistentCodexConversation:
     """Serialize one live SDK client/thread and its reconnect identity."""
 
@@ -1033,10 +1099,13 @@ class _PersistentCodexConversation:
                 except AttributeError as exc:
                     raise _backend_unavailable(str(exc)) from exc
             resume_id = self._thread_id
+            host_review = self._host_approval_handler is not None
             if resume_id is None:
-                thread = await client.thread_start(**self._thread_kwargs)
+                thread = await _thread_start(client, self._thread_kwargs, host_review=host_review)
             else:
-                thread = await client.thread_resume(resume_id, **self._thread_kwargs)
+                thread = await _thread_resume(
+                    client, resume_id, self._thread_kwargs, host_review=host_review
+                )
             thread_id = stringify(getattr(thread, "id", None))
             if not thread_id or not callable(getattr(thread, "turn", None)):
                 raise _backend_unavailable("openai_codex returned an incompatible AsyncThread")

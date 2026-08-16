@@ -14,16 +14,22 @@ from typing import Any, List, Mapping
 import unittest
 from unittest import mock
 
+from agent_collab.backends.base import BackendUnavailable
 from agent_collab.backends.codex_sdk.backend import (
     CodexSdkRunner,
     CodexTurnOutcome,
     _default_conversation,
+    _thread_resume,
+    _thread_start,
 )
 from agent_collab.backends.codex_sdk.permissions import (
     COMMAND_EXECUTION_APPROVAL,
     FILE_CHANGE_APPROVAL,
+    HOST_REVIEW_APPROVAL_POLICY,
+    HOST_REVIEW_REVIEWER,
     approval_result_from_decision,
     deny_payload,
+    host_review_start_payload,
     make_sync_approval_handler,
     park_codex_tool_approval,
 )
@@ -42,6 +48,14 @@ from tests.backends.codex_sdk.test_backend import _turn_result
 
 def _fake_module(state: dict[str, Any], results: list[Any]):
     return _codex_backend_tests.CodexProductionFactoryTests._fake_module(state, results)
+
+
+def _patch_openai_codex(module: ModuleType):
+    mapping: dict[str, Any] = {"openai_codex": module}
+    types = getattr(module, "types", None)
+    if types is not None:
+        mapping["openai_codex.types"] = types
+    return mock.patch.dict(sys.modules, mapping)
 
 
 AGENT = AgentConfig(id="claude_cli", type="codex", backend="sdk")
@@ -154,6 +168,116 @@ class PermissionHelperTests(unittest.IsolatedAsyncioTestCase):
         released.set()
         result = await asyncio.wait_for(task, timeout=2.0)
         self.assertTrue(_is_accept(result))
+
+    def test_host_review_payload_routes_to_user(self):
+        payload = host_review_start_payload(
+            {
+                "cwd": "/workspace",
+                "model": "gpt-5.6-luna",
+                "sandbox": SimpleNamespace(value="full-access"),
+            }
+        )
+        self.assertEqual(payload["approvalPolicy"], HOST_REVIEW_APPROVAL_POLICY)
+        self.assertEqual(payload["approvalsReviewer"], HOST_REVIEW_REVIEWER)
+        self.assertEqual(payload["cwd"], "/workspace")
+        self.assertEqual(payload["model"], "gpt-5.6-luna")
+        self.assertEqual(payload["sandbox"], "danger-full-access")
+
+    async def test_gated_start_uses_inner_client_host_review(self):
+        recorded: dict[str, Any] = {}
+
+        class Inner:
+            async def thread_start(self, params=None):
+                recorded["params"] = params
+                return SimpleNamespace(thread=SimpleNamespace(id="thread-host-review"))
+
+        async def public_start(**kwargs):
+            raise AssertionError(f"gated start used public thread_start kwargs={kwargs}")
+
+        client = SimpleNamespace(_client=Inner(), thread_start=public_start)
+        with (
+            mock.patch("agent_collab.backends.codex_sdk.backend._require_host_review_types"),
+            mock.patch(
+                "agent_collab.backends.codex_sdk.backend._wrap_started_thread",
+                side_effect=lambda _client, started: SimpleNamespace(id=started.thread.id),
+            ),
+        ):
+            thread = await _thread_start(
+                client, {"cwd": "/workspace", "model": "gpt-5.6-luna"}, host_review=True
+            )
+        self.assertEqual(thread.id, "thread-host-review")
+        self.assertEqual(recorded["params"]["approvalsReviewer"], HOST_REVIEW_REVIEWER)
+        self.assertEqual(recorded["params"]["approvalPolicy"], HOST_REVIEW_APPROVAL_POLICY)
+
+    async def test_ungated_start_keeps_public_thread_start(self):
+        recorded: dict[str, Any] = {}
+
+        class Inner:
+            async def thread_start(self, params=None):
+                raise AssertionError("ungated start must not use inner host-review start")
+
+        async def public_start(**kwargs):
+            recorded["kwargs"] = kwargs
+            return SimpleNamespace(id="thread-public")
+
+        client = SimpleNamespace(_client=Inner(), thread_start=public_start)
+        thread = await _thread_start(client, {"cwd": "/workspace"}, host_review=False)
+        self.assertEqual(thread.id, "thread-public")
+        self.assertEqual(recorded["kwargs"], {"cwd": "/workspace"})
+
+    async def test_gated_resume_uses_inner_client_host_review(self):
+        recorded: dict[str, Any] = {}
+
+        class Inner:
+            async def thread_resume(self, thread_id, params=None):
+                recorded["thread_id"] = thread_id
+                recorded["params"] = params
+                return SimpleNamespace(thread=SimpleNamespace(id=thread_id))
+
+        async def public_resume(thread_id, **kwargs):
+            raise AssertionError(f"gated resume used public thread_resume {thread_id} {kwargs}")
+
+        client = SimpleNamespace(_client=Inner(), thread_resume=public_resume)
+        with (
+            mock.patch("agent_collab.backends.codex_sdk.backend._require_host_review_types"),
+            mock.patch(
+                "agent_collab.backends.codex_sdk.backend._wrap_started_thread",
+                side_effect=lambda _client, started: SimpleNamespace(id=started.thread.id),
+            ),
+        ):
+            thread = await _thread_resume(
+                client, "thread-resume", {"cwd": "/workspace"}, host_review=True
+            )
+        self.assertEqual(thread.id, "thread-resume")
+        self.assertEqual(recorded["thread_id"], "thread-resume")
+        self.assertEqual(recorded["params"]["approvalsReviewer"], HOST_REVIEW_REVIEWER)
+        self.assertEqual(recorded["params"]["threadId"], "thread-resume")
+
+    async def test_gated_start_fails_closed_when_inner_thread_start_missing(self):
+        recorded: list[Any] = []
+
+        async def public_start(**kwargs):
+            recorded.append(kwargs)
+            raise AssertionError(f"gated start used public thread_start kwargs={kwargs}")
+
+        client = SimpleNamespace(_client=SimpleNamespace(), thread_start=public_start)
+        with self.assertRaises(BackendUnavailable) as raised:
+            await _thread_start(client, {"cwd": "/workspace"}, host_review=True)
+        self.assertEqual(recorded, [])
+        self.assertIn("inner thread_start", str(raised.exception))
+
+    async def test_gated_resume_fails_closed_when_inner_thread_resume_missing(self):
+        recorded: list[Any] = []
+
+        async def public_resume(thread_id, **kwargs):
+            recorded.append((thread_id, kwargs))
+            raise AssertionError(f"gated resume used public thread_resume {thread_id} {kwargs}")
+
+        client = SimpleNamespace(_client=SimpleNamespace(), thread_resume=public_resume)
+        with self.assertRaises(BackendUnavailable) as raised:
+            await _thread_resume(client, "thread-resume", {"cwd": "/workspace"}, host_review=True)
+        self.assertEqual(recorded, [])
+        self.assertIn("inner thread_resume", str(raised.exception))
 
 
 class CodexSdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
@@ -395,7 +519,7 @@ class CodexSdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
         runner.set_approval_callback(callback)
         runner.bind_turn(turn_id="turn-1", agent_id="claude_cli")
         module, _, _ = _fake_module(state, [_turn_result(final_response="Done.")])
-        with mock.patch.dict(sys.modules, {"openai_codex": module}):
+        with _patch_openai_codex(module):
             events: list[Event] = []
 
             async def emit(event: Event) -> None:
@@ -430,7 +554,7 @@ class CodexSdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
         runner.set_approval_callback(callback)
         runner.bind_turn(turn_id="turn-1", agent_id="claude_cli")
         module, _, _ = _fake_module(state, [_turn_result(final_response="Done.")])
-        with mock.patch.dict(sys.modules, {"openai_codex": module}):
+        with _patch_openai_codex(module):
 
             async def emit(_event: Event) -> None:
                 return None
@@ -460,7 +584,7 @@ class CodexSdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
         runner.set_approval_callback(callback)
         runner.bind_turn(turn_id="turn-1", agent_id="claude_cli")
         module, _, _ = _fake_module(state, [_turn_result(final_response="Done.")])
-        with mock.patch.dict(sys.modules, {"openai_codex": module}):
+        with _patch_openai_codex(module):
 
             async def emit(_event: Event) -> None:
                 return None
@@ -539,6 +663,60 @@ class CodexSdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
             await runner.close()
         self.assertEqual(outcome.outcome, "failed")
 
+    async def test_gated_connect_fails_closed_when_inner_thread_start_missing(self) -> None:
+        module = ModuleType("openai_codex")
+        started: list[Any] = []
+
+        class _FakeSync:
+            def __init__(self) -> None:
+                self._approval_handler = None
+
+        class FakeThread:
+            def __init__(self):
+                self.id = "thread-public"
+
+            async def turn(self, prompt, **kwargs):
+                del prompt, kwargs
+                raise AssertionError("gated connect must not reach public thread_start")
+
+        class FakeAsyncCodex:
+            def __init__(self, config=None):
+                del config
+                self._client = SimpleNamespace(_sync=_FakeSync())
+
+            async def __aenter__(self):
+                return self
+
+            async def close(self):
+                return None
+
+            async def thread_start(self, **kwargs):
+                started.append(kwargs)
+                return FakeThread()
+
+            async def thread_resume(self, thread_id, **kwargs):
+                del thread_id, kwargs
+                raise AssertionError("gated connect must not resume")
+
+        module.AsyncCodex = FakeAsyncCodex
+        runner = CodexSdkRunner(AGENT, False, {}, conversation_factory=_default_conversation)
+        runner.set_approval_callback(lambda payload: None)
+        with mock.patch.dict(sys.modules, {"openai_codex": module}):
+            events: list[Event] = []
+
+            async def emit(event: Event) -> None:
+                events.append(event)
+
+            outcome = await runner.run_turn("gate", Path("/workspace"), emit)
+            await runner.close()
+        self.assertEqual(outcome.outcome, "failed")
+        self.assertEqual(outcome.code, "provider_transport_failed")
+        self.assertEqual(started, [])
+        self.assertTrue(
+            any("inner thread_start" in event.text for event in events),
+            events,
+        )
+
 
 class CodexSdkSessionToolGateTests(unittest.IsolatedAsyncioTestCase):
     async def _start_gated_session(
@@ -558,7 +736,7 @@ class CodexSdkSessionToolGateTests(unittest.IsolatedAsyncioTestCase):
 
         manager = SessionManager()
         module, _, _ = _fake_module(state, [_turn_result(final_response="Done.")])
-        module_patch = mock.patch.dict(sys.modules, {"openai_codex": module})
+        module_patch = _patch_openai_codex(module)
         module_patch.start()
         self.addCleanup(module_patch.stop)
         patcher = mock.patch.object(Referee, "_runners", _runners)

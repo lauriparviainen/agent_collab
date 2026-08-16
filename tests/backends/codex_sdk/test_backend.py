@@ -782,7 +782,9 @@ class CodexProductionFactoryTests(unittest.TestCase):
 
         class FakeThread:
             def __init__(self, thread_id="thread-production", owner=None):
-                self.id = thread_id
+                if not isinstance(thread_id, str):
+                    owner, thread_id = thread_id, owner
+                self.id = thread_id or "thread-production"
                 self._owner = owner
 
             async def turn(self, prompt, **kwargs):
@@ -803,12 +805,37 @@ class CodexProductionFactoryTests(unittest.TestCase):
             def __init__(self):
                 self._approval_handler = None
 
+        class _FakeInnerClient:
+            def __init__(self):
+                self._sync = _FakeSyncClient()
+
+            async def thread_start(self, params=None):
+                state.setdefault("inner_starts", []).append(params)
+                return SimpleNamespace(thread=SimpleNamespace(id="thread-production"))
+
+            async def thread_resume(self, thread_id, params=None):
+                state.setdefault("inner_resumes", []).append((thread_id, params))
+                error = state.get("resume_error")
+                if error is not None:
+                    raise error
+                return SimpleNamespace(thread=SimpleNamespace(id=thread_id))
+
+        class FakeAskForApproval:
+            @staticmethod
+            def model_validate(value):
+                if str(value) != "on-request":
+                    raise ValueError(value)
+                return value
+
+        class FakeApprovalsReviewer:
+            user = "user"
+
         class FakeAsyncCodex:
             def __init__(self, config=None):
                 state["clients"] += 1
                 state["client_config"] = config
                 self.is_open = False
-                self._client = SimpleNamespace(_sync=_FakeSyncClient())
+                self._client = _FakeInnerClient()
                 state.setdefault("async_codex_clients", []).append(self)
 
             async def __aenter__(self):
@@ -838,9 +865,14 @@ class CodexProductionFactoryTests(unittest.TestCase):
                     raise error
                 return FakeThread(thread_id, owner=self)
 
+        types_mod = ModuleType("openai_codex.types")
+        types_mod.AskForApproval = FakeAskForApproval
+        types_mod.ApprovalsReviewer = FakeApprovalsReviewer
         module.AsyncCodex = FakeAsyncCodex
+        module.AsyncThread = FakeThread
         module.CodexConfig = FakeCodexConfig
         module.Sandbox = FakeSandbox
+        module.types = types_mod
         module.generated = SimpleNamespace(
             v2_all=SimpleNamespace(ReasoningEffort=FakeReasoningEffort)
         )

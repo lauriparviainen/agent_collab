@@ -27,6 +27,14 @@ from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from ...approvals import build_approval_summary, sanitize_tool_name
 
+# Public ``AsyncCodex.thread_start`` only accepts ``ApprovalMode.auto_review``
+# (reviewer ``auto_review``, which can decide without the Python handler) or
+# ``deny_all`` (never asks). Installed ``AsyncCodexClient.thread_start`` accepts
+# these wire fields. Values match ``openai_codex.types.AskForApproval`` /
+# ``ApprovalsReviewer.user``.
+HOST_REVIEW_APPROVAL_POLICY = "on-request"
+HOST_REVIEW_REVIEWER = "user"
+
 
 RequestApproval = Callable[..., Awaitable[Mapping[str, Any]]]
 ApprovalHandler = Callable[[str, Optional[Mapping[str, Any]]], Mapping[str, Any]]
@@ -80,6 +88,37 @@ def approval_result_from_decision(envelope: Any) -> Mapping[str, str]:
 
 def mint_approval_id() -> str:
     return secrets.token_hex(16)
+
+
+def host_review_start_payload(thread_kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    """JSON start/resume fields that route ``requestApproval`` to the host.
+
+    Gated sessions must not keep the public ``ApprovalMode.auto_review``
+    default. That mode sets ``approvalsReviewer=auto_review`` and can accept
+    tools without calling ``approval_handler``.
+    """
+
+    payload: dict[str, Any] = {
+        "approvalPolicy": HOST_REVIEW_APPROVAL_POLICY,
+        "approvalsReviewer": HOST_REVIEW_REVIEWER,
+    }
+    cwd = thread_kwargs.get("cwd")
+    if cwd is not None:
+        payload["cwd"] = cwd
+    model = thread_kwargs.get("model")
+    if model is not None:
+        payload["model"] = model
+    sandbox = thread_kwargs.get("sandbox")
+    if sandbox is not None:
+        payload["sandbox"] = _sandbox_wire_value(sandbox)
+    return payload
+
+
+def _sandbox_wire_value(sandbox: Any) -> str:
+    value = getattr(sandbox, "value", sandbox)
+    if value in ("full-access", "danger-full-access"):
+        return "danger-full-access"
+    return str(value)
 
 
 def install_host_approval_handler(async_codex: Any, handler: ApprovalHandler) -> None:

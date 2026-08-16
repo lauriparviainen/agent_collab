@@ -13,9 +13,15 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add credentialed Codex SDK tool_gate park tests on the worker and
+  in-process paths. In-process deny, approve, and parked-interval clock
+  exclusion parked after gated starts force host review. Worker parks
+  did not. Production `codex_sdk.tool_gate` stays false (#20).
 - Wire Codex SDK `approval_handler` on the worker and gated in-process
-  paths (120 s fail-closed deny, serialized parks). Production
-  `codex_sdk.tool_gate` stays false pending credentialed coverage (#20).
+  paths (120 s fail-closed deny, serialized parks). Gated starts force
+  `approvalsReviewer=user` so public `auto_review` cannot decide without
+  the host handler. Production `codex_sdk.tool_gate` stays false
+  pending credentialed coverage (#20).
 - Map Codex SDK `turn/interrupt` on worker and in-process turns onto
   `interrupted` when the abort is distinguishable; production
   `codex_sdk.interrupt` stays false pending credentialed coverage (#20).
