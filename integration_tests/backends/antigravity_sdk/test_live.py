@@ -9,7 +9,7 @@ import tempfile
 from unittest import mock
 
 from agent_collab.backends.antigravity_sdk.backend import AntigravitySdkRunner
-from agent_collab.daemon import SessionManager, StartSessionRequest
+from agent_collab.daemon import SessionManager, SessionRequestError, StartSessionRequest
 from agent_collab.options import StartOptionsError
 from integration_tests.harness import LiveBackendTestCase, REPO_ROOT, missing_reason
 
@@ -43,6 +43,10 @@ def _configured_project() -> str:
 class AntigravitySdkLiveTests(LiveBackendTestCase):
     provider = "antigravity"
     backend_id = "sdk"
+    # Worker run_started is before connect/chat. Antigravity does not stream, so
+    # wait this long after run_started for ChatResponse to be published. Keep
+    # it short: Flash can finish the count before a longer settle fires.
+    _WORKER_CHAT_SETTLE_S = 2.0
 
     def requested_options(self):
         options = super().requested_options()
@@ -244,6 +248,18 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
             clock_exclusion=True,
         )
 
+    def test_interrupt_long_turn_worker(self):
+        self._run_interrupt_long_turn(sandbox="read-only")
+
+    def test_interrupt_long_turn_in_process(self):
+        self._run_interrupt_long_turn(sandbox="none")
+
+    def test_interrupt_continue_worker(self):
+        self._run_interrupt_continue(sandbox="read-only")
+
+    def test_interrupt_continue_in_process(self):
+        self._run_interrupt_continue(sandbox="none")
+
     def _run_tool_gate_park(self, *, sandbox, decision, clock_exclusion=False):
         token = f"PARK-{secrets.token_hex(4).upper()}"
         timeout = 20 if clock_exclusion else 180
@@ -366,6 +382,273 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
                         os.environ.pop(key, None)
                     else:
                         os.environ[key] = value
+
+    def _run_interrupt_long_turn(self, *, sandbox):
+        async def scenario(workdir):
+            manager = SessionManager()
+            state = None
+            try:
+                state = await self._start_interrupt_session(manager, workdir, sandbox)
+                result, issued = await self._interrupt_live_turn(manager, state.session_id)
+                self._assert_distinguishable_interrupt(result, manager, state.session_id, issued)
+            finally:
+                if state is not None:
+                    await manager.stop_session(state.session_id)
+
+        self._run_isolated_session(scenario)
+
+    def _run_interrupt_continue(self, *, sandbox):
+        async def scenario(workdir):
+            manager = SessionManager()
+            state = None
+            try:
+                state = await self._start_interrupt_session(manager, workdir, sandbox)
+                result, issued = await self._interrupt_live_turn(manager, state.session_id)
+                self._assert_distinguishable_interrupt(result, manager, state.session_id, issued)
+                self._assert_continue_rejected(result, manager, state.session_id)
+                with self.assertRaises(SessionRequestError) as ctx:
+                    await manager.post_message(
+                        state.session_id,
+                        "Reply with the single word: ready.",
+                    )
+                if "session is not live: failed" not in str(ctx.exception):
+                    self._fail_interrupt(
+                        result,
+                        manager,
+                        state.session_id,
+                        issued=issued,
+                        detail=(
+                            f"continue-after-interrupt post_message rejection was {ctx.exception!r}"
+                        ),
+                    )
+            finally:
+                if state is not None:
+                    await manager.stop_session(state.session_id)
+
+        self._run_isolated_session(scenario)
+
+    async def _start_interrupt_session(self, manager, workdir, sandbox):
+        try:
+            return await manager.start_session(
+                StartSessionRequest(
+                    task=self._interrupt_prompt(),
+                    workflow="solo",
+                    members={"claude_cli": "antigravity_sdk"},
+                    backend_options={"antigravity_sdk": self.requested_options()},
+                    max_turns=1,
+                    timeout=180,
+                    workdir=workdir,
+                    sandbox=sandbox,
+                    interactive=True,
+                    interactive_idle_timeout=300,
+                )
+            )
+        except StartOptionsError as exc:
+            codes = [detail.get("code") for detail in exc.details]
+            self.fail(
+                f"worker start failed structurally sandbox={sandbox} codes={codes} error={exc}"
+            )
+
+    def _interrupt_prompt(self):
+        return (
+            "Count slowly from 1 to 40 in chat. Write each number as its own "
+            "short sentence on its own line, like 'Number 1 is one.' Do not use "
+            "any tools. Do not skip numbers. Do not summarize. Keep going until "
+            "you reach 40."
+        )
+
+    async def _interrupt_live_turn(self, manager, session_id):
+        await self._wait_provider_in_flight(manager, session_id)
+        managed = manager._sessions[session_id]
+        referee = managed.referee
+        if referee is None:
+            peek = await manager.wait_result(session_id, timeout_ms=0)
+            self._fail_interrupt(
+                peek,
+                manager,
+                session_id,
+                issued=False,
+                detail="no live referee",
+            )
+        issued = await referee.interrupt_in_flight()
+        result = await self._wait_settled_after_interrupt(manager, session_id)
+        return result, issued
+
+    async def _wait_provider_in_flight(self, manager, session_id, timeout_s=90.0):
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        last = None
+        worker_started_at = None
+        while asyncio.get_running_loop().time() < deadline:
+            remaining_ms = max(50, int((deadline - asyncio.get_running_loop().time()) * 1000))
+            last = await manager.wait_result(session_id, timeout_ms=min(remaining_ms, 500))
+            if last.settled:
+                code = self._failure_code(last)
+                kinds = self._event_kinds(manager, session_id)
+                if isinstance(code, str) and code.startswith("outer_sandbox_"):
+                    self.fail(
+                        "worker start failed structurally; never reached in-flight; "
+                        f"status={last.status} code={code} kinds={kinds}"
+                    )
+                self._fail_interrupt(
+                    last,
+                    manager,
+                    session_id,
+                    issued=None,
+                    detail="settled before interrupt",
+                )
+            if last.status == "running" and self._has_provider_progress(manager, session_id):
+                return last
+            if last.status == "running" and self._has_worker_run_started(manager, session_id):
+                now = asyncio.get_running_loop().time()
+                if worker_started_at is None:
+                    worker_started_at = now
+                # Worker run_started is before chat() publishes _live_response.
+                # Interrupting then is a no-op (issued=True, turn completes).
+                elif now - worker_started_at >= self._WORKER_CHAT_SETTLE_S:
+                    return last
+        self._fail_interrupt(
+            last,
+            manager,
+            session_id,
+            issued=None,
+            detail="no provider progress before interrupt",
+        )
+
+    async def _wait_settled_after_interrupt(self, manager, session_id, timeout_s=120.0):
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        last = None
+        while asyncio.get_running_loop().time() < deadline:
+            remaining_ms = max(50, int((deadline - asyncio.get_running_loop().time()) * 1000))
+            last = await manager.wait_result(session_id, timeout_ms=min(remaining_ms, 5_000))
+            if last.settled:
+                return last
+        self._fail_interrupt(
+            last,
+            manager,
+            session_id,
+            issued=True,
+            detail="interrupt wait hung",
+        )
+
+    def _has_provider_progress(self, manager, session_id):
+        if self._has_in_process_live_response(manager, session_id):
+            return True
+        for event in self._session_events(manager, session_id):
+            raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
+            # Worker emits source=antigravity "run started" before connect/chat;
+            # interrupting then is a no-op and the turn completes.
+            if raw.get("phase") == "run_started":
+                continue
+            if raw.get("provider_session_id"):
+                return True
+            if event.get("source") == "antigravity":
+                return True
+            if event.get("type") in {"message", "tool"} and event.get("source") not in {
+                "human",
+                "referee",
+            }:
+                return True
+        return False
+
+    def _has_worker_run_started(self, manager, session_id):
+        for event in self._session_events(manager, session_id):
+            raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
+            if raw.get("phase") == "run_started":
+                return True
+        return False
+
+    def _has_in_process_live_response(self, manager, session_id):
+        # Antigravity does not stream; chat() publishes _live_response before
+        # resolve(), and that is the first moment cancel() can issue.
+        managed = manager._sessions.get(session_id)
+        referee = getattr(managed, "referee", None)
+        if referee is None:
+            return False
+        for runner in getattr(referee, "_live_runners", {}).values():
+            conversation = getattr(runner, "_conversation", None)
+            if getattr(conversation, "_live_response", None) is not None:
+                return True
+        return False
+
+    def _assert_distinguishable_interrupt(self, result, manager, session_id, issued):
+        if not issued:
+            self._fail_interrupt(
+                result,
+                manager,
+                session_id,
+                issued=issued,
+                detail="interrupt_in_flight issued nothing",
+            )
+        if not result.settled:
+            self._fail_interrupt(
+                result,
+                manager,
+                session_id,
+                issued=issued,
+                detail="interrupt wait hung",
+            )
+        if self._has_local_interrupt(result):
+            return
+        self._fail_interrupt(
+            result,
+            manager,
+            session_id,
+            issued=issued,
+            detail="interrupt lacked abort marker",
+        )
+
+    def _assert_continue_rejected(self, result, manager, session_id):
+        session = manager.get_session(session_id)
+        result_code = self._failure_code(result)
+        session_code = self._failure_code(session)
+        if (
+            result.status == "failed"
+            and result_code == "local_turn_interrupted"
+            and session.status == "failed"
+            and session_code == "local_turn_interrupted"
+        ):
+            return
+        self._fail_interrupt(
+            result,
+            manager,
+            session_id,
+            issued=True,
+            detail=(
+                "continue-after-interrupt did not fail the session; "
+                f"wait_result status={result.status} code={result_code} "
+                f"get_session status={session.status} code={session_code}"
+            ),
+        )
+
+    def _has_local_interrupt(self, result):
+        return any(
+            outcome == "interrupted" and code == "local_turn_interrupted"
+            for outcome, code in self._turn_outcome_pairs(result)
+        )
+
+    def _turn_outcome_pairs(self, result):
+        pairs = []
+        for item in result.turn_outcomes or []:
+            if isinstance(item, dict):
+                pairs.append((item.get("outcome"), item.get("code")))
+        return pairs
+
+    def _failure_code(self, result):
+        if result is None:
+            return None
+        failure = result.failure
+        if isinstance(failure, dict):
+            return failure.get("code")
+        return None
+
+    def _fail_interrupt(self, result, manager, session_id, *, issued, detail):
+        status = getattr(result, "status", None)
+        code = self._failure_code(result)
+        pairs = self._turn_outcome_pairs(result) if result is not None else []
+        kinds = self._event_kinds(manager, session_id)
+        self.fail(
+            f"{detail}; status={status} code={code} issued={issued} outcomes={pairs} kinds={kinds}"
+        )
 
     async def _wait_parked(self, manager, session_id, timeout_s=180.0):
         deadline = asyncio.get_running_loop().time() + timeout_s

@@ -13,6 +13,12 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add credentialed Antigravity SDK interrupt tests on the worker and
+  in-process paths. Both paths produced a distinguishable abort
+  (`interrupted` / `local_turn_interrupted`). Continue-after-interrupt
+  did not: the session failed via `RequiredTurnFailed`, so `post_message`
+  was rejected. Production `antigravity_sdk.interrupt` stays false (#20).
+
 - Record xAI SDK Stage 3 interrupt and tool-gate negatives after re-verifying
   `xai-sdk` 1.17.0. `sample()` is unary gRPC with no server abort; the adapter
   shield is ownership, not interrupt. Server-side tools exist but are forbidden

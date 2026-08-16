@@ -95,7 +95,9 @@ worker path and on in-process sessions that have a session approval
 callback. `tool_gate` is true: both production paths park `ask_user`
 for an explicit approve/deny (issue #20). `resume` and `interrupt`
 remain false under their stricter public definitions (no restart-safe
-resume, no credentialed interrupt proof / continue-after-cancel).
+resume; live interrupt abort is proven on both paths, but
+continue-after-interrupt fails at the session layer via
+`RequiredTurnFailed`).
 `LocalAgentConfig(workspaces=[...])`
 receives only the resolved workspace.
 

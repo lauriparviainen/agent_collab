@@ -97,8 +97,20 @@ take it:
    "local_turn_interrupted")`; retain). Production
    `antigravity_sdk.interrupt` stays false: open question 2 is still
    unproven, and continue-after-interrupt at the session layer still hits
-   `RequiredTurnFailed` / rejected `post_message` (same as Claude). Do
-   not claim live interrupt proof. Antigravity tool_gate *mapping*
+   `RequiredTurnFailed` / rejected `post_message` (same as Claude).
+   Interrupt live proof 2026-08-16: `interrupt_in_flight()` (not
+   `stop_session`) on worker (`sandbox=read-only`) and in-process
+   (`sandbox=none`) produced `TurnOutcome("interrupted",
+   "local_turn_interrupted")`. An earlier worker attempt that waited
+   10 s after `run_started` settled `completed` / `awaiting_input`
+   before the abort (Flash finished the no-tool count); waiting 2 s
+   after `run_started` then aborted. In-process waits for the published
+   live `ChatResponse` rather than a streamed token. Continue-after-interrupt
+   did not: both paths settled `failed` / `local_turn_interrupted`
+   because `RequiredTurnFailed` still maps a non-`completed` required
+   turn to session failure, so `post_message` is rejected. Adapter
+   retain is unproven at the session layer. A following `chat()` on the
+   same conversation after cancel was not proven. Antigravity tool_gate *mapping*
    also landed: host `policy.ask_user("*")` is wired on the worker
    (always) and on in-process only when `_approval_callback` is set;
    questions 5, 9, and 10 are recorded in the Antigravity Decision
@@ -142,9 +154,11 @@ take it:
    recorded negatives after re-verifying `xai-sdk` 1.17.0
    (2026-08-16): both flags stay false. Questions 5, 9, and 10
    are answered for xAI in the Decision below. Open question 2
-   is Antigravity-only and remains open. Remaining Stage 3:
-   Antigravity credentialed interrupt (do not flip
-   `antigravity_sdk.interrupt`).
+   is Antigravity-only and remains open: live abort is proven, but a
+   following `chat()` on the same conversation after cancel was not,
+   and session-layer continue is still blocked by `RequiredTurnFailed`.
+   Remaining Stage 3: none. Do not flip `antigravity_sdk.interrupt`.
+   Do not start Stage 4.
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Mind the pieces added in review: keyed-merge identity
    capture (the shipped capture write full-replaces the descriptor), the
@@ -1661,14 +1675,16 @@ the feature. A skipped provider keeps the production capability false.
    Production `codex_sdk.interrupt` stays false pending credentialed
    coverage / continue-after-interrupt. Live proof is not claimed. (Stage 3)
 2. Is an Antigravity conversation still usable for a following turn after
-   `ChatResponse.cancel()`? Hermetic mapping landed on worker and
-   in-process paths (`interrupted` / `local_turn_interrupted`, retain).
-   Wheel `test_cancel_e2e_raises_cancelled_error` proves halt +
-   `AntigravityCancelledError`; it does not prove a following `chat()`
-   on the same conversation. Live following-turn proof is not claimed.
-   Continue-after-interrupt at the session layer still hits
-   `RequiredTurnFailed` / rejected `post_message` (same as Claude).
-   Production `antigravity_sdk.interrupt` stays false. (Stage 3)
+   `ChatResponse.cancel()`? **Still open.** Live abort proof 2026-08-16:
+   `interrupt_in_flight()` on worker (`sandbox=read-only`) and
+   in-process (`sandbox=none`) produced `TurnOutcome("interrupted",
+   "local_turn_interrupted")`. That does not prove a following `chat()`
+   on the same conversation after cancel. Continue-after-interrupt at
+   the session layer still hits `RequiredTurnFailed` / rejected
+   `post_message` (same as Claude), so the session cannot continue.
+   Wheel `test_cancel_e2e_raises_cancelled_error` still only proves
+   halt + `AntigravityCancelledError`. Production
+   `antigravity_sdk.interrupt` stays false. (Stage 3)
 3. Antigravity's unknown/expired-id rejection has never been exercised against a
    live provider — only the documented `RESUME` contract backs it. (Stage 4)
 4. What retention policy governs durable trajectory roots once they outlive the
@@ -2154,11 +2170,19 @@ the tests, not this document, are their guarantee.
   a long ACK, and maps a distinguishable `AntigravityCancelledError` to
   `TurnOutcome("interrupted", "local_turn_interrupted")`, retaining the
   conversation. A generic host `asyncio.CancelledError` is not treated as
-  a successful provider interrupt. Continue-after-interrupt at the
-  session layer still hits `RequiredTurnFailed` / rejected `post_message`
-  (same as Claude). Mapping landed; production
-  `antigravity_sdk.interrupt` stays false. Do not claim live interrupt
-  proof. See open question 2.
+  a successful provider interrupt. Live proof 2026-08-16:
+  `interrupt_in_flight()` on both production paths (worker
+  `sandbox=read-only`, in-process `sandbox=none`) produced
+  `TurnOutcome("interrupted", "local_turn_interrupted")` — not a
+  completed turn, hang, or fail-closed transport error. A worker wait
+  of 10 s after `run_started` was too late (turn completed); 2 s after
+  `run_started` aborted. Continue-after-interrupt did not: the referee
+  still raises `RequiredTurnFailed` on a non-`completed` required turn,
+  the session becomes `failed`, and `post_message` is rejected. Adapter
+  retain on a clean interrupt win is unproven at the session layer. A
+  following `chat()` on the same conversation after cancel is still
+  unproven (open question 2). Production `antigravity_sdk.interrupt`
+  stays false.
 - *[all]* `Agent.__aexit__()` disconnects: processor tasks and reader cancelled,
   WebSocket close bounded to 0.5 s, stdin closed, native process waited up to
   180 s before terminate/kill escalation. Disconnect is not safe to race with
