@@ -39,7 +39,7 @@ class AntigravitySdkSandboxAdapterTests(unittest.TestCase):
             for item in spec.state_roots:
                 self.assertEqual(item.persistence.value, "session_private")
                 self.assertEqual(item.creation.value, "create_private_directory")
-            self.assertEqual(dict(spec.native_profile.sdk_options).get("policy"), "allow_all")
+            self.assertEqual(dict(spec.native_profile.sdk_options).get("policy"), "ask_user")
             self.assertEqual(
                 spec.environment.set_values.get("HOME"),
                 str(spec.state_roots[2].destination),
@@ -61,7 +61,7 @@ class AntigravitySdkSandboxAdapterTests(unittest.TestCase):
             )
             self.assertEqual(payload["backend"], "antigravity_sdk")
             self.assertEqual(payload["agent_id"], "reviewer")
-            self.assertEqual(payload["native"]["policy"], "allow_all")
+            self.assertEqual(payload["native"]["policy"], "ask_user")
             self.assertEqual(payload["save_dir"], str(root / "traj"))
             self.assertEqual(payload["app_data_dir"], str(root / "app"))
             self.assertEqual(payload["cwd"], str(workspace / "sub"))
@@ -314,7 +314,8 @@ class AntigravitySdkWorkerBackendTests(unittest.IsolatedAsyncioTestCase):
                     }
                 )
         self.assertEqual(captured["workdir"], workspace.resolve())
-        self.assertIs(captured["kwargs"].get("allow_all_policy"), True)
+        self.assertNotEqual(captured["kwargs"].get("allow_all_policy"), True)
+        self.assertTrue(callable(captured["kwargs"].get("ask_user_handler")))
         self.assertEqual(tuple(captured.get("extra_workspaces") or ()), ())
 
     async def test_open_declares_external_cwd_as_extra_workspace(self) -> None:

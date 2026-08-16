@@ -124,7 +124,7 @@ class AntigravitySdkSandboxAdapter:
             native_profile=NativeSandboxProfile(
                 summary={
                     "shape": "sdk_worker",
-                    "policy": "allow_all_after_outer_ack",
+                    "policy": "ask_user",
                     "trajectory": "session_private_save_dir",
                     "app_data": "session_private_app_data_dir",
                     "adc": "read_only_when_configured",
@@ -133,7 +133,7 @@ class AntigravitySdkSandboxAdapter:
                     "protobuf": f">= {REQUIRED_PROTOBUF}",
                     "glibc": f">= {REQUIRED_GLIBC}",
                 },
-                sdk_options={"policy": "allow_all"},
+                sdk_options={"policy": "ask_user"},
             ),
             compatibility=(
                 CompatibilityCheck("protobuf_runtime", _reject_incompatible_protobuf),
@@ -192,7 +192,7 @@ class AntigravitySdkSandboxAdapter:
             "verbose": bool(verbose),
             "save_dir": effective_save,
             "app_data_dir": effective_app,
-            "native": {"policy": "allow_all"},
+            "native": {"policy": "ask_user"},
         }
 
 

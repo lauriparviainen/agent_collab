@@ -96,8 +96,15 @@ take it:
    `antigravity_sdk.interrupt` stays false: open question 2 is still
    unproven, and continue-after-interrupt at the session layer still hits
    `RequiredTurnFailed` / rejected `post_message` (same as Claude). Do
-   not claim live interrupt proof. Do not implement Antigravity
-   `tool_gate` in the same increment (worker still forces `allow_all`).
+   not claim live interrupt proof. Antigravity tool_gate *mapping*
+   also landed: host `policy.ask_user("*")` is wired on the worker
+   (always) and on in-process only when `_approval_callback` is set;
+   questions 5, 9, and 10 are recorded in the Antigravity Decision
+   below. The worker no longer forces `allow_all` after outer proof.
+   Ungated in-process keeps the SDK default `confirm_run_command`.
+   Production `antigravity_sdk.tool_gate` stays false pending
+   credentialed parks. Do not add those live park tests in this
+   increment (next slice). Do not flip `antigravity_sdk.interrupt`.
    Codex tool_gate *mapping* also landed:
    host `approval_handler` is wired on the worker (always) and on
    in-process only when `_approval_callback` is set; questions 5, 9, and
@@ -122,10 +129,9 @@ take it:
    never-parked test fails rather than skips. Production
    `codex_sdk.tool_gate` stays false. Remaining Stage 3: a worker
    combo that emits `requestApproval` inside outer Bubblewrap
-   without suppressing tools; Antigravity `tool_gate` (worker still
-   forces `allow_all`; later increment); and xAI (open question 2
-   still open, plus remaining 5, 9, and 10; record negatives
-   explicitly).
+   without suppressing tools; Antigravity credentialed parks on
+   both production paths; and xAI (open question 2 still open,
+   plus remaining 5, 9, and 10; record negatives explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Mind the pieces added in review: keyed-merge identity
    capture (the shipped capture write full-replaces the descriptor), the
@@ -476,8 +482,8 @@ Settled as product policy for `claude_sdk` from static inspect of pin
 consensus scored for versatility and ease of use. 2026-08-16 live turns
 parked on both production paths (deny, approve, parked-interval clock
 exclusion). Production `claude_sdk.tool_gate` is true. Live two-at-once /
-abort-during-park remain unverified and are not a flip blocker. Codex,
-Antigravity, and xAI keep questions 5, 9, and 10 open at Stage 3.
+abort-during-park remain unverified and are not a flip blocker. xAI
+keeps questions 5, 9, and 10 open at Stage 3.
 
 **Open question 5 (Claude):** `can_use_tool` is not gated by account or plan
 entitlements in the SDK or CLI source. Silent skip is a **permission-mode /
@@ -523,8 +529,8 @@ callback is bound). Gated sessions start/resume with
 `approvalPolicy=on-request` and `approvalsReviewer=user` through
 `AsyncCodexClient.thread_start` (public `AsyncCodex.thread_start` only
 exposes `auto_review` / `deny_all`). Production `codex_sdk.tool_gate`
-stays false pending credentialed worker parks. Antigravity and xAI
-keep questions 5, 9, and 10 open.
+stays false pending credentialed worker parks. xAI keeps questions
+5, 9, and 10 open.
 
 **Open question 5 (Codex):** The Python handler is not account/plan
 gated. Silent skip is approval-policy / default-accept shadowing
@@ -583,6 +589,58 @@ trials above did not emit `requestApproval` inside outer Bubblewrap.
 A never-parked credentialed test fails rather than skips. Live
 two-at-once is not expected. Live abort-during-park remains
 unverified and is not a flip blocker once parks are proven.
+
+### Decision (2026-08-16): Antigravity Stage 3 tool-gate policy
+
+Settled as product policy for `antigravity_sdk` from static inspect of
+pin `google-antigravity` 0.1.8. The host `policy.ask_user("*")`
+handler is wired on both production paths (worker always;
+in-process only when a session callback is bound). Production
+`antigravity_sdk.tool_gate` stays false pending credentialed parks.
+xAI keeps questions 5, 9, and 10 open.
+
+**Open question 5 (Antigravity):** The Python `ask_user` handler is
+not account/plan gated. `hooks/policy.py` has no entitlement check.
+Silent skip is **policy shadowing**: `policy.allow_all()` approves
+everything (Claude analog of `bypassPermissions` / Codex
+`danger-full-access`); the SDK default `confirm_run_command()`
+denies `run_command` and **allows all other tools including file
+write** — a silent skip for writes, not a park. The historical
+worker force of `allow_all` after outer Bubblewrap proof was that
+skip. Gated sessions install `ask_user("*", handler=...)` and do
+not install `allow_all` or default `confirm_run_command`.
+`policy.safe_defaults(handler)` allows read-only builtins and asks
+for the rest; `ask_user("*")` is the reliable analog of Claude
+parking every `can_use_tool`. A never-parked credentialed test
+must **fail**, not skip-and-flip.
+
+**Open question 9 (Antigravity):** No Python-side callback timer on
+0.1.8. `_execute_ask_user` awaits the handler with no timeout. Do
+not clamp. Do not keep `tool_gate` false because of clocks.
+Agent-collab owns the existing 120 s fail-closed deny and 2×
+park-exclusion cap. Live abort-during-park remains unverified.
+
+**Open question 10 (Antigravity):** The SDK can spawn concurrent
+`pre_tool_call_decide` hooks. `LocalHarnessEventProcessor.process_event`
+routes each `call_hook_request` through `_run_in_background` →
+`asyncio.create_task`. Keep `pending_approvals` as a **list**.
+Implement overlap; do not serialize parks. The handler runs on the
+conversation/serve loop, so it may be async and await the park
+directly. Live two-at-once is still unverified.
+
+*Rejected alternatives:* using default `confirm_run_command` for
+gated sessions (writes auto-allow); keeping worker `allow_all`
+after outer proof; clamping to a guessed provider deadline;
+keeping `tool_gate` false because of clocks; treating a
+never-parked credentialed test as skip; faking serialized parks
+when the SDK can overlap decide hooks; using
+`run_coroutine_threadsafe` when the hook already runs on the
+serve loop.
+
+**Hard blocker for flipping `tool_gate`:** credentialed parks on
+both production paths. Mapping landed; live parks are the next
+slice. Live two-at-once / abort-during-park remain unverified and
+are not a flip blocker once parks are proven.
 
 ### Aggregation
 
@@ -1558,7 +1616,13 @@ the feature. A skipped provider keeps the production capability false.
    `requestApproval` inside outer Bubblewrap. Workers still force
    inner `danger-full-access`. A never-parked credentialed test must
    fail, not skip-and-flip.
-   Antigravity and xAI remain open. (Stage 3)
+   **Antigravity: no.** The Python `ask_user` handler is not
+   plan-gated. Silent skip is `allow_all` (historical worker force
+   after outer proof) or default `confirm_run_command` (denies
+   `run_command`, allows writes). Gated sessions use
+   `ask_user("*")` and do not install those skips. A never-parked
+   credentialed test must fail, not skip-and-flip.
+   xAI remains open. (Stage 3)
 6. Can `agy -p` emit the exact conversation id it just used through a stable
    machine-readable surface? CLI 1.1.8 added typed `init`, `step_update`, and
    `result` events after the current backend was designed; inspect a root turn,
@@ -1591,7 +1655,12 @@ the feature. A skipped provider keeps the production capability false.
    `requestApproval` is unverified. Because the handler blocks the
    reader, interrupt-during-park must go through deny-then-interrupt.
    Live abort-during-park is unverified; do not claim that proof.
-   Antigravity and xAI remain open. (Stage 3)
+   **Antigravity: no Python-side timer.** `_execute_ask_user`
+   awaits with no timeout. Do not clamp; do not keep `tool_gate`
+   false because of clocks. Agent-collab owns the 120 s
+   fail-closed deny and 2× park-exclusion cap. Live
+   abort-during-park is unverified.
+   xAI remains open. (Stage 3)
 10. Can each SDK fire multiple permission callbacks concurrently within one
     turn, or are they serialized? The plural `pending_approvals` surface
     assumes concurrency is possible. **Claude: keep the list; implement
@@ -1599,7 +1668,11 @@ the feature. A skipped provider keeps the production capability false.
     two-at-once is still unverified. **Codex: serialized at the
     transport.** Keep the list; do not implement fake concurrent parks.
     Hermetic coverage is sequential parks. Live two-at-once is not
-    expected. Antigravity and xAI remain open. (Stage 3)
+    expected. **Antigravity: keep the list; implement overlap.**
+    `process_event` spawns each `call_hook_request` as an asyncio
+    background task, so `pre_tool_call_decide` hooks can overlap.
+    Live two-at-once is still unverified. xAI remains open.
+    (Stage 3)
 
 ---
 
@@ -1923,9 +1996,30 @@ the tests, not this document, are their guarantee.
 - *[resume]* `save_dir` maps to the localharness trajectory `storage_directory`.
   Letting each `Agent` synthesize a new temporary directory breaks reopen — see
   *Durable trajectory root*.
-- *[tool_gate]* No permission-callback surface has been verified for the
-  localharness connection; callback concurrency and any provider-side decision
-  deadline are likewise unrecorded (open questions 9–10).
+- *[tool_gate]* Installed `google-antigravity` 0.1.8
+  `LocalAgentConfig.policies` default is `confirm_run_command()`:
+  denies `run_command`, allows all other tools including file write.
+  `policy.ask_user(tool, handler=...)` takes
+  `Callable[[ToolCall], bool | Awaitable[bool]]`; `_execute_ask_user`
+  awaits it with no timeout. `policy.allow_all()` approves everything.
+  `policy.safe_defaults(handler)` allows read-only builtins and
+  `ask_user("*")` for the rest. `Agent.__aenter__` calls
+  `policy.enforce(active_policies)` and registers the decide hook.
+  No account/plan gate is visible in the policy module (open
+  question 5). No Python-side callback timer (open question 9).
+  `LocalHarnessEventProcessor.process_event` runs each
+  `call_hook_request` via `_run_in_background` →
+  `asyncio.create_task`, so decide hooks can overlap (open
+  question 10). Worker always installs host `ask_user("*")` and no
+  longer forces `allow_all` after outer proof. In-process installs
+  `ask_user("*")` only when `_approval_callback` is set; ungated
+  in-process keeps the SDK default. Missing `policies` field or
+  `policy.ask_user` fails closed (`BackendUnavailable`) when a host
+  gate was requested. Hermetic tests cover park / approve / deny /
+  overlap / unbound deny / missing-API fail-closed on both paths.
+  Production `antigravity_sdk.tool_gate` stays false pending
+  credentialed parks. See *Decision (2026-08-16): Antigravity
+  Stage 3 tool-gate policy*.
 - *[interrupt]* `Agent.chat()` returns a lazy `ChatResponse`. Cancelling a
   local `resolve()` consumer does not invoke provider cancellation.
   `ChatResponse.cancel()` delegates to `Conversation.cancel()` →

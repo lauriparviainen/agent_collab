@@ -68,6 +68,7 @@ from ...events import Event, compact_json
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
 from ...runners import AgentRunner, AsyncEventSink
 from ...sandbox.specs import SandboxPolicy
+from .permissions import park_in_process_antigravity_approval
 from .sandbox import AntigravitySdkSandboxAdapter
 from ..base import (
     BackendCapabilities,
@@ -839,14 +840,32 @@ class AntigravitySdkRunner(AgentRunner):
             await emit(Event.create("antigravity", "status", "antigravity sdk turn complete"))
         return result
 
+    async def _ask_user(self, tool_call: Any) -> bool:
+        """In-process ``ask_user`` park: session registry, no frames."""
+
+        return await park_in_process_antigravity_approval(
+            callback=getattr(self, "_approval_callback", None),
+            agent_id=getattr(self, "_bound_agent_id", None) or self.name,
+            turn_id=getattr(self, "_bound_turn_id", None) or "",
+            tool_call=tool_call,
+        )
+
     def _conversation_for(self, workdir: Path) -> AntigravityConversation:
         resolved = workdir.resolve()
         if self._conversation is None:
-            self._conversation = self._conversation_factory(
-                self.agent,
-                self.options,
-                resolved,
+            factory = self._conversation_factory
+            ask_user_handler = (
+                self._ask_user if getattr(self, "_approval_callback", None) is not None else None
             )
+            if factory is _default_conversation:
+                self._conversation = factory(
+                    self.agent,
+                    self.options,
+                    resolved,
+                    ask_user_handler=ask_user_handler,
+                )
+            else:
+                self._conversation = factory(self.agent, self.options, resolved)
             self._workdir = resolved
         elif self._workdir != resolved:
             raise RuntimeError("antigravity sdk conversation workdir changed between turns")
@@ -1092,8 +1111,16 @@ def _default_conversation(
     app_data_dir: Optional[str] = None,
     allow_all_policy: bool = False,
     extra_workspaces: Optional[Sequence[Path]] = None,
+    ask_user_handler: Any = None,
 ) -> AntigravityConversation:
-    """Build one lazy-imported persistent Agent conversation for a runner."""
+    """Build one lazy-imported persistent Agent conversation for a runner.
+
+    ``ask_user_handler`` is the host ``policy.ask_user("*")`` hook. Worker
+    serve always passes it. In-process passes it only when a session
+    approval callback is bound. Omit it for ungated in-process so the SDK
+    default ``confirm_run_command`` remains. ``allow_all_policy`` is the
+    historical post-proof skip and must not be combined with a host gate.
+    """
 
     cleanup: Optional[Callable[[], None]] = None
     if save_dir is None:
@@ -1111,6 +1138,7 @@ def _default_conversation(
             app_data_dir=app_data_dir,
             allow_all_policy=allow_all_policy,
             extra_workspaces=extras,
+            ask_user_handler=ask_user_handler,
         ),
         close_cleanup=cleanup,
     )
@@ -1126,6 +1154,7 @@ def _default_agent_factory(
     app_data_dir: Optional[str] = None,
     allow_all_policy: bool = False,
     extra_workspaces: Optional[Sequence[Path]] = None,
+    ask_user_handler: Any = None,
 ) -> Any:
     """Lazily import the verified 0.1.8 SDK and build one Agent context.
 
@@ -1169,7 +1198,34 @@ def _default_agent_factory(
         config_kwargs["save_dir"] = save_dir
     if app_data_dir is not None and "app_data_dir" in fields:
         config_kwargs["app_data_dir"] = app_data_dir
-    if allow_all_policy:
+    if ask_user_handler is not None:
+        # Host gate wins. Never fall back to allow_all when a gate was requested.
+        try:
+            from google.antigravity.hooks import policy  # type: ignore
+        except ImportError as exc:
+            raise BackendUnavailable(
+                "antigravity",
+                "sdk",
+                "google.antigravity has no compatible tool policy API",
+                INSTALL_HINT,
+            ) from exc
+        if "policies" not in fields:
+            raise BackendUnavailable(
+                "antigravity",
+                "sdk",
+                "google.antigravity has no compatible policies field",
+                INSTALL_HINT,
+            )
+        ask_user = getattr(policy, "ask_user", None)
+        if not callable(ask_user):
+            raise BackendUnavailable(
+                "antigravity",
+                "sdk",
+                "google.antigravity has no compatible ask_user policy hook",
+                INSTALL_HINT,
+            )
+        config_kwargs["policies"] = [ask_user("*", handler=ask_user_handler)]
+    elif allow_all_policy:
         try:
             from google.antigravity import CapabilitiesConfig  # type: ignore
             from google.antigravity.hooks import policy  # type: ignore

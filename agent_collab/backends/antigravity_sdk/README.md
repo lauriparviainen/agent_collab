@@ -90,11 +90,13 @@ delta prompt omitted the original task and generated codeword, the response
 recalled the codeword, and both turns reported one stable conversation id.
 The adapter publishes the live `ChatResponse` and issues
 `ChatResponse.cancel()` out of band on both worker and in-process paths
-without taking the run lock. `resume`, `interrupt`, and `tool_gate` remain
-false under their stricter public definitions (no restart-safe resume, no
-credentialed interrupt proof / continue-after-cancel, no permission
-callback). `LocalAgentConfig(workspaces=[...])` receives only the resolved
-workspace.
+without taking the run lock. Host `policy.ask_user("*")` is wired on the
+worker path and on in-process sessions that have a session approval
+callback. Production `tool_gate` remains false pending credentialed parks
+(issue #20). `resume` and `interrupt` remain false under their stricter
+public definitions (no restart-safe resume, no credentialed interrupt
+proof / continue-after-cancel). `LocalAgentConfig(workspaces=[...])`
+receives only the resolved workspace.
 
 ## Outer filesystem sandbox
 
@@ -104,10 +106,14 @@ then runs `python -I -m agent_collab.sandbox.sdk_worker`. The worker owns the
 complete Antigravity SDK client, callbacks, and bundled `localharness` plus
 tool descendants. Session-private trajectory and app-data directories are created
 for the session; configured Application Default Credentials are mounted
-read-only. After outer proof, the worker applies the allow-all SDK policy and
-default capabilities profile. Protobuf and glibc floors fail closed when
-incompatible. OS keyring use remains an external service outside the filesystem
-guarantee.
+read-only. After outer proof, the worker installs `policy.ask_user("*")` so
+tool calls park for host approval. It does **not** force `allow_all` — that
+policy skips the host gate (Claude analog of `bypassPermissions`). Ungated
+in-process (`sandbox = "none"`) keeps the SDK default
+`confirm_run_command` (denies `run_command`, allows writes) unless a
+session approval callback is bound. Protobuf and glibc floors fail closed
+when incompatible. OS keyring use remains an external service outside the
+filesystem guarantee.
 
 `sandbox = "none"` keeps the historical in-process daemon runner
 and does not start Bubblewrap. Explicit outer `none` is the rollback path.

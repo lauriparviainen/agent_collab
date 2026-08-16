@@ -17,6 +17,7 @@ from .backend import (
     _should_reset_after_outcome,
     map_antigravity_turn,
 )
+from .permissions import park_antigravity_tool_approval
 
 EventEmit = Callable[[Any], Awaitable[None]]
 
@@ -29,6 +30,7 @@ class AntigravitySdkWorkerBackend:
         self._verbose = False
         self._workspace: Optional[Path] = None
         self._agent_id = "antigravity_sdk"
+        self._request_approval: Optional[Callable[..., Awaitable[Mapping[str, Any]]]] = None
 
     async def open(self, payload: Mapping[str, Any]) -> None:
         workspace = Path(str(payload["workspace"])).resolve()
@@ -55,12 +57,13 @@ class AntigravitySdkWorkerBackend:
             env=agent_env,
             backend_config=backend_config,
         )
-        # Outer proof allows the permissive SDK policy/capabilities profile.
-        # LocalAgentConfig.workspaces always includes the session workspace root
-        # so workspace-scoped tools can see siblings of a nested agent cwd.
-        # When the Bubblewrap-effective cwd is outside that root (supported
-        # absolute agent.cwd override), declare it as an extra workspace so
-        # tools do not reject the process cwd tree.
+        # Worker serve always binds approvals. Install host ask_user("*") so
+        # the historical allow_all skip after outer proof cannot shadow the
+        # gate. LocalAgentConfig.workspaces always includes the session
+        # workspace root so workspace-scoped tools can see siblings of a
+        # nested agent cwd. When the Bubblewrap-effective cwd is outside
+        # that root (supported absolute agent.cwd override), declare it as
+        # an extra workspace so tools do not reject the process cwd tree.
         extras: list[Path] = []
         if cwd != workspace:
             try:
@@ -73,13 +76,12 @@ class AntigravitySdkWorkerBackend:
             workspace,
             save_dir=save_dir,
             app_data_dir=app_data_dir,
-            allow_all_policy=True,
             extra_workspaces=extras,
+            ask_user_handler=self._ask_user,
         )
         self._conversation = conversation
         self._verbose = verbose
         self._workspace = workspace
-        self._request_approval: Optional[Callable[..., Awaitable[Mapping[str, Any]]]] = None
 
     async def run(
         self,
@@ -161,6 +163,14 @@ class AntigravitySdkWorkerBackend:
         if not callable(method):
             return
         await method()
+
+    async def _ask_user(self, tool_call: Any) -> bool:
+        """Worker ``ask_user`` park: enqueue via the serve loop, never write the socket."""
+
+        return await park_antigravity_tool_approval(
+            request_approval=self._request_approval,
+            tool_call=tool_call,
+        )
 
     def bind_approvals(self, request_approval: Callable[..., Awaitable[Mapping[str, Any]]]) -> None:
         self._request_approval = request_approval
