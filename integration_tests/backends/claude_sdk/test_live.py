@@ -308,8 +308,7 @@ class ClaudeSdkLiveTests(LiveBackendTestCase):
                         state.session_id,
                         issued=issued,
                         detail=(
-                            "continue-after-interrupt post_message rejection "
-                            f"was {ctx.exception!r}"
+                            f"continue-after-interrupt post_message rejection was {ctx.exception!r}"
                         ),
                     )
             finally:

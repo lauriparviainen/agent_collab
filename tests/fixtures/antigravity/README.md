@@ -1,24 +1,53 @@
-# Antigravity spike fixtures (Stage 4.9, step 7)
+# Antigravity fixtures
 
-Captured 2026-07-08 to drive `parse_antigravity_line` (cli) and the SDK event
-mapper. Parsers/mappers are written against these samples, not guessed.
+CLI stream-JSON shapes were reconstructed on 2026-08-16 from a cheap
+`agy 1.1.13` print-mode turn (`--output-format stream-json`, `--mode plan`)
+and from official headless-mode documentation. Values are sanitized: no
+secrets, tokens, host paths, usernames, or live transcript text.
 
-## CLI (`agy`) — CONFIRMED live
+SDK samples remain the 0.1.8 wheel facts used by
+`agent_collab/backends/antigravity_sdk/backend.py`.
 
-- Binary: `agy`, version **1.1.0** (`agy-version.txt`).
-- Command: `agy --mode accept-edits -p "<prompt>"` in a throwaway git repo,
-  signed in via the cached `~/.gemini` OAuth token.
-- `agy-print-sample.stdout.txt` — real stdout with one machine-local
-  documentation link replaced by neutral prose. `agy-print-sample.stderr.txt`
-  — real stderr (empty).
+## CLI (`agy`) — stream-json (1.1.8+)
 
-**Finding (matches the plan's "Verified provider facts"):** print mode emits
-**free-form plain text / Markdown prose** — multiple lines, blank lines, `###`
-headers, `*` bullet lists, and fenced code blocks. There is **no** JSON, no
-NDJSON, and **no stable per-line event marker**. So `parse_antigravity_line`
-emits one `antigravity` `message` event per non-empty stdout line (message-only,
-low fidelity). The referee still emits the `command` start and `status` exit
-events it emits for every subprocess runner.
+Installed help and changelog confirm `--output-format json` / `stream-json`,
+typed `init` / `step_update` / `result`, `--conversation`, and `--continue`.
+`--output-format` must appear before `-p`, or the prompt must follow `-p`
+immediately; otherwise `-p` consumes the next token as the prompt.
+
+Observed print-mode NDJSON (root turn):
+
+- `{"event":"init","conversation_id":"<uuid>","init":{...}}`
+- `{"event":"step_update","step_update":{...}}`
+- `{"event":"result","result":{...}}`
+
+A stable **root** conversation id is present on `init.conversation_id`
+(top-level), `step_update.conversation_id`, and `result.conversation_id`,
+and those three slots matched on the captured root turn. Identity capture
+is out of scope for this increment; fixtures keep redacted ids only so
+later resume work can distinguish root from child.
+
+`subagent_info.conversation_id` is child identity. It was not emitted on
+the cheap root turn; `stream-json-subagent.ndjson` reconstructs the
+documented child payload so parsers cannot treat it as the root.
+
+`init` also carried additive `expanded_commands` (ignored). One
+`step_update` used `step_type=unknown` (still a non-terminal `step_update`).
+A failed invalid-model turn emitted a single terminal `result` with
+`status=ERROR` and an empty `conversation_id` (no `init`).
+
+| File | Role |
+| --- | --- |
+| `stream-json-success.ndjson` | `init`, `step_update`, terminal `result` `SUCCESS` |
+| `stream-json-failed.ndjson` | failed terminal `result` (`ERROR`) |
+| `stream-json-malformed.ndjson` | invalid NDJSON |
+| `stream-json-unknown-nonterminal.ndjson` | additive unknown event, then success |
+| `stream-json-unknown-terminal.ndjson` | unknown terminal `status` |
+| `stream-json-subagent.ndjson` | root id vs `subagent_info.conversation_id` |
+| `stream-json-missing-result.ndjson` | no terminal `result` |
+| `stream-json-invalid-result.ndjson` | `result` missing required `status` |
+| `agy-print-sample.stdout.txt` | **negative**: plain text is not a successful turn |
+| `agy-version.txt` | captured CLI version (`1.1.13`) |
 
 ## SDK (`google-antigravity`) — 0.1.8 installed-wheel facts
 

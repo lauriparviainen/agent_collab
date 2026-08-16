@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Convert `antigravity_cli` to typed `agy --output-format stream-json`
+  NDJSON, require `agy >= 1.1.8`, and retire message-only clean-EOF
+  success. Continuity, resume, interrupt, and tool_gate stay false (#20).
+
 - Add credentialed Antigravity SDK interrupt tests on the worker and
   in-process paths. Both paths produced a distinguishable abort
   (`interrupted` / `local_turn_interrupted`). Continue-after-interrupt

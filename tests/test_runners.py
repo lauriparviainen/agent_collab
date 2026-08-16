@@ -10,7 +10,7 @@ from agent_collab.config import AgentConfig, ConfigError
 from agent_collab.events import Event
 from agent_collab.backends.claude_cli.parser import ClaudeStreamingParser
 from agent_collab.backends.codex_cli.parser import CodexStreamingParser
-from agent_collab.backends.antigravity_cli import parse_antigravity_line
+from agent_collab.backends.antigravity_cli.parser import AntigravityStreamingParser
 from agent_collab.backends.xai_cli.parser import XaiStreamingParser
 from agent_collab.runners import SubprocessRunner, configured_runner
 from agent_collab.sandbox.specs import SandboxFailure, SandboxPolicy
@@ -498,6 +498,18 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
                 "cancelled",
                 "provider_turn_cancelled",
             ),
+            (
+                "antigravity/stream-json-success.ndjson",
+                AntigravityStreamingParser(),
+                "completed",
+                None,
+            ),
+            (
+                "antigravity/stream-json-failed.ndjson",
+                AntigravityStreamingParser(),
+                "failed",
+                "provider_terminal_failure",
+            ),
         )
         for relative, parser, expected_outcome, expected_code in cases:
             with self.subTest(fixture=relative):
@@ -528,27 +540,62 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(event.type == "message" for event in events))
         self.assertEqual(outcome.code, "provider_output_incomplete")
 
-    async def test_antigravity_provisional_clean_eof_requires_message(self):
+    async def test_antigravity_plain_text_and_missing_result_fail_structurally(self):
         fixture = Path(__file__).parent / "fixtures/antigravity/agy-print-sample.stdout.txt"
         script = f"from pathlib import Path; print(Path({str(fixture)!r}).read_text(), end='')"
-        with_message = SubprocessRunner(
+        plain = SubprocessRunner(
             "antigravity",
             [sys.executable, "-c", script],
-            parse_antigravity_line,
-            clean_eof_fallback=True,
+            AntigravityStreamingParser(),
         )
-        events, outcome = await self._result(with_message)
-        self.assertTrue(any(event.type == "message" for event in events))
-        self.assertEqual(outcome.outcome, "completed")
+        _events, outcome = await self._result(plain)
+        self.assertEqual(outcome.code, "provider_output_invalid")
 
-        empty = SubprocessRunner(
-            "antigravity",
-            [sys.executable, "-c", "pass"],
-            lambda line, verbose: None,
-            clean_eof_fallback=True,
+        missing = Path(__file__).parent / "fixtures/antigravity/stream-json-missing-result.ndjson"
+        missing_script = (
+            f"from pathlib import Path; print(Path({str(missing)!r}).read_text(), end='')"
         )
-        _events, outcome = await self._result(empty)
-        self.assertEqual(outcome.code, "provider_empty_response")
+        incomplete = SubprocessRunner(
+            "antigravity",
+            [sys.executable, "-c", missing_script],
+            AntigravityStreamingParser(),
+        )
+        events, outcome = await self._result(incomplete)
+        self.assertTrue(any(event.type == "message" for event in events))
+        self.assertEqual(outcome.code, "provider_output_incomplete")
+
+    async def test_antigravity_reset_drops_prior_turn_deltas_on_reused_parser(self):
+        leaked = json.dumps(
+            {
+                "event": "step_update",
+                "step_update": {"text_delta": "LEAKED FROM PRIOR TURN\n"},
+            }
+        )
+        parser = AntigravityStreamingParser()
+        runner = SubprocessRunner(
+            "antigravity",
+            [sys.executable, "-c", f"print({leaked!r}); print('not-json')"],
+            parser,
+        )
+        first_events, first_outcome = await self._result(runner)
+        self.assertEqual(first_outcome.code, "provider_output_invalid")
+        self.assertFalse(
+            any(event.type == "message" and "LEAKED" in event.text for event in first_events)
+        )
+
+        success = json.dumps(
+            {
+                "event": "result",
+                "result": {"status": "SUCCESS", "response": "actual response\n"},
+            }
+        )
+        runner.command_prefix = [sys.executable, "-c", f"print({success!r})"]
+        events, outcome = await self._result(runner)
+        messages = [event for event in events if event.type == "message"]
+        self.assertEqual((outcome.outcome, outcome.code), ("completed", None))
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].text, "actual response\n")
+        self.assertNotIn("LEAKED", messages[0].text)
 
 
 if __name__ == "__main__":

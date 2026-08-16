@@ -1,10 +1,20 @@
 # Antigravity CLI backend
 
-Registered as `antigravity_cli` (`type="antigravity"`, `backend="cli"`). It runs `agy` print mode. Since output is plain text, fidelity is message-only.
+Registered as `antigravity_cli` (`type="antigravity"`, `backend="cli"`). It
+runs `agy` print mode with `--output-format stream-json`. Event fidelity is
+typed (`init`, `step_update`, `result`).
 
 ## Selection and requirements
 
-Select with `backend="cli"`; `agy` must be on PATH. The health probe checks the binary and version, and looks for a cached Antigravity OAuth token or an active Google account under `~/.gemini/`. It never returns a definite "missing" for credentials: recent `agy` may sign in through the OS keyring, so an unverifiable sign-in is reported as `unknown` (a start warning, not a block). Agent-collab never manages those credentials. This backend is enabled by default and blocks start only when `agy` itself is definitely unavailable.
+Select with `backend="cli"`; `agy` 1.1.8 or newer must be on PATH. The health
+probe checks the binary, rejects older or unparseable versions with
+`cli_version_incompatible` (required and observed versions in the reason),
+and looks for a cached Antigravity OAuth token or an active Google account
+under `~/.gemini/`. It never returns a definite "missing" for credentials:
+recent `agy` may sign in through the OS keyring, so an unverifiable sign-in
+is reported as `unknown` (a start warning, not a block). Agent-collab never
+manages those credentials. This backend is enabled by default and blocks
+start when `agy` is missing or older than 1.1.8.
 
 ## Options
 
@@ -23,25 +33,26 @@ intentional override.
 
 ## Events and identity
 
-Every substantive stdout line becomes `antigravity/message`. Blank and
-structural-only lines are ignored; explicit tool-failure markers become fatal
-error events. Tool structure and provider conversation identity cannot be
-recovered from print mode.
+The typed NDJSON parser maps `init` and non-text `step_update` records to
+verbose status, `text_delta` / terminal `response` to `antigravity/message`,
+and tool steps to `tool/tool_call`. Additive unknown non-terminal records are
+ignored (or bounded verbose status). This increment does not emit
+`provider_session` or capture conversation ids. `subagent_info.conversation_id`
+is child identity and is never treated as the root.
 
 ## Turn outcome
 
-This message-only transport has the one provisional clean-EOF fallback: exit
-zero plus at least one substantive stdout message completes; empty or
-structural-only output, nonzero exit, or output/transport failure fails.
-Explicit Antigravity `TOOL_ERROR:`/tool-action failure status lines are
-retained as private terminal evidence, so a provider exit of zero cannot turn a
-reported action failure into a successful turn. Ordinary response prose is not
-classified as a provider cancellation or refusal.
+A terminal `result` with `status=SUCCESS` completes the turn. `ERROR` /
+`INVALID` / `INTERRUPTED` and unknown statuses fail
+(`provider_terminal_failure`); `CANCELED` is `cancelled`. Malformed NDJSON is
+`provider_output_invalid`. A missing terminal `result` is
+`provider_output_incomplete`. There is no plain-text or clean-EOF success
+fallback.
 
 ## Capabilities and security
 
-`resume`, `interrupt`, and `tool_gate` are false. Execution uses the resolved
-cwd/add-dir configuration and closes stdin.
+`resume`, `interrupt`, `tool_gate`, and `continuity` are false. Execution uses
+the resolved cwd/add-dir configuration and closes stdin.
 
 The separate top-level outer policy supports `sandbox="read-only"` in Stage 4.
 It reuses the common Linux Bubblewrap launcher and declares exactly
@@ -76,6 +87,8 @@ and delegated writes are not isolated or claimed as protected.
 ## Testing
 
 Hermetic: `python3 -m unittest tests.backends.antigravity_cli.test_backend
+tests.backends.antigravity_cli.test_parser
+tests.backends.antigravity_cli.test_health
 tests.backends.antigravity_cli.test_sandbox`. Credential-free real namespace:
 `./agent_collab_dev.sh bubblewrap-test`. Live:
 `./agent_collab_dev.sh integration-test antigravity_cli`. The paid Stage 4

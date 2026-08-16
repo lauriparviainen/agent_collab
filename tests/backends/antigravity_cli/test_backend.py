@@ -3,7 +3,10 @@ from pathlib import Path
 
 from agent_collab.backend_contract import BackendOptionError
 from agent_collab.backends.antigravity_cli import AntigravityCliBackend
-from agent_collab.backends.antigravity_cli.parser import parse_antigravity_line
+from agent_collab.backends.antigravity_cli.parser import (
+    AntigravityStreamingParser,
+    parse_antigravity_line,
+)
 from agent_collab.config import AgentConfig, ConfigError
 from agent_collab.runners import SubprocessRunner
 
@@ -21,12 +24,23 @@ class AntigravityCliBackendTests(unittest.TestCase):
             **kwargs,
         )
 
-    def test_plain_text_does_not_invent_provider_identity(self):
-        event = parse_antigravity_line("conversation_id=looks-real-but-is-prose")
+    def test_structured_records_do_not_capture_provider_identity(self):
+        line = (
+            '{"event":"result","result":{"conversation_id":'
+            '"00000000-0000-4000-8000-000000000001","status":"SUCCESS",'
+            '"response":"ready\\n"}}'
+        )
+        event = parse_antigravity_line(line)
+        parser = AntigravityStreamingParser()
+        parsed = parser(line)
+        events = parsed if isinstance(parsed, list) else [parsed]
         self.assertEqual(event.type, "message")
-        self.assertNotIn("provider_session_id", event.raw)
         self.assertIsNone(event.provider_session)
+        self.assertNotIn("provider_session_id", event.raw)
+        self.assertTrue(all(item.provider_session is None for item in events if item is not None))
         self.assertIsNone(AntigravityCliBackend.provider_session_id_kind)
+        self.assertFalse(self.backend.capabilities.continuity)
+        self.assertFalse(self.backend.capabilities.resume)
 
     def test_manifest_and_workdir_mapping_are_backend_owned(self):
         backend = AntigravityCliBackend()
@@ -35,6 +49,8 @@ class AntigravityCliBackendTests(unittest.TestCase):
         command = backend.build_command(agent, options, Path("/tmp/work"))
         self.assertIn("plan", command)
         self.assertIn("--add-dir", command)
+        self.assertEqual(command[command.index("--output-format") + 1], "stream-json")
+        self.assertLess(command.index("--output-format"), command.index("-p"))
 
     def test_cli_inference_overrides_defaults_and_last_flag_wins(self):
         agent = self.agent(
@@ -57,6 +73,8 @@ class AntigravityCliBackendTests(unittest.TestCase):
         self.assertLess(command.index("--model"), command.index("-p"))
         self.assertLess(command.index("--mode"), command.index("-p"))
         self.assertLess(command.index("--add-dir"), command.index("-p"))
+        self.assertEqual(command[command.index("--output-format") + 1], "stream-json")
+        self.assertLess(command.index("--output-format"), command.index("-p"))
 
     def test_request_replaces_inferred_values_and_existing_add_dir_is_preserved(self):
         agent = self.agent(["--mode=plan", "--add-dir", "/configured", "-p"])
@@ -68,6 +86,21 @@ class AntigravityCliBackendTests(unittest.TestCase):
         self.assertEqual(command[command.index("--mode") + 1], "default")
         self.assertEqual(command.count("--add-dir"), 1)
         self.assertEqual(command[command.index("--add-dir") + 1], "/configured")
+
+    def test_build_command_injects_and_overrides_stream_json_before_print(self):
+        injected = self.backend.build_command(self.agent(["-p"]), {})
+        self.assertEqual(injected[injected.index("--output-format") + 1], "stream-json")
+        self.assertLess(injected.index("--output-format"), injected.index("-p"))
+
+        overridden = self.backend.build_command(self.agent(["--output-format", "json", "-p"]), {})
+        self.assertEqual(overridden.count("--output-format"), 1)
+        self.assertEqual(overridden[overridden.index("--output-format") + 1], "stream-json")
+        self.assertLess(overridden.index("--output-format"), overridden.index("-p"))
+        self.assertNotIn("json", overridden)
+
+        equals_form = self.backend.build_command(self.agent(["--output-format=text", "-p"]), {})
+        self.assertEqual(equals_form[equals_form.index("--output-format") + 1], "stream-json")
+        self.assertNotIn("--output-format=text", equals_form)
 
     def test_turn_timeout_maps_to_print_timeout_before_print_mode(self):
         command = self.backend.build_command(self.agent(timeout=900), {}, Path("/tmp/work"))

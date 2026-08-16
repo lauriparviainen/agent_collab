@@ -5,7 +5,7 @@
 [backends.antigravity_cli]
 enabled = true
 command = "agy"
-args = ["-p"]
+args = ["--output-format", "stream-json", "-p"]
 
 [backends.antigravity_cli.options]
 model = "gemini-3.7-flash-high"

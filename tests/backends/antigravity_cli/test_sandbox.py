@@ -182,6 +182,8 @@ class AntigravityCliSandboxAdapterTests(unittest.TestCase):
 
             helper = state / "antigravity-cli" / "bin" / "agentapi"
             helper.parent.mkdir(parents=True, mode=0o700)
+            for path in (state / "antigravity-cli", helper.parent):
+                path.chmod(0o700)
             helper.write_text("fixture", encoding="utf-8")
             helper.chmod(0o700)
             for check in spec.compatibility:
@@ -408,12 +410,38 @@ class AntigravityCliSandboxRunnerTests(unittest.IsolatedAsyncioTestCase):
 
             outcome = await runner.run_turn("prompt", root, emit)
 
-        self.assertEqual(
-            (outcome.outcome, outcome.code, outcome.process_exit_code),
-            ("failed", "provider_empty_response", 0),
-        )
+        self.assertEqual((outcome.outcome, outcome.code), ("failed", "provider_output_invalid"))
         self.assertFalse(
             any(event.source == "antigravity" and event.type == "message" for event in events)
+        )
+
+    async def test_zero_exit_empty_stdout_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            executable = root / "fake-agy"
+            executable.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+            executable.chmod(0o700)
+            backend = AntigravityCliBackend()
+            runner = backend.create_runner(
+                AgentConfig(
+                    id="antigravity",
+                    type="antigravity",
+                    command=str(executable),
+                    args=["-p"],
+                ),
+                False,
+                {},
+            )
+            events = []
+
+            async def emit(event):
+                events.append(event)
+
+            outcome = await runner.run_turn("prompt", root, emit)
+
+        self.assertEqual(
+            (outcome.outcome, outcome.code, outcome.process_exit_code),
+            ("failed", "provider_output_incomplete", 0),
         )
 
     async def test_zero_exit_reported_tool_failure_remains_failed_turn(self):
@@ -422,8 +450,13 @@ class AntigravityCliSandboxRunnerTests(unittest.IsolatedAsyncioTestCase):
             executable = root / "fake-agy"
             executable.write_text(
                 "#!/usr/bin/env python3\n"
-                "print('useful partial response')\n"
-                "print('TOOL_ERROR: agentapi materialization failed')\n",
+                'print(\'{"event":"result","result":{'
+                '"conversation_id":"",'
+                '"status":"ERROR",'
+                '"response":"",'
+                '"error":"agentapi materialization failed",'
+                '"duration_seconds":0,'
+                '"num_turns":0}}\')\n',
                 encoding="utf-8",
             )
             executable.chmod(0o700)

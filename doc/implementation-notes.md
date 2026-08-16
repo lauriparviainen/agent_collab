@@ -241,8 +241,9 @@ intentionally uses the agent's configured local `codex` executable through
 back to the SDK-pinned runtime. The backend summary reports which runtime path
 is active.
 
-Antigravity is opt-in. Its `cli` path uses `agy` print mode as message-only
-plain text. Its `sdk` path targets the installed `google-antigravity` 0.1.8
+Antigravity CLI is enabled by default. Its `cli` path uses `agy` print mode
+with typed `--output-format stream-json` and requires `agy >= 1.1.8`. Its
+`sdk` path targets the installed `google-antigravity` 0.1.8
 shapes:
 
 - `Agent`

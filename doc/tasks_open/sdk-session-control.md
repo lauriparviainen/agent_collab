@@ -9,10 +9,10 @@ which made the outer read-only Bubblewrap worker the default execution path and
 so relocated where the SDK controls have to be built. Resume scope was widened
 the same day after re-verifying the installed provider CLIs: Claude, Codex, and
 Grok expose strict headless resume-by-id surfaces, as does Antigravity.
-Agent-collab's current Antigravity parser is still plain text and
-captures no conversation id, but installed CLI 1.1.8 now offers structured
-`json`/`stream-json`; its root identity payload must be checked before declaring
-that backend blocked. Staging therefore separates the shared SDK control
+Agent-collab's `antigravity_cli` transport is now typed stream-json with an
+`agy >= 1.1.8` floor. A stable root conversation id is present on the print
+stream; identity capture and resume remain unstarted. Staging therefore
+separates the shared SDK control
 transport from a provider-neutral resume lifecycle that can serve verified CLI
 and SDK backends.
 
@@ -160,12 +160,18 @@ take it:
    Remaining Stage 3: none. Do not flip `antigravity_sdk.interrupt`.
    Do not start Stage 4.
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
-   five increments. Mind the pieces added in review: keyed-merge identity
-   capture (the shipped capture write full-replaces the descriptor), the
-   session-level workflow-phase record (no stage replay on resume), the
-   atomic per-session resume claim, the `interrupt_acknowledged` eligibility
-   marker, the `xai_sdk` close-deletes-resume-material conflict, and the
-   durable Antigravity trajectory root.
+   five increments. Increment 1 landed: `antigravity_cli` uses typed
+   `--output-format stream-json`, retires message-only/clean-EOF success, and
+   probes `agy >= 1.1.8`. Remaining four increments: live CLI continuation by
+   exact captured id; the durable Antigravity trajectory root and SDK resume
+   establishment; persisted explicit resume plus its public operation; and
+   turn-level interrupt public surfaces. Mind the pieces added in review:
+   keyed-merge identity capture (the shipped capture write full-replaces the
+   descriptor), the session-level workflow-phase record (no stage replay on
+   resume), the atomic per-session resume claim, the
+   `interrupt_acknowledged` eligibility marker, the `xai_sdk`
+   close-deletes-resume-material conflict, and the durable Antigravity
+   trajectory root.
 
 ## Purpose and scope
 
@@ -1723,12 +1729,14 @@ the feature. A skipped provider keeps the production capability false.
    approval / `can_use_tool` callback on Chat or `sample()`.
    Production `xai_sdk.tool_gate` stays false. (Stage 3)
 6. Can `agy -p` emit the exact conversation id it just used through a stable
-   machine-readable surface? CLI 1.1.8 added typed `init`, `step_update`, and
-   `result` events after the current backend was designed; inspect a root turn,
-   distinguish root identity from `subagent_info.conversation_id`, and add
-   fixtures before deciding. If no root id exists, `antigravity_cli` resume
-   stays false, but the independently accepted stream-JSON migration remains.
-   (Stage 4)
+   machine-readable surface? **Yes, on the print-mode stream-json root turn.**
+   Re-verified 2026-08-16 on installed `agy` 1.1.13 (floor 1.1.8): the same
+   root conversation id appears on top-level `init.conversation_id`,
+   `step_update.conversation_id`, and `result.conversation_id`.
+   `subagent_info.conversation_id` is child identity and was not emitted on
+   the cheap root turn; fixtures keep that distinction. Identity capture and
+   `--conversation` resume are not implemented in increment 1;
+   `continuity` and `resume` stay false. (Stage 4)
 7. What minimum CLI versions or feature probes should gate the other strict
    resume builders? `antigravity_cli` is decided at `agy >= 1.1.8`. The binary
    identity/version belongs in the fingerprint, but Claude, Codex, and Grok
@@ -1857,32 +1865,30 @@ the tests, not this document, are their guarantee.
   still require a credentialed smoke test on both launch paths. One-shot CLI
   interrupt/tool gating remain false.
 
-### antigravity_cli — `agy` 1.1.8 (verified 2026-07-30)
+### antigravity_cli — `agy` 1.1.8 floor, installed 1.1.13 (verified 2026-08-16)
 
 - *[resume surface]* Installed help and the official
   [conversation guide](https://antigravity.google/docs/cli/conversations) and
   [resume command reference](https://antigravity.google/docs/cli/commands/resume)
   expose `--conversation <conversation-id>` and `--continue`. Only the explicit
-  id form is acceptable.
-- *[resume opportunity]* The shipped agent-collab backend still invokes the
-  default plain-text `agy -p` transport, whose parser cannot correlate the turn
-  with a provider conversation id. However, 1.1.8 added `--output-format json`
-  and `stream-json`; its changelog describes typed `init`, `step_update`, and
-  terminal `result` events. Inspect and fixture those shapes before
-  implementation. A `subagent_info.conversation_id` is child identity and must
-  not be mistaken for the root conversation id.
-- *[minimum version]* The stream-JSON migration makes `agy >= 1.1.8` the
-  backend-wide minimum, even if exact root identity is unavailable and resume
-  remains false. The readiness probe must reject older versions with the
-  observed and required versions before every session establishment.
-- *[transport migration]* Convert the backend command to
-  `agy -p --output-format stream-json ...`, replace the message-only parser with
-  a typed NDJSON parser, set `clean_eof_fallback = False`, and update event
-  fidelity/settings documentation in the same change. Invalid JSON, an invalid
-  or missing terminal `result`, and an unknown terminal outcome are structural
-  turn failures; never reinterpret those bytes as plain assistant prose.
-  Unknown additive non-terminal records may be ignored or surfaced as bounded
-  verbose status so the parser remains forward-compatible.
+  id form is acceptable. Not implemented in increment 1.
+- *[resume opportunity]* Print-mode `--output-format stream-json` emits typed
+  `init`, `step_update`, and terminal `result` events. A stable **root**
+  conversation id is present on `init.conversation_id` (top-level),
+  `step_update.conversation_id`, and `result.conversation_id` (same id on a
+  successful root turn). `subagent_info.conversation_id` is child identity and
+  must not be mistaken for the root. Increment 1 records this and does not
+  capture identity or add `--conversation` / `--continue`.
+- *[minimum version]* `agy >= 1.1.8` is the backend-wide floor. The readiness
+  probe rejects older or unparseable versions with `cli_version_incompatible`
+  and the required/observed versions before every session establishment.
+- *[transport migration]* Landed in increment 1: shipped args are
+  `--output-format stream-json -p`; `build_command` injects or overrides
+  `--output-format` to `stream-json`; the typed NDJSON parser requires a
+  terminal `result`; `clean_eof_fallback` is false; event fidelity is `typed`.
+  Invalid JSON, an invalid or missing terminal `result`, and an unknown
+  terminal outcome are structural turn failures. Unknown additive
+  non-terminal records are ignored or bounded verbose status.
 - *[safety]* Do not infer the id from a mutable "last conversation" cache.
   Resume can ship only after the exact print-mode turn emits or otherwise
   exposes a stable, uniquely correlated identity. The outer sandbox already

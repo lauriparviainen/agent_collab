@@ -120,7 +120,7 @@ class BuiltinDefaultsCompositionTests(unittest.TestCase):
         expected_backends = {
             "antigravity_cli": (
                 "agy",
-                ["-p"],
+                ["--output-format", "stream-json", "-p"],
                 {"model": "gemini-3.7-flash-high", "mode": "plan"},
             ),
             "antigravity_sdk": (None, [], {"model": "gemini-3.7-flash-high"}),

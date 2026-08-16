@@ -20,10 +20,11 @@ from ..common.cli import (
     set_flag_value_before_print_prompt,
 )
 from ..common.health import antigravity_credentials, default_version_runner, probe_cli_backend
-from .parser import AntigravityParser
+from .parser import AntigravityStreamingParser
 from .sandbox import AntigravityCliSandboxAdapter
 
 OPTION_SCHEMA = load_option_schema(Path(__file__).with_name("options.toml"))
+REQUIRED_AGY_VERSION = "1.1.8"
 
 _TRUE_BOOLEAN_VALUES = frozenset({"1", "t", "true"})
 _FALSE_BOOLEAN_VALUES = frozenset({"0", "f", "false"})
@@ -52,20 +53,20 @@ class AntigravityCliBackend:
     id = "cli"
     agent_type = "antigravity"
     brand_color = "#4285F4"
-    event_fidelity = "message_only"
+    event_fidelity = "typed"
     provider_session_id_kind = None
     capabilities = BackendCapabilities()
     sandbox_adapter = AntigravityCliSandboxAdapter()
     checks_credentials = True
     block_on_unavailable = True
-    # The supported ``agy -p`` surface is message-only.  Until the provider
-    # exposes a structured terminal marker, clean exit plus non-empty output is
-    # the deliberately provisional success contract.
-    clean_eof_fallback = True
+    clean_eof_fallback = False
 
     def probe(self) -> BackendHealth:
         return probe_cli_backend(
-            "agy", run_version=default_version_runner, credentials=antigravity_credentials
+            "agy",
+            run_version=default_version_runner,
+            credentials=antigravity_credentials,
+            min_version=REQUIRED_AGY_VERSION,
         )
 
     def probe_for_agent(self, agent: AgentConfig) -> BackendHealth:
@@ -73,6 +74,7 @@ class AntigravityCliBackend:
             agent.command or agent.id,
             run_version=default_version_runner,
             credentials=antigravity_credentials,
+            min_version=REQUIRED_AGY_VERSION,
         )
 
     def option_schema(self, agent: AgentConfig) -> Mapping[str, OptionSpec]:
@@ -101,6 +103,7 @@ class AntigravityCliBackend:
         self, agent: AgentConfig, options: Mapping[str, Any], run_dir: Optional[Path] = None
     ) -> list[str]:
         command = [agent.command or agent.id, *agent.args]
+        command = set_flag_value_before_print_prompt(command, "--output-format", "stream-json")
         for key, flag in (("model", "--model"), ("mode", "--mode")):
             if key in options:
                 command = set_flag_value_before_print_prompt(command, flag, str(options[key]))
@@ -140,6 +143,6 @@ class AntigravityCliBackend:
             agent,
             verbose,
             options,
-            AntigravityParser(),
+            AntigravityStreamingParser(),
             command_builder=lambda run_dir: self.build_command(agent, options, run_dir),
         )

@@ -192,6 +192,9 @@ class SubprocessRunner(AgentRunner):
         self.sandbox_plan = sandbox_plan
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
+        reset = getattr(self.parser, "reset", None)
+        if callable(reset):
+            reset()
         run_dir = _resolve_run_dir(workdir, self.cwd)
         command_prefix = (
             self.command_builder(run_dir) if self.command_builder else list(self.command_prefix)

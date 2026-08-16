@@ -21,6 +21,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from ...events import utc_timestamp
@@ -38,6 +39,23 @@ VersionFn = Callable[[str, str], Optional[str]]
 NowFn = Callable[[], str]
 
 DEFAULT_TTL_SECONDS = 60.0
+# At least x.y.z, at start or after whitespace, optional v/V prefix. Rejects
+# embedded runs such as ``go1.22.5`` and lone integers such as ``exit status 2``.
+_VERSION_TOKEN = re.compile(r"(?:^|(?<=\s))[vV]?(\d+\.\d+\.\d+(?:\.\d+)*)")
+
+
+def parse_cli_version(value: Optional[str]) -> Optional[Tuple[int, ...]]:
+    """Extract a dotted ``x.y.z`` (or longer) version from a CLI ``--version`` line."""
+
+    if not value:
+        return None
+    match = _VERSION_TOKEN.search(value.strip())
+    if match is None:
+        return None
+    try:
+        return tuple(int(part) for part in match.group(1).split("."))
+    except ValueError:
+        return None
 
 
 def default_version_runner(binary: str, path: str) -> Optional[str]:
@@ -65,8 +83,14 @@ def probe_cli_backend(
     run_version: Optional[VersionFn] = None,
     credentials: Optional[CredentialsFn] = None,
     now: Optional[NowFn] = None,
+    min_version: Optional[str] = None,
 ) -> BackendHealth:
-    """Probe a subprocess (``cli``) backend: PATH presence, version, credentials."""
+    """Probe a subprocess (``cli``) backend: PATH presence, version, credentials.
+
+    ``min_version`` is an optional compatibility floor. When set, a missing or
+    unparseable version fails closed because the probe cannot prove the binary
+    meets the required version.
+    """
 
     which = which or shutil.which
     now = now or utc_timestamp
@@ -93,24 +117,51 @@ def probe_cli_backend(
         )
     version = run_version(binary, path) if run_version is not None else None
     creds = credentials() if credentials is not None else CREDENTIALS_UNKNOWN
+    checks: Dict[str, Any] = {
+        "dependency": {
+            "status": "present",
+            "kind": "path",
+            "command": binary,
+            "version": version,
+        },
+        "credentials": {
+            "status": creds,
+            "method": "provider_local_evidence" if credentials is not None else "not_checked",
+        },
+    }
+    if min_version is not None:
+        required = parse_cli_version(min_version)
+        observed = parse_cli_version(version)
+        observed_label = version if version else "missing"
+        compatible = bool(required and observed and observed >= required)
+        checks["cli_version"] = {
+            "status": "compatible" if compatible else "incompatible",
+            "required": f"{binary} >= {min_version}",
+            "observed": observed_label,
+        }
+        if not compatible:
+            return BackendHealth(
+                status=HEALTH_UNAVAILABLE,
+                reason=(f"{binary} requires version >= {min_version}; observed {observed_label}"),
+                credentials=creds,
+                version=version,
+                checked_at=checked_at,
+                checks=checks,
+                reason_codes=("cli_version_incompatible",),
+                remediation=(
+                    {
+                        "code": "upgrade_cli",
+                        "message": f"Upgrade {binary} to {min_version} or newer.",
+                    },
+                ),
+            )
     return BackendHealth(
         status=HEALTH_OK,
         reason=None,
         credentials=creds,
         version=version,
         checked_at=checked_at,
-        checks={
-            "dependency": {
-                "status": "present",
-                "kind": "path",
-                "command": binary,
-                "version": version,
-            },
-            "credentials": {
-                "status": creds,
-                "method": "provider_local_evidence" if credentials is not None else "not_checked",
-            },
-        },
+        checks=checks,
     )
 
 

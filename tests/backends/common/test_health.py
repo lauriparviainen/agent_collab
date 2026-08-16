@@ -18,6 +18,7 @@ from agent_collab.backends.base import (
 from agent_collab.backends.common.health import (
     HealthCache,
     antigravity_credentials,
+    parse_cli_version,
     probe_cli_backend,
     probe_sdk_backend,
 )
@@ -80,6 +81,56 @@ class CliProbeTests(unittest.TestCase):
         self.assertEqual(health.status, HEALTH_OK)
         self.assertEqual(health.version, "1.1.0")
         self.assertEqual(health.credentials, CREDENTIALS_OK)
+        self.assertNotIn("cli_version", health.checks)
+
+    def test_min_version_floor_is_optional_and_fails_closed(self):
+        self.assertEqual(parse_cli_version("1.1.8"), (1, 1, 8))
+        self.assertEqual(parse_cli_version("1.1.13"), (1, 1, 13))
+        self.assertEqual(parse_cli_version("1.1.7"), (1, 1, 7))
+        self.assertEqual(parse_cli_version("agy 1.1.8"), (1, 1, 8))
+        self.assertEqual(parse_cli_version("v1.1.13"), (1, 1, 13))
+        self.assertIsNone(parse_cli_version("exit status 2"))
+        self.assertIsNone(parse_cli_version("go1.22.5"))
+        self.assertIsNone(parse_cli_version("dev"))
+        self.assertIsNone(parse_cli_version(None))
+        ok = probe_cli_backend(
+            "agy",
+            which=_WhichFake(True),
+            run_version=lambda binary, path: "1.1.8",
+            min_version="1.1.8",
+        )
+        self.assertEqual(ok.status, HEALTH_OK)
+        self.assertEqual(ok.checks["cli_version"]["observed"], "1.1.8")
+        old = probe_cli_backend(
+            "agy",
+            which=_WhichFake(True),
+            run_version=lambda binary, path: "1.1.7",
+            min_version="1.1.8",
+        )
+        self.assertEqual(old.status, HEALTH_UNAVAILABLE)
+        self.assertEqual(old.reason_codes, ("cli_version_incompatible",))
+        self.assertIn("1.1.8", old.reason)
+        self.assertIn("1.1.7", old.reason)
+        missing = probe_cli_backend(
+            "agy",
+            which=_WhichFake(True),
+            run_version=lambda binary, path: None,
+            min_version="1.1.8",
+        )
+        self.assertEqual(missing.status, HEALTH_UNAVAILABLE)
+        self.assertIn("missing", missing.reason)
+        self.assertIn("1.1.8", missing.reason)
+        for garbage in ("exit status 2", "go1.22.5", "dev"):
+            with self.subTest(version=garbage):
+                health = probe_cli_backend(
+                    "agy",
+                    which=_WhichFake(True),
+                    run_version=lambda binary, path, observed=garbage: observed,
+                    min_version="1.1.8",
+                )
+                self.assertEqual(health.status, HEALTH_UNAVAILABLE)
+                self.assertEqual(health.reason_codes, ("cli_version_incompatible",))
+                self.assertIn(garbage, health.reason)
 
 
 class SdkProbeTests(unittest.TestCase):

@@ -677,18 +677,19 @@ sandbox = "read-only"
 
 ### `antigravity_cli`
 
-Uses the installed `agy` CLI and its Google OAuth sign-in (including sign-in
-cached through the OS keyring). It does not use `GEMINI_API_KEY`. Output is
-message-only, and `mode = "plan"` is the shipped provider-native read-only
-posture. An explicit top-level `sandbox = "read-only"` instead applies the
-Stage 4 OS boundary and audited permissive native profile described above. See the
+Uses the installed `agy` CLI (1.1.8 or newer) and its Google OAuth sign-in
+(including sign-in cached through the OS keyring). It does not use
+`GEMINI_API_KEY`. Output is typed stream-json, and `mode = "plan"` is the
+shipped provider-native read-only posture. An explicit top-level
+`sandbox = "read-only"` instead applies the Stage 4 OS boundary and audited
+permissive native profile described above. See the
 [backend reference](../agent_collab/backends/antigravity_cli/README.md).
 
 ```toml
 [backends.antigravity_cli]
 enabled = true
 command = "agy"
-args = ["-p"]
+args = ["--output-format", "stream-json", "-p"]
 
 [backends.antigravity_cli.options]
 model = "gemini-3.7-flash-high"

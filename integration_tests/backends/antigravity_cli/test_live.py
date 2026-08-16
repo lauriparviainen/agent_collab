@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 
+from agent_collab import backends
 from agent_collab.daemon import SessionManager, StartSessionRequest
 
 from integration_tests.harness import LiveBackendTestCase, missing_reason
@@ -13,7 +14,14 @@ class AntigravityCliLiveTests(LiveBackendTestCase):
     backend_id = "cli"
 
     def test_turn(self):
-        self.assert_message(self.run_live())
+        backend = backends.get_backend(self.provider, self.backend_id)
+        self.assertFalse(backend.clean_eof_fallback)
+        self.assertEqual(backend.event_fidelity, "typed")
+        self.assertFalse(backend.capabilities.continuity)
+        self.assertFalse(backend.capabilities.resume)
+        events = self.run_live()
+        self.assert_message(events)
+        self.assertFalse(any(event.provider_session for event in events))
 
     def test_outer_read_only_keyring_helper_shell_state_acceptance(self):
         raw_state = os.environ.get("AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE")

@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from agent_collab.backends.antigravity_cli import AntigravityCliBackend, parse_antigravity_line
-from agent_collab.backends.antigravity_cli.parser import AntigravityParser
+from agent_collab.backends.antigravity_cli.parser import AntigravityStreamingParser
 from agent_collab.config import AgentConfig, builtin_config, load_config, merge_config_data
 from agent_collab.options import (
     StartOptionsError,
@@ -51,58 +51,26 @@ async def _first_event(runner, prompt="do a thing", workdir=Path(".")):
 
 
 class AntigravityParserTests(unittest.TestCase):
-    def test_plain_text_line_becomes_antigravity_message(self):
-        event = parse_antigravity_line("### Supported Modes")
-        self.assertEqual(event.source, "antigravity")
-        self.assertEqual(event.type, "message")
-        self.assertEqual(event.text, "### Supported Modes")
-
     def test_blank_and_whitespace_lines_return_none(self):
         self.assertIsNone(parse_antigravity_line(""))
         self.assertIsNone(parse_antigravity_line("   \n"))
         self.assertIsNone(parse_antigravity_line("\t\n"))
 
-    def test_structural_only_lines_do_not_count_as_messages(self):
-        parser = AntigravityParser()
-        for line in ("}", "{", "[]", "{}", ".", "---", "```"):
+    def test_plain_text_and_structural_fragments_are_invalid(self):
+        parser = AntigravityStreamingParser()
+        for line in ("}", "{", "[]", ".", "---", "```", "### Supported Modes"):
             with self.subTest(line=line):
-                self.assertIsNone(parse_antigravity_line(line))
-                self.assertIsNone(parser(line))
+                with self.assertRaises(ValueError):
+                    parse_antigravity_line(line)
+                with self.assertRaises(ValueError):
+                    parser(line)
 
-    def test_exported_parser_preserves_tool_failure_as_error(self):
-        event = parse_antigravity_line("TOOL_ERROR: agentapi materialization failed")
-
-        self.assertEqual((event.source, event.type), ("error", "error"))
-        self.assertEqual(event.raw["code"], "provider_terminal_failure")
-        self.assertTrue(event.raw["fatal"])
-
-    def test_tool_error_prose_remains_a_message(self):
-        parser = AntigravityParser()
-        for line in (
-            "TOOL_ERRORS should be handled by the supervisor",
-            "Tool execution failed: always check return codes in examples",
-        ):
-            with self.subTest(line=line):
-                exported_event = parse_antigravity_line(line)
-                stateful_event = parser(line)
-                self.assertEqual(
-                    (exported_event.source, exported_event.type),
-                    ("antigravity", "message"),
-                )
-                self.assertEqual(
-                    (stateful_event.source, stateful_event.type),
-                    ("antigravity", "message"),
-                )
-        self.assertEqual(parser.take_terminal_evidence(), [])
-
-    def test_captured_fixture_yields_only_antigravity_messages(self):
-        lines = (FIXTURES / "agy-print-sample.stdout.txt").read_text(encoding="utf-8").splitlines()
-        events = [parse_antigravity_line(line) for line in lines]
-        non_none = [event for event in events if event is not None]
-        self.assertTrue(non_none, "captured fixture should yield events")
-        self.assertTrue(all(e.source == "antigravity" and e.type == "message" for e in non_none))
-        # blank lines in the prose are skipped, so fewer events than input lines.
-        self.assertLess(len(non_none), len(lines))
+    def test_plain_text_sample_is_a_negative_fixture(self):
+        first = (
+            (FIXTURES / "agy-print-sample.stdout.txt").read_text(encoding="utf-8").splitlines()[0]
+        )
+        with self.assertRaises(ValueError):
+            parse_antigravity_line(first)
 
 
 class AntigravityConfigTests(unittest.TestCase):
@@ -185,6 +153,8 @@ sequence = ["antigravity_cli"]
             print_index = command.index("-p")
             self.assertLess(command.index("--model"), print_index)
             self.assertLess(command.index("--mode"), print_index)
+            self.assertEqual(command[command.index("--output-format") + 1], "stream-json")
+            self.assertLess(command.index("--output-format"), print_index)
 
     def test_invalid_mode_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -212,7 +182,10 @@ sequence = ["antigravity_cli"]
         options = backend.normalize_options(agent, {})
 
         self.assertIs(options["sandbox"], False)
-        self.assertEqual(backend.build_command(agent, options), ["agy", "-p"])
+        self.assertEqual(
+            backend.build_command(agent, options),
+            ["agy", "--output-format", "stream-json", "-p"],
+        )
 
     def test_invalid_sandbox_flag_value_is_left_for_provider_validation(self):
         backend = AntigravityCliBackend()
@@ -226,7 +199,10 @@ sequence = ["antigravity_cli"]
         options = backend.normalize_options(agent, {})
 
         self.assertNotIn("sandbox", options)
-        self.assertEqual(backend.build_command(agent, options), ["agy", "--sandbox=invalid", "-p"])
+        self.assertEqual(
+            backend.build_command(agent, options),
+            ["agy", "--sandbox=invalid", "--output-format", "stream-json", "-p"],
+        )
 
     def test_settings_records_antigravity_backend_and_command_preview(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -293,6 +269,7 @@ sequence = ["antigravity_cli"]
             merge_config_data(config, {"backends": {"antigravity_cli": {"enabled": True}}})
             agent = config.agents["antigravity_cli"]
             agent.cwd = "agent-root"
+            agent.command = str(root / "missing-agy")
             backend = AntigravityCliBackend()
             runner = backend.create_runner(agent, False, backend.normalize_options(agent, {}))
 
