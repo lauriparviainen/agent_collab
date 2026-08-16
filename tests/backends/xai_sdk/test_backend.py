@@ -16,10 +16,16 @@ from agent_collab.backends.base import (
 from agent_collab.backends.common.health import xai_api_key_credentials
 from agent_collab.backends.xai_sdk import XaiSdkBackend
 from agent_collab.backends.xai_sdk.backend import (
+    XaiSdkRunner,
     _PersistentXaiConversation,
     _default_conversation,
     _finish_reason,
 )
+from agent_collab.backends.xai_sdk.sandbox import (
+    FORBIDDEN_CHAT_CREATE_KEYS,
+    production_chat_kwargs,
+)
+from agent_collab.runners import AgentRunner
 from agent_collab.config import AgentConfig, CollaborationConfig, WorkflowConfig
 from agent_collab.options import StartOptionsError, describe_options, validate_start_backends
 
@@ -140,6 +146,20 @@ class XaiSdkBackendTests(unittest.TestCase):
         )
         self.assertEqual(backend.event_fidelity, "message_only")
         self.assertEqual(backend.provider_session_id_kind, "response")
+
+    def test_stage3_negatives_leave_interrupt_and_tool_gate_false(self):
+        backend = backends.get_backend("xai", "sdk")
+        self.assertFalse(backend.capabilities.interrupt)
+        self.assertFalse(backend.capabilities.tool_gate)
+        self.assertIs(XaiSdkRunner.interrupt_request, AgentRunner.interrupt_request)
+        runner = backend.create_runner(_agent(), False, {"model": "grok-4.5"})
+        self.assertFalse(asyncio.run(runner.interrupt_request()))
+        kwargs = production_chat_kwargs(
+            {"model": "grok-4.5", "tools": [], "tool_choice": "auto"},
+        )
+        self.assertNotIn("tools", kwargs)
+        self.assertNotIn("tool_choice", kwargs)
+        self.assertTrue({"tools", "tool_choice"}.issubset(FORBIDDEN_CHAT_CREATE_KEYS))
 
     def test_reasoning_alias_agreement_and_conflict(self):
         backend = XaiSdkBackend()

@@ -68,8 +68,14 @@ client.
 The runner maps only non-empty `response.content` to an xAI message. It enables
 no remote or client-side tools and emits no tool, command, or file-change
 events. Event fidelity is message-only. In-session continuity is true and the
-settings summary reports `conversation="persistent"`; restart-safe resume,
-interrupt, and tool-gate capabilities remain false. Credential values and SDK
+settings summary reports `conversation="persistent"`. Restart-safe `resume`
+remains false. `interrupt` is permanently false: `sample()` is one unary gRPC
+`GetCompletion` with no server abort; local cancel does not stop remote work;
+the adapter shield owns the in-flight RPC and is not a provider interrupt
+(issue #20). `tool_gate` is false: the wheel has no host permission callback
+on the audited production chat path, and production `chat.create` forbids
+`tools` / `tool_choice` / server-side tools so the Stage 8
+`not_applicable_no_local_effects` claim stays intact. Credential values and SDK
 responses are never logged by health probes.
 
 ## Outer sandbox: `no_local_effects` (Stage 8)

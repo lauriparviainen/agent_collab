@@ -3,6 +3,7 @@
 **Status:** Open. Continuity shipped (#47); production `claude_sdk.tool_gate`
 and `antigravity_sdk.tool_gate` are true. `interrupt` and `resume` remain
 false for every backend, and `tool_gate` remains false for Codex and xAI.
+xAI Stage 3 interrupt and tool_gate are recorded negatives.
 Design resynced 2026-07-30 against 0.13.0,
 which made the outer read-only Bubblewrap worker the default execution path and
 so relocated where the SDK controls have to be built. Resume scope was widened
@@ -137,10 +138,13 @@ take it:
    `--unshare-user`; `on-request` then has no escalation. A
    never-parked test fails rather than skips. Production
    `codex_sdk.tool_gate` stays false. Codex worker parks remain a
-   recorded negative. Remaining Stage 3: Antigravity credentialed
-   interrupt (do not flip `antigravity_sdk.interrupt`); then xAI
-   (open question 2 still open, plus remaining 5, 9, and 10; record
-   negatives explicitly).
+   recorded negative. xAI Stage 3 interrupt and tool_gate are
+   recorded negatives after re-verifying `xai-sdk` 1.17.0
+   (2026-08-16): both flags stay false. Questions 5, 9, and 10
+   are answered for xAI in the Decision below. Open question 2
+   is Antigravity-only and remains open. Remaining Stage 3:
+   Antigravity credentialed interrupt (do not flip
+   `antigravity_sdk.interrupt`).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Mind the pieces added in review: keyed-merge identity
    capture (the shipped capture write full-replaces the descriptor), the
@@ -492,7 +496,8 @@ consensus scored for versatility and ease of use. 2026-08-16 live turns
 parked on both production paths (deny, approve, parked-interval clock
 exclusion). Production `claude_sdk.tool_gate` is true. Live two-at-once /
 abort-during-park remain unverified and are not a flip blocker. xAI
-keeps questions 5, 9, and 10 open at Stage 3.
+questions 5, 9, and 10 are recorded in *Decision (2026-08-16): xAI
+Stage 3 interrupt and tool-gate policy*.
 
 **Open question 5 (Claude):** `can_use_tool` is not gated by account or plan
 entitlements in the SDK or CLI source. Silent skip is a **permission-mode /
@@ -538,8 +543,9 @@ callback is bound). Gated sessions start/resume with
 `approvalPolicy=on-request` and `approvalsReviewer=user` through
 `AsyncCodexClient.thread_start` (public `AsyncCodex.thread_start` only
 exposes `auto_review` / `deny_all`). Production `codex_sdk.tool_gate`
-stays false pending credentialed worker parks. xAI keeps questions
-5, 9, and 10 open.
+stays false pending credentialed worker parks. xAI questions 5, 9,
+and 10 are recorded in *Decision (2026-08-16): xAI Stage 3
+interrupt and tool-gate policy*.
 
 **Open question 5 (Codex):** The Python handler is not account/plan
 gated. Silent skip is approval-policy / default-accept shadowing
@@ -607,7 +613,8 @@ handler is wired on both production paths (worker always;
 in-process only when a session callback is bound). Production
 `antigravity_sdk.tool_gate` is true because both paths parked.
 Credentialed parks landed 2026-08-16 on both production paths.
-xAI keeps questions 5, 9, and 10 open.
+xAI questions 5, 9, and 10 are recorded in *Decision
+(2026-08-16): xAI Stage 3 interrupt and tool-gate policy*.
 
 **Open question 5 (Antigravity):** The Python `ask_user` handler is
 not account/plan gated. `hooks/policy.py` has no entitlement check.
@@ -654,6 +661,61 @@ parked-interval clock exclusion on worker and in-process).
 parks can register. Production `antigravity_sdk.tool_gate` is
 true. Live two-at-once / abort-during-park remain unverified
 and are not a flip blocker.
+
+### Decision (2026-08-16): xAI Stage 3 interrupt and tool-gate policy
+
+Settled as product policy for `xai_sdk` from static inspect of pin
+`xai-sdk` 1.17.0 (re-verified 2026-08-16; Appendix A previously
+dated 2026-07-24). Production `xai_sdk.interrupt` is
+**permanently false**. Production `xai_sdk.tool_gate` stays
+false. Do not invent an abort path. Do not add `tools` /
+`tool_choice` / server-side tools to production `chat.create`
+(that would revoke Stage 8 `not_applicable_no_local_effects`).
+Do not import `xai_sdk.tools` into the production backend.
+
+**Interrupt:** `Chat.sample()` is one unary gRPC
+`GetCompletion` (`channel.unary_unary`). `Chat` and collected
+`Response` have no cancel, abort, or close method. Batch
+`CancelBatch` is a different API and is not on the production
+chat path. Local cancellation does not stop remote work.
+`AsyncClient.close()` closes gRPC channels and exposes no
+close-vs-request coordination contract. The adapter already
+shields an in-flight `sample()` so close/reset cannot race the
+channel; that shield is **ownership, not a provider
+interrupt**. `XaiSdkRunner` does not override
+`interrupt_request` (default False).
+
+**Open question 5 (xAI):** There is no host permission /
+approval / `can_use_tool` callback on the audited production
+chat path. This is **not plan-gated because there is no
+gate**. Silent skip is **"tools are not on the audited chat
+path."** The wheel's `xai_sdk.tools` helpers
+(`web_search`, `x_search`, `code_execution`,
+`collections_search`, `mcp`) and `chat.create(tools=...,
+tool_choice=...)` exist, but production forbids those kwargs
+(`FORBIDDEN_CHAT_CREATE_KEYS`). File-upload progress callbacks
+are not a tool gate.
+
+**Open question 9 (xAI):** No callback timer because there is
+no callback. Do not invent a park deadline. `tool_gate` stays
+false because there is no host permission surface, not because
+of clocks.
+
+**Open question 10 (xAI):** No concurrent parks because there
+is no park surface. Keep the public `pending_approvals` list
+for other backends; do not implement a fake xAI park.
+
+*Rejected alternatives:* inventing a client-side abort around
+unary `GetCompletion`; treating the in-flight `sample()`
+shield as interrupt; adding `tools` / `tool_choice` /
+server-side tools to production `chat.create` to create a
+gate (revokes Stage 8); importing `xai_sdk.tools` into the
+production backend; leaving the flags undecided.
+
+**Hard blocker for flipping either flag:** there is no
+provider interrupt and no host permission callback on the
+audited production path. Both flags stay false as completed
+Stage 3 negatives, not as unverified work.
 
 ### Aggregation
 
@@ -1635,7 +1697,15 @@ the feature. A skipped provider keeps the production capability false.
    `run_command`, allows writes). Gated sessions use
    `ask_user("*")` and do not install those skips. A never-parked
    credentialed test must fail, not skip-and-flip.
-   xAI remains open. (Stage 3)
+   **xAI: no host callback on the production path.** Not
+   plan-gated because there is no gate. Silent skip is "tools
+   are not on the audited chat path." Installed 1.17.0 exposes
+   server-side tools and `chat.create(tools=...,
+   tool_choice=...)`, but production forbids those kwargs
+   (`FORBIDDEN_CHAT_CREATE_KEYS`) and does not import
+   `xai_sdk.tools`. The wheel has no host permission /
+   approval / `can_use_tool` callback on Chat or `sample()`.
+   Production `xai_sdk.tool_gate` stays false. (Stage 3)
 6. Can `agy -p` emit the exact conversation id it just used through a stable
    machine-readable surface? CLI 1.1.8 added typed `init`, `step_update`, and
    `result` events after the current backend was designed; inspect a root turn,
@@ -1673,7 +1743,10 @@ the feature. A skipped provider keeps the production capability false.
    false because of clocks. Agent-collab owns the 120 s
    fail-closed deny and 2× park-exclusion cap. Live
    abort-during-park is unverified.
-   xAI remains open. (Stage 3)
+   **xAI: no callback timer because there is no callback.**
+   Do not invent a park deadline. `tool_gate` stays false
+   because there is no host permission surface, not because
+   of clocks. (Stage 3)
 10. Can each SDK fire multiple permission callbacks concurrently within one
     turn, or are they serialized? The plural `pending_approvals` surface
     assumes concurrency is possible. **Claude: keep the list; implement
@@ -1684,8 +1757,10 @@ the feature. A skipped provider keeps the production capability false.
     expected. **Antigravity: keep the list; implement overlap.**
     `process_event` spawns each `call_hook_request` as an asyncio
     background task, so `pre_tool_call_decide` hooks can overlap.
-    Live two-at-once is still unverified. xAI remains open.
-    (Stage 3)
+    Live two-at-once is still unverified. **xAI: no concurrent
+    parks because there is no park surface.** Keep the public
+    `pending_approvals` list for other backends; do not
+    implement a fake xAI park. (Stage 3)
 
 ---
 
@@ -1962,7 +2037,7 @@ the tests, not this document, are their guarantee.
   reports `codex-cli` 0.147.0. This re-verification exercised the 0.144.4
   wheel, not the 0.147.0 CLI.
 
-### xai_sdk — `xai-sdk` 1.17.0 (verified 2026-07-24)
+### xai_sdk — `xai-sdk` 1.17.0 (verified 2026-08-16)
 
 - *[continuity — shipped]* Continuity is the public stored-response API, not the
   `Chat` object: `store_messages=True` persists each completion under its
@@ -1976,11 +2051,32 @@ the tests, not this document, are their guarantee.
   failure is structural. The adapter deletes captured stored completions
   best-effort on final close, which restart-safe resume would have to reconcile
   with retention.
-- *[interrupt]* **Expected permanently false.** `sample()` is one unary gRPC call
-  with no documented server-side abort; local cancellation does not stop remote
-  work. `Chat` and collected `Response` have no close method, and
-  `AsyncClient.close()` exposes no close-vs-request coordination contract, so the
-  adapter shields an in-flight sample and retains ownership until it settles.
+- *[interrupt]* **Permanently false (re-verified 2026-08-16).** Installed
+  `xai_sdk.aio.chat.Chat.sample()` is one unary gRPC `GetCompletion`
+  (`channel.unary_unary`). `Chat` and collected `Response` have no
+  cancel/abort/close method. Batch `CancelBatch` is a different API and is
+  not on the production chat path. Local cancellation does not stop remote
+  work. `AsyncClient.close()` closes gRPC channels and exposes no
+  close-vs-request coordination contract, so the adapter shields an
+  in-flight `sample()` and retains ownership until it settles. That
+  shield is ownership, not a provider interrupt. `XaiSdkRunner` does not
+  override `interrupt_request` (default False). Do not invent an abort
+  path. Production `xai_sdk.interrupt` stays false. See *Decision
+  (2026-08-16): xAI Stage 3 interrupt and tool-gate policy*.
+- *[tool_gate]* **Recorded negative (re-verified 2026-08-16).**
+  `xai_sdk.tools` defines server-side tools (`web_search`, `x_search`,
+  `code_execution`, `collections_search`, `mcp`) and `chat.create`
+  accepts `tools` / `tool_choice` / `parallel_tool_calls` /
+  `search_parameters` / `max_turns` / `agent_count`. Those kwargs are
+  forbidden on the audited production path (`FORBIDDEN_CHAT_CREATE_KEYS`
+  in `backends/xai_sdk/sandbox.py`); adding them would revoke Stage 8
+  `not_applicable_no_local_effects`. The wheel has no host permission /
+  approval / `can_use_tool` callback on the production chat path
+  (file-upload progress callbacks are not a tool gate). Silent skip is
+  "tools are not on the audited chat path," not an entitlement skip. No
+  callback timer and no concurrent parks because there is no callback.
+  Production `xai_sdk.tool_gate` stays false. See *Decision
+  (2026-08-16): xAI Stage 3 interrupt and tool-gate policy*.
 - *[all]* The shared environment now runs protobuf 7.35+ behind
   `backends/xai_sdk/compat.py`, which defeats this version's import-time
   protobuf-major gate. Re-check on any `xai-sdk` bump whether upstream accepts

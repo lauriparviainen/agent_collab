@@ -13,6 +13,13 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Record xAI SDK Stage 3 interrupt and tool-gate negatives after re-verifying
+  `xai-sdk` 1.17.0. `sample()` is unary gRPC with no server abort; the adapter
+  shield is ownership, not interrupt. Server-side tools exist but are forbidden
+  on the audited production chat path, and the wheel has no host permission
+  callback. Production `xai_sdk.interrupt` and `xai_sdk.tool_gate` stay false
+  (#20).
+
 - Flip production `antigravity_sdk.tool_gate` to true after credentialed parks on
   both worker and in-process paths (#20).
 
