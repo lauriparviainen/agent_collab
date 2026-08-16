@@ -13,6 +13,9 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Flip production `antigravity_sdk.tool_gate` to true after credentialed parks on
+  both worker and in-process paths (#20).
+
 - Add credentialed Antigravity SDK `tool_gate` park tests on the worker
   and in-process paths. Deny, approve, and parked-interval clock
   exclusion parked on both paths. Pin `ask_user` across the SDK config

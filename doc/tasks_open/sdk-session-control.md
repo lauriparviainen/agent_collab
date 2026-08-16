@@ -1,8 +1,9 @@
 # Provider session control: interrupt, tool approval, restart-safe resume
 
 **Status:** Open. Continuity shipped (#47); production `claude_sdk.tool_gate`
-is true. `interrupt` and `resume` remain false for every backend, and
-`tool_gate` remains false for the other backends. Design resynced 2026-07-30 against 0.13.0,
+and `antigravity_sdk.tool_gate` are true. `interrupt` and `resume` remain
+false for every backend, and `tool_gate` remains false for Codex and xAI.
+Design resynced 2026-07-30 against 0.13.0,
 which made the outer read-only Bubblewrap worker the default execution path and
 so relocated where the SDK controls have to be built. Resume scope was widened
 the same day after re-verifying the installed provider CLIs: Claude, Codex, and
@@ -111,8 +112,8 @@ take it:
    holds stayed `awaiting_approval`; a slow pre-park can still settle
    `timed_out` after resolve because startup counts against the 20 s
    remainder. A never-parked test fails rather than skips. Production
-   `antigravity_sdk.tool_gate` stays false pending a dedicated flip
-   increment. Do not flip `antigravity_sdk.interrupt`.
+   `antigravity_sdk.tool_gate` is now true because both paths parked.
+   Do not flip `antigravity_sdk.interrupt`.
    Codex tool_gate *mapping* also landed:
    host `approval_handler` is wired on the worker (always) and on
    in-process only when `_approval_callback` is set; questions 5, 9, and
@@ -135,11 +136,10 @@ take it:
    bubblewrap cannot create a user namespace inside outer
    `--unshare-user`; `on-request` then has no escalation. A
    never-parked test fails rather than skips. Production
-   `codex_sdk.tool_gate` stays false. Remaining Stage 3: a worker
-   combo that emits `requestApproval` inside outer Bubblewrap
-   without suppressing tools; a dedicated Antigravity `tool_gate`
-   flip increment (parks landed; flag stays false); and xAI (open
-   question 2 still open, plus remaining 5, 9, and 10; record
+   `codex_sdk.tool_gate` stays false. Codex worker parks remain a
+   recorded negative. Remaining Stage 3: Antigravity credentialed
+   interrupt (do not flip `antigravity_sdk.interrupt`); then xAI
+   (open question 2 still open, plus remaining 5, 9, and 10; record
    negatives explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Mind the pieces added in review: keyed-merge identity
@@ -605,9 +605,9 @@ Settled as product policy for `antigravity_sdk` from static inspect of
 pin `google-antigravity` 0.1.8. The host `policy.ask_user("*")`
 handler is wired on both production paths (worker always;
 in-process only when a session callback is bound). Production
-`antigravity_sdk.tool_gate` stays false pending a dedicated flip
-increment. Credentialed parks landed 2026-08-16 on both
-production paths. xAI keeps questions 5, 9, and 10 open.
+`antigravity_sdk.tool_gate` is true because both paths parked.
+Credentialed parks landed 2026-08-16 on both production paths.
+xAI keeps questions 5, 9, and 10 open.
 
 **Open question 5 (Antigravity):** The Python `ask_user` handler is
 not account/plan gated. `hooks/policy.py` has no entitlement check.
@@ -651,9 +651,9 @@ serve loop.
 both production paths. Those landed 2026-08-16 (deny, approve,
 parked-interval clock exclusion on worker and in-process).
 `ask_user` is pinned across the SDK config deepcopy so in-process
-parks can register. Production `antigravity_sdk.tool_gate` stays
-false pending a dedicated flip increment. Live two-at-once /
-abort-during-park remain unverified and are not a flip blocker.
+parks can register. Production `antigravity_sdk.tool_gate` is
+true. Live two-at-once / abort-during-park remain unverified
+and are not a flip blocker.
 
 ### Aggregation
 
@@ -2030,8 +2030,9 @@ the tests, not this document, are their guarantee.
   `policy.ask_user` fails closed (`BackendUnavailable`) when a host
   gate was requested. Hermetic tests cover park / approve / deny /
   overlap / unbound deny / missing-API fail-closed on both paths.
-  Production `antigravity_sdk.tool_gate` stays false pending a
-  dedicated flip increment. 2026-08-16 credentialed parks: worker
+  Production `antigravity_sdk.tool_gate` is true;
+  `antigravity_sdk.interrupt` stays false. 2026-08-16
+  credentialed parks: worker
   (`sandbox=read-only`) and in-process (`sandbox=none`) parked on
   deny, approve, and parked-interval clock exclusion (20 s turn
   timeout, 25 s hold, not `timed_out`). In-process first failed

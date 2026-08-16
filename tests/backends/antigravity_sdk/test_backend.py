@@ -1355,7 +1355,7 @@ class SdkInterruptMappingTests(unittest.TestCase):
         caps = backends.capabilities_for("antigravity", "sdk")
         self.assertEqual(
             caps.to_dict(),
-            {"resume": False, "interrupt": False, "tool_gate": False, "continuity": True},
+            {"resume": False, "interrupt": False, "tool_gate": True, "continuity": True},
         )
         self.assertFalse(AntigravitySdkBackend().capabilities.interrupt)
 
@@ -1725,7 +1725,7 @@ class SdkSelectionTests(unittest.TestCase):
             {
                 "resume": False,
                 "interrupt": False,
-                "tool_gate": False,
+                "tool_gate": True,
                 "continuity": True,
             },
         )

@@ -815,13 +815,13 @@ class AntigravitySdkSessionToolGateTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AntigravitySdkToolGateCapabilityTests(unittest.TestCase):
-    def test_production_capabilities_stay_false_except_continuity(self) -> None:
+    def test_production_tool_gate_is_true(self) -> None:
         from agent_collab import backends
 
         caps = backends.capabilities_for("antigravity", "sdk")
         self.assertEqual(
             caps.to_dict(),
-            {"resume": False, "interrupt": False, "tool_gate": False, "continuity": True},
+            {"resume": False, "interrupt": False, "tool_gate": True, "continuity": True},
         )
 
 

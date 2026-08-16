@@ -92,11 +92,11 @@ The adapter publishes the live `ChatResponse` and issues
 `ChatResponse.cancel()` out of band on both worker and in-process paths
 without taking the run lock. Host `policy.ask_user("*")` is wired on the
 worker path and on in-process sessions that have a session approval
-callback. Credentialed parks landed on worker and in-process paths;
-production `tool_gate` remains false pending a dedicated flip increment
-(issue #20). `resume` and `interrupt` remain false under their stricter
-public definitions (no restart-safe resume, no credentialed interrupt
-proof / continue-after-cancel). `LocalAgentConfig(workspaces=[...])`
+callback. `tool_gate` is true: both production paths park `ask_user`
+for an explicit approve/deny (issue #20). `resume` and `interrupt`
+remain false under their stricter public definitions (no restart-safe
+resume, no credentialed interrupt proof / continue-after-cancel).
+`LocalAgentConfig(workspaces=[...])`
 receives only the resolved workspace.
 
 ## Outer filesystem sandbox

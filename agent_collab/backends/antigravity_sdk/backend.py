@@ -195,7 +195,7 @@ class AntigravitySdkBackend:
         libc_ver: Optional[Callable[[], tuple[str, str]]] = None,
         protobuf_version: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
-        self.capabilities = BackendCapabilities(continuity=True)
+        self.capabilities = BackendCapabilities(continuity=True, tool_gate=True)
         self.checks_credentials = True
         # Opt-in backend: a missing extra / sign-out fails the start fast.
         self.block_on_unavailable = True
