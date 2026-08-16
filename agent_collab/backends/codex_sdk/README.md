@@ -53,8 +53,10 @@ the held provider thread and receive delta prompts. The host
 that have a session approval callback. Gated sessions start/resume through
 the installed client with `approvalPolicy=on-request` and
 `approvalsReviewer=user` so the public `auto_review` default cannot decide
-without the host handler. Production `tool_gate` remains false pending
-credentialed parks on both paths (issue #20). `resume` and `interrupt` remain
+without the host handler. Production `tool_gate` remains false: in-process
+parks are proven; worker parks are not (issue #20). Inner worker
+`danger-full-access` remains the historical filesystem posture after
+outer proof; it also skips `requestApproval`. `resume` and `interrupt` remain
 false under their stricter public definitions (no restart-safe resume, no
 credentialed interrupt proof). The adapter serializes run/reset/close;
 cancelling the asyncio waiter does not stop the provider — interrupt must
@@ -70,7 +72,10 @@ socket. The worker owns the complete Codex SDK client, app-server, and any
 local tool descendants. The complete effective `CODEX_HOME` is the persistent
 writable state root (same contract as `codex_cli`). After outer proof, the
 worker forces SDK `danger-full-access` for non-interactive tool use; that is
-not OS isolation.
+not OS isolation. Nested Codex bubblewrap cannot apply an inner
+`read-only` sandbox inside the outer `--unshare-user` namespace, so
+`on-request` has no escalation there. Stopping that inner force did
+not produce worker parks and was not kept.
 
 `sandbox = "none"` keeps the historical in-process daemon runner
 and does not start Bubblewrap. Explicit outer `none` is the rollback path.

@@ -98,12 +98,24 @@ take it:
    host handler. 2026-08-16 live parks: in-process (`sandbox=none`)
    parked on deny, approve, and parked-interval clock exclusion (20 s
    turn timeout, 25 s hold, not `timed_out`). Worker
-   (`sandbox=read-only`) did not park: some turns finished without a
-   tool; when a command ran there was no `approval_request`. A
+   (`sandbox=read-only`) did not park. Inner `danger-full-access` is
+   a permission skip (Claude analog of `bypassPermissions`) **and**
+   the historical worker filesystem posture. Stopping that force so
+   gated workers keep inner `read-only` did not emit
+   `requestApproval` (command ran with no park, or the model used no
+   tool). Further worker trials — `AskForApproval.untrusted`,
+   granular policy, turn-level host review, `externalSandbox`, and
+   `use_legacy_landlock` — were not a reliable gate and were
+   reverted. Isolated auth-only `CODEX_HOME` is not the skip
+   (in-process plus that isolation still parked). Nested Codex
+   bubblewrap cannot create a user namespace inside outer
+   `--unshare-user`; `on-request` then has no escalation. A
    never-parked test fails rather than skips. Production
-   `codex_sdk.tool_gate` stays false. Remaining Stage 3: worker park
-   proof, Antigravity and xAI (open question 2, plus remaining 5, 9,
-   and 10; record negatives explicitly).
+   `codex_sdk.tool_gate` stays false. Remaining Stage 3: a worker
+   combo that emits `requestApproval` inside outer Bubblewrap
+   without suppressing tools, then Antigravity and xAI (open
+   question 2, plus remaining 5, 9, and 10; record negatives
+   explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Mind the pieces added in review: keyed-merge identity
    capture (the shipped capture write full-replaces the descriptor), the
@@ -501,21 +513,34 @@ callback is bound). Gated sessions start/resume with
 `approvalPolicy=on-request` and `approvalsReviewer=user` through
 `AsyncCodexClient.thread_start` (public `AsyncCodex.thread_start` only
 exposes `auto_review` / `deny_all`). Production `codex_sdk.tool_gate`
-stays false: in-process parks landed; worker parks did not.
-Antigravity and xAI keep questions 5, 9, and 10 open.
+stays false pending credentialed worker parks. Antigravity and xAI
+keep questions 5, 9, and 10 open.
 
 **Open question 5 (Codex):** The Python handler is not account/plan
-gated. Silent skip is approval-policy / default-accept shadowing:
-`ApprovalMode.deny_all` never asks; the installed default handler
-auto-accepts both `item/commandExecution/requestApproval` and
-`item/fileChange/requestApproval`. Live 2026-08-16: public
-`auto_review` auto-decided in-process tools with no
-`approval_request` until gated starts forced `approvalsReviewer=user`.
-Worker turns still did not park (no tool, or a command with no
-`approval_request`). Worker `danger-full-access` remains the
-outer-sandbox filesystem posture; a brief inner `workspace-write`
-trial was not a reliable gate and was reverted. A never-parked
-credentialed test must **fail**, not skip-and-flip.
+gated. Silent skip is approval-policy / default-accept shadowing
+**or** an inner skip sandbox: `ApprovalMode.deny_all` never asks; the
+installed default handler auto-accepts both
+`item/commandExecution/requestApproval` and
+`item/fileChange/requestApproval`; inner `danger-full-access` does
+not emit `requestApproval` even with `approvalsReviewer=user`. Live
+2026-08-16: public `auto_review` auto-decided in-process tools with
+no `approval_request` until gated starts forced
+`approvalsReviewer=user`. In-process (`sandbox=none`, inner not
+forced) then parked. Worker (`sandbox=read-only`) did not park while
+`worker_open_payload` forced inner `danger-full-access`. Bundled CLI
+0.144.4 documents `--dangerously-bypass-approvals-and-sandbox` as
+skipping all confirmation prompts (intended for an externally
+sandboxed environment); `on-request` is model-decides; `untrusted`
+asks for non-trusted commands. A brief inner `workspace-write` trial
+was not a reliable gate (workspace writes do not escalate) and was
+reverted. Later worker trials — gated inner `read-only` (stop
+forcing `danger-full-access`), `AskForApproval.untrusted`, granular
+policy, turn-level host review, `externalSandbox`, and
+`use_legacy_landlock` — were not a reliable gate and were reverted
+in the same increment. Isolated auth-only `CODEX_HOME` is not the
+skip. Workers still force inner `danger-full-access` after outer
+proof. A never-parked credentialed test must **fail**, not
+skip-and-flip.
 
 **Open question 9 (Codex):** No Python-side callback timer on 0.144.4.
 Do not clamp. Do not keep `tool_gate` false because of clocks.
@@ -542,8 +567,10 @@ concurrent parks the transport cannot dispatch.
 
 **Hard blocker for flipping `tool_gate`:** credentialed parks on both
 production paths. In-process parks landed 2026-08-16 (deny, approve,
-parked-interval clock exclusion). Worker parks did not. A
-never-parked credentialed test fails rather than skips. Live
+parked-interval clock exclusion). Worker parks did not: stopping the
+inner `danger-full-access` force and the later policy/sandbox
+trials above did not emit `requestApproval` inside outer Bubblewrap.
+A never-parked credentialed test fails rather than skips. Live
 two-at-once is not expected. Live abort-during-park remains
 unverified and is not a flip blocker once parks are proven.
 
@@ -1506,12 +1533,15 @@ the feature. A skipped provider keeps the production capability false.
    skips. **Codex: no.** The Python handler is not plan-gated; silent
    skip is approval-policy / default-accept shadowing
    (`ApprovalMode.deny_all` never asks; the default handler
-   auto-accepts both `requestApproval` methods). Live 2026-08-16:
-   `auto_review` auto-decided in-process tools until gated starts
-   forced `approvalsReviewer=user`. Worker parks still did not land.
-   Worker `danger-full-access` remains the outer-sandbox filesystem
-   posture. A never-parked credentialed test must fail, not
-   skip-and-flip.
+   auto-accepts both `requestApproval` methods) **or** inner
+   `danger-full-access`, which skips `requestApproval` (Claude analog
+   of `bypassPermissions`). Live 2026-08-16: `auto_review`
+   auto-decided in-process tools until gated starts forced
+   `approvalsReviewer=user`. Worker parks did not land: stopping the
+   inner skip sandbox and later policy/sandbox trials did not emit
+   `requestApproval` inside outer Bubblewrap. Workers still force
+   inner `danger-full-access`. A never-parked credentialed test must
+   fail, not skip-and-flip.
    Antigravity and xAI remain open. (Stage 3)
 6. Can `agy -p` emit the exact conversation id it just used through a stable
    machine-readable surface? CLI 1.1.8 added typed `init`, `step_update`, and
@@ -1785,20 +1815,45 @@ the tests, not this document, are their guarantee.
   The wheel does not name a deny decision token; host deny uses
   `{"decision": "decline"}` (guessed from item
   `CommandExecutionStatus` / `PatchApplyStatus` `declined`; anything
-  other than explicit `accept` is deny). Worker always installs the
-  host handler; in-process installs only when `_approval_callback` is
-  set. Gated sessions start/resume through
-  `AsyncCodexClient.thread_start` with `approvalPolicy=on-request` and
-  `approvalsReviewer=user` (public `AsyncCodex.thread_start` cannot
-  express that). Live 2026-08-16: in-process (`sandbox=none`) parked on
-  deny, approve, and parked-interval clock exclusion after those start
+  other than explicit `accept` is deny). `AskForApproval` accepts
+  `untrusted` / `on-request` / `never` and a granular object
+  (`mcp_elicitations`, `rules`, `sandbox_approval`, optional
+  `request_permissions` / `skill_approval`). `ApprovalsReviewer` is
+  `user` / `auto_review` / `guardian_subagent`. Bundled CLI 0.144.4
+  help: `--dangerously-bypass-approvals-and-sandbox` skips all
+  confirmation prompts (intended for an externally sandboxed
+  environment); `on-request` is model-decides; `untrusted` asks for
+  non-trusted commands. Worker always installs the host handler;
+  in-process installs only when `_approval_callback` is set. Gated
+  sessions start/resume through `AsyncCodexClient.thread_start` with
+  `approvalPolicy=on-request` and `approvalsReviewer=user` (public
+  `AsyncCodex.thread_start` cannot express that). Live 2026-08-16:
+  in-process (`sandbox=none`, inner not forced) parked on deny,
+  approve, and parked-interval clock exclusion after those start
   params; without them, tools ran with no `approval_request`. Worker
-  (`sandbox=read-only`) did not park: some turns used no tool; when a
-  command ran there was no `approval_request`. Worker
-  `danger-full-access` remains the outer-sandbox filesystem posture; a
-  brief inner `workspace-write` trial was not a reliable gate and was
-  reverted. Production `codex_sdk.tool_gate` stays false. A
-  never-parked credentialed test must fail, not skip-and-flip. See
+  (`sandbox=read-only`) did not park. Inner `danger-full-access` is a
+  permission skip (Claude analog of `bypassPermissions`) **and** the
+  historical worker filesystem posture after outer proof. Isolated
+  auth-only `CODEX_HOME` is not the skip (in-process plus that
+  isolation still parked). Stopping the inner force so gated workers
+  keep `read-only` did not emit `requestApproval` (command ran with
+  no park, or no tool). `AskForApproval.untrusted`, granular policy,
+  turn-level host review, `externalSandbox`, and
+  `use_legacy_landlock` were not a reliable gate and were reverted.
+  Nested Codex bubblewrap cannot create a user namespace inside
+  outer `--unshare-user`; `on-request` then has no escalation.
+  Official app-server `sandboxPolicy.type=externalSandbox` means
+  "already sandboxed, skip nested enforcement" and did not ask.
+  Bundled CLI 0.144.4 still documents
+  `--dangerously-bypass-approvals-and-sandbox` for an externally
+  sandboxed environment. Wheel `AskForApproval` still accepts
+  `untrusted` / `on-request` / `never` plus granular
+  (`mcp_elicitations`, `rules`, `sandbox_approval`, optional
+  `request_permissions` / `skill_approval`). Protocol also names
+  `item/permissions/requestApproval` (grant-shaped; not the default
+  handler's accept/decline pair). Workers still force inner
+  `danger-full-access`. Production `codex_sdk.tool_gate` stays false.
+  A never-parked credentialed test must fail, not skip-and-flip. See
   *Decision (2026-08-16): Codex Stage 3 tool-gate policy*.
 - *[all]* Two-pin ambiguity: the inspected API is the `openai-codex` 0.144.4
   wheel (bundled `openai-codex-cli-bin` 0.144.4). The configured local CLI

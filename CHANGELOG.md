@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Record that Codex SDK worker `tool_gate` parks remain unproven after
+  gated-sandbox, `untrusted`, `externalSandbox`, and legacy-Landlock
+  trials (all reverted). In-process parks still pass. Production
+  `codex_sdk.tool_gate` stays false (#20).
 - Add credentialed Codex SDK tool_gate park tests on the worker and
   in-process paths. In-process deny, approve, and parked-interval clock
   exclusion parked after gated starts force host review. Worker parks
