@@ -1299,9 +1299,21 @@ def build_session_settings(
             preview = backend.command_preview(agent, options, workdir)
             if preview is not None:
                 if sandbox_plan is not None and agent_id in sandbox_plan.agents:
+                    from .backends.common.cli import prepare_cli_invocation
+
                     agent_plan = sandbox_plan.agents[agent_id]
-                    if agent_plan.policy.effective.value == "read-only":
-                        preview = list(agent_plan.prepare_inner(preview))
+                    finalizer = getattr(backend, "finalize_cli_invocation", None)
+                    if not callable(finalizer):
+                        finalizer = None
+                    preview = list(
+                        prepare_cli_invocation(
+                            preview,
+                            agent_plan,
+                            None,
+                            finalizer=finalizer,
+                            ownership_flags=getattr(backend, "cli_ownership_flags", ()),
+                        )
+                    )
                 entry["command_preview"] = preview
         if sandbox_plan is not None and agent_id in sandbox_plan.agents:
             entry["outer_sandbox"] = sandbox_plan.agents[agent_id].settings(full=True)

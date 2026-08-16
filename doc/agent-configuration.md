@@ -271,7 +271,7 @@ registry is keyed by `(provider, mechanism)`:
 | ----------------- | -------------------- | ------------------------------- |
 | `claude`          | ✅ (default)          | ✅ (`claude-agent-sdk`, typed)   |
 | `codex`           | ✅ (default)          | ✅ (`openai-codex`, message-first) |
-| `antigravity`     | ✅ (`agy`, plain text) | ✅ (`google-antigravity`, typed) |
+| `antigravity`     | ✅ (`agy`, typed stream-json) | ✅ (`google-antigravity`, typed) |
 | `xai`             | ✅ (`grok`, streaming JSON) | ✅ (`xai-sdk`, message-only remote chat) |
 
 - `cli` runs the agent as a subprocess and parses its stdout. It is the default
@@ -680,9 +680,12 @@ sandbox = "read-only"
 Uses the installed `agy` CLI (1.1.8 or newer) and its Google OAuth sign-in
 (including sign-in cached through the OS keyring). It does not use
 `GEMINI_API_KEY`. Output is typed stream-json, and `mode = "plan"` is the
-shipped provider-native read-only posture. An explicit top-level
-`sandbox = "read-only"` instead applies the Stage 4 OS boundary and audited
-permissive native profile described above. See the
+shipped provider-native read-only posture. After a completed turn that
+captured the root conversation id, later turns in the same live session
+continue with `--conversation <id>`; configured `--conversation` /
+`--continue` are rejected. An explicit top-level `sandbox = "read-only"`
+instead applies the Stage 4 OS boundary and audited permissive native
+profile described above. See the
 [backend reference](../agent_collab/backends/antigravity_cli/README.md).
 
 ```toml

@@ -175,13 +175,36 @@ class SandboxSupervisor:
                 "SandboxSupervisor received a non-read-only plan",
                 phase="launch",
             )
+        prepared = plan.prepare_inner(command_prefix)
+        return await self.launch_prepared_cli(
+            plan,
+            prepared,
+            prompt,
+            stream_limit=stream_limit,
+        )
+
+    async def launch_prepared_cli(
+        self,
+        plan: ResolvedSandboxPlan,
+        prepared_prefix: Sequence[str],
+        prompt: str,
+        *,
+        stream_limit: int,
+    ) -> SupervisedProcess:
+        """Launch an already-prepared prefix without calling ``prepare_inner`` again."""
+
+        if plan.policy.effective is not SandboxPolicy.READ_ONLY:
+            raise SandboxFailure(
+                "outer_sandbox_policy_invalid",
+                "SandboxSupervisor received a non-read-only plan",
+                phase="launch",
+            )
         scratch: Optional[Path] = None
         try:
             scratch = _allocate_scratch(plan)
             rendered_prompt = plan.render_prompt(prompt, scratch)
-            prepared = plan.prepare_inner(command_prefix)
             inner = (
-                *_resolve_inner_executable(prepared, plan.context.inherited_environment),
+                *_resolve_inner_executable(prepared_prefix, plan.context.inherited_environment),
                 rendered_prompt,
             )
             process, _worker = await self._launch(

@@ -3,7 +3,19 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 from .config import AgentConfig, ConfigError
 from .events import Event
@@ -21,6 +33,12 @@ AsyncEventSink = Callable[[Event], Awaitable[None]]
 DEFAULT_STREAM_LIMIT_BYTES = 8 * 1024 * 1024
 SUBPROCESS_TERMINATE_GRACE_SECONDS = 1.0
 SUBPROCESS_KILL_GRACE_SECONDS = 1.0
+CLI_RESUME_EMPTY = "empty"
+CLI_RESUME_PENDING = "pending"
+CLI_RESUME_ACTIVE = "active"
+CLI_RESUME_QUARANTINED = "quarantined"
+IN_SESSION_ELIGIBLE_OUTCOMES = frozenset({"completed"})
+CliResumeFinalizer = Callable[[Sequence[str], Optional[Mapping[str, Any]]], Tuple[str, ...]]
 
 
 def _adopt_process_wait(process: object) -> None:
@@ -87,19 +105,32 @@ class DryRunRunner(AgentRunner):
         cwd: Optional[str] = None,
         command_builder: Optional[CommandBuilder] = None,
         sandbox_plan: Optional[object] = None,
+        resume_finalizer: Optional[CliResumeFinalizer] = None,
+        ownership_flags: Sequence[str] = (),
     ):
         self.name = name
         self.command = command
         self.cwd = cwd
         self.command_builder = command_builder
         self.sandbox_plan = sandbox_plan
+        self.resume_finalizer = resume_finalizer
+        self.ownership_flags = tuple(ownership_flags)
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
+        from .backends.common.cli import prepare_cli_invocation
+
         run_dir = _resolve_run_dir(workdir, self.cwd)
         command = self.command_builder(run_dir) if self.command_builder else list(self.command)
-        policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
-        if getattr(policy, "value", policy) == "read-only":
-            command = list(self.sandbox_plan.prepare_inner(command))
+        command = list(
+            prepare_cli_invocation(
+                command,
+                self.sandbox_plan,
+                None,
+                finalizer=self.resume_finalizer,
+                ownership_flags=self.ownership_flags,
+            )
+        )
+        policy = self.sandbox_plan.policy if self.sandbox_plan is not None else None
         raw = {
             "command_preview": command,
             "workdir": str(run_dir),
@@ -171,6 +202,8 @@ class SubprocessRunner(AgentRunner):
         source: Optional[str] = None,
         clean_eof_fallback: bool = False,
         sandbox_plan: Optional[object] = None,
+        resume_finalizer: Optional[CliResumeFinalizer] = None,
+        ownership_flags: Sequence[str] = (),
     ):
         self.name = name
         self.command_prefix = command_prefix
@@ -190,25 +223,117 @@ class SubprocessRunner(AgentRunner):
         self.stream_limit = stream_limit
         self.clean_eof_fallback = bool(clean_eof_fallback)
         self.sandbox_plan = sandbox_plan
+        self.resume_finalizer = resume_finalizer
+        self.ownership_flags = tuple(ownership_flags)
+        self._cli_state = CLI_RESUME_EMPTY
+        self._id_seen = False
+        self._active_id: Optional[str] = None
+        self._pending_id: Optional[str] = None
+        self._turn_ids: List[str] = []
+        self._identity_conflict = False
+
+    def conversation_active(self) -> bool:
+        return self.resume_finalizer is not None and self._cli_state == CLI_RESUME_ACTIVE
+
+    def _resume_enabled(self) -> bool:
+        return self.resume_finalizer is not None
+
+    def _resume_descriptor(self) -> Optional[Dict[str, str]]:
+        if (
+            not self._resume_enabled()
+            or self._cli_state != CLI_RESUME_ACTIVE
+            or not self._active_id
+        ):
+            return None
+        return {"provider_session_id": self._active_id}
+
+    def _observe_provider_session(self, event: Event) -> None:
+        if not self._resume_enabled():
+            return
+        identity = event.provider_session
+        if identity is None:
+            return
+        session_id = identity.get("provider_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return
+        self._id_seen = True
+        self._turn_ids.append(session_id)
+        expected = self._active_id or self._pending_id
+        if expected is None:
+            self._pending_id = session_id
+            if self._cli_state == CLI_RESUME_EMPTY:
+                self._cli_state = CLI_RESUME_PENDING
+        elif session_id != expected:
+            self._identity_conflict = True
+
+    def _finish_cli_state(self, outcome: Optional[TurnOutcome], *, cancelled: bool = False) -> None:
+        if not self._resume_enabled() or self._cli_state == CLI_RESUME_QUARANTINED:
+            return
+        unique: List[str] = []
+        for session_id in self._turn_ids:
+            if session_id and session_id not in unique:
+                unique.append(session_id)
+        if len(unique) > 1:
+            self._identity_conflict = True
+        if unique:
+            self._id_seen = True
+            if self._pending_id is None:
+                self._pending_id = unique[0]
+            if self._active_id is not None and unique[0] != self._active_id:
+                self._identity_conflict = True
+        if not self._id_seen:
+            return
+        if (
+            self._identity_conflict
+            or cancelled
+            or outcome is None
+            or outcome.outcome not in IN_SESSION_ELIGIBLE_OUTCOMES
+        ):
+            self._cli_state = CLI_RESUME_QUARANTINED
+            return
+        self._active_id = self._active_id or self._pending_id or unique[0]
+        self._pending_id = None
+        self._cli_state = CLI_RESUME_ACTIVE
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
+        from .backends.common.cli import prepare_cli_invocation
+        from .sandbox.specs import SandboxFailure, SandboxPolicy
+
+        if self._resume_enabled() and self._cli_state == CLI_RESUME_QUARANTINED:
+            await emit(
+                Event.create(
+                    "error",
+                    "error",
+                    f"{self.name} provider conversation is quarantined",
+                    {"code": "provider_session_quarantined", "fatal": True},
+                )
+            )
+            return TurnOutcome("failed", "provider_session_quarantined")
+
         reset = getattr(self.parser, "reset", None)
         if callable(reset):
             reset()
+        self._turn_ids = []
+        self._identity_conflict = False
         run_dir = _resolve_run_dir(workdir, self.cwd)
-        command_prefix = (
+        ordinary_prefix = (
             self.command_builder(run_dir) if self.command_builder else list(self.command_prefix)
         )
-        argv = command_prefix + [prompt]
-        from .sandbox.specs import SandboxFailure, SandboxPolicy
-
-        policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
+        argv = list(ordinary_prefix) + [prompt]
+        outcome: Optional[TurnOutcome] = None
+        cancelled = False
         try:
-            command_preview = list(command_prefix)
-            if policy is SandboxPolicy.READ_ONLY:
-                command_preview = list(self.sandbox_plan.prepare_inner(command_prefix))
+            prepared_prefix = prepare_cli_invocation(
+                ordinary_prefix,
+                self.sandbox_plan,
+                self._resume_descriptor(),
+                finalizer=self.resume_finalizer,
+                ownership_flags=self.ownership_flags,
+            )
+            argv = list(prepared_prefix) + [prompt]
+            policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
             command_raw = {
-                "command_preview": command_preview,
+                "command_preview": list(prepared_prefix),
                 "workdir": str(run_dir),
                 "sandbox": "read-only" if policy is SandboxPolicy.READ_ONLY else "none",
                 "mount_labels": [
@@ -235,9 +360,9 @@ class SubprocessRunner(AgentRunner):
                 from .sandbox.supervisor import SandboxSupervisor
 
                 installation = await asyncio.to_thread(discover_bubblewrap)
-                process = await SandboxSupervisor(installation).launch_cli(
+                process = await SandboxSupervisor(installation).launch_prepared_cli(
                     self.sandbox_plan,
-                    command_prefix,
+                    prepared_prefix,
                     prompt,
                     stream_limit=self.stream_limit,
                 )
@@ -262,6 +387,8 @@ class SubprocessRunner(AgentRunner):
                         {"sandbox": "read-only", "startup": startup},
                     )
                 )
+            outcome = await self._consume_process(process, emit)
+            return outcome
         except FileNotFoundError as exc:
             await emit(
                 Event.create(
@@ -271,7 +398,8 @@ class SubprocessRunner(AgentRunner):
                     {"error": str(exc), "fatal": True},
                 )
             )
-            return TurnOutcome("failed", "provider_transport_failed")
+            outcome = TurnOutcome("failed", "provider_transport_failed")
+            return outcome
         except Exception as exc:
             if not isinstance(exc, SandboxFailure):
                 raise
@@ -288,7 +416,16 @@ class SubprocessRunner(AgentRunner):
                     },
                 )
             )
-            return TurnOutcome("failed", exc.code)
+            outcome = TurnOutcome("failed", exc.code)
+            return outcome
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        finally:
+            self._finish_cli_state(outcome, cancelled=cancelled)
+
+    async def _consume_process(self, process: Any, emit: AsyncEventSink) -> TurnOutcome:
+        from .sandbox.specs import SandboxFailure
 
         queue: asyncio.Queue[Optional[Event]] = asyncio.Queue()
         evidence = TerminalEvidenceAccumulator()
@@ -488,6 +625,7 @@ class SubprocessRunner(AgentRunner):
                     break
                 if event.type == "message" and event.source != "error" and event.text.strip():
                     produced_message = True
+                self._observe_provider_session(event)
                 await emit(event)
         finally:
             if not done_task.done():

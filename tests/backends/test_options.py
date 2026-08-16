@@ -386,6 +386,40 @@ class ProviderSessionCaptureTests(unittest.TestCase):
             {"resumable": True, "interruptible": False, "continuity": True},
         )
 
+    def test_mid_turn_capture_preserves_already_persisted_descriptor_fields(self):
+        extra = {
+            "prompt_event_cursor": 12,
+            "last_turn_status": "in_flight",
+            "resume_fingerprint": {"model": "sonnet"},
+            "backend_version": "1.2.3",
+        }
+
+        async def run():
+            manager = self._manager()
+            managed = self._managed({"claude": "sdk"})
+            managed.state.agent_sessions = {
+                "claude": {
+                    "backend": "sdk",
+                    "provider_session_id": "old",
+                    "provider_session_kind": "session",
+                    **extra,
+                }
+            }
+            manager._maybe_capture_provider_session(
+                managed,
+                provider_session_event("claude", "claude", "sess-xyz", "session"),
+            )
+            return managed.state.agent_sessions["claude"]
+
+        entry = asyncio.run(run())
+        self.assertEqual(entry["backend"], "sdk")
+        self.assertEqual(entry["provider_session_id"], "sess-xyz")
+        self.assertEqual(entry["provider_session_kind"], "session")
+        self.assertEqual(entry["prompt_event_cursor"], 12)
+        self.assertEqual(entry["last_turn_status"], "in_flight")
+        self.assertEqual(entry["resume_fingerprint"], {"model": "sonnet"})
+        self.assertEqual(entry["backend_version"], "1.2.3")
+
     def test_turn_commit_refreshes_projection_without_new_capture(self):
         record = TurnOutcomeRecord.from_outcome(
             turn_id="turn-1",

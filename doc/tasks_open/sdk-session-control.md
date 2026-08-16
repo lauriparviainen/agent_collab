@@ -10,8 +10,10 @@ so relocated where the SDK controls have to be built. Resume scope was widened
 the same day after re-verifying the installed provider CLIs: Claude, Codex, and
 Grok expose strict headless resume-by-id surfaces, as does Antigravity.
 Agent-collab's `antigravity_cli` transport is now typed stream-json with an
-`agy >= 1.1.8` floor. A stable root conversation id is present on the print
-stream; identity capture and resume remain unstarted. Staging therefore
+`agy >= 1.1.8` floor. A stable root conversation id is captured from the print
+stream and used for in-session `--conversation` continuation; `resume` remains
+false and `continuity` stays false until both launch paths pass the
+credentialed two-turn proof. Staging therefore
 separates the shared SDK control
 transport from a provider-neutral resume lifecycle that can serve verified CLI
 and SDK backends.
@@ -162,16 +164,23 @@ take it:
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Increment 1 landed: `antigravity_cli` uses typed
    `--output-format stream-json`, retires message-only/clean-EOF success, and
-   probes `agy >= 1.1.8`. Remaining four increments: live CLI continuation by
-   exact captured id; the durable Antigravity trajectory root and SDK resume
+   probes `agy >= 1.1.8`. Increment 2 landed in-session continuation by exact
+   captured root conversation id (`agy --conversation <id>`), keyed-merge
+   identity capture, the gated CLI runner state machine, and
+   `prepare_cli_invocation` plus the Antigravity finalizer. 2026-08-17 live:
+   the direct (`sandbox=none`) two-turn provider-memory path passed on
+   `gemini-3.5-flash-low` (same captured root id, `--conversation` on turn 2,
+   delta prompt). The outer (`sandbox=read-only`) two-turn was skipped
+   because `AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE` was unset; that skip
+   does not flip the flag. Production `antigravity_cli.continuity` stays
+   false until both launch paths pass; `resume` stays false. Remaining three
+   increments: the durable Antigravity trajectory root and SDK resume
    establishment; persisted explicit resume plus its public operation; and
    turn-level interrupt public surfaces. Mind the pieces added in review:
-   keyed-merge identity capture (the shipped capture write full-replaces the
-   descriptor), the session-level workflow-phase record (no stage replay on
-   resume), the atomic per-session resume claim, the
-   `interrupt_acknowledged` eligibility marker, the `xai_sdk`
-   close-deletes-resume-material conflict, and the durable Antigravity
-   trajectory root.
+   the session-level workflow-phase record (no stage replay on resume), the
+   atomic per-session resume claim, the `interrupt_acknowledged` eligibility
+   marker, the `xai_sdk` close-deletes-resume-material conflict, and the
+   durable Antigravity trajectory root.
 
 ## Purpose and scope
 
@@ -1583,11 +1592,13 @@ CLI resume coverage additionally proves:
   descriptor validation passes; invalid/ineligible descriptors construct no
   runner and project resume unavailable, while a fully eligible descriptor
   projects availability before the operation is called;
-- `antigravity_cli` stays `continuity=false, resume=false` until a fake
-  stream-JSON root event can prove exact conversation-id capture; fixtures cover
-  `init`, `step_update`, terminal `result`, malformed records, additive unknown
-  non-terminal records, unknown terminal outcomes, root versus subagent
-  identity, and the no-plain-text-fallback rule; `clean_eof_fallback` is false.
+- `antigravity_cli` captures the root conversation id from fake stream-JSON
+  `init` / `step_update` / `result` events and continues with
+  `--conversation <id>` after a completed turn; fixtures cover those records,
+  malformed NDJSON, additive unknown non-terminal records, unknown terminal
+  outcomes, root versus subagent identity, and the no-plain-text-fallback
+  rule; `clean_eof_fallback` is false. `continuity` stays false until both
+  launch paths pass the credentialed two-turn proof; `resume` stays false.
 
 The #47 fake-conversation tests already cover the adapter these controls extend.
 Keep `AGENT_COLLAB_HOME` isolated everywhere. No hermetic test may import a real
@@ -1655,7 +1666,8 @@ the feature. A skipped provider keeps the production capability false.
   `resume` independently: `continuity` requires two live turns through both
   launch paths, while `resume` additionally requires persisted cursor and
   fingerprint validation, daemon reload, and the explicit public operation;
-  `antigravity_cli` remains false until exact print-mode id capture exists.
+  `antigravity_cli` may advertise `continuity` only after both launch paths
+  pass the credentialed two-turn proof; `resume` stays false until increment 4.
 - Before `xai_cli` flips either flag, configured `--continue`, `--resume`,
   `--session-id`, and related ownership selectors are rejected under both
   sandbox policies; only the typed internal descriptor may select a session.
@@ -1734,9 +1746,10 @@ the feature. A skipped provider keeps the production capability false.
    root conversation id appears on top-level `init.conversation_id`,
    `step_update.conversation_id`, and `result.conversation_id`.
    `subagent_info.conversation_id` is child identity and was not emitted on
-   the cheap root turn; fixtures keep that distinction. Identity capture and
-   `--conversation` resume are not implemented in increment 1;
-   `continuity` and `resume` stay false. (Stage 4)
+   the cheap root turn; fixtures keep that distinction. Increment 2 captures
+   the root id and uses `--conversation <id>` for in-session continuation.
+   `resume` stays false. `continuity` stays false until both launch paths
+   pass the credentialed two-turn proof. (Stage 4)
 7. What minimum CLI versions or feature probes should gate the other strict
    resume builders? `antigravity_cli` is decided at `agy >= 1.1.8`. The binary
    identity/version belongs in the fingerprint, but Claude, Codex, and Grok
@@ -1871,14 +1884,17 @@ the tests, not this document, are their guarantee.
   [conversation guide](https://antigravity.google/docs/cli/conversations) and
   [resume command reference](https://antigravity.google/docs/cli/commands/resume)
   expose `--conversation <conversation-id>` and `--continue`. Only the explicit
-  id form is acceptable. Not implemented in increment 1.
+  id form is acceptable. Increment 2 uses `--conversation <id>` for in-session
+  continuation after a completed capture. `--continue` is never used.
+  Persisted explicit resume remains increment 4.
 - *[resume opportunity]* Print-mode `--output-format stream-json` emits typed
   `init`, `step_update`, and terminal `result` events. A stable **root**
   conversation id is present on `init.conversation_id` (top-level),
   `step_update.conversation_id`, and `result.conversation_id` (same id on a
   successful root turn). `subagent_info.conversation_id` is child identity and
-  must not be mistaken for the root. Increment 1 records this and does not
-  capture identity or add `--conversation` / `--continue`.
+  must not be mistaken for the root. Increment 2 captures the root id and
+  continues with `--conversation <id>`. `resume` stays false. `continuity`
+  stays false until both launch paths pass the credentialed two-turn proof.
 - *[minimum version]* `agy >= 1.1.8` is the backend-wide floor. The readiness
   probe rejects older or unparseable versions with `cli_version_incompatible`
   and the required/observed versions before every session establishment.

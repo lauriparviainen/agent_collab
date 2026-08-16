@@ -1705,13 +1705,15 @@ class SessionManager:
         # arbitrary state entries or impersonate another provider.
         if not backend_id or agent is None or event.source != agent.type:
             return
-        entry: Dict[str, Any] = {"backend": backend_id}
+        sessions = dict(managed.state.agent_sessions or {})
+        existing = sessions.get(agent_id)
+        entry = dict(existing) if isinstance(existing, dict) else {}
+        entry["backend"] = backend_id
         entry["provider_session_id"] = session_id
         kind = identity.get("provider_session_kind")
         if isinstance(kind, str) and kind:
             entry["provider_session_kind"] = kind
-        sessions = dict(managed.state.agent_sessions or {})
-        if sessions.get(agent_id) == entry:
+        if existing == entry:
             return
         sessions[agent_id] = entry
         managed.state.agent_sessions = sessions

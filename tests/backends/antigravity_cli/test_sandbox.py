@@ -284,6 +284,19 @@ class AntigravityCliSandboxAdapterTests(unittest.TestCase):
             ),
         )
 
+    def test_user_conversation_and_continue_are_rejected_by_sandbox_audit(self):
+        for command in (
+            ("/usr/bin/agy", "--conversation", "00000000-0000-4000-8000-000000000001", "-p"),
+            ("/usr/bin/agy", "--conversation=00000000-0000-4000-8000-000000000001", "-p"),
+            ("/usr/bin/agy", "--continue", "-p"),
+            ("/usr/bin/agy", "--continue=true", "-p"),
+        ):
+            with tempfile.TemporaryDirectory() as raw:
+                plan = self._plan(SandboxPolicy.READ_ONLY, Path(raw), command)
+                with self.assertRaises(SandboxFailure) as raised:
+                    plan.prepare_inner(command)
+            self.assertEqual(raised.exception.code, "outer_sandbox_backend_incompatible")
+
     def test_malformed_owned_flags_fail_with_sanitized_code(self):
         for command in (
             ("/usr/bin/agy", "--mode", "-p"),

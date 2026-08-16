@@ -145,7 +145,7 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
             sandbox_plan=plan,
         )
         supervisor = mock.Mock()
-        supervisor.launch_cli = mock.AsyncMock(
+        supervisor.launch_prepared_cli = mock.AsyncMock(
             side_effect=SandboxFailure(
                 "outer_sandbox_hardlink_alias",
                 "private diagnostic",
@@ -173,9 +173,9 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
         command = next(event for event in events if event.type == "command")
         self.assertEqual(command.raw["command_preview"], list(prepared_prefix))
         plan.prepare_inner.assert_called_once_with(runner.command_prefix)
-        supervisor.launch_cli.assert_awaited_once_with(
+        supervisor.launch_prepared_cli.assert_awaited_once_with(
             plan,
-            runner.command_prefix,
+            prepared_prefix,
             "prompt",
             stream_limit=runner.stream_limit,
         )
@@ -217,7 +217,7 @@ class SubprocessTransportTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         supervisor = mock.Mock()
-        supervisor.launch_cli = mock.AsyncMock(return_value=FailingSandboxProcess())
+        supervisor.launch_prepared_cli = mock.AsyncMock(return_value=FailingSandboxProcess())
 
         with (
             mock.patch(

@@ -9,6 +9,16 @@ from agent_collab.backends.antigravity_cli.parser import (
 
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "antigravity"
+ROOT_CONVERSATION_ID = "00000000-0000-4000-8000-000000000001"
+CHILD_CONVERSATION_ID = "00000000-0000-4000-8000-000000000099"
+
+
+def _identities(events):
+    return [
+        event.provider_session
+        for event in events
+        if event is not None and event.provider_session is not None
+    ]
 
 
 def _lines(name: str) -> list[str]:
@@ -40,7 +50,11 @@ class AntigravityStreamJsonParserTests(unittest.TestCase):
         messages = [event for event in events if event.type == "message"]
         self.assertEqual(len(messages), 1)
         self.assertIn("ready", messages[0].text)
-        self.assertTrue(all(event.provider_session is None for event in events))
+        identities = _identities(events)
+        self.assertEqual(len(identities), 1)
+        self.assertEqual(identities[0]["provider_session_id"], ROOT_CONVERSATION_ID)
+        self.assertEqual(identities[0]["provider_session_kind"], "conversation")
+        self.assertEqual(identities[0]["agent_id"], "antigravity")
 
     def test_failed_terminal_result_is_structural_failure(self):
         events, evidence = _parse_fixture("stream-json-failed.ndjson")
@@ -67,7 +81,9 @@ class AntigravityStreamJsonParserTests(unittest.TestCase):
         self.assertTrue(
             any(event.type == "status" and "progress" in event.text for event in events)
         )
-        self.assertTrue(all(event.provider_session is None for event in events))
+        identities = _identities(events)
+        self.assertEqual(len(identities), 1)
+        self.assertEqual(identities[0]["provider_session_id"], ROOT_CONVERSATION_ID)
         self.assertTrue(any(event.type == "message" for event in events))
 
     def test_unknown_terminal_status_fails(self):
@@ -81,10 +97,18 @@ class AntigravityStreamJsonParserTests(unittest.TestCase):
     def test_subagent_conversation_id_is_not_root_identity(self):
         events, evidence = _parse_fixture("stream-json-subagent.ndjson", verbose=True)
         self.assertEqual([(item.outcome, item.code) for item in evidence], [("completed", None)])
-        self.assertTrue(all(event.provider_session is None for event in events))
+        identities = _identities(events)
+        self.assertEqual(len(identities), 1)
+        self.assertEqual(identities[0]["provider_session_id"], ROOT_CONVERSATION_ID)
+        self.assertNotEqual(identities[0]["provider_session_id"], CHILD_CONVERSATION_ID)
         raw = json.dumps([event.raw for event in events])
-        self.assertIn("00000000-0000-4000-8000-000000000099", raw)
-        self.assertTrue(all("provider_session_id" not in (event.raw or {}) for event in events))
+        self.assertIn(CHILD_CONVERSATION_ID, raw)
+        self.assertTrue(
+            all(
+                (event.provider_session or {}).get("provider_session_id") != CHILD_CONVERSATION_ID
+                for event in events
+            )
+        )
 
     def test_plain_text_sample_is_not_success(self):
         parser = AntigravityStreamingParser()
@@ -116,22 +140,31 @@ class AntigravityStreamJsonParserTests(unittest.TestCase):
         self.assertIsNone(parse_antigravity_line("   \n"))
         self.assertIsNone(AntigravityStreamingParser()("\t\n"))
 
-    def test_stateless_helper_does_not_invent_identity_from_prose_or_records(self):
-        event = parse_antigravity_line(
+    def test_stateless_helper_captures_root_id_and_not_prose(self):
+        parsed = parse_antigravity_line(
             json.dumps(
                 {
                     "event": "result",
                     "result": {
-                        "conversation_id": "00000000-0000-4000-8000-000000000001",
+                        "conversation_id": ROOT_CONVERSATION_ID,
                         "status": "SUCCESS",
                         "response": "ready\n",
                     },
                 }
-            )
+            ),
+            agent_id="reviewer",
         )
-        self.assertEqual(event.type, "message")
-        self.assertIsNone(event.provider_session)
-        self.assertNotIn("provider_session_id", event.raw)
+        events = parsed if isinstance(parsed, list) else [parsed]
+        identities = _identities(events)
+        self.assertEqual(len(identities), 1)
+        self.assertEqual(identities[0]["provider_session_id"], ROOT_CONVERSATION_ID)
+        self.assertEqual(identities[0]["provider_session_kind"], "conversation")
+        self.assertEqual(identities[0]["agent_id"], "reviewer")
+        messages = [event for event in events if event.type == "message"]
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].text, "ready\n")
+        with self.assertRaises(ValueError):
+            parse_antigravity_line("### Supported Modes")
 
     def test_reset_discards_prior_turn_deltas_without_hiding_result_response(self):
         parser = AntigravityStreamingParser()

@@ -20,6 +20,7 @@ from ..common.cli import (
     set_flag_value_before_print_prompt,
 )
 from ..common.health import antigravity_credentials, default_version_runner, probe_cli_backend
+from .invocation import CLI_OWNERSHIP_FLAGS, finalize_antigravity_cli_invocation
 from .parser import AntigravityStreamingParser
 from .sandbox import AntigravityCliSandboxAdapter
 
@@ -54,8 +55,10 @@ class AntigravityCliBackend:
     agent_type = "antigravity"
     brand_color = "#4285F4"
     event_fidelity = "typed"
-    provider_session_id_kind = None
+    provider_session_id_kind = "conversation"
     capabilities = BackendCapabilities()
+    cli_ownership_flags = CLI_OWNERSHIP_FLAGS
+    finalize_cli_invocation = staticmethod(finalize_antigravity_cli_invocation)
     sandbox_adapter = AntigravityCliSandboxAdapter()
     checks_credentials = True
     block_on_unavailable = True
@@ -143,6 +146,6 @@ class AntigravityCliBackend:
             agent,
             verbose,
             options,
-            AntigravityStreamingParser(),
+            AntigravityStreamingParser(agent.id),
             command_builder=lambda run_dir: self.build_command(agent, options, run_dir),
         )

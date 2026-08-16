@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ...events import Event, compact_json
 from ...outcomes import TerminalEvidence, TurnOutcomeKind
+from ..common.sdk import provider_session_event
 
 
 SUCCESS_STATUSES = frozenset({"SUCCESS"})
@@ -115,17 +116,52 @@ def _map_result(raw: Dict[str, Any], verbose: bool) -> Optional[Event]:
     return Event.create("antigravity", "status", "result", raw) if verbose else None
 
 
-def parse_antigravity_line(line: str, verbose: bool = False) -> Optional[Event]:
-    """Map one stream-json record without retaining turn-level evidence.
+def _root_conversation_id(raw: Dict[str, Any]) -> Optional[str]:
+    """Return the root conversation id, never a ``subagent_info`` child id."""
 
-    The production runner uses :class:`AntigravityStreamingParser`. This
-    stateless helper remains the fixture-level event mapper. Malformed NDJSON
-    raises; it never treats plain text as a successful message.
-    """
-
-    raw = _load_record(line)
-    if raw is None:
+    event_type = raw.get("event")
+    if event_type == "init":
+        value = raw.get("conversation_id")
+        if isinstance(value, str) and value:
+            return value
         return None
+    if event_type == "step_update":
+        payload = raw.get("step_update")
+        if isinstance(payload, dict):
+            value = payload.get("conversation_id")
+            if isinstance(value, str) and value:
+                return value
+        return None
+    if event_type == "result":
+        payload = raw.get("result")
+        if isinstance(payload, dict):
+            value = payload.get("conversation_id")
+            if isinstance(value, str) and value:
+                return value
+        return None
+    return None
+
+
+def _identity_event(raw: Dict[str, Any], agent_id: str) -> Optional[Event]:
+    conversation_id = _root_conversation_id(raw)
+    if conversation_id is None:
+        return None
+    return provider_session_event("antigravity", agent_id, conversation_id, "conversation", raw=raw)
+
+
+def _combine_identity(
+    identity: Optional[Event], mapped: Optional[Union[Event, List[Event]]]
+) -> Optional[Union[Event, List[Event]]]:
+    if identity is None:
+        return mapped
+    if mapped is None:
+        return identity
+    if isinstance(mapped, list):
+        return [identity, *mapped]
+    return [identity, mapped]
+
+
+def _map_record(raw: Dict[str, Any], verbose: bool) -> Optional[Event]:
     event_type = raw.get("event")
     if event_type == "init":
         payload = raw.get("init")
@@ -141,10 +177,31 @@ def parse_antigravity_line(line: str, verbose: bool = False) -> Optional[Event]:
     return Event.create("antigravity", "status", compact_json(raw), raw) if verbose else None
 
 
+def parse_antigravity_line(
+    line: str,
+    verbose: bool = False,
+    *,
+    agent_id: str = "antigravity",
+) -> Optional[Union[Event, List[Event]]]:
+    """Map one stream-json record without retaining turn-level evidence.
+
+    The production runner uses :class:`AntigravityStreamingParser`. This
+    stateless helper remains the fixture-level event mapper. Malformed NDJSON
+    raises; it never treats plain text as a successful message.
+    """
+
+    raw = _load_record(line)
+    if raw is None:
+        return None
+    return _combine_identity(_identity_event(raw, agent_id), _map_record(raw, verbose))
+
+
 class AntigravityStreamingParser:
     """Stateful stream-json parser that requires a typed terminal ``result``."""
 
-    def __init__(self) -> None:
+    def __init__(self, agent_id: str = "antigravity") -> None:
+        self.agent_id = agent_id
+        self._seen_session_ids: set[str] = set()
         self._text_parts: List[str] = []
         self._terminal_evidence: List[TerminalEvidence] = []
 
@@ -155,18 +212,20 @@ class AntigravityStreamingParser:
         event_type = raw.get("event")
         if event_type == "init" and not isinstance(raw.get("init"), dict):
             self._terminal_evidence.append(TerminalEvidence("failed", "provider_terminal_failure"))
-            return parse_antigravity_line(line, verbose)
+            return self._with_identity(raw, _map_record(raw, verbose))
         if event_type == "step_update":
             payload = raw.get("step_update")
             if isinstance(payload, dict) and isinstance(payload.get("text_delta"), str):
                 if payload["text_delta"]:
                     self._text_parts.append(payload["text_delta"])
                 if payload.get("step_type") == "tool" or isinstance(payload.get("tool_info"), dict):
-                    return _map_step_update(raw, verbose)
+                    return self._with_identity(raw, _map_step_update(raw, verbose))
                 if verbose:
                     label = payload.get("step_type") or payload.get("state") or "step_update"
-                    return Event.create("antigravity", "status", str(label), raw)
-                return None
+                    return self._with_identity(
+                        raw, Event.create("antigravity", "status", str(label), raw)
+                    )
+                return self._with_identity(raw, None)
         if event_type == "result":
             payload = raw.get("result")
             if not isinstance(payload, dict):
@@ -174,10 +233,10 @@ class AntigravityStreamingParser:
                     TerminalEvidence("failed", "provider_terminal_failure")
                 )
                 events = self._flush_text()
-                mapped = parse_antigravity_line(line, verbose)
+                mapped = _map_record(raw, verbose)
                 if mapped is not None:
                     events.append(mapped)
-                return events or None
+                return self._with_identity(raw, events or None)
             outcome, code, reason, _text = _classify_result(payload.get("status"))
             self._terminal_evidence.append(
                 TerminalEvidence(outcome, code, provider_stop_reason=reason)
@@ -187,7 +246,7 @@ class AntigravityStreamingParser:
                 response = payload.get("response")
                 if isinstance(response, str) and response.strip():
                     events.append(Event.create("antigravity", "message", response, raw))
-            mapped = parse_antigravity_line(line, verbose)
+            mapped = _map_record(raw, verbose)
             if outcome != "completed" and mapped is not None:
                 events.append(mapped)
             elif (
@@ -197,8 +256,20 @@ class AntigravityStreamingParser:
                 and verbose
             ):
                 events.append(mapped)
-            return events or None
-        return parse_antigravity_line(line, verbose)
+            return self._with_identity(raw, events or None)
+        return self._with_identity(raw, _map_record(raw, verbose))
+
+    def _with_identity(
+        self, raw: Dict[str, Any], mapped: Optional[Union[Event, List[Event]]]
+    ) -> Optional[Union[Event, List[Event]]]:
+        conversation_id = _root_conversation_id(raw)
+        identity = None
+        if conversation_id and conversation_id not in self._seen_session_ids:
+            self._seen_session_ids.add(conversation_id)
+            identity = provider_session_event(
+                "antigravity", self.agent_id, conversation_id, "conversation", raw=raw
+            )
+        return _combine_identity(identity, mapped)
 
     def reset(self) -> None:
         """Discard leftover turn state without emitting."""

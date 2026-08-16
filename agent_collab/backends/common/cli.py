@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ...config import AgentConfig, ConfigError
 from ...runners import AgentRunner, CommandBuilder, Parser, SubprocessRunner
+
+CliResumeFinalizer = Callable[[Sequence[str], Optional[Mapping[str, Any]]], Tuple[str, ...]]
 
 
 def flag_value(args: Sequence[str], flag: str) -> Optional[str]:
@@ -119,6 +121,55 @@ def cli_command_preview(
     return backend.build_command(agent, options) if agent.command else None
 
 
+def reject_cli_ownership_flags(command: Sequence[str], flags: Sequence[str]) -> None:
+    """Reject user-configured session-ownership selectors before finalization."""
+
+    if not flags:
+        return
+    from ...sandbox.specs import SandboxFailure
+
+    for item in command[1:]:
+        if item == "--":
+            break
+        for flag in flags:
+            if item == flag or item.startswith(f"{flag}="):
+                raise SandboxFailure(
+                    "outer_sandbox_backend_incompatible",
+                    "Provider arguments include a user-configured session-ownership selector",
+                    remediation=(
+                        "Remove configured --conversation and --continue flags; "
+                        "only the typed internal descriptor may select a session.",
+                    ),
+                )
+
+
+def prepare_cli_invocation(
+    command: Sequence[str],
+    sandbox_plan: Optional[Any],
+    descriptor: Optional[Mapping[str, Any]] = None,
+    *,
+    finalizer: Optional[CliResumeFinalizer] = None,
+    ownership_flags: Sequence[str] = (),
+) -> Tuple[str, ...]:
+    """Build the immutable provider prefix used by dry-run, direct, and outer paths.
+
+    1. Reject user-configured ownership selectors under either sandbox policy.
+    2. Apply ``sandbox_plan.prepare_inner`` (a no-op for ``sandbox=none``).
+    3. Apply the backend-owned finalizer: identity when ``descriptor`` is absent,
+       or that provider's strict resume-by-id form when present.
+    4. Return an immutable prefix that still excludes the prompt.
+    """
+
+    reject_cli_ownership_flags(command, ownership_flags)
+    if sandbox_plan is not None:
+        prepared = tuple(sandbox_plan.prepare_inner(command))
+    else:
+        prepared = tuple(command)
+    if finalizer is None:
+        return prepared
+    return tuple(finalizer(prepared, descriptor))
+
+
 def create_cli_runner(
     backend: Any,
     agent: AgentConfig,
@@ -141,6 +192,10 @@ def create_cli_runner(
         def command_builder(_run_dir: Path) -> List[str]:
             return backend.build_command(agent, options)
 
+    finalizer = getattr(backend, "finalize_cli_invocation", None)
+    if not callable(finalizer):
+        finalizer = None
+    ownership_flags = tuple(getattr(backend, "cli_ownership_flags", ()) or ())
     return SubprocessRunner(
         agent.id,
         backend.build_command(agent, options),
@@ -151,6 +206,8 @@ def create_cli_runner(
         command_builder=command_builder,
         source=backend.agent_type,
         clean_eof_fallback=bool(getattr(backend, "clean_eof_fallback", False)),
+        resume_finalizer=finalizer,
+        ownership_flags=ownership_flags,
     )
 
 

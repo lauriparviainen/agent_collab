@@ -24,21 +24,31 @@ class AntigravityCliBackendTests(unittest.TestCase):
             **kwargs,
         )
 
-    def test_structured_records_do_not_capture_provider_identity(self):
+    def test_structured_records_capture_root_conversation_identity(self):
         line = (
             '{"event":"result","result":{"conversation_id":'
             '"00000000-0000-4000-8000-000000000001","status":"SUCCESS",'
             '"response":"ready\\n"}}'
         )
-        event = parse_antigravity_line(line)
-        parser = AntigravityStreamingParser()
-        parsed = parser(line)
+        parsed = parse_antigravity_line(line, agent_id="reviewer")
         events = parsed if isinstance(parsed, list) else [parsed]
-        self.assertEqual(event.type, "message")
-        self.assertIsNone(event.provider_session)
-        self.assertNotIn("provider_session_id", event.raw)
-        self.assertTrue(all(item.provider_session is None for item in events if item is not None))
-        self.assertIsNone(AntigravityCliBackend.provider_session_id_kind)
+        identity = next(event for event in events if event.provider_session)
+        self.assertEqual(
+            identity.provider_session["provider_session_id"],
+            "00000000-0000-4000-8000-000000000001",
+        )
+        self.assertEqual(identity.provider_session["provider_session_kind"], "conversation")
+        self.assertEqual(identity.provider_session["agent_id"], "reviewer")
+        parser = AntigravityStreamingParser("reviewer")
+        streamed = parser(line)
+        streamed_events = streamed if isinstance(streamed, list) else [streamed]
+        self.assertEqual(
+            next(event.provider_session for event in streamed_events if event.provider_session)[
+                "provider_session_id"
+            ],
+            "00000000-0000-4000-8000-000000000001",
+        )
+        self.assertEqual(AntigravityCliBackend.provider_session_id_kind, "conversation")
         self.assertFalse(self.backend.capabilities.continuity)
         self.assertFalse(self.backend.capabilities.resume)
 
@@ -142,3 +152,5 @@ class AntigravityCliBackendTests(unittest.TestCase):
         self.assertTrue(runner.verbose)
         self.assertEqual(runner.cwd, "nested")
         self.assertEqual(runner.env, {"SAFE": "1"})
+        self.assertEqual(runner.parser.agent_id, "reviewer")
+        self.assertTrue(callable(runner.resume_finalizer))

@@ -23,9 +23,9 @@ Observed print-mode NDJSON (root turn):
 
 A stable **root** conversation id is present on `init.conversation_id`
 (top-level), `step_update.conversation_id`, and `result.conversation_id`,
-and those three slots matched on the captured root turn. Identity capture
-is out of scope for this increment; fixtures keep redacted ids only so
-later resume work can distinguish root from child.
+and those three slots matched on the captured root turn. The parser captures
+that root id once as `provider_session` kind `conversation`. Fixtures keep
+redacted ids so tests can distinguish root from child.
 
 `subagent_info.conversation_id` is child identity. It was not emitted on
 the cheap root turn; `stream-json-subagent.ndjson` reconstructs the

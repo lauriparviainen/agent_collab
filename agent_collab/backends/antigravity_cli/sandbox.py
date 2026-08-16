@@ -24,6 +24,8 @@ from ...sandbox.specs import (
     StateRootSpec,
 )
 
+from .invocation import reject_antigravity_ownership_flags
+
 
 @dataclass(frozen=True)
 class AntigravityCliSandboxAdapter:
@@ -148,6 +150,7 @@ def _option_values(command: Sequence[str], flag: str, *, strict: bool) -> Tuple[
 def _prepare_read_only_command(command: Sequence[str]) -> Tuple[str, ...]:
     if not command:
         _command_incompatible()
+    reject_antigravity_ownership_flags(command)
     _option_values(command, "--add-dir", strict=True)
     result: list[str] = [command[0]]
     index = 1

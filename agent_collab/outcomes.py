@@ -34,6 +34,7 @@ CANONICAL_MESSAGES: Dict[str, str] = {
     "local_turn_interrupted": "The turn was interrupted by an explicit session stop",
     "referee_cancelled_unexpected": "The turn supervisor was cancelled unexpectedly",
     "subprocess_exit_nonzero": "The provider subprocess exited unsuccessfully",
+    "provider_session_quarantined": "The provider conversation is quarantined and cannot continue",
     "parallel_stage_no_accepted_member": "No parallel reviewer produced an accepted review",
 }
 

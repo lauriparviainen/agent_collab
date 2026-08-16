@@ -97,7 +97,7 @@ class AntigravityCliVersionFloorTests(unittest.TestCase):
         self.assertIn("1.1.7", health.reason)
         self.assertEqual(backend.clean_eof_fallback, False)
         self.assertEqual(backend.event_fidelity, "typed")
-        self.assertIsNone(backend.provider_session_id_kind)
+        self.assertEqual(backend.provider_session_id_kind, "conversation")
         self.assertEqual(
             backend.capabilities.to_dict(),
             {"resume": False, "interrupt": False, "tool_gate": False, "continuity": False},

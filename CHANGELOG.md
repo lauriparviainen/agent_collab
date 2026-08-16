@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Capture the Antigravity CLI root conversation id and continue an in-session
+  thread with `agy --conversation <id>` on later turns. `continuity` stays
+  false until both launch paths pass a credentialed two-turn proof; `resume`
+  stays false (#20).
+
 - Convert `antigravity_cli` to typed `agy --output-format stream-json`
   NDJSON, require `agy >= 1.1.8`, and retire message-only clean-EOF
   success. Continuity, resume, interrupt, and tool_gate stay false (#20).

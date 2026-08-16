@@ -357,6 +357,8 @@ class Referee:
                         preview,
                         cwd=agent.cwd,
                         sandbox_plan=self.sandbox_plan.agents.get(agent_id),
+                        resume_finalizer=getattr(backend, "finalize_cli_invocation", None),
+                        ownership_flags=getattr(backend, "cli_ownership_flags", ()),
                     )
                     if preview is not None
                     else BackendDryRunRunner(agent.id, f"{agent.type}_{backend_id}", cwd=agent.cwd)

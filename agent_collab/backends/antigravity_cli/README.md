@@ -36,9 +36,15 @@ intentional override.
 The typed NDJSON parser maps `init` and non-text `step_update` records to
 verbose status, `text_delta` / terminal `response` to `antigravity/message`,
 and tool steps to `tool/tool_call`. Additive unknown non-terminal records are
-ignored (or bounded verbose status). This increment does not emit
-`provider_session` or capture conversation ids. `subagent_info.conversation_id`
-is child identity and is never treated as the root.
+ignored (or bounded verbose status). A stable root conversation id on
+`init.conversation_id`, `step_update.conversation_id`, or
+`result.conversation_id` is emitted once as `provider_session` kind
+`conversation`. `subagent_info.conversation_id` is child identity and is never
+treated as the root. After a completed turn that captured that id, later turns
+in the same live session use `agy --conversation <id>` plus the referee delta
+prompt. User-configured `--conversation` / `--continue` are rejected; only the
+typed internal descriptor may select a session. `--continue` and last-conversation
+cache inference are not used.
 
 ## Turn outcome
 
@@ -51,7 +57,9 @@ fallback.
 
 ## Capabilities and security
 
-`resume`, `interrupt`, `tool_gate`, and `continuity` are false. Execution uses
+`resume`, `interrupt`, and `tool_gate` are false. `continuity` stays false
+until a credentialed two-turn proof passes on both the direct
+(`sandbox=none`) and outer (`sandbox=read-only`) launch paths. Execution uses
 the resolved cwd/add-dir configuration and closes stdin.
 
 The separate top-level outer policy supports `sandbox="read-only"` in Stage 4.
@@ -89,7 +97,8 @@ and delegated writes are not isolated or claimed as protected.
 Hermetic: `python3 -m unittest tests.backends.antigravity_cli.test_backend
 tests.backends.antigravity_cli.test_parser
 tests.backends.antigravity_cli.test_health
-tests.backends.antigravity_cli.test_sandbox`. Credential-free real namespace:
+tests.backends.antigravity_cli.test_sandbox
+tests.backends.antigravity_cli.test_continuity`. Credential-free real namespace:
 `./agent_collab_dev.sh bubblewrap-test`. Live:
 `./agent_collab_dev.sh integration-test antigravity_cli`. The paid Stage 4
 acceptance is skipped unless
