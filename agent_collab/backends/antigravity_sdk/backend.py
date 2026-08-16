@@ -68,7 +68,7 @@ from ...events import Event, compact_json
 from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
 from ...runners import AgentRunner, AsyncEventSink
 from ...sandbox.specs import SandboxPolicy
-from .permissions import park_in_process_antigravity_approval
+from .permissions import PinnedAskUserHandler, park_in_process_antigravity_approval
 from .sandbox import AntigravitySdkSandboxAdapter
 from ..base import (
     BackendCapabilities,
@@ -855,7 +855,9 @@ class AntigravitySdkRunner(AgentRunner):
         if self._conversation is None:
             factory = self._conversation_factory
             ask_user_handler = (
-                self._ask_user if getattr(self, "_approval_callback", None) is not None else None
+                PinnedAskUserHandler(self._ask_user)
+                if getattr(self, "_approval_callback", None) is not None
+                else None
             )
             if factory is _default_conversation:
                 self._conversation = factory(
@@ -1120,6 +1122,8 @@ def _default_conversation(
     approval callback is bound. Omit it for ungated in-process so the SDK
     default ``confirm_run_command`` remains. ``allow_all_policy`` is the
     historical post-proof skip and must not be combined with a host gate.
+    Callers should pass ``PinnedAskUserHandler`` so
+    ``Agent.__init__`` ``model_copy(deep=True)`` does not walk the runner.
     """
 
     cleanup: Optional[Callable[[], None]] = None

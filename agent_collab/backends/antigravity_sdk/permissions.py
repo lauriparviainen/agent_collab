@@ -23,6 +23,32 @@ from ...approvals import build_approval_summary, sanitize_tool_name
 
 
 RequestApproval = Callable[..., Awaitable[Mapping[str, Any]]]
+AskUserImpl = Callable[[Any], Awaitable[bool]]
+
+
+class PinnedAskUserHandler:
+    """Keep ``ask_user`` identity across ``LocalAgentConfig.model_copy(deep=True)``.
+
+    Installed 0.1.8 ``Agent.__init__`` deep-copies the config. A bound method
+    on the in-process runner walks the runner graph and raises
+    ``TypeError: cannot pickle 'mappingproxy' object``. Returning ``self``
+    from copy/deepcopy preserves the live park callback.
+    """
+
+    __slots__ = ("_impl",)
+
+    def __init__(self, impl: AskUserImpl) -> None:
+        self._impl = impl
+
+    async def __call__(self, tool_call: Any) -> bool:
+        return await self._impl(tool_call)
+
+    def __copy__(self) -> "PinnedAskUserHandler":
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "PinnedAskUserHandler":
+        memo[id(self)] = self
+        return self
 
 
 def approval_result_from_decision(envelope: Any) -> bool:

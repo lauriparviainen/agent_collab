@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add credentialed Antigravity SDK `tool_gate` park tests on the worker
+  and in-process paths. Deny, approve, and parked-interval clock
+  exclusion parked on both paths. Pin `ask_user` across the SDK config
+  deepcopy so in-process parks can register. Production
+  `antigravity_sdk.tool_gate` stays false (#20).
 - Wire Antigravity SDK `policy.ask_user("*")` on the worker and gated
   in-process paths (120 s fail-closed deny, overlapping parks). The
   worker no longer forces `allow_all` after outer proof. Production

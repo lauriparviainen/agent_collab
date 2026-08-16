@@ -21,6 +21,7 @@ from agent_collab.backends.antigravity_sdk.backend import (
     _default_conversation,
 )
 from agent_collab.backends.antigravity_sdk.permissions import (
+    PinnedAskUserHandler,
     approval_result_from_decision,
     park_antigravity_tool_approval,
     tool_name_from_call,
@@ -230,6 +231,19 @@ def _fake_antigravity_modules(
 
 
 class PermissionHelperTests(unittest.TestCase):
+    def test_pinned_handler_survives_deepcopy(self) -> None:
+        from copy import deepcopy
+
+        calls: list[str] = []
+
+        async def impl(tool_call: Any) -> bool:
+            calls.append(getattr(tool_call, "name", ""))
+            return True
+
+        pinned = PinnedAskUserHandler(impl)
+        copied = deepcopy(pinned)
+        self.assertIs(copied, pinned)
+
     def test_decision_mapping_is_fail_closed(self) -> None:
         self.assertTrue(approval_result_from_decision({"decision": "approve"}))
         self.assertFalse(approval_result_from_decision({"decision": "deny"}))
@@ -336,7 +350,9 @@ class AntigravitySdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
             return conv
 
         async with self._drive(backend, fake_conv) as (reader, writer):
-            self.assertIs(holder["ask_user_handler"].__func__, backend._ask_user.__func__)
+            handler = holder["ask_user_handler"]
+            self.assertIsInstance(handler, PinnedAskUserHandler)
+            self.assertIs(handler._impl.__func__, backend._ask_user.__func__)
             self.assertNotEqual(holder["allow_all_policy"], True)
             await send_frame(writer, make_frame("run", run_id="run-1", prompt="gate"))
             request = await self._recv_until(reader, "approval_request")

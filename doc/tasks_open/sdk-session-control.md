@@ -102,9 +102,17 @@ take it:
    questions 5, 9, and 10 are recorded in the Antigravity Decision
    below. The worker no longer forces `allow_all` after outer proof.
    Ungated in-process keeps the SDK default `confirm_run_command`.
-   Production `antigravity_sdk.tool_gate` stays false pending
-   credentialed parks. Do not add those live park tests in this
-   increment (next slice). Do not flip `antigravity_sdk.interrupt`.
+   2026-08-16 credentialed parks: worker (`sandbox=read-only`) and
+   in-process (`sandbox=none`) parked on deny, approve, and
+   parked-interval clock exclusion (20 s turn timeout, 25 s hold, not
+   `timed_out`). In-process required a copy-stable `ask_user` wrapper
+   so `Agent` `model_copy(deep=True)` does not walk the runner
+   (`TypeError: cannot pickle 'mappingproxy' object`). Worker clock
+   holds stayed `awaiting_approval`; a slow pre-park can still settle
+   `timed_out` after resolve because startup counts against the 20 s
+   remainder. A never-parked test fails rather than skips. Production
+   `antigravity_sdk.tool_gate` stays false pending a dedicated flip
+   increment. Do not flip `antigravity_sdk.interrupt`.
    Codex tool_gate *mapping* also landed:
    host `approval_handler` is wired on the worker (always) and on
    in-process only when `_approval_callback` is set; questions 5, 9, and
@@ -129,9 +137,10 @@ take it:
    never-parked test fails rather than skips. Production
    `codex_sdk.tool_gate` stays false. Remaining Stage 3: a worker
    combo that emits `requestApproval` inside outer Bubblewrap
-   without suppressing tools; Antigravity credentialed parks on
-   both production paths; and xAI (open question 2 still open,
-   plus remaining 5, 9, and 10; record negatives explicitly).
+   without suppressing tools; a dedicated Antigravity `tool_gate`
+   flip increment (parks landed; flag stays false); and xAI (open
+   question 2 still open, plus remaining 5, 9, and 10; record
+   negatives explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Mind the pieces added in review: keyed-merge identity
    capture (the shipped capture write full-replaces the descriptor), the
@@ -596,8 +605,9 @@ Settled as product policy for `antigravity_sdk` from static inspect of
 pin `google-antigravity` 0.1.8. The host `policy.ask_user("*")`
 handler is wired on both production paths (worker always;
 in-process only when a session callback is bound). Production
-`antigravity_sdk.tool_gate` stays false pending credentialed parks.
-xAI keeps questions 5, 9, and 10 open.
+`antigravity_sdk.tool_gate` stays false pending a dedicated flip
+increment. Credentialed parks landed 2026-08-16 on both
+production paths. xAI keeps questions 5, 9, and 10 open.
 
 **Open question 5 (Antigravity):** The Python `ask_user` handler is
 not account/plan gated. `hooks/policy.py` has no entitlement check.
@@ -638,9 +648,12 @@ when the SDK can overlap decide hooks; using
 serve loop.
 
 **Hard blocker for flipping `tool_gate`:** credentialed parks on
-both production paths. Mapping landed; live parks are the next
-slice. Live two-at-once / abort-during-park remain unverified and
-are not a flip blocker once parks are proven.
+both production paths. Those landed 2026-08-16 (deny, approve,
+parked-interval clock exclusion on worker and in-process).
+`ask_user` is pinned across the SDK config deepcopy so in-process
+parks can register. Production `antigravity_sdk.tool_gate` stays
+false pending a dedicated flip increment. Live two-at-once /
+abort-during-park remain unverified and are not a flip blocker.
 
 ### Aggregation
 
@@ -2017,8 +2030,16 @@ the tests, not this document, are their guarantee.
   `policy.ask_user` fails closed (`BackendUnavailable`) when a host
   gate was requested. Hermetic tests cover park / approve / deny /
   overlap / unbound deny / missing-API fail-closed on both paths.
-  Production `antigravity_sdk.tool_gate` stays false pending
-  credentialed parks. See *Decision (2026-08-16): Antigravity
+  Production `antigravity_sdk.tool_gate` stays false pending a
+  dedicated flip increment. 2026-08-16 credentialed parks: worker
+  (`sandbox=read-only`) and in-process (`sandbox=none`) parked on
+  deny, approve, and parked-interval clock exclusion (20 s turn
+  timeout, 25 s hold, not `timed_out`). In-process first failed
+  with `TypeError: cannot pickle 'mappingproxy' object` until
+  `ask_user` was pinned across `Agent` `model_copy(deep=True)`.
+  Worker clock holds stayed `awaiting_approval`; a slow pre-park
+  can still settle `timed_out` after resolve. A never-parked test
+  fails rather than skips. See *Decision (2026-08-16): Antigravity
   Stage 3 tool-gate policy*.
 - *[interrupt]* `Agent.chat()` returns a lazy `ChatResponse`. Cancelling a
   local `resolve()` consumer does not invoke provider cancellation.

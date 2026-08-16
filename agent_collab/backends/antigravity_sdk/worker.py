@@ -17,7 +17,7 @@ from .backend import (
     _should_reset_after_outcome,
     map_antigravity_turn,
 )
-from .permissions import park_antigravity_tool_approval
+from .permissions import PinnedAskUserHandler, park_antigravity_tool_approval
 
 EventEmit = Callable[[Any], Awaitable[None]]
 
@@ -77,7 +77,7 @@ class AntigravitySdkWorkerBackend:
             save_dir=save_dir,
             app_data_dir=app_data_dir,
             extra_workspaces=extras,
-            ask_user_handler=self._ask_user,
+            ask_user_handler=PinnedAskUserHandler(self._ask_user),
         )
         self._conversation = conversation
         self._verbose = verbose
