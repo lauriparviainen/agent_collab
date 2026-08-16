@@ -68,9 +68,21 @@ take it:
    parked and denied. Not a permission-mode skip. Production
    `claude_sdk.tool_gate` is now true. Live two-at-once /
    abort-during-park remain unverified and are not a flip blocker.
-   Remaining Stage 2: interrupt live proof before any `interrupt` flag
-   flip. Keep MCP free of wait_approval, list_approvals, and
-   interrupt/resume tools until Stage 4.
+   Interrupt live proof 2026-08-16: `interrupt_in_flight()` (not
+   `stop_session`) on worker (`sandbox=read-only`) and in-process
+   (`sandbox=none`) produced `TurnOutcome("interrupted",
+   "local_turn_interrupted")`. An earlier worker attempt that interrupted
+   on the worker `run_started` status completed without the abort marker
+   (`issued=True`, `outcomes=[completed]`); waiting for a real provider
+   event then aborted. Continue-after-interrupt did not: both paths
+   settled `failed` / `local_turn_interrupted` because `RequiredTurnFailed`
+   still maps a non-`completed` required turn to session failure, so
+   `post_message` is rejected. Adapter retain is unproven at the session
+   layer. Production `claude_sdk.interrupt` stays false. Remaining Stage 2:
+   do not flip `interrupt` until a later increment can continue after the
+   abort (Stage 4 turn-level interrupt parks at `awaiting_input` instead of
+   raising `RequiredTurnFailed`). Keep MCP free of wait_approval,
+   list_approvals, and interrupt/resume tools until Stage 4.
 5. **Stage 3 — Codex, Antigravity, and xAI SDK controls** (open questions
    1–2, plus remaining 5, 9, and 10; record negatives explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
@@ -1596,10 +1608,14 @@ the tests, not this document, are their guarantee.
   the conversation. Any other result keeps the existing completed/failed
   mapping; an exception or stream end without a distinguishable abort marker
   fails closed to `provider_transport_failed` / `provider_output_incomplete`.
-  Whether a live CLI actually emits those `terminal_reason` values, an error
-  result, an empty stream, or a hang until the control-request timeout is
-  **not** proven without a credentialed call; `claude_sdk.interrupt` stays
-  false.
+  Live proof 2026-08-16: `interrupt_in_flight()` on both production paths
+  (worker `sandbox=read-only`, in-process `sandbox=none`) produced
+  `TurnOutcome("interrupted", "local_turn_interrupted")` — not a completed
+  turn, hang, or fail-closed transport error. Continue-after-interrupt did
+  not: the referee still raises `RequiredTurnFailed` on a non-`completed`
+  required turn, the session becomes `failed`, and `post_message` is
+  rejected. Adapter retain on a clean interrupt win is unproven at the
+  session layer. `claude_sdk.interrupt` stays false.
 - *[interrupt]* Cancelling the local consumer does **not** stop provider work:
   the detached reader and CLI subprocess run until `disconnect()`, whose
   subprocess close is internally bounded (~20 s worst-case terminate/kill

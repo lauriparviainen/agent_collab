@@ -13,6 +13,12 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add credentialed Claude SDK interrupt tests on the worker and in-process
+  paths. Both paths produced a distinguishable abort (`interrupted` /
+  `local_turn_interrupted`). Continue-after-interrupt did not: the session
+  failed via `RequiredTurnFailed`, so `post_message` was rejected. Production
+  `claude_sdk.interrupt` stays false (#20).
+
 - Flip production `claude_sdk.tool_gate` to true after credentialed parks on
   both worker and in-process paths (#20).
 
