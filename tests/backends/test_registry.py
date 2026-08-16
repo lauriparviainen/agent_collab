@@ -128,6 +128,8 @@ class CapabilityReducerTests(unittest.TestCase):
         for caps in (codex, claude, antigravity, xai):
             self.assertFalse(caps.resume)
             self.assertFalse(caps.interrupt)
+        self.assertTrue(claude.tool_gate)
+        for caps in (codex, antigravity, xai):
             self.assertFalse(caps.tool_gate)
         self.assertTrue(backends.summarize_session_capabilities({"codex_sdk": codex})["continuity"])
         self.assertTrue(

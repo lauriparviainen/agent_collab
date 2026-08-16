@@ -13,6 +13,9 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Flip production `claude_sdk.tool_gate` to true after credentialed parks on
+  both worker and in-process paths (#20).
+
 - Add credentialed Claude SDK `tool_gate` park tests on the worker and
   in-process paths. Deny, approve, and parked-interval clock exclusion
   parked on both paths. Production `claude_sdk.tool_gate` stays false (#20).

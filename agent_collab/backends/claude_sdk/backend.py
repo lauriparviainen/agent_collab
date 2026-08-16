@@ -113,7 +113,7 @@ class ClaudeSdkBackend:
     provider_session_id_kind = "session"
 
     def __init__(self, conversation_factory: Optional[ConversationFactory] = None) -> None:
-        self.capabilities = BackendCapabilities(continuity=True)
+        self.capabilities = BackendCapabilities(continuity=True, tool_gate=True)
         self.checks_credentials = True
         # First-class but opt-in: a missing wheel / import failure fails the start
         # fast with an install hint instead of burning the first turn.
