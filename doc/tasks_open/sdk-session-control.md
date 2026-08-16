@@ -58,9 +58,17 @@ take it:
    loop that excludes parked intervals (120 s default fail-closed deny,
    list-shaped overlap, no provider-clock clamp). Hermetic coverage is in
    place. Remaining before any `tool_gate` / `interrupt` flag flip:
-   **credentialed coverage on both paths**. Live park / two-at-once /
-   abort-during-park are still unverified. Keep MCP free of wait_approval,
-   list_approvals, and interrupt/resume tools until Stage 4.
+   live two-at-once / abort-during-park, plus interrupt live proof.
+   2026-08-16 live run: in-process (`sandbox=none`) parked on deny,
+   approve, and parked-interval clock exclusion (20 s turn timeout, 25 s
+   hold, not `timed_out`). Worker (`sandbox=read-only`) parked on the same
+   three cases once the isolated `-I` worker loaded this branch's protocol
+   v2 (a leftover non-editable copy in the durable venv had been shadowing
+   the editable checkout). One deny-worker attempt finished without a park
+   (`status=done`); a retry parked and denied. Not a permission-mode skip.
+   Production `claude_sdk.tool_gate` and `interrupt` stay false. Keep MCP
+   free of wait_approval, list_approvals, and interrupt/resume tools until
+   Stage 4.
 5. **Stage 3 — Codex, Antigravity, and xAI SDK controls** (open questions
    1–2, plus remaining 5, 9, and 10; record negatives explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
@@ -410,10 +418,11 @@ roots pass through the outer sandbox adapter.
 
 Settled as product policy for `claude_sdk` from static inspect of pin
 `claude-agent-sdk` 0.2.126 / bundled CLI 2.1.218 plus a three-reviewer
-consensus scored for versatility and ease of use. This is **not** a live-turn
-proof. `claude_sdk.tool_gate` stays false until both production paths
-actually deliver `can_use_tool` and credentialed tests park on both. Codex,
-Antigravity, and xAI keep questions 5, 9, and 10 open at Stage 3.
+consensus scored for versatility and ease of use. 2026-08-16 live turns
+parked on both production paths (deny, approve, parked-interval clock
+exclusion). `claude_sdk.tool_gate` stays false while live two-at-once /
+abort-during-park remain unverified. Codex, Antigravity, and xAI keep
+questions 5, 9, and 10 open at Stage 3.
 
 **Open question 5 (Claude):** `can_use_tool` is not gated by account or plan
 entitlements in the SDK or CLI source. Silent skip is a **permission-mode /
@@ -443,10 +452,11 @@ waits 60 s (different control path); serializing parks because live overlap
 is unproven; keeping `tool_gate` false due to clocks when clocks are not the
 blocker; treating a never-parked credentialed test as skip.
 
-**Hard blocker for flipping `tool_gate`:** credentialed coverage on both
-paths. The worker no longer forces `bypassPermissions`; hermetic tests
-invoke `can_use_tool` on worker and in-process. Live park / two-at-once /
-abort-during-park remain unverified.
+**Hard blocker for flipping `tool_gate`:** live two-at-once / abort-during-park
+remain unverified. The worker no longer forces `bypassPermissions`; hermetic
+tests invoke `can_use_tool` on worker and in-process. 2026-08-16 live run
+parked on both paths (deny, approve, parked-interval clock exclusion).
+Production `claude_sdk.tool_gate` stays false.
 
 ### Aggregation
 
@@ -612,8 +622,10 @@ findings that must inform it.
 ## Design: tool gating
 
 Hermetic mapping and clocks are implemented on both Claude SDK paths; live
-park is still unverified and production `claude_sdk.tool_gate` stays false
-pending credentialed coverage. The `can_use_tool` callback fires **inside
+park is proven on worker and in-process (2026-08-16 deny, approve, and
+parked-interval clock exclusion) and production `claude_sdk.tool_gate`
+stays false. Live two-at-once / abort-during-park remain unverified. The
+`can_use_tool` callback fires **inside
 the worker**, in the middle of `backend.run()`. The clean shape keeps one
 receive loop and reuses the bounded out-of-band control writer from
 interrupt; it never parks that loop or the turn lock on a human decision.
@@ -1601,12 +1613,13 @@ the tests, not this document, are their guarantee.
   `"default"`). The worker no longer forces `bypassPermissions` after the
   outer ack; outer Bubblewrap remains the filesystem barrier. Hermetic
   tests cover park / approve / deny / overlap / deadline / abandon /
-  deny-before-stop / clocks on both paths. Live proof still missing:
-  whether a real turn emits `can_use_tool`, whether two fire at once, and
-  whether the CLI aborts a park during the 120 s window.
-  `claude_sdk.tool_gate` stays false until credentialed coverage on both
-  paths. Request id, tool input shape, and live result types remain
-  unverified against a real CLI.
+  deny-before-stop / clocks on both paths. Live proof 2026-08-16: real
+  in-process and worker turns emit `can_use_tool` and park (deny, approve,
+  and parked-interval clock exclusion). Live parks confirmed a request id
+  and deny/approve outcomes on both paths; full tool-input shape / CLI
+  result-type inventory still unverified. Whether two fire at once, and
+  whether the CLI aborts a park during the 120 s window, remain unverified.
+  `claude_sdk.tool_gate` stays false.
 - *[all]* The client is loop-scoped but usable across tasks in one loop (its
   reader is detached via `spawn_detached` -> `loop.create_task`); an `atexit`
   child killer reaps orphaned CLI subprocesses. `disconnect()` is idempotent,

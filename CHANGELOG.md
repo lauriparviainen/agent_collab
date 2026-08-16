@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add credentialed Claude SDK `tool_gate` park tests on the worker and
+  in-process paths. Deny, approve, and parked-interval clock exclusion
+  parked on both paths. Production `claude_sdk.tool_gate` stays false (#20).
+
 - Wire Claude SDK `can_use_tool` on the worker and in-process paths, drop the
   worker `bypassPermissions` force, and pause the per-turn clock while parked
   (120 s default fail-closed deny). A worker park with no listener is
