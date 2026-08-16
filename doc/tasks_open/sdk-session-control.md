@@ -55,13 +55,16 @@ take it:
    control ACK so the worker serve loop can harvest the turn `result`
    within the daemon's 2 s bound; that ACK-vs-harvest inversion is part of
    the mapping. Production `claude_sdk.interrupt` stays false until
-   credentialed coverage on both paths. Remaining in this stage: tool_gate,
-   the clocks design (re-armed remaining-budget loop, per-park and per-turn
-   caps), and resolving open questions 9–10 (provider-side decision
-   deadlines, callback concurrency) for this backend, then the credentialed
-   flag flip.
+   credentialed coverage on both paths. Open questions 5, 9, and 10 are
+   **decided for `claude_sdk`** (see *Decision (2026-08-16)*); they are
+   not reopened for this backend. Remaining in this stage: tool_gate
+   mapping plus the clocks loop against that decision (120 s default
+   fail-closed deny, list-shaped concurrent parks, no provider-clock
+   clamp), stop forcing `bypassPermissions` on the worker so
+   `can_use_tool` is no longer shadowed, then credentialed coverage on
+   both paths before any `tool_gate` / `interrupt` flag flip.
 5. **Stage 3 — Codex, Antigravity, and xAI SDK controls** (open questions
-   1–2; record negatives explicitly).
+   1–2, plus remaining 5, 9, and 10; record negatives explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
    five increments. Mind the pieces added in review: keyed-merge identity
    capture (the shipped capture write full-replaces the descriptor), the
@@ -405,6 +408,48 @@ mapping once the worker protocol exists. For CLIs, both paths still launch one
 process; the difference is whether the backend-owned argv and provider state
 roots pass through the outer sandbox adapter.
 
+### Decision (2026-08-16): Claude Stage 2 tool-gate policy
+
+Settled as product policy for `claude_sdk` from static inspect of pin
+`claude-agent-sdk` 0.2.126 / bundled CLI 2.1.218 plus a three-reviewer
+consensus scored for versatility and ease of use. This is **not** a live-turn
+proof. `claude_sdk.tool_gate` stays false until both production paths
+actually deliver `can_use_tool` and credentialed tests park on both. Codex,
+Antigravity, and xAI keep questions 5, 9, and 10 open at Stage 3.
+
+**Open question 5 (Claude):** `can_use_tool` is not gated by account or plan
+entitlements in the SDK or CLI source. Silent skip is a **permission-mode /
+allow-list shadowing** problem, not an entitlement skip. The production
+worker currently forces `permission_mode=bypassPermissions` after the outer
+ack; the SDK documents that mode as skipping `can_use_tool`, so the default
+worker path cannot prove a park. A credentialed test that never parks
+**fails**; it does not skip and flip the flag.
+
+**Open question 9 (Claude):** Neither the Python SDK nor the bundled CLI
+holds a Python-side decision timer on a pending `can_use_tool`. Do **not**
+clamp the approval deadline to a guessed provider clock. Do **not** keep
+`tool_gate` false *because of clocks*. Agent-collab owns a fail-closed deny
+deadline: default **120 seconds**, configurable as a start setting, expiry
+denies. The per-turn park-exclusion cap is twice the configured approval
+deadline (240 s at the default). Treat CLI `control_cancel_request` /
+stream-close as abandon/auto-deny, not as a decision clock. Whether a live
+CLI aborts a park during that 120 s window is still unverified.
+
+**Open question 10 (Claude):** Keep `pending_approvals` as a **list**.
+Implement overlap; do not serialize parks. The SDK can spawn concurrent
+`can_use_tool` tasks; whether a live turn actually fires two at once is
+still unverified.
+
+*Rejected alternatives:* clamping to 60 s because the interrupt control ACK
+waits 60 s (different control path); serializing parks because live overlap
+is unproven; keeping `tool_gate` false due to clocks when clocks are not the
+blocker; treating a never-parked credentialed test as skip.
+
+**Hard blocker for flipping `tool_gate`:** the worker path must stop forcing
+`bypassPermissions` (or otherwise still invoke `can_use_tool`) so both
+worker and in-process paths deliver the callback — the same every-path bar
+as interrupt.
+
 ### Aggregation
 
 Capabilities remain facts declared by each concrete backend; the reducer
@@ -644,18 +689,22 @@ deadline is a single fire-and-forget `asyncio.sleep` in `_run_agent_turn`; it
 cannot be paused, so it becomes a re-armed remaining-budget loop that excludes
 parked intervals. The exclusion is fail-closed: excluded time is hard-capped
 at one approval deadline per parked request and by a bounded per-turn total
-across all parks, and any ambiguity — registry entry gone, worker lost,
-unknown request id — resumes the clock rather than extending it.
-The approval deadline itself is a bounded, configurable start setting with a
-conservative default; expiry denies. The interactive idle timeout does not run
-during a mid-turn park (the referee is not in its input loop). And the
-exclusion covers only agent-collab's local deadline: agent-collab also
-propagates the same configured timeout into some provider argv (Antigravity's
-`--print-timeout`), and a provider SDK may hold its own decision deadline on a
-pending callback — a per-backend fact stages 2–3 must record in Appendix A
-(open question 9). Recording is not the whole obligation: if a backend's
-provider-side decision deadline cannot be disabled or proven longer than the
-configured approval deadline, that backend's `tool_gate` stays false — or the
+across all parks (Claude: twice the configured approval deadline; see
+*Decision (2026-08-16)*), and any ambiguity — registry entry gone, worker
+lost, unknown request id — resumes the clock rather than extending it.
+The approval deadline itself is a bounded, configurable start setting; the
+Claude default is **120 seconds** (see *Decision (2026-08-16)*); expiry
+denies. The interactive idle timeout does not run during a mid-turn park
+(the referee is not in its input loop). And the exclusion covers only
+agent-collab's local deadline: agent-collab also propagates the same
+configured timeout into some provider argv (Antigravity's `--print-timeout`),
+and a provider SDK may hold its own decision deadline on a pending callback
+— a per-backend fact stages 2–3 record in Appendix A (open question 9).
+Claude's static inspect found no such timer, so Claude does not clamp and
+does not keep `tool_gate` false because of clocks. Recording is not the
+whole obligation for other backends: if a backend's provider-side decision
+deadline cannot be disabled or proven longer than the configured approval
+deadline, that backend's `tool_gate` stays false — or the
 effective approval deadline is clamped strictly below the provider's — because
 a gate the provider can time out from under does not own the complete
 lifecycle.
@@ -1341,7 +1390,11 @@ the feature. A skipped provider keeps the production capability false.
 4. What retention policy governs durable trajectory roots once they outlive the
    session? (Stage 4)
 5. Do any providers gate tool-approval callbacks behind account or plan
-   entitlements that a credentialed test would silently skip? (Stages 2–3)
+   entitlements that a credentialed test would silently skip? **Claude:
+   no.** `can_use_tool` is not plan-gated; silent skip is permission-mode
+   / allow-list shadowing (`bypassPermissions` on the production worker).
+   A never-parked credentialed test fails rather than skips. Codex,
+   Antigravity, and xAI remain open. (Stage 3)
 6. Can `agy -p` emit the exact conversation id it just used through a stable
    machine-readable surface? CLI 1.1.8 added typed `init`, `step_update`, and
    `result` events after the current backend was designed; inspect a root turn,
@@ -1362,11 +1415,19 @@ the feature. A skipped provider keeps the production capability false.
    agent-collab's turn clock is cosmetic beyond that bound; each SDK
    subsection must record the fact, and a deadline that can be neither
    disabled nor out-waited gates `tool_gate` or clamps the approval deadline
-   (see *Clocks*). (Stages 2–3)
+   (see *Clocks*). **Claude: no Python-side timer.** Do not clamp; do not
+   keep `tool_gate` false because of clocks. Agent-collab owns a 120 s
+   default fail-closed deny (configurable start setting); per-turn
+   park-exclusion cap is twice that deadline. Treat CLI
+   `control_cancel_request` / stream-close as abandon/auto-deny. Live
+   abort-during-park is still unverified. Codex, Antigravity, and xAI
+   remain open. (Stage 3)
 10. Can each SDK fire multiple permission callbacks concurrently within one
     turn, or are they serialized? The plural `pending_approvals` surface
-    assumes concurrency is possible; the per-backend fact is unverified.
-    (Stages 2–3)
+    assumes concurrency is possible. **Claude: keep the list; implement
+    overlap.** The SDK can spawn concurrent `can_use_tool` tasks; live
+    two-at-once is still unverified. Codex, Antigravity, and xAI remain
+    open. (Stage 3)
 
 ---
 
@@ -1524,9 +1585,20 @@ the tests, not this document, are their guarantee.
   subprocess close is internally bounded (~20 s worst-case terminate/kill
   escalation).
 - *[tool_gate]* The persistent client is the precondition for `can_use_tool`;
-  the gate cannot exist on a one-shot `query()`. Request id, tool input shape,
-  and result types are unverified — as are callback concurrency within one
-  turn and any SDK/CLI-side decision deadline (open questions 9–10).
+  the gate cannot exist on a one-shot `query()`. Policy for this backend is
+  settled (see *Decision (2026-08-16)*): no provider decision timer, so no
+  clamp; agent-collab owns a 120 s fail-closed deny; `pending_approvals`
+  stays a list; implement overlap, do not serialize; `can_use_tool` is not
+  plan-gated.   Static inspect of pin 0.2.126 / CLI 2.1.218 found no
+  Python-side callback timer; the SDK can spawn concurrent
+  `can_use_tool` tasks.
+  Live proof still missing: whether a real turn emits `can_use_tool`,
+  whether two fire at once, and whether the CLI aborts a park during the
+  120 s window. Production worker currently forces
+  `permission_mode=bypassPermissions` after the outer ack, which the SDK
+  documents as skipping `can_use_tool` — that shadowing is the hard
+  blocker for flipping the flag, not clocks. Request id, tool input
+  shape, and result types remain unverified until the mapping lands.
 - *[all]* The client is loop-scoped but usable across tasks in one loop (its
   reader is detached via `spawn_detached` -> `loop.create_task`); an `atexit`
   child killer reaps orphaned CLI subprocesses. `disconnect()` is idempotent,
