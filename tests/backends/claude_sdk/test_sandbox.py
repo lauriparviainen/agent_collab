@@ -206,6 +206,9 @@ class ClaudeSdkWorkerBackendTests(unittest.IsolatedAsyncioTestCase):
             async def close(self) -> None:
                 return None
 
+            async def interrupt(self) -> bool:
+                return False
+
         backend = ClaudeSdkWorkerBackend()
         backend._conversation = _Conversation()
         backend._agent_id = "reviewer"
@@ -348,6 +351,109 @@ class ClaudeSdkWorkerBackendTests(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertIsNone(runner._worker_session)
         self.assertFalse(runner._worker_terminal)
+
+    async def test_interrupt_without_conversation_is_noop(self) -> None:
+        backend = ClaudeSdkWorkerBackend()
+        await backend.interrupt("run-1")
+
+    async def test_interrupt_calls_conversation_once_and_maps_aborted_result(self) -> None:
+        class _Result:
+            def __init__(self) -> None:
+                self.subtype = "success"
+                self.is_error = False
+                self.session_id = "sess-1"
+                self.content = None
+                self.terminal_reason = "aborted_streaming"
+
+        class _Conversation:
+            def __init__(self) -> None:
+                self.interrupt_calls = 0
+                self.reset_calls = 0
+                self.started = asyncio.Event()
+                self._release = asyncio.Event()
+
+            async def run(self, prompt: str):
+                del prompt
+                self.started.set()
+                await self._release.wait()
+                yield _Result()
+
+            def note_session_id(self, session_id: str) -> None:
+                del session_id
+
+            async def interrupt(self) -> bool:
+                self.interrupt_calls += 1
+                self._release.set()
+                return True
+
+            async def reset(self) -> None:
+                self.reset_calls += 1
+
+            async def close(self) -> None:
+                return None
+
+        conversation = _Conversation()
+        backend = ClaudeSdkWorkerBackend()
+        backend._conversation = conversation
+        task = asyncio.create_task(backend.run("hello", run_id="r1"))
+        await conversation.started.wait()
+        await backend.interrupt("r1")
+        _residual, outcome = await task
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertIs(backend._conversation, conversation)
+
+    async def test_interrupt_completion_race_keeps_completed_outcome(self) -> None:
+        class _Result:
+            def __init__(self) -> None:
+                self.subtype = "success"
+                self.is_error = False
+                self.session_id = "sess-1"
+                self.content = None
+
+        class _Conversation:
+            def __init__(self) -> None:
+                self.interrupt_calls = 0
+                self.reset_calls = 0
+                self.started = asyncio.Event()
+                self._release = asyncio.Event()
+
+            async def run(self, prompt: str):
+                del prompt
+                self.started.set()
+                await self._release.wait()
+                yield _Result()
+
+            def note_session_id(self, session_id: str) -> None:
+                del session_id
+
+            async def interrupt(self) -> bool:
+                self.interrupt_calls += 1
+                self._release.set()
+                return True
+
+            async def reset(self) -> None:
+                self.reset_calls += 1
+
+            async def close(self) -> None:
+                return None
+
+        conversation = _Conversation()
+        backend = ClaudeSdkWorkerBackend()
+        backend._conversation = conversation
+        task = asyncio.create_task(backend.run("hello", run_id="r1"))
+        await conversation.started.wait()
+        await backend.interrupt("r1")
+        _residual, outcome = await task
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertIsNone(outcome.code)
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertIs(backend._conversation, conversation)
 
 
 if __name__ == "__main__":

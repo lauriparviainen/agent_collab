@@ -20,7 +20,7 @@ and SDK backends.
 (#47) built the substrate. [antigravity-read-only-bubblewrap-sandbox.md](../tasks_closed/antigravity-read-only-bubblewrap-sandbox.md)
 (#43) built the worker boundary.
 
-## Next work — pick up here (2026-08-06)
+## Next work — pick up here (2026-08-16)
 
 This design has been through multi-round adversarial review (three internal
 rounds plus eleven cross-vendor dual-review rounds against the shipped code on
@@ -47,10 +47,19 @@ take it:
    production projection re-evaluates after identity capture, turn commit,
    and restore through the same conservative reducer (see *Aggregation*).
    Remaining is Stage 2.
-4. **Stage 2 — Claude SDK interrupt + tool gating**, including the clocks
-   design (re-armed remaining-budget loop, per-park and per-turn caps) and
-   resolving open questions 9–10 (provider-side decision deadlines, callback
-   concurrency) for this backend.
+4. **Stage 2 — Claude SDK interrupt mapping** is in progress on
+   `sdk-session-control` (worker + in-process issue of `interrupt()`;
+   distinguishable `ResultMessage.terminal_reason` `aborted_streaming` /
+   `aborted_tools` → `TurnOutcome("interrupted", "local_turn_interrupted")`).
+   The mapping issues `client.interrupt()` without awaiting the SDK's 60 s
+   control ACK so the worker serve loop can harvest the turn `result`
+   within the daemon's 2 s bound; that ACK-vs-harvest inversion is part of
+   the mapping. Production `claude_sdk.interrupt` stays false until
+   credentialed coverage on both paths. Remaining in this stage: tool_gate,
+   the clocks design (re-armed remaining-budget loop, per-park and per-turn
+   caps), and resolving open questions 9–10 (provider-side decision
+   deadlines, callback concurrency) for this backend, then the credentialed
+   flag flip.
 5. **Stage 3 — Codex, Antigravity, and xAI SDK controls** (open questions
    1–2; record negatives explicitly).
 6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
@@ -1471,7 +1480,7 @@ the tests, not this document, are their guarantee.
 - *[interrupt/tool_gate]* The one-shot print transport has no verified
   bidirectional control path; both remain false.
 
-### claude_sdk — `claude-agent-sdk` 0.2.126, bundled CLI 2.1.218 (verified 2026-07-24)
+### claude_sdk — `claude-agent-sdk` 0.2.126, bundled CLI 2.1.218 (verified 2026-08-16)
 
 - *[continuity — shipped]* One connected `ClaudeSDKClient` (`connect` / `query` /
   `receive_response` / `interrupt` / `disconnect`) accepts sequential turns on
@@ -1487,8 +1496,29 @@ the tests, not this document, are their guarantee.
   `ResultMessage` observed) still resumed the exact id with the delivered
   prompt's context. Resumability begins at the first delivered user message, not
   the first terminal result.
-- *[interrupt]* Client `interrupt()` exists and is the intended abort path — its
-  completion semantics under agent-collab's bound are unverified.
+- *[interrupt]* `ClaudeSDKClient.interrupt` is `async def interrupt(self) -> None`.
+  Unconnected clients (`_query` unset) raise `CLIConnectionError`; otherwise it
+  sends a streaming-mode control request `{"subtype": "interrupt"}` through
+  `Query._send_control_request` (default 60 s wait for the CLI control
+  response). One-shot `query()` has no interrupt path. Agent-collab issues
+  `client.interrupt()` out of band on both worker and in-process adapters
+  without taking the conversation run lock and **without awaiting that 60 s
+  control ACK**, so the worker serve loop can harvest the turn `result`
+  within the daemon's 2 s interrupt-acknowledge bound. The turn `result`
+  remains the acknowledgement.
+- *[interrupt]* `receive_response()` is documented to yield until and including
+  a `ResultMessage`, then return; it does not raise an interrupt-specific
+  exception. Installed `ResultMessage.terminal_reason` documents
+  `"aborted_streaming"` and `"aborted_tools"` as the markers for
+  `interrupt()` / an interrupt control request. Agent-collab maps those two
+  values to `TurnOutcome("interrupted", "local_turn_interrupted")` and retains
+  the conversation. Any other result keeps the existing completed/failed
+  mapping; an exception or stream end without a distinguishable abort marker
+  fails closed to `provider_transport_failed` / `provider_output_incomplete`.
+  Whether a live CLI actually emits those `terminal_reason` values, an error
+  result, an empty stream, or a hang until the control-request timeout is
+  **not** proven without a credentialed call; `claude_sdk.interrupt` stays
+  false.
 - *[interrupt]* Cancelling the local consumer does **not** stop provider work:
   the detached reader and CLI subprocess run until `disconnect()`, whose
   subprocess close is internally bounded (~20 s worst-case terminate/kill

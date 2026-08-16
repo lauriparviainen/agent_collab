@@ -13,6 +13,9 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Map Claude SDK `interrupt()` on worker and in-process turns onto
+  `interrupted` when the abort is distinguishable; production
+  `claude_sdk.interrupt` stays false pending credentialed coverage (#20).
 - Re-evaluate session capability summaries after identity capture, turn commit,
   and restore so live status matches the conservative reducer (#20).
 - Add interrupt seams on stop for worker-backed SDK runners, with defaulted

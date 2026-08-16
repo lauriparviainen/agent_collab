@@ -101,6 +101,7 @@ class ResultMessage:
         errors=None,
         api_error_status=None,
         uuid=None,
+        terminal_reason=None,
     ):
         self.subtype = subtype
         self.duration_ms = duration_ms
@@ -119,6 +120,7 @@ class ResultMessage:
         self.errors = errors
         self.api_error_status = api_error_status
         self.uuid = uuid
+        self.terminal_reason = terminal_reason
 
 
 class SystemMessage:
@@ -137,6 +139,7 @@ class _FakeConversation:
         self.noted_ids = []
         self.reset_calls = 0
         self.close_calls = 0
+        self.interrupt_calls = 0
         self.is_active = False
         self.is_closed = False
 
@@ -155,6 +158,12 @@ class _FakeConversation:
 
     def note_session_id(self, session_id):
         self.noted_ids.append(session_id)
+
+    async def interrupt(self):
+        if self.is_closed or not self.is_active:
+            return False
+        self.interrupt_calls += 1
+        return True
 
     async def reset(self):
         self.reset_calls += 1
@@ -245,6 +254,19 @@ class ClaudeEventMappingTests(unittest.TestCase):
         transport = _outcome([], error=RuntimeError("Bearer secret /home/private"))
         self.assertEqual(transport.code, "provider_transport_failed")
         self.assertNotIn("secret", str(transport.to_dict()))
+        for reason in ("aborted_streaming", "aborted_tools"):
+            interrupted = _outcome([_result(terminal_reason=reason)])
+            self.assertEqual(
+                (interrupted.outcome, interrupted.code),
+                ("interrupted", "local_turn_interrupted"),
+            )
+        error_abort = _outcome(
+            [_result(is_error=True, subtype="error", terminal_reason="aborted_streaming")]
+        )
+        self.assertEqual(
+            (error_abort.outcome, error_abort.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
 
     def test_message_and_typed_tool_uses_map_to_standard_events(self):
         message = _assistant(
@@ -505,6 +527,168 @@ class ClaudeConversationLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(conversation.reset_calls, 1)
 
+    def test_interrupted_result_retains_conversation(self):
+        conversation = _FakeConversation([[_result(terminal_reason="aborted_streaming")]])
+        runner = _runner_for(conversation)
+
+        async def scenario():
+            async def emit(_event):
+                return None
+
+            outcome = await runner.run_turn("stop", Path("."), emit)
+            return outcome, runner.conversation_active()
+
+        outcome, active = asyncio.run(scenario())
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertTrue(active)
+
+    def test_in_process_interrupt_request_issues_when_conversation_is_live(self):
+        conversation = _FakeConversation([[_result()]])
+        conversation.is_active = True
+        runner = _runner_for(conversation)
+        runner._conversation = conversation
+
+        async def scenario():
+            return await runner.interrupt_request()
+
+        self.assertTrue(asyncio.run(scenario()))
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertIsNone(runner._worker_session)
+
+    def test_in_process_interrupt_request_idle_or_missing_is_false(self):
+        idle = _FakeConversation([[_result()]])
+        runner = _runner_for(idle)
+        runner._conversation = idle
+
+        async def idle_request():
+            return await runner.interrupt_request()
+
+        self.assertFalse(asyncio.run(idle_request()))
+        self.assertEqual(idle.interrupt_calls, 0)
+
+        empty = _runner_for(_FakeConversation([[_result()]]))
+
+        async def missing_request():
+            return await empty.interrupt_request()
+
+        self.assertFalse(asyncio.run(missing_request()))
+
+    def test_worker_session_interrupt_is_preferred_over_in_process(self):
+        conversation = _FakeConversation([[_result()]])
+        conversation.is_active = True
+        runner = _runner_for(conversation)
+        runner._conversation = conversation
+
+        class _Session:
+            def __init__(self):
+                self.calls = []
+
+            async def interrupt_active(self):
+                self.calls.append("run-9")
+                return True
+
+        session = _Session()
+        runner._worker_session = session
+
+        async def scenario():
+            return await runner.interrupt_request()
+
+        self.assertTrue(asyncio.run(scenario()))
+        self.assertEqual(session.calls, ["run-9"])
+        self.assertEqual(conversation.interrupt_calls, 0)
+
+    def test_interrupt_during_blocked_run_unblocks_and_ends_interrupted(self):
+        async def scenario():
+            entered = asyncio.Event()
+
+            class BlockingConversation(_FakeConversation):
+                def __init__(self):
+                    super().__init__([])
+                    self._blocked = asyncio.Event()
+
+                async def run(self, prompt):
+                    self.prompts.append(prompt)
+                    self.is_active = True
+                    entered.set()
+                    await self._blocked.wait()
+                    yield _result(terminal_reason="aborted_tools")
+
+                async def interrupt(self):
+                    self.interrupt_calls += 1
+                    self._blocked.set()
+                    return True
+
+            conversation = BlockingConversation()
+            runner = _runner_for(conversation)
+
+            async def collect():
+                async def emit(_event):
+                    return None
+
+                return await runner.run_turn("stop me", Path("."), emit)
+
+            turn = asyncio.create_task(collect())
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            issued = await runner.interrupt_request()
+            outcome = await asyncio.wait_for(turn, timeout=1.0)
+            return issued, outcome, conversation
+
+        issued, outcome, conversation = asyncio.run(scenario())
+        self.assertTrue(issued)
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertEqual(conversation.reset_calls, 0)
+
+    def test_interrupt_completion_race_keeps_completed_outcome(self):
+        async def scenario():
+            entered = asyncio.Event()
+
+            class BlockingConversation(_FakeConversation):
+                def __init__(self):
+                    super().__init__([])
+                    self._blocked = asyncio.Event()
+
+                async def run(self, prompt):
+                    self.prompts.append(prompt)
+                    self.is_active = True
+                    entered.set()
+                    await self._blocked.wait()
+                    yield _result()
+
+                async def interrupt(self):
+                    self.interrupt_calls += 1
+                    self._blocked.set()
+                    return True
+
+            conversation = BlockingConversation()
+            runner = _runner_for(conversation)
+
+            async def collect():
+                async def emit(_event):
+                    return None
+
+                return await runner.run_turn("finish first", Path("."), emit)
+
+            turn = asyncio.create_task(collect())
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            issued = await runner.interrupt_request()
+            outcome = await asyncio.wait_for(turn, timeout=1.0)
+            return issued, outcome, conversation
+
+        issued, outcome, conversation = asyncio.run(scenario())
+        self.assertTrue(issued)
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertIsNone(outcome.code)
+        self.assertEqual(conversation.reset_calls, 0)
+
 
 class ClaudeSessionCaptureTests(unittest.TestCase):
     def test_session_id_captured_uniformly_regardless_of_verbose(self):
@@ -718,6 +902,20 @@ class ClaudeProductionFactoryTests(unittest.TestCase):
                     if not self.is_open:
                         raise AssertionError("receive on a disconnected client")
                     yield message
+
+            async def interrupt(self):
+                if not self.is_open:
+                    raise RuntimeError("Not connected. Call connect() first.")
+                error = state.get("interrupt_error")
+                if error is not None:
+                    raise error
+                state["interrupts"] = state.get("interrupts", 0) + 1
+                gate = state.get("interrupt_gate")
+                if gate is not None:
+                    gate.set()
+                delay = state.get("interrupt_delay")
+                if delay is not None:
+                    await asyncio.sleep(delay)
 
             async def disconnect(self):
                 if not self.is_open:
@@ -1172,6 +1370,150 @@ class ClaudeProductionFactoryTests(unittest.TestCase):
 
         self.assertEqual(state["disconnects"], 1)
         self.assertEqual(state["open"], 0)
+
+    def test_idle_and_closed_interrupt_are_noop(self):
+        state = {}
+        module = self._fake_module(
+            state,
+            [[_assistant([TextBlock("one")]), _result(session_id="sess-live")]],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                conv = _default_conversation(AGENT, {}, Path("/workspace"))
+                idle = await conv.interrupt()
+                await self._collect(runner, "one")
+                await runner.close()
+                closed = await runner.interrupt_request()
+                return idle, closed
+
+            idle, closed = asyncio.run(scenario())
+
+        self.assertFalse(idle)
+        self.assertFalse(closed)
+        self.assertEqual(state.get("interrupts", 0), 0)
+
+    def test_interrupt_during_blocked_client_run_unblocks_and_retains(self):
+        state = {}
+        started = asyncio.Event()
+        interrupt_gate = asyncio.Event()
+
+        async def blocking_message():
+            started.set()
+            await interrupt_gate.wait()
+            return _result(session_id="sess-live", terminal_reason="aborted_streaming")
+
+        module = self._fake_module(state, [[blocking_message]])
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                state["interrupt_gate"] = interrupt_gate
+                turn = asyncio.create_task(self._collect(runner, "block"))
+                await started.wait()
+                issued = await runner.interrupt_request()
+                events, outcome = await turn
+                active = runner.conversation_active()
+                await runner.close()
+                return issued, outcome, active
+
+            issued, outcome, active = asyncio.run(scenario())
+
+        self.assertTrue(issued)
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertTrue(active)
+        self.assertEqual(state.get("interrupts"), 1)
+        # Close only: a clean interrupt win must not reset the client.
+        self.assertEqual(state["disconnects"], 1)
+        self.assertEqual(len(state["clients"]), 1)
+
+    def test_interrupt_completion_race_on_live_client_stays_completed(self):
+        state = {}
+        started = asyncio.Event()
+        interrupt_gate = asyncio.Event()
+
+        async def blocking_message():
+            started.set()
+            await interrupt_gate.wait()
+            return _result(session_id="sess-live")
+
+        module = self._fake_module(state, [[blocking_message]])
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                state["interrupt_gate"] = interrupt_gate
+                turn = asyncio.create_task(self._collect(runner, "race"))
+                await started.wait()
+                issued = await runner.interrupt_request()
+                events, outcome = await turn
+                await runner.close()
+                return issued, outcome
+
+            issued, outcome = asyncio.run(scenario())
+
+        self.assertTrue(issued)
+        self.assertEqual(state.get("interrupts"), 1)
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertIsNone(outcome.code)
+        self.assertEqual(state["disconnects"], 1)
+
+    def test_interrupt_returns_before_long_control_ack(self):
+        state = {}
+        module = self._fake_module(
+            state,
+            [[_assistant([TextBlock("one")]), _result(session_id="sess-live")]],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                await self._collect(runner, "one")
+                state["interrupt_delay"] = 5.0
+                issued_adapter = await asyncio.wait_for(
+                    runner._conversation.interrupt(), timeout=0.2
+                )
+                issued_request = await asyncio.wait_for(runner.interrupt_request(), timeout=0.2)
+                await runner.close()
+                return issued_adapter, issued_request
+
+            issued_adapter, issued_request = asyncio.run(scenario())
+
+        self.assertTrue(issued_adapter)
+        self.assertTrue(issued_request)
+        self.assertEqual(state.get("interrupts"), 2)
+
+    def test_interrupt_immediate_failure_is_not_issued(self):
+        state = {}
+        module = self._fake_module(
+            state,
+            [[_assistant([TextBlock("one")]), _result(session_id="sess-live")]],
+        )
+        runner = self._runner()
+
+        with mock.patch.dict(sys.modules, {"claude_agent_sdk": module}):
+
+            async def scenario():
+                await self._collect(runner, "one")
+                state["interrupt_error"] = RuntimeError("Not connected. Call connect() first.")
+                issued_adapter = await runner._conversation.interrupt()
+                issued_request = await runner.interrupt_request()
+                await runner.close()
+                return issued_adapter, issued_request
+
+            issued_adapter, issued_request = asyncio.run(scenario())
+
+        self.assertFalse(issued_adapter)
+        self.assertFalse(issued_request)
+        self.assertEqual(state.get("interrupts", 0), 0)
 
     def test_default_conversation_reports_missing_or_incompatible_module(self):
         with mock.patch.dict(sys.modules, {"claude_agent_sdk": None}):

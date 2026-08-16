@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, List, Mapping, Optional, Tuple
 
 from ...events import Event
-from ...outcomes import TerminalEvidence, TerminalEvidenceAccumulator, TurnOutcome
+from ...outcomes import TerminalEvidenceAccumulator, TurnOutcome
 from ...sandbox.worker_codec import sanitize_error_text
 from ..common.sdk import close_async_stream
 from .backend import (
@@ -14,6 +14,8 @@ from .backend import (
     _is_result_message,
     _message_session_id,
     _reset_conversation_bounded,
+    _result_turn_evidence,
+    _should_reset_after_outcome,
     iter_claude_events,
 )
 
@@ -86,10 +88,7 @@ class ClaudeSdkWorkerBackend:
                         provider_session_event("claude", self._agent_id, sid, "session"),
                     )
                 if _is_result_message(message):
-                    if getattr(message, "is_error", False):
-                        evidence.add(TerminalEvidence("failed", "provider_terminal_failure"))
-                    else:
-                        evidence.add(TerminalEvidence("completed"))
+                    evidence.add(_result_turn_evidence(message))
                 for event in iter_claude_events(message, self._verbose):
                     await _deliver(emit, events, event)
         except Exception as exc:
@@ -114,13 +113,20 @@ class ClaudeSdkWorkerBackend:
         if not clean_close and exception_code is None:
             exception_code = "provider_transport_failed"
         result = evidence.resolve(exception_code=exception_code)
-        if result.outcome != "completed" and self._conversation is not None:
+        if _should_reset_after_outcome(result.outcome) and self._conversation is not None:
             await _reset_conversation_bounded(self._conversation)
         # When emit is provided, events already crossed the framed transport.
         return ([] if emit is not None else events), result
 
     async def interrupt(self, run_id: str) -> None:
         del run_id
+        conversation = self._conversation
+        if conversation is None:
+            return
+        method = getattr(conversation, "interrupt", None)
+        if not callable(method):
+            return
+        await method()
 
     def bind_approvals(self, request_approval: Callable[..., Awaitable[Mapping[str, Any]]]) -> None:
         self._request_approval = request_approval

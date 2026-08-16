@@ -88,6 +88,8 @@ class ClaudeConversation(Protocol):
 
     def note_session_id(self, session_id: str) -> None: ...
 
+    async def interrupt(self) -> bool: ...
+
     async def reset(self) -> None: ...
 
     async def close(self) -> None: ...
@@ -205,7 +207,15 @@ class ClaudeSdkRunner(AgentRunner):
     async def interrupt_request(self) -> bool:
         from ...sandbox.worker_session import interrupt_active_session
 
-        return await interrupt_active_session(self._worker_session)
+        if self._worker_session is not None:
+            return await interrupt_active_session(self._worker_session)
+        conversation = self._conversation
+        if conversation is None:
+            return False
+        interrupt = getattr(conversation, "interrupt", None)
+        if not callable(interrupt):
+            return False
+        return bool(await interrupt())
 
     async def close(self) -> None:
         if self._worker_session is not None:
@@ -489,10 +499,7 @@ class ClaudeSdkRunner(AgentRunner):
                         conversation.note_session_id(sid)
                         await emit(provider_session_event("claude", self.name, sid, "session"))
                     if _is_result_message(message):
-                        if getattr(message, "is_error", False):
-                            evidence.add(TerminalEvidence("failed", "provider_terminal_failure"))
-                        else:
-                            evidence.add(TerminalEvidence("completed"))
+                        evidence.add(_result_turn_evidence(message))
                     for event in iter_claude_events(message, self.verbose):
                         await emit(event)
             finally:
@@ -514,7 +521,7 @@ class ClaudeSdkRunner(AgentRunner):
         if not clean_close and exception_code is None:
             exception_code = "provider_transport_failed"
         result = evidence.resolve(exception_code=exception_code)
-        if result.outcome != "completed" and conversation is not None:
+        if _should_reset_after_outcome(result.outcome) and conversation is not None:
             await _reset_conversation_bounded(conversation)
         if self.verbose:
             await emit(Event.create("claude", "status", "claude sdk turn complete"))
@@ -534,8 +541,34 @@ class ClaudeSdkRunner(AgentRunner):
         return self._conversation
 
 
+# Installed claude-agent-sdk 0.2.126 documents these ResultMessage.terminal_reason
+# values as the interrupt/abort markers. Live CLI emission is not credentialed.
+_INTERRUPT_TERMINAL_REASONS = frozenset({"aborted_streaming", "aborted_tools"})
+
+
 def _is_result_message(message: Any) -> bool:
     return not isinstance(getattr(message, "content", None), list) and hasattr(message, "is_error")
+
+
+def _result_turn_evidence(message: Any) -> TerminalEvidence:
+    """Map one ResultMessage onto turn evidence.
+
+    Distinguishable abort reasons become ``interrupted``; anything else keeps
+    the shipped completed/failed mapping. Unknown shapes fail closed.
+    """
+
+    terminal_reason = getattr(message, "terminal_reason", None)
+    if terminal_reason in _INTERRUPT_TERMINAL_REASONS:
+        return TerminalEvidence("interrupted", "local_turn_interrupted")
+    if getattr(message, "is_error", False):
+        return TerminalEvidence("failed", "provider_terminal_failure")
+    return TerminalEvidence("completed")
+
+
+def _should_reset_after_outcome(outcome: str) -> bool:
+    # A clean interrupt win keeps the live client so the next delta can
+    # continue the same provider session. Transport/failure still resets.
+    return outcome not in ("completed", "interrupted")
 
 
 def iter_claude_events(message: Any, verbose: bool) -> Iterator[Event]:
@@ -658,6 +691,7 @@ def _result_raw(message: Any) -> Dict[str, Any]:
         "num_turns",
         "session_id",
         "stop_reason",
+        "terminal_reason",
         "total_cost_usd",
         "usage",
         "model_usage",
@@ -836,6 +870,38 @@ class _PersistentClaudeConversation:
             await self._client.query(effective_prompt)
             async for message in self._client.receive_response():
                 yield message
+
+    async def interrupt(self) -> bool:
+        """Issue a provider abort on the held client, if any.
+
+        Must not take ``_lock``: ``run()`` holds it for the whole turn, so
+        an in-band acquire would deadlock with the consumer we need to
+        unblock. Idle, closed, or missing-client is a no-op, not an error.
+
+        Starts ``client.interrupt()`` as a background task and does not
+        await the SDK's control-request ACK (up to 60 s). Acknowledgement
+        is the turn's own ``result``. An immediate raise (not connected)
+        is not treated as issued.
+        """
+
+        if self._closed:
+            return False
+        client = self._client
+        if client is None:
+            return False
+        method = getattr(client, "interrupt", None)
+        if not callable(method):
+            return False
+        task = asyncio.create_task(method())
+        await asyncio.sleep(0)
+        if task.done():
+            try:
+                task.result()
+            except BaseException:
+                return False
+            return True
+        task.add_done_callback(_consume_background_result)
+        return True
 
     async def reset(self) -> None:
         async with self._lock:
