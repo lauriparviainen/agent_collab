@@ -117,6 +117,41 @@ class AntigravitySdkSandboxAdapterTests(unittest.TestCase):
                 )
             self.assertIn("app_data_dir", str(raised_app.exception))
 
+    def test_worker_open_payload_typed_resume_wins_over_conversation_id(self) -> None:
+        adapter = AntigravitySdkSandboxAdapter()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            workspace = root / "workspace"
+            workspace.mkdir(mode=0o700)
+            payload = adapter.worker_open_payload_for_agent(
+                agent_id="reviewer",
+                options={},
+                workspace=workspace,
+                cwd=workspace,
+                agent_env={},
+                backend_config={},
+                verbose=False,
+                save_dir=str(root / "traj"),
+                app_data_dir=str(root / "app"),
+                conversation_id="old-id",
+                resume={"provider_session_id": "conv-resume"},
+            )
+            self.assertEqual(payload["resume"]["provider_session_id"], "conv-resume")
+            self.assertEqual(payload["conversation_id"], "conv-resume")
+            with self.assertRaises(RuntimeError):
+                adapter.worker_open_payload_for_agent(
+                    agent_id="reviewer",
+                    options={},
+                    workspace=workspace,
+                    cwd=workspace,
+                    agent_env={},
+                    backend_config={},
+                    verbose=False,
+                    save_dir=str(root / "traj"),
+                    app_data_dir=str(root / "app"),
+                    resume={"provider_session_id": ""},
+                )
+
     def test_session_keyed_trajectory_is_stable_and_host_persistent(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve()

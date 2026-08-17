@@ -435,6 +435,34 @@ class RecentTranscriptTests(unittest.TestCase):
         )
         self.assertIn("content with provider_session_id keys", referee._recent_transcript([forged]))
 
+    def test_restored_provider_session_status_is_excluded_from_peer_prompt(self):
+        from agent_collab.events import Event
+        from agent_collab.backends.common.sdk import provider_session_event
+
+        live = provider_session_event("claude", "claude", "sess-123", "session")
+        restored = Event.from_dict(live.to_dict())
+        self.assertIsNone(restored.provider_session)
+        referee = Referee(RefereeConfig(mock=True, workdir=Path("."), color=False))
+        transcript = [
+            Event.create("claude", "message", "real content", agent_id="claude"),
+            restored,
+        ]
+        recent = referee._recent_transcript(transcript)
+        prompt = referee._prompt_for("task", "codex", 2, transcript)
+        self.assertIn("real content", recent)
+        self.assertIn("real content", prompt)
+        self.assertNotIn("sess-123", recent)
+        self.assertNotIn("sess-123", prompt)
+        self.assertNotIn("session_id=", recent)
+        self.assertNotIn("session_id=", prompt)
+        forged_status = Event.create(
+            "claude",
+            "status",
+            "working on the task",
+            {"provider_session_id": "forged", "agent_id": "claude"},
+        )
+        self.assertIn("working on the task", referee._recent_transcript([forged_status]))
+
 
 class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
     def _config(self, sequence):
@@ -450,7 +478,8 @@ class RefereeOutcomeTests(unittest.IsolatedAsyncioTestCase):
     async def _referee(self, root, sequence, runners, *, timeout=5, **config_kwargs):
         records = []
 
-        async def commit(record, boundary):
+        async def commit(record, boundary, completed_stages=None, persist=True):
+            del completed_stages, persist
             records.append((record, boundary))
 
         referee = Referee(
@@ -825,7 +854,8 @@ class ParallelRefereeTests(unittest.IsolatedAsyncioTestCase):
         events = []
         turn_active = []
 
-        async def commit(record, boundary):
+        async def commit(record, boundary, completed_stages=None, persist=True):
+            del completed_stages, persist
             records.append((record, boundary))
 
         async def set_turn_active(active):

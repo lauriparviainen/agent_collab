@@ -21,6 +21,7 @@ All operations except `GET /health` require the per-daemon Bearer token. `/optio
 | `POST` | `/sessions/{session_id}/messages` | Bearer | PostMessageRequestModel | EventBatchModel |
 | `GET` | `/sessions/{session_id}/transcript` | Bearer | TranscriptRequestModel | TranscriptModel |
 | `POST` | `/sessions/{session_id}/approvals` | Bearer | ApprovalDecisionRequestModel | ApprovalDecisionResponseModel |
+| `POST` | `/sessions/{session_id}/resume` | Bearer | ResumeSessionRequestModel | SessionStateModel |
 | `POST` | `/sessions/{session_id}/stop` | Bearer | — | SessionStateModel |
 | `POST` | `/sessions/prune` | Bearer | PruneSessionsRequestModel | PruneResultModel |
 
@@ -142,6 +143,15 @@ Approve or deny one parked tool-approval request
 - Authentication: Bearer token
 - Request model: `ApprovalDecisionRequestModel`
 - Response model: `ApprovalDecisionResponseModel`
+
+### POST `/sessions/{session_id}/resume`
+
+Resume an interrupted or reloaded session
+
+- Operation ID: `resume_session_post`
+- Authentication: Bearer token
+- Request model: `ResumeSessionRequestModel`
+- Response model: `SessionStateModel`
 
 ### POST `/sessions/{session_id}/stop`
 

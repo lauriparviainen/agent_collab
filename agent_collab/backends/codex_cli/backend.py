@@ -21,6 +21,7 @@ from ..common.cli import (
 )
 from ..common.health import default_version_runner, probe_cli_backend
 from ..common.options import highest_precedence_choices, resolve_codex_effort
+from .invocation import CLI_OWNERSHIP_FLAGS, finalize_codex_cli_invocation
 from .parser import CodexStreamingParser
 from .sandbox import CodexCliSandboxAdapter
 
@@ -34,6 +35,8 @@ class CodexCliBackend:
     event_fidelity = "typed"
     provider_session_id_kind = "thread"
     capabilities = BackendCapabilities()
+    cli_ownership_flags = CLI_OWNERSHIP_FLAGS
+    finalize_cli_invocation = staticmethod(finalize_codex_cli_invocation)
     sandbox_adapter = CodexCliSandboxAdapter()
     checks_credentials = False
     block_on_unavailable = False

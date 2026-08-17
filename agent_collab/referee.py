@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import asyncio
 from pathlib import Path
+import re
 from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Set
 
 from .approvals import APPROVAL_PARK_EXCLUSION_FACTOR, DEFAULT_APPROVAL_DEADLINE_SECONDS
@@ -39,7 +40,8 @@ RUNNER_CLEANUP_GRACE_SECONDS = 2.0
 REAPER_DRAIN_SECONDS = 8.0
 
 EventAppender = Callable[[Event], Awaitable[int]]
-OutcomeCommitter = Callable[[TurnOutcomeRecord, Event], Awaitable[None]]
+# (record, boundary, planned_completed_stages=None, persist=True)
+OutcomeCommitter = Callable[..., Awaitable[None]]
 
 
 class RequiredTurnFailed(RuntimeError):
@@ -99,16 +101,30 @@ class RefereeStopSignal:
         await self._event.wait()
 
 
-def _is_provider_session_event(event: Event) -> bool:
-    """A live provider-session bookkeeping event (carries a captured id).
+# Daemon-authored bookkeeping text from provider_session_event(). The trusted
+# in-process marker does not survive JSONL; resume must recognize the same
+# status lines without reading untrusted raw identity keys.
+_PROVIDER_SESSION_TEXT_RE = re.compile(
+    r"^(?P<source>\S+) (?P<kind>session|thread|conversation|response)_id=\S+$"
+)
 
-    Referee transcripts are constructed from live runner events and are never
-    restored from JSONL. The trusted marker intentionally does not survive log
-    serialization; a future resume feature must reconstruct identity from
-    daemon-owned session state, never from provider-controlled ``raw`` keys.
+
+def _is_provider_session_event(event: Event) -> bool:
+    """True for live marked events and restored daemon bookkeeping status lines.
+
+    The trusted marker intentionally does not survive log serialization. Restored
+    transcripts are recognized by ``type==status`` plus the daemon text shape
+    (``{source} {kind}_id={id}``). Provider-controlled ``raw`` keys are never
+    treated as a capture source.
     """
 
-    return event.provider_session is not None
+    if event.provider_session is not None:
+        return True
+    if event.type != "status":
+        return False
+    text = event.text or ""
+    match = _PROVIDER_SESSION_TEXT_RE.fullmatch(text)
+    return match is not None and match.group("source") == event.source
 
 
 @dataclass
@@ -164,6 +180,14 @@ class RefereeConfig:
     pending_turn_approvals: Optional[Callable[[str], Sequence[str]]] = None
     approval_generation: Optional[Callable[[], int]] = None
     wait_approval_generation: Optional[Callable[[int], Awaitable[Any]]] = None
+    resume: bool = False
+    resume_events: Optional[List[Event]] = None
+    resume_watermarks: Optional[Dict[str, int]] = None
+    resume_phase: Optional[Dict[str, Any]] = None
+    resume_descriptors: Optional[Dict[str, Dict[str, Any]]] = None
+    resume_turn_outcomes: Optional[List[Dict[str, Any]]] = None
+    prompt_handoff_callback: Optional[Callable[[str, int], Awaitable[None]]] = None
+    phase_commit_callback: Optional[Callable[[int, bool], Awaitable[None]]] = None
 
 
 # Poll when a park is active but no generation waiter is wired (fail-closed).
@@ -223,6 +247,7 @@ class Referee:
         self.stop_signal = config.stop_signal or RefereeStopSignal()
         self._next_turn_number = 1
         self._committed_turn_ids: set[str] = set()
+        self._seed_resume_turn_ids()
         self._reaper_tasks: set[asyncio.Task] = set()
         # Per-agent prompt-snapshot watermark: the transcript length captured when
         # the agent's last prompt was *built*. The next continuation delta is
@@ -530,6 +555,10 @@ class Referee:
         if self.config.status_callback is not None:
             await self.config.status_callback(status)
 
+    async def _commit_phase(self, completed_stages: int, parked: bool) -> None:
+        if self.config.phase_commit_callback is not None:
+            await self.config.phase_commit_callback(int(completed_stages), bool(parked))
+
     async def _register_event_appender(self, appender: Optional[EventAppender]) -> None:
         if self.config.event_appender_callback is not None:
             await self.config.event_appender_callback(appender)
@@ -587,6 +616,26 @@ class Referee:
             "timestamp": event.timestamp,
         }
 
+    def _seed_resume_turn_ids(self) -> None:
+        """Continue turn-id allocation after persisted outcomes so resume cannot collide."""
+
+        if not self.config.resume:
+            return
+        highest = 0
+        for item in self.config.resume_turn_outcomes or []:
+            if not isinstance(item, dict):
+                continue
+            turn_id = item.get("turn_id")
+            if not isinstance(turn_id, str) or not turn_id:
+                continue
+            self._committed_turn_ids.add(turn_id)
+            if turn_id.startswith("turn-"):
+                suffix = turn_id[5:]
+                if suffix.isdigit():
+                    highest = max(highest, int(suffix))
+        if highest:
+            self._next_turn_number = highest + 1
+
     def _allocate_occurrence(self) -> str:
         turn_id = f"turn-{self._next_turn_number}"
         self._next_turn_number += 1
@@ -605,6 +654,9 @@ class Referee:
         transcript: List[Event],
         record: TurnOutcomeRecord,
         answer: Optional[Dict[str, Any]] = None,
+        *,
+        planned_completed_stages: Optional[int] = None,
+        persist: bool = True,
     ) -> None:
         if record.turn_id in self._committed_turn_ids:
             raise RuntimeError(f"outcome already committed for {record.turn_id}")
@@ -625,7 +677,9 @@ class Referee:
             transcript.append(boundary)
             logger.write(boundary)
             if self.config.outcome_commit_callback is not None:
-                await self.config.outcome_commit_callback(record, boundary)
+                await self.config.outcome_commit_callback(
+                    record, boundary, planned_completed_stages, persist
+                )
             else:
                 self.printer(boundary)
             self._committed_turn_ids.add(record.turn_id)
@@ -696,6 +750,8 @@ class Referee:
         turn_id: str,
         manage_turn_active: bool = True,
         event_observer: Optional[Callable[[Event], None]] = None,
+        planned_completed_stages: Optional[int] = None,
+        persist_outcome: bool = True,
     ) -> TurnOutcomeRecord:
         # The event span for this turn's answer starts here, before the runner
         # emits anything. transcript index == daemon event id (appended in
@@ -711,6 +767,9 @@ class Referee:
             await self._emit(logger, transcript, event)
 
         runner.bind_turn(turn_id=turn_id, agent_id=agent_id)
+        if self.config.prompt_handoff_callback is not None:
+            cursor = self._agent_watermarks.get(agent_id, len(transcript))
+            await self.config.prompt_handoff_callback(agent_id, cursor)
         runner_task = asyncio.create_task(
             runner.run_turn(prompt, self.workdir, emit),
             name=f"agent-collab-{turn_id}-{agent_id}",
@@ -791,7 +850,18 @@ class Referee:
             # Commit the outcome and record its answer atomically under the shield
             # so a stop cancellation never lands a completed outcome without its
             # ledger entry.
-            await asyncio.shield(self._commit_outcome(logger, transcript, record, answer))
+            await asyncio.shield(
+                self._commit_outcome(
+                    logger,
+                    transcript,
+                    record,
+                    answer,
+                    planned_completed_stages=(
+                        planned_completed_stages if record.outcome == "completed" else None
+                    ),
+                    persist=persist_outcome,
+                )
+            )
             # A provider result that was already complete at arbitration keeps
             # its truthful outcome, but a concurrent registered stop still
             # ends this workflow now instead of launching another turn.
@@ -925,6 +995,7 @@ class Referee:
                         stage_index=stage_index,
                         turn_id=turn_id,
                         manage_turn_active=False,
+                        persist_outcome=False,
                         event_observer=lambda event, member=agent_id: observe(member, event),
                     ),
                     name=f"agent-collab-stage-{stage_index}-{agent_id}",
@@ -1181,10 +1252,15 @@ class Referee:
         transcript: List[Event] = []
         runners: Dict[str, AgentRunner] = {}
         stages = self._stages()[: max(0, self.config.max_turns)]
+        if self.config.resume:
+            transcript = list(self.config.resume_events or [])
+            if self.config.resume_watermarks:
+                self._agent_watermarks.update(self.config.resume_watermarks)
 
         try:
             await self._preflight_direct_sandbox_plan()
             runners = self._runners()
+            self._seed_resume_runners(runners)
             self._live_runners = runners
             if not self.config.mock and not self.config.dry_run:
                 self._plan_went_live = True
@@ -1232,6 +1308,15 @@ class Referee:
             self._live_runners = {}
             self._in_flight_runner_tasks.clear()
 
+    def _seed_resume_runners(self, runners: Dict[str, AgentRunner]) -> None:
+        descriptors = self.config.resume_descriptors or {}
+        if not self.config.resume or not descriptors:
+            return
+        for agent_id, runner in runners.items():
+            descriptor = descriptors.get(agent_id)
+            if isinstance(descriptor, dict):
+                runner.seed_resume_descriptor(descriptor)
+
     async def _run_stages(
         self,
         task: str,
@@ -1240,23 +1325,45 @@ class Referee:
         stages: List[List[str]],
     ) -> Dict[str, str]:
         with SessionLogger(self.log_dir, task, self.config.session_id) as logger:
-            await self._emit(
-                logger, transcript, Event.create("human", "message", task, {"task": task})
-            )
-            await self._emit(
-                logger,
-                transcript,
-                Event.create(
-                    "referee",
-                    "status",
-                    f"workflow={self.config.workflow} max_turns={self.config.max_turns} timeout={self.config.timeout}s workdir={self.workdir}",
-                ),
-            )
+            if not self.config.resume:
+                await self._emit(
+                    logger, transcript, Event.create("human", "message", task, {"task": task})
+                )
+                await self._emit(
+                    logger,
+                    transcript,
+                    Event.create(
+                        "referee",
+                        "status",
+                        f"workflow={self.config.workflow} max_turns={self.config.max_turns} timeout={self.config.timeout}s workdir={self.workdir}",
+                    ),
+                )
             # Always register so daemon-minted approval events stay in lockstep
             # with the referee transcript (event_id == transcript index).
             await self._register_event_appender(lambda event: self._emit(logger, transcript, event))
             try:
+                phase = dict(self.config.resume_phase or {})
+                completed_stages = int(phase.get("completed_stages") or 0)
+                parked = bool(phase.get("parked_in_input_loop"))
+                if self.config.resume and parked and self.config.interactive:
+                    await self._commit_phase(completed_stages, True)
+                    await self._set_input_accepting(True)
+                    await self._set_status("awaiting_input")
+                    try:
+                        await self._await_interactive_input(logger, transcript, runners, task)
+                    finally:
+                        await self._set_input_accepting(False)
+                    await self._commit_phase(completed_stages, False)
+                    await self._emit_final_summary(logger, transcript, len(stages))
+                    await self._set_status("done")
+                    return {
+                        "session_id": logger.session_id,
+                        "jsonl_path": str(logger.jsonl_path),
+                        "markdown_path": str(logger.markdown_path),
+                    }
                 for turn, stage in enumerate(stages, start=1):
+                    if self.config.resume and turn <= completed_stages:
+                        continue
                     if self.config.interactive:
                         await self._process_pending_inputs(logger, transcript, runners, task)
                     if len(stage) > 1:
@@ -1277,6 +1384,7 @@ class Referee:
                             stage,
                             turn,
                         )
+                        await self._commit_phase(turn, False)
                         continue
                     agent_name = stage[0]
                     await self._emit(
@@ -1307,6 +1415,7 @@ class Referee:
                         agent_id=agent_name,
                         stage_index=turn,
                         turn_id=turn_id,
+                        planned_completed_stages=turn,
                     )
                     if record.outcome != "completed":
                         raise RequiredTurnFailed(record)
@@ -1317,12 +1426,14 @@ class Referee:
                     # exits (idle timeout, a failed directed turn, or a stop
                     # cancellation), so the awaiting_input -> terminal window is
                     # never seen as settled and never accepts an unread post.
+                    await self._commit_phase(len(stages), True)
                     await self._set_input_accepting(True)
                     await self._set_status("awaiting_input")
                     try:
                         await self._await_interactive_input(logger, transcript, runners, task)
                     finally:
                         await self._set_input_accepting(False)
+                    await self._commit_phase(len(stages), False)
                     await self._emit_final_summary(logger, transcript, len(stages))
                     await self._set_status("done")
                 else:

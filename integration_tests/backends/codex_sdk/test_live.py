@@ -108,6 +108,31 @@ class CodexSdkLiveTests(LiveBackendTestCase):
                 else:
                     os.environ["AGENT_COLLAB_HOME"] = previous
 
+    def test_reload_public_resume_worker(self):
+        self._run_reload_public_resume(sandbox="read-only")
+
+    def test_reload_public_resume_in_process(self):
+        self._run_reload_public_resume(sandbox="none")
+
+    def _run_reload_public_resume(self, *, sandbox):
+        from integration_tests.resume_proof import run_reload_public_resume
+
+        codeword = f"SABLE-{secrets.token_hex(4).upper()}"
+
+        async def scenario(workdir):
+            proof = await run_reload_public_resume(
+                self,
+                workdir,
+                sandbox=sandbox,
+                members={"claude_cli": "codex_sdk"},
+                backend_options={"codex_sdk": self.requested_options()},
+                agent_id="codex_sdk",
+                codeword=codeword,
+            )
+            self.assertTrue(proof["resumed"], "public resume was never invoked")
+
+        self._run_isolated_session(scenario, isolate_codex_home=(sandbox == "read-only"))
+
     def test_tool_gate_park_deny_worker(self):
         self._run_tool_gate_park(sandbox="read-only", decision="deny")
 

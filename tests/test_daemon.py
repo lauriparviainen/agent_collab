@@ -2536,8 +2536,17 @@ sequence = ["claude_cli.a", "claude_cli.b"]
         runners = {"claude_cli": AnswerRunner()}
         original_record = SessionManager._record_turn_outcome
 
-        async def blocking_record(self, managed, record, boundary_event):
-            await original_record(self, managed, record, boundary_event)
+        async def blocking_record(
+            self, managed, record, boundary_event, completed_stages=None, persist=True
+        ):
+            await original_record(
+                self,
+                managed,
+                record,
+                boundary_event,
+                completed_stages=completed_stages,
+                persist=persist,
+            )
             reached_commit.set()
             await release_commit.wait()
 
@@ -2887,6 +2896,21 @@ class SessionManagerPruneTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.pruned, 4)
         self.assertIn("still-running", self.index.load())
         self.assertNotIn("still-running", [detail.session_id for detail in result.sessions])
+
+    async def test_apply_skips_session_with_held_resume_claim(self):
+        self._add_record("racing", status="interrupted")
+        manager = self._manager()
+        managed = manager._sessions["racing"]
+        await managed.resume_lock.acquire()
+        self.addCleanup(managed.resume_lock.release)
+
+        result = await self._prune(manager, apply=True)
+
+        detail = next(d for d in result.sessions if d.session_id == "racing")
+        self.assertEqual(detail.disposition, "skipped_live")
+        self.assertIn("racing", self.index.load())
+        self.assertTrue((self.session_dir / "racing.jsonl").exists())
+        self.assertIn("racing", [s.session_id for s in manager.list_sessions()])
 
     async def test_terminal_record_with_live_task_is_skipped(self):
         self._add_record("racing")

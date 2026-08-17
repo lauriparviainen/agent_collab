@@ -287,9 +287,71 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
                 manager = SessionManager(index_path=index_path)
                 restored = manager.get_session("captured-resume")
 
-            expected = {"resumable": True, "interruptible": False, "continuity": True}
+            expected = {"resumable": False, "interruptible": False, "continuity": True}
             self.assertEqual(restored.capabilities, expected)
             self.assertEqual(index.load()["captured-resume"]["capabilities"], expected)
+
+    async def test_restore_with_full_eligible_descriptor_projects_resumable(self):
+        from agent_collab import backends as backend_registry
+        from agent_collab.backends.base import BackendCapabilities
+        from agent_collab.resume import compute_resume_fingerprint
+
+        real_capabilities_for = backend_registry.capabilities_for
+
+        def resume_stub(agent_type, backend_id):
+            caps = real_capabilities_for(agent_type, backend_id)
+            return BackendCapabilities(
+                resume=True,
+                interrupt=caps.interrupt,
+                tool_gate=caps.tool_gate,
+                continuity=caps.continuity,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            fingerprint = compute_resume_fingerprint(
+                agent_type="claude", backend_id="sdk", workdir=str(root)
+            )
+            index = SessionIndex(index_path)
+            index.upsert(
+                {
+                    "session_id": "eligible-resume",
+                    "status": "interrupted",
+                    "task": "eligible sdk",
+                    "workflow": "solo-sdk",
+                    "workdir": str(root),
+                    "jsonl_path": str(root / "eligible-resume.jsonl"),
+                    "markdown_path": str(root / "eligible-resume.md"),
+                    "created_at": "2026-07-08T00:00:00+00:00",
+                    "updated_at": "2026-07-08T00:00:00+00:00",
+                    "settings": {
+                        "agents": {"claude_sdk": {"type": "claude", "backend": "sdk"}},
+                        "workflow": {"sequence": ["claude_sdk"]},
+                    },
+                    "agent_sessions": {
+                        "claude_sdk": {
+                            "backend": "sdk",
+                            "provider_session_id": "sess-1",
+                            "provider_session_kind": "session",
+                            "last_turn_status": "completed",
+                            "prompt_event_cursor": 2,
+                            "resume_fingerprint": fingerprint,
+                            "quarantined": False,
+                        }
+                    },
+                    "workflow_phase": {"completed_stages": 0, "parked_in_input_loop": False},
+                }
+            )
+
+            with mock.patch(
+                "agent_collab.backends.capabilities_for",
+                side_effect=resume_stub,
+            ):
+                manager = SessionManager(index_path=index_path)
+                restored = manager.get_session("eligible-resume")
+
+            self.assertTrue(restored.capabilities["resumable"])
 
     async def test_restore_mock_session_stays_not_resumable_with_resume_stub(self):
         from agent_collab import backends as backend_registry

@@ -28,6 +28,38 @@ class XaiCliLiveTests(LiveBackendTestCase):
         self.assert_message(events)
         self.assert_session_kind(events, "session")
 
+    def test_reload_public_resume_direct(self):
+        from integration_tests.resume_proof import run_isolated_reload_public_resume
+
+        run_isolated_reload_public_resume(
+            self,
+            sandbox="none",
+            backend_name="xai_cli",
+            members={"claude_cli": "xai_cli"},
+        )
+
+    def test_reload_public_resume_outer(self):
+        from integration_tests.resume_proof import run_isolated_reload_public_resume
+
+        raw_state = os.environ.get("AGENT_COLLAB_IT_XAI_SANDBOX_STATE")
+        if not raw_state:
+            self.skipTest(
+                missing_reason(
+                    self.provider,
+                    self.backend_id,
+                    "set AGENT_COLLAB_IT_XAI_SANDBOX_STATE to an operator-authorized "
+                    "dedicated complete .grok directory for the paid outer-sandbox "
+                    "reload + public-resume proof",
+                )
+            )
+        run_isolated_reload_public_resume(
+            self,
+            sandbox="read-only",
+            backend_name="xai_cli",
+            members={"claude_cli": "xai_cli"},
+            extra_env={"HOME": str(Path(raw_state).expanduser().resolve(strict=True).parent)},
+        )
+
     def test_outer_read_only_complete_state_bash_acceptance(self):
         raw_state = os.environ.get("AGENT_COLLAB_IT_XAI_SANDBOX_STATE")
         if not raw_state:

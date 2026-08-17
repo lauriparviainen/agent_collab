@@ -732,6 +732,7 @@ def _prepare_read_only_command(command: Sequence[str]) -> Tuple[str, ...]:
                 "--resume",
                 "-r",
                 "--fork-session",
+                "--session-id",
             }
             or item.startswith(
                 (
@@ -743,6 +744,7 @@ def _prepare_read_only_command(command: Sequence[str]) -> Tuple[str, ...]:
                     "--resume=",
                     "-r=",
                     "--fork-session=",
+                    "--session-id=",
                 )
             )
             or (item.startswith("-") and not item.startswith("--") and item[1:2] in {"c", "r", "w"})

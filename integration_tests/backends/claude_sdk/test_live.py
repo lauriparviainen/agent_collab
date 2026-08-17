@@ -165,6 +165,12 @@ class ClaudeSdkLiveTests(LiveBackendTestCase):
     def test_interrupt_continue_in_process(self):
         self._run_interrupt_continue(sandbox="none")
 
+    def test_reload_public_resume_worker(self):
+        self._run_reload_public_resume(sandbox="read-only")
+
+    def test_reload_public_resume_in_process(self):
+        self._run_reload_public_resume(sandbox="none")
+
     def _run_tool_gate_park(self, *, sandbox, decision, clock_exclusion=False):
         token = f"PARK-{secrets.token_hex(4).upper()}"
         timeout = 20 if clock_exclusion else 180
@@ -249,6 +255,25 @@ class ClaudeSdkLiveTests(LiveBackendTestCase):
             "You must use the Write tool to create PARK.txt. "
             "Do not only reply in chat. Do not use a read-only tool. Call Write now."
         )
+
+    def _run_reload_public_resume(self, *, sandbox):
+        from integration_tests.resume_proof import run_reload_public_resume
+
+        codeword = f"SABLE-{secrets.token_hex(4).upper()}"
+
+        async def scenario(workdir):
+            proof = await run_reload_public_resume(
+                self,
+                workdir,
+                sandbox=sandbox,
+                members={"claude_cli": "claude_sdk"},
+                backend_options={"claude_sdk": self.requested_options()},
+                agent_id="claude_sdk",
+                codeword=codeword,
+            )
+            self.assertTrue(proof["resumed"], "public resume was never invoked")
+
+        self._run_isolated_session(scenario)
 
     def _run_isolated_session(self, scenario):
         with (

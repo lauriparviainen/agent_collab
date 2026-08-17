@@ -317,7 +317,7 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         self.assertTrue(after_one["continuity"])
         self.assertEqual(
             after_both,
-            {"resumable": True, "interruptible": False, "continuity": True},
+            {"resumable": False, "interruptible": False, "continuity": True},
         )
 
     def test_mock_and_dry_run_cannot_become_resumable(self):
@@ -353,7 +353,7 @@ class ProviderSessionCaptureTests(unittest.TestCase):
             return managed.state.capabilities
 
         summary = asyncio.run(run())
-        self.assertTrue(summary["resumable"])
+        self.assertFalse(summary["resumable"])
         self.assertTrue(summary["continuity"])
 
     def test_turn_commit_refreshes_projection_from_boundary_capture(self):
@@ -383,8 +383,120 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         )
         self.assertEqual(
             state.capabilities,
+            {"resumable": False, "interruptible": False, "continuity": True},
+        )
+
+    def test_full_eligible_descriptor_projects_resumable(self):
+        from agent_collab.resume import compute_resume_fingerprint
+
+        fingerprint = compute_resume_fingerprint(agent_type="claude", backend_id="sdk", workdir=".")
+
+        async def run():
+            manager = self._manager()
+            managed = self._managed({"claude": "sdk"})
+            managed.state.workflow_phase = {
+                "completed_stages": 0,
+                "parked_in_input_loop": False,
+            }
+            managed.state.agent_sessions = {
+                "claude": {
+                    "backend": "sdk",
+                    "provider_session_id": "sess-c",
+                    "provider_session_kind": "session",
+                    "last_turn_status": "completed",
+                    "prompt_event_cursor": 2,
+                    "resume_fingerprint": fingerprint,
+                    "interrupt_acknowledged": False,
+                    "quarantined": False,
+                }
+            }
+            with mock.patch(
+                "agent_collab.backends.capabilities_for",
+                side_effect=_capabilities_for_with_resume,
+            ):
+                manager._refresh_session_capabilities(managed.state)
+            return managed.state.capabilities
+
+        summary = asyncio.run(run())
+        self.assertEqual(
+            summary,
             {"resumable": True, "interruptible": False, "continuity": True},
         )
+
+    def test_mid_workflow_unstarted_peer_projects_resumable(self):
+        from agent_collab.resume import compute_resume_fingerprint
+
+        fingerprint = compute_resume_fingerprint(agent_type="claude", backend_id="sdk", workdir=".")
+        agents = {
+            "claude": AgentConfig(id="claude", type="claude", backend="sdk"),
+            "codex": AgentConfig(id="codex", type="codex", backend="sdk"),
+        }
+
+        async def run():
+            manager = self._manager()
+            managed = self._managed({"claude": "sdk", "codex": "sdk"}, agents=agents)
+            managed.state.workflow_phase = {
+                "completed_stages": 1,
+                "parked_in_input_loop": False,
+            }
+            managed.state.settings["workflow"] = {"sequence": ["claude", "codex"]}
+            managed.state.agent_sessions = {
+                "claude": {
+                    "backend": "sdk",
+                    "provider_session_id": "sess-c",
+                    "provider_session_kind": "session",
+                    "last_turn_status": "completed",
+                    "prompt_event_cursor": 2,
+                    "resume_fingerprint": fingerprint,
+                    "interrupt_acknowledged": False,
+                    "quarantined": False,
+                }
+            }
+            with mock.patch(
+                "agent_collab.backends.capabilities_for",
+                side_effect=_capabilities_for_with_resume,
+            ):
+                manager._refresh_session_capabilities(managed.state)
+            return managed.state.capabilities
+
+        summary = asyncio.run(run())
+        self.assertEqual(
+            summary,
+            {"resumable": True, "interruptible": False, "continuity": True},
+        )
+
+    def test_quarantined_agent_makes_session_not_resumable(self):
+        from agent_collab.resume import compute_resume_fingerprint
+
+        fingerprint = compute_resume_fingerprint(agent_type="claude", backend_id="sdk", workdir=".")
+
+        async def run():
+            manager = self._manager()
+            managed = self._managed({"claude": "sdk"})
+            managed.state.workflow_phase = {
+                "completed_stages": 0,
+                "parked_in_input_loop": False,
+            }
+            managed.state.agent_sessions = {
+                "claude": {
+                    "backend": "sdk",
+                    "provider_session_id": "sess-c",
+                    "provider_session_kind": "session",
+                    "last_turn_status": "resume_rejected",
+                    "prompt_event_cursor": 2,
+                    "resume_fingerprint": fingerprint,
+                    "quarantined": True,
+                }
+            }
+            with mock.patch(
+                "agent_collab.backends.capabilities_for",
+                side_effect=_capabilities_for_with_resume,
+            ):
+                manager._refresh_session_capabilities(managed.state)
+            return managed.state.capabilities
+
+        summary = asyncio.run(run())
+        self.assertFalse(summary["resumable"])
 
     def test_mid_turn_capture_preserves_already_persisted_descriptor_fields(self):
         extra = {
@@ -392,6 +504,9 @@ class ProviderSessionCaptureTests(unittest.TestCase):
             "last_turn_status": "in_flight",
             "resume_fingerprint": {"model": "sonnet"},
             "backend_version": "1.2.3",
+            "interrupt_acknowledged": True,
+            "quarantined": False,
+            "phase_stage_index": 1,
         }
 
         async def run():
@@ -419,6 +534,9 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         self.assertEqual(entry["last_turn_status"], "in_flight")
         self.assertEqual(entry["resume_fingerprint"], {"model": "sonnet"})
         self.assertEqual(entry["backend_version"], "1.2.3")
+        self.assertTrue(entry["interrupt_acknowledged"])
+        self.assertFalse(entry["quarantined"])
+        self.assertEqual(entry["phase_stage_index"], 1)
 
     def test_turn_commit_refreshes_projection_without_new_capture(self):
         record = TurnOutcomeRecord.from_outcome(

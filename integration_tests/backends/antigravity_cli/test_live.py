@@ -118,6 +118,70 @@ class AntigravityCliLiveTests(LiveBackendTestCase):
 
         asyncio.run(run())
 
+    def test_reload_public_resume_direct(self):
+        self._run_reload_public_resume(sandbox="none")
+
+    def test_reload_public_resume_outer(self):
+        raw_state = os.environ.get("AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE")
+        if not raw_state:
+            self.skipTest(
+                missing_reason(
+                    self.provider,
+                    self.backend_id,
+                    "set AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE to an "
+                    "operator-authorized dedicated complete .gemini directory for the paid "
+                    "outer-sandbox reload + public-resume proof",
+                )
+            )
+        state = Path(raw_state).expanduser().resolve(strict=True)
+        if not state.is_dir() or state.name != ".gemini":
+            self.fail(
+                "AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE must be a complete .gemini directory"
+            )
+        self._run_reload_public_resume(sandbox="read-only", home=str(state.parent))
+
+    def _run_reload_public_resume(self, *, sandbox: str, home: str | None = None) -> None:
+        from integration_tests.resume_proof import run_reload_public_resume
+
+        codeword = f"SABLE-{secrets.token_hex(4).upper()}"
+
+        async def scenario(workdir):
+            proof = await run_reload_public_resume(
+                self,
+                workdir,
+                sandbox=sandbox,
+                members={"claude_cli": "antigravity_cli"},
+                backend_options={"antigravity_cli": self.requested_options()},
+                agent_id="antigravity_cli",
+                codeword=codeword,
+            )
+            self.assertTrue(proof["resumed"], "public resume was never invoked")
+
+        with (
+            tempfile.TemporaryDirectory(prefix="agent-collab-it-") as tmp,
+            tempfile.TemporaryDirectory(prefix="agent-collab-it-home-") as daemon_home,
+        ):
+            home_path = Path(daemon_home)
+            (home_path / "config.toml").write_text(
+                ("schema_version = 12\n\n[backends.antigravity_cli]\nenabled = true\n"),
+                encoding="utf-8",
+            )
+            previous = {
+                "AGENT_COLLAB_HOME": os.environ.get("AGENT_COLLAB_HOME"),
+                "HOME": os.environ.get("HOME"),
+            }
+            os.environ["AGENT_COLLAB_HOME"] = str(home_path)
+            if home is not None:
+                os.environ["HOME"] = home
+            try:
+                asyncio.run(scenario(Path(tmp).resolve()))
+            finally:
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
     def test_provider_memory_across_interactive_turns_direct(self):
         self._run_provider_memory_across_turns(sandbox="none")
 

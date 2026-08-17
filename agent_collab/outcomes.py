@@ -35,6 +35,8 @@ CANONICAL_MESSAGES: Dict[str, str] = {
     "referee_cancelled_unexpected": "The turn supervisor was cancelled unexpectedly",
     "subprocess_exit_nonzero": "The provider subprocess exited unsuccessfully",
     "provider_session_quarantined": "The provider conversation is quarantined and cannot continue",
+    "resume_rejected": "The provider rejected the resume request",
+    "resume_uncertain": "The provider resume result was uncertain",
     "parallel_stage_no_accepted_member": "No parallel reviewer produced an accepted review",
 }
 

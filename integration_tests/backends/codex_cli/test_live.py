@@ -15,6 +15,38 @@ class CodexCliLiveTests(LiveBackendTestCase):
     def test_turn(self):
         self.assert_message(self.run_live())
 
+    def test_reload_public_resume_direct(self):
+        from integration_tests.resume_proof import run_isolated_reload_public_resume
+
+        run_isolated_reload_public_resume(
+            self,
+            sandbox="none",
+            backend_name="codex_cli",
+            members={"claude_cli": "codex_cli"},
+        )
+
+    def test_reload_public_resume_outer(self):
+        from integration_tests.resume_proof import run_isolated_reload_public_resume
+
+        raw_state = os.environ.get("AGENT_COLLAB_IT_CODEX_SANDBOX_STATE")
+        if not raw_state:
+            self.skipTest(
+                missing_reason(
+                    self.provider,
+                    self.backend_id,
+                    "set AGENT_COLLAB_IT_CODEX_SANDBOX_STATE to an operator-authorized "
+                    "dedicated complete CODEX_HOME for the paid outer-sandbox "
+                    "reload + public-resume proof",
+                )
+            )
+        run_isolated_reload_public_resume(
+            self,
+            sandbox="read-only",
+            backend_name="codex_cli",
+            members={"claude_cli": "codex_cli"},
+            extra_env={"CODEX_HOME": str(Path(raw_state).expanduser().resolve(strict=True))},
+        )
+
     def test_outer_read_only_complete_state_acceptance(self):
         raw_state = os.environ.get("AGENT_COLLAB_IT_CODEX_SANDBOX_STATE")
         if not raw_state:

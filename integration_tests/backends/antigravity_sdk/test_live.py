@@ -267,6 +267,12 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
     def test_resume_establishment_in_process(self):
         self._run_resume_establishment(sandbox="none")
 
+    def test_reload_public_resume_worker(self):
+        self._run_reload_public_resume(sandbox="read-only")
+
+    def test_reload_public_resume_in_process(self):
+        self._run_reload_public_resume(sandbox="none")
+
     def _run_tool_gate_park(self, *, sandbox, decision, clock_exclusion=False):
         token = f"PARK-{secrets.token_hex(4).upper()}"
         timeout = 20 if clock_exclusion else 180
@@ -451,6 +457,25 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
 
         with mock.patch.object(backend_mod, "_default_agent_factory", recording_factory):
             self._run_isolated_session(scenario)
+
+    def _run_reload_public_resume(self, *, sandbox):
+        from integration_tests.resume_proof import run_reload_public_resume
+
+        codeword = f"SABLE-{secrets.token_hex(4).upper()}"
+
+        async def scenario(workdir):
+            proof = await run_reload_public_resume(
+                self,
+                workdir,
+                sandbox=sandbox,
+                members={"claude_cli": "antigravity_sdk"},
+                backend_options={"antigravity_sdk": self.requested_options()},
+                agent_id="antigravity_sdk",
+                codeword=codeword,
+            )
+            self.assertTrue(proof["resumed"], "public resume was never invoked")
+
+        self._run_isolated_session(scenario)
 
     def _conversation_ids(self, manager, session_id):
         return [

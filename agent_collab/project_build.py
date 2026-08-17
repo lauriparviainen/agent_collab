@@ -325,7 +325,7 @@ def _operation(route: Any) -> Dict[str, Any]:
     responses: Dict[str, Any] = {"200": success, "400": error, "404": error, "default": error}
     if protected:
         responses["401"] = error
-    if route.handler == "resolve_approval":
+    if route.handler in {"resolve_approval", "resume_session"}:
         responses["409"] = error
 
     operation: Dict[str, Any] = {
@@ -361,6 +361,7 @@ def _summary(route: Any) -> str:
         "post_message": "Post input to an interactive session",
         "read_transcript": "Read a session transcript",
         "resolve_approval": "Approve or deny one parked tool-approval request",
+        "resume_session": "Resume an interrupted or reloaded session",
         "stop_session": "Stop a live session",
         "prune_sessions": "Preview or apply terminal-session retention",
     }

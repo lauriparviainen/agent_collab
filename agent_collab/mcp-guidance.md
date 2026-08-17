@@ -22,7 +22,10 @@ A session is one supervised run of a task:
 - its events append to a JSONL log mirrored as a Markdown transcript under
   the global data root (`~/.agent-collab/data/sessions`),
 - it survives daemon restarts in a persistent session index; sessions running
-  when the daemon died are marked `interrupted`.
+  when the daemon died are marked `interrupted`. Resume those with
+  `agent_collab_resume` after an explicit request — restore never auto-starts
+  a paid turn. A live session is a conflict. A quarantined resume cannot be
+  repaired in place; start a new session.
 
 The session `workdir` matters twice: project config is loaded from
 `WORKDIR/.agent-collab/config.toml` and layered over the user config and
@@ -101,7 +104,8 @@ Run another agent as a subagent and collect its result over MCP alone:
    it re-sends the task and a recent window, costing like a fresh turn.
 6. End with `agent_collab_stop`, or let the session close on its
    `interactive_idle_timeout` (raise it for long conversations). Stop ends
-   the session; it is not a keep-alive turn interrupt.
+   the session; it is not a keep-alive turn interrupt. After a daemon reload
+   an `interrupted` session continues only through `agent_collab_resume`.
 
 ## Workflows
 
@@ -318,7 +322,9 @@ error, request fresh discovery, and remediate deliberately instead of
 oscillating between backends. For an unknown workflow or agent, call
 `agent_collab_describe_options` for the same `workdir` and choose from what it
 lists. Unknown `session_id` errors usually mean a mistyped id or a different
-daemon.
+daemon. `agent_collab_resume` on a live session is a structured conflict;
+an ineligible or quarantined descriptor is a validation error. Do not retry
+a quarantined resume in place.
 
 For a started session, `turn_outcomes` is the authoritative per-turn history;
 key entries by `turn_id`, never by array position. A required sequential or

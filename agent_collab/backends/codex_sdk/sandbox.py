@@ -125,7 +125,10 @@ class CodexSdkSandboxAdapter:
         agent_env: Mapping[str, str],
         codex_bin: Optional[str],
         verbose: bool,
+        resume: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
+        from ...resume import attach_resume_block
+
         payload = self.worker_open_payload(
             options=options,
             workspace=workspace,
@@ -135,7 +138,7 @@ class CodexSdkSandboxAdapter:
             verbose=verbose,
         )
         payload["agent_id"] = agent_id
-        return payload
+        return attach_resume_block(payload, resume)
 
 
 _SQLITE_ENV_KEYS = (

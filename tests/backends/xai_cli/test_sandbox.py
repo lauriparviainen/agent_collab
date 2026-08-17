@@ -858,6 +858,8 @@ hooks = [{ command = "hooks/notify.sh payload/input.json" }]
             ("/usr/bin/grok", "--continue=session", "-p"),
             ("/usr/bin/grok", "-c=session", "-p"),
             ("/usr/bin/grok", "--fork-session=session", "-p"),
+            ("/usr/bin/grok", "--session-id=session", "-p"),
+            ("/usr/bin/grok", "--session-id", "session", "-p"),
             ("/usr/bin/grok", "-rsid", "-p"),
             ("/usr/bin/grok", "-r/tmp/session", "-p"),
             ("/usr/bin/grok", "-csession", "-p"),

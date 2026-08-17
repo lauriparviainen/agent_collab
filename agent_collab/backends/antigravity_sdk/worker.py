@@ -45,7 +45,10 @@ class AntigravitySdkWorkerBackend:
             self._agent_id = agent_id
         save_dir = payload.get("save_dir")
         app_data_dir = payload.get("app_data_dir")
-        conversation_id = payload.get("conversation_id")
+        from ...resume import require_resume_session_id
+
+        resume_id = require_resume_session_id(payload)
+        conversation_id = resume_id if resume_id is not None else payload.get("conversation_id")
         if not isinstance(save_dir, str) or not save_dir:
             raise RuntimeError("antigravity sdk worker open requires save_dir")
         if not isinstance(app_data_dir, str) or not app_data_dir:

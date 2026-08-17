@@ -197,8 +197,21 @@ default to a stateless no-op, so CLI and mock runners are unchanged.
 Backend capabilities (`resume`, `interrupt`, `tool_gate`, `continuity`) are
 honest runtime facts and are not inferred from provider brand. `continuity` is
 the in-session provider-thread continuation fact; the session reducer reports it
-true only when every selected backend has it (false for every backend until the
-per-backend #47 stages flip it with proof). Live backend health gates starts on
+true only when every selected backend has it. Session `resumable` additionally
+requires every *started* agent (one that already has an `agent_sessions` row)
+to hold a fully eligible resume descriptor (captured id,
+`last_turn_status=completed`, valid `prompt_event_cursor`, well-formed
+fingerprint, not quarantined). Unstarted members are not required to hold a
+descriptor; they do ordinary first-turn establishment after resume. Every
+selected non-mock backend must still advertise `resume`. Capture alone is not
+readiness.
+The public resume operation (`POST /sessions/{id}/resume`,
+`agent_collab_resume`, `agent-collab resume`, TUI `/resume`) never auto-starts
+on restore; concurrent resumes serialize on a per-session claim. Production
+`antigravity_sdk.resume`, `claude_sdk.resume`, and `codex_sdk.resume` are
+true after both-path credentialed reload + public-resume + delta-prompt
+proof. CLI backends and `xai_sdk` stay false until the same proof passes
+on both of that backend's production paths. Live backend health gates starts on
 certainty and is reported by `describe_options`, not by daemon status.
 
 The original Stage 5.1 A1 spike resolved all SDKs together under Python
@@ -273,8 +286,8 @@ credentialed two-turn Vertex provider-memory fixture passed with
 that omitted the original task and codeword. Strict reconnect reopens the
 captured id with `SessionContinuationMode.RESUME` against a host-persistent,
 session-keyed trajectory `save_dir` that is not removed on close.
-`antigravity_sdk.continuity` and `antigravity_sdk.tool_gate` are therefore
-true; restart-safe `resume` and `interrupt` remain false.
+`antigravity_sdk.continuity`, `antigravity_sdk.tool_gate`, and
+`antigravity_sdk.resume` are therefore true; `interrupt` remains false.
 
 xAI is opt-in. Grok Build 0.2.93 passed a real headless CLI turn and exposed
 `thought`, `text`, `end`, and explicit `error` records. A disposable shell-tool

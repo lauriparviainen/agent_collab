@@ -78,6 +78,20 @@ class EventCreateCoercionTests(unittest.TestCase):
         self.assertEqual(attributed.agent_id, "claude-reviewer")
         self.assertEqual(attributed.to_dict()["agent_id"], "claude-reviewer")
 
+    def test_from_dict_does_not_restore_provider_session_from_raw(self):
+        event = Event.from_dict(
+            {
+                "timestamp": "2026-01-01T00:00:00Z",
+                "source": "claude",
+                "type": "status",
+                "text": "captured",
+                "raw": {"provider_session_id": "wire-id"},
+                "agent_id": "claude",
+            }
+        )
+        self.assertIsNone(event.provider_session)
+        self.assertEqual(event.agent_id, "claude")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,22 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Close increment-4 resume holes: one index write for planned-stage
+  completion plus `completed_stages`, prune honors a live resume claim,
+  `wait_result` keeps restored answers after resume, and Grok `-c`/`-r`
+  are rejected on the direct argv audit. Mid-workflow resume no longer
+  requires unstarted members to hold a descriptor; resume after prune
+  fails `not_found` without resurrecting the index row; restored
+  provider-session bookkeeping stays out of resume prompts (#20).
+
+- Add persisted explicit resume and the public resume operation
+  (`POST /sessions/{id}/resume`, `agent_collab_resume`,
+  `agent-collab resume`, TUI `/resume`). Capture alone is not readiness;
+  only a completed, fingerprinted, non-quarantined descriptor is eligible.
+  Production `antigravity_sdk.resume`, `claude_sdk.resume`, and
+  `codex_sdk.resume` are true after both-path credentialed reload proofs;
+  CLI backends and `xai_sdk` stay false (#20).
+
 - Keep Antigravity SDK trajectories in a host-persistent, session-keyed
   directory and reopen a captured conversation id against that `save_dir`
   after the live Agent is dropped. Never-live starts roll the HOST root

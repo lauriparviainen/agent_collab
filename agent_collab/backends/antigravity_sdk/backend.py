@@ -194,7 +194,7 @@ class AntigravitySdkBackend:
         libc_ver: Optional[Callable[[], tuple[str, str]]] = None,
         protobuf_version: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
-        self.capabilities = BackendCapabilities(continuity=True, tool_gate=True)
+        self.capabilities = BackendCapabilities(resume=True, continuity=True, tool_gate=True)
         self.checks_credentials = True
         # Opt-in backend: a missing extra / sign-out fails the start fast.
         self.block_on_unavailable = True
@@ -416,8 +416,11 @@ class AntigravitySdkRunner(AgentRunner):
         self._worker_resume_blocked = False
         self._worker_soft_drop_cancelled = False
         self._captured_conversation_id: Optional[str] = None
+        self._resume_quarantined = False
 
     def conversation_active(self) -> bool:
+        if self._resume_quarantined:
+            return False
         if self._worker_terminal or self._worker_resume_blocked:
             return False
         if self._worker_session is not None:
@@ -441,6 +444,14 @@ class AntigravitySdkRunner(AgentRunner):
         if not callable(interrupt):
             return False
         return bool(await interrupt())
+
+    def seed_resume_descriptor(self, descriptor: Mapping[str, Any]) -> None:
+        session_id = descriptor.get("provider_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return
+        self._captured_conversation_id = session_id
+        self._resume_quarantined = False
+        self._worker_resume_blocked = False
 
     async def close(self) -> None:
         session = self._worker_session
@@ -475,6 +486,16 @@ class AntigravitySdkRunner(AgentRunner):
         self._captured_conversation_id = None
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
+        if self._resume_quarantined:
+            await emit(
+                Event.create(
+                    "error",
+                    "error",
+                    f"{self.name} provider conversation is quarantined",
+                    {"code": "provider_session_quarantined", "fatal": True},
+                )
+            )
+            return TurnOutcome("failed", "provider_session_quarantined")
         policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
         if policy is SandboxPolicy.READ_ONLY:
             return await self._run_turn_worker(prompt, workdir, emit)
@@ -568,15 +589,23 @@ class AntigravitySdkRunner(AgentRunner):
         except SandboxFailure as exc:
             await self._terminate_worker_session()
             await self._emit_sandbox_failure(emit, exc)
-            return TurnOutcome("failed", exc.code)
+            return self._resume_or_plain_failure(exc, exc.code)
         except WorkerProtocolError as exc:
             await self._terminate_worker_session()
             await self._emit_sandbox_failure(emit, exc)
-            return TurnOutcome("failed", exc.code)
+            return self._resume_or_plain_failure(exc, exc.code)
         except Exception as exc:
             await self._terminate_worker_session()
             await emit(sdk_error_event("antigravity", exc))
-            return TurnOutcome("failed", "provider_transport_failed")
+            return self._resume_or_plain_failure(exc, "provider_transport_failed")
+
+    def _resume_or_plain_failure(self, exc: BaseException, fallback: str) -> TurnOutcome:
+        if not self._captured_conversation_id:
+            return TurnOutcome("failed", fallback)
+        from ...resume import resume_failure_status_for_exception
+
+        self._resume_quarantined = True
+        return TurnOutcome("failed", resume_failure_status_for_exception(exc))
 
     async def _emit_sandbox_failure(self, emit: AsyncEventSink, exc: Any) -> None:
         try:
@@ -749,6 +778,12 @@ class AntigravitySdkRunner(AgentRunner):
             env_values = dict(
                 getattr(getattr(plan, "spec", None), "environment", None).set_values or {}
             )  # type: ignore[union-attr]
+            resume = None
+            if self._captured_conversation_id:
+                resume = {
+                    "provider_session_id": self._captured_conversation_id,
+                    "provider_session_kind": "conversation",
+                }
             payload = adapter.worker_open_payload_for_agent(
                 agent_id=self.name,
                 options=self.options,
@@ -760,6 +795,7 @@ class AntigravitySdkRunner(AgentRunner):
                 save_dir=env_values.get("ANTIGRAVITY_SAVE_DIR"),
                 app_data_dir=env_values.get("ANTIGRAVITY_APP_DATA_DIR"),
                 conversation_id=self._captured_conversation_id,
+                resume=resume,
             )
             session = SupervisedWorkerSession(
                 process,
@@ -844,9 +880,19 @@ class AntigravitySdkRunner(AgentRunner):
         except BackendUnavailable as exc:
             await emit(backend_unavailable_event(exc))
             exception_code = "provider_transport_failed"
+            if self._captured_conversation_id:
+                from ...resume import resume_failure_status_for_exception
+
+                self._resume_quarantined = True
+                exception_code = resume_failure_status_for_exception(exc)
         except Exception as exc:  # surface SDK errors as transcript errors
             await emit(sdk_error_event("antigravity", exc))
             exception_code = "provider_transport_failed"
+            if self._captured_conversation_id:
+                from ...resume import resume_failure_status_for_exception
+
+                self._resume_quarantined = True
+                exception_code = resume_failure_status_for_exception(exc)
         if not clean_close and exception_code is None:
             exception_code = "provider_transport_failed"
         result = evidence.resolve(exception_code=exception_code)
@@ -890,6 +936,8 @@ class AntigravitySdkRunner(AgentRunner):
                 )
             else:
                 self._conversation = factory(self.agent, self.options, resolved)
+            if self._captured_conversation_id:
+                self._conversation.note_session_id(self._captured_conversation_id)
             self._workdir = resolved
         elif self._workdir != resolved:
             raise RuntimeError("antigravity sdk conversation workdir changed between turns")

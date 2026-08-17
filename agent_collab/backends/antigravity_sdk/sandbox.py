@@ -179,6 +179,7 @@ class AntigravitySdkSandboxAdapter:
         save_dir: Optional[str] = None,
         app_data_dir: Optional[str] = None,
         conversation_id: Optional[str] = None,
+        resume: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
         if not isinstance(save_dir, str) or not save_dir.strip():
             raise RuntimeError("antigravity sdk worker open requires a durable save_dir")
@@ -197,7 +198,12 @@ class AntigravitySdkSandboxAdapter:
             "app_data_dir": app_data_dir,
             "native": {"policy": "ask_user"},
         }
-        if isinstance(conversation_id, str) and conversation_id:
+        from ...resume import attach_resume_block, require_resume_session_id
+
+        if resume is not None:
+            attach_resume_block(payload, resume)
+            payload["conversation_id"] = require_resume_session_id(payload)
+        elif isinstance(conversation_id, str) and conversation_id:
             payload["conversation_id"] = conversation_id
         return payload
 

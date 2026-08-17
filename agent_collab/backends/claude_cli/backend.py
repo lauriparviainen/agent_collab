@@ -18,6 +18,7 @@ from ..common.cli import (
 )
 from ..common.health import default_version_runner, probe_cli_backend
 from ..common.options import highest_precedence_choices, resolve_claude_thinking
+from .invocation import CLI_OWNERSHIP_FLAGS, finalize_claude_cli_invocation
 from .parser import ClaudeStreamingParser
 from .sandbox import ClaudeCliSandboxAdapter
 
@@ -31,6 +32,8 @@ class ClaudeCliBackend:
     event_fidelity = "typed"
     provider_session_id_kind = "session"
     capabilities = BackendCapabilities()
+    cli_ownership_flags = CLI_OWNERSHIP_FLAGS
+    finalize_cli_invocation = staticmethod(finalize_claude_cli_invocation)
     sandbox_adapter = ClaudeCliSandboxAdapter()
     checks_credentials = False
     block_on_unavailable = False

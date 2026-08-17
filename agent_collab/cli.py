@@ -32,6 +32,7 @@ PUBLIC_COMMANDS = (
     ("result", "Wait for a daemon-owned session to settle and print its result."),
     ("watch", "Watch a live session or stored JSONL transcript."),
     ("stop", "Stop a daemon-owned session."),
+    ("resume", "Resume an interrupted or reloaded daemon-owned session."),
     ("approval", "Approve or deny a parked tool-approval request."),
     ("sessions", "Manage stored sessions, including pruning old terminal sessions."),
     ("config", "Show the merged config files for a workdir, or create the user config."),
@@ -1318,6 +1319,23 @@ def _main_stop(argv) -> int:
     return 0
 
 
+def _main_resume(argv) -> int:
+    parser = build_session_parser(
+        "agent-collab resume",
+        "Resume an interrupted or reloaded daemon session.",
+    )
+    args = parser.parse_args(argv)
+    try:
+        step(f"Resuming session {args.session_id}")
+        session = _client(args.server_url).resume_session(args.session_id)
+        ok(f"Resumed {session.session_id}")
+        _print_session(session)
+    except Exception as exc:
+        error(str(exc))
+        return 1
+    return 0
+
+
 def build_approval_parser() -> argparse.ArgumentParser:
     parser = build_session_parser(
         "agent-collab approval",
@@ -1527,6 +1545,7 @@ def _command_handlers():
         "events": _main_events,
         "result": _main_result,
         "stop": _main_stop,
+        "resume": _main_resume,
         "approval": _main_approval,
         "sessions": _main_sessions,
         "config": _main_config,

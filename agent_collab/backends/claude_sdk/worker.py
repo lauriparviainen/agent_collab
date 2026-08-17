@@ -44,6 +44,9 @@ class ClaudeSdkWorkerBackend:
         if isinstance(agent_id, str) and agent_id:
             self._agent_id = agent_id
 
+        from ...resume import require_resume_session_id
+
+        resume_id = require_resume_session_id(payload)
         agent = _WorkerAgent(agent_id=self._agent_id, env=agent_env)
         # Outer read-only worker path suppresses ambient project/user MCP.
         conversation = _default_conversation(
@@ -53,6 +56,8 @@ class ClaudeSdkWorkerBackend:
             suppress_ambient_mcp=True,
             can_use_tool=self._can_use_tool,
         )
+        if resume_id is not None:
+            conversation.note_session_id(resume_id)
         self._conversation = conversation
         self._verbose = verbose
         self._workspace = workspace

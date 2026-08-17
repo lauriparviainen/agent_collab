@@ -53,8 +53,10 @@ background reaper without delaying timeout/interruption recording.
 `continuity` is true: follow-up turns in a live session continue the provider
 thread natively and the referee sends delta continuation prompts. `tool_gate`
 is true: both production paths park `can_use_tool` for an explicit
-approve/deny (issue #20). `resume` and `interrupt` remain false (no
-restart-safe resume, no credentialed interrupt proof). The
+approve/deny (issue #20). `resume` is true: both worker and in-process
+paths passed a credentialed daemon-reload + public `resume_session` +
+delta-prompt proof. `interrupt` remains false (no credentialed interrupt
+proof). The
 disposable/session workdir is passed as SDK cwd. Missing wheels fail
 availability probing; runtime/auth errors become transcript error events.
 

@@ -288,6 +288,7 @@ class SessionStateModel:
     # Per-agent provider session identity (backend + provider_session_id +
     # provider_session_kind), keyed by agent id. Opaque dict like ``settings``.
     agent_sessions: Optional[Dict[str, Any]] = None
+    workflow_phase: Optional[Dict[str, Any]] = None
     pending_approvals: List[PendingApprovalModel] = field(default_factory=list)
     pending_approvals_omitted: int = 0
     stop: Optional[SessionStopModel] = None
@@ -318,6 +319,7 @@ class SessionStateModel:
             settings=data.get("settings"),
             capabilities=data.get("capabilities"),
             agent_sessions=data.get("agent_sessions"),
+            workflow_phase=data.get("workflow_phase"),
             pending_approvals=[
                 PendingApprovalModel.from_dict(item) for item in data.get("pending_approvals", [])
             ],
@@ -352,6 +354,7 @@ class SessionStateModel:
             "settings": self.settings,
             "capabilities": self.capabilities,
             "agent_sessions": self.agent_sessions,
+            "workflow_phase": self.workflow_phase,
             "pending_approvals": [item.to_dict() for item in self.pending_approvals],
             "pending_approvals_omitted": self.pending_approvals_omitted,
             "stop": None if self.stop is None else self.stop.to_dict(),
@@ -947,6 +950,35 @@ class ApprovalDecisionRequestModel:
 
 
 @dataclass
+class ResumeSessionRequestModel:
+    """``POST /sessions/{id}/resume`` request. Empty body; reserved for options."""
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ResumeSessionRequestModel":
+        del data
+        return cls()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {}
+
+
+@dataclass
+class ResumeSessionResponseModel:
+    """``POST /sessions/{id}/resume`` response: the reopened session state."""
+
+    session: SessionStateModel
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ResumeSessionResponseModel":
+        if "session" in data and isinstance(data["session"], dict):
+            return cls(session=SessionStateModel.from_dict(data["session"]))
+        return cls(session=SessionStateModel.from_dict(data))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.session.to_dict()
+
+
+@dataclass
 class ApprovalDecisionResponseModel:
     """``POST /sessions/{id}/approvals`` response: one bound decision."""
 
@@ -1309,6 +1341,14 @@ ROUTES: Tuple[Route, ...] = (
     ),
     Route(
         "POST",
+        "/sessions/{session_id}/resume",
+        "resume_session",
+        "resume_session",
+        ResumeSessionRequestModel,
+        SessionStateModel,
+    ),
+    Route(
+        "POST",
         "/sessions/{session_id}/stop",
         "stop_session",
         "stop_session",
@@ -1348,6 +1388,8 @@ __all__ = [
     "SessionResultModel",
     "ApprovalDecisionRequestModel",
     "ApprovalDecisionResponseModel",
+    "ResumeSessionRequestModel",
+    "ResumeSessionResponseModel",
     "ErrorModel",
     "PruneResultModel",
     "PruneSessionDetailModel",

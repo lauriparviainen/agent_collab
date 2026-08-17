@@ -99,6 +99,31 @@ class Event:
         result.pop("_provider_session", None)
         return result
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Event":
+        """Rebuild a transcript event from persisted JSONL without re-warning.
+
+        Provider identity is not restored from ``raw``; resume uses daemon-owned
+        descriptors for that. Invalid source/type fall back the same way
+        ``create`` does, without logging a live-session coercion warning.
+        """
+
+        source = str(data.get("source") or "status")
+        event_type = str(data.get("type") or "status")
+        if source not in VALID_SOURCES:
+            source = "error"
+        if event_type not in VALID_TYPES:
+            event_type = "status"
+        agent_id = data.get("agent_id")
+        return cls(
+            timestamp=str(data.get("timestamp") or ""),
+            source=source,
+            type=event_type,
+            text=str(data.get("text") or ""),
+            raw=data.get("raw"),
+            agent_id=agent_id if isinstance(agent_id, str) else None,
+        )
+
     def mark_provider_session(self, *, agent_id: str, session_id: str, kind: str) -> "Event":
         """Attach trusted, non-wire provider-session metadata to this event."""
 

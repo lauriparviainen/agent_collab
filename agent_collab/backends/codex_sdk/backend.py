@@ -114,7 +114,7 @@ class CodexSdkBackend:
     provider_session_id_kind = "thread"
 
     def __init__(self, conversation_factory: Optional[ConversationFactory] = None) -> None:
-        self.capabilities = BackendCapabilities(continuity=True)
+        self.capabilities = BackendCapabilities(resume=True, continuity=True)
         self.checks_credentials = True
         self.block_on_unavailable = True
         self._conversation_factory = conversation_factory
@@ -192,8 +192,15 @@ class CodexSdkRunner(AgentRunner):
         # not merely because a Bubblewrap worker process is still alive.
         self._worker_provider_active = False
         self._worker_soft_drop_cancelled = False
+        self._resume_session_id: Optional[str] = None
+        self._resume_kind = "thread"
+        self._resume_quarantined = False
 
     def conversation_active(self) -> bool:
+        if self._resume_quarantined:
+            return False
+        if self._resume_session_id:
+            return True
         if self._worker_terminal:
             return False
         if self._worker_session is not None:
@@ -215,6 +222,16 @@ class CodexSdkRunner(AgentRunner):
         if not callable(interrupt):
             return False
         return bool(await interrupt())
+
+    def seed_resume_descriptor(self, descriptor: Mapping[str, Any]) -> None:
+        session_id = descriptor.get("provider_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return
+        self._resume_session_id = session_id
+        kind = descriptor.get("provider_session_kind")
+        if isinstance(kind, str) and kind:
+            self._resume_kind = kind
+        self._resume_quarantined = False
 
     async def close(self) -> None:
         if self._worker_session is not None:
@@ -239,6 +256,16 @@ class CodexSdkRunner(AgentRunner):
             await self._conversation.close()
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
+        if self._resume_quarantined:
+            await emit(
+                Event.create(
+                    "error",
+                    "error",
+                    f"{self.name} provider conversation is quarantined",
+                    {"code": "provider_session_quarantined", "fatal": True},
+                )
+            )
+            return TurnOutcome("failed", "provider_session_quarantined")
         policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
         if policy is SandboxPolicy.READ_ONLY:
             return await self._run_turn_worker(prompt, workdir, emit)
@@ -298,15 +325,23 @@ class CodexSdkRunner(AgentRunner):
         except SandboxFailure as exc:
             await self._terminate_worker_session()
             await self._emit_sandbox_failure(emit, exc)
-            return TurnOutcome("failed", exc.code)
+            return self._resume_or_plain_failure(exc, exc.code)
         except WorkerProtocolError as exc:
             await self._terminate_worker_session()
             await self._emit_sandbox_failure(emit, exc)
-            return TurnOutcome("failed", exc.code)
+            return self._resume_or_plain_failure(exc, exc.code)
         except Exception as exc:
             await self._terminate_worker_session()
             await emit(sdk_error_event("codex", exc))
-            return TurnOutcome("failed", "provider_transport_failed")
+            return self._resume_or_plain_failure(exc, "provider_transport_failed")
+
+    def _resume_or_plain_failure(self, exc: BaseException, fallback: str) -> TurnOutcome:
+        if not self._resume_session_id:
+            return TurnOutcome("failed", fallback)
+        from ...resume import resume_failure_status_for_exception
+
+        self._resume_quarantined = True
+        return TurnOutcome("failed", resume_failure_status_for_exception(exc))
 
     async def _emit_sandbox_failure(self, emit: AsyncEventSink, exc: Any) -> None:
         """Best-effort failure event; never block on a stalled sink."""
@@ -434,6 +469,12 @@ class CodexSdkRunner(AgentRunner):
             hello = await handshake_worker(reader, writer)
             adapter = CodexSdkSandboxAdapter()
             effective_cwd = getattr(getattr(plan, "context", None), "cwd", None) or resolved
+            resume = None
+            if self._resume_session_id:
+                resume = {
+                    "provider_session_id": self._resume_session_id,
+                    "provider_session_kind": self._resume_kind,
+                }
             payload = adapter.worker_open_payload_for_agent(
                 agent_id=self.name,
                 options=self.options,
@@ -442,6 +483,7 @@ class CodexSdkRunner(AgentRunner):
                 agent_env=agent_environment(self.agent),
                 codex_bin=_configured_codex_bin(self.agent),
                 verbose=self.verbose,
+                resume=resume,
             )
             session = SupervisedWorkerSession(
                 process,
@@ -512,9 +554,19 @@ class CodexSdkRunner(AgentRunner):
         except BackendUnavailable as exc:
             await emit(backend_unavailable_event(exc))
             exception_code = "provider_transport_failed"
+            if self._resume_session_id:
+                from ...resume import resume_failure_status_for_exception
+
+                self._resume_quarantined = True
+                exception_code = resume_failure_status_for_exception(exc)
         except Exception as exc:  # startup, auth, and turn errors reach the transcript
             await emit(sdk_error_event("codex", exc))
             exception_code = "provider_transport_failed"
+            if self._resume_session_id:
+                from ...resume import resume_failure_status_for_exception
+
+                self._resume_quarantined = True
+                exception_code = resume_failure_status_for_exception(exc)
 
         result = evidence.resolve(exception_code=exception_code)
         if _should_reset_after_outcome(result.outcome) and conversation is not None:
@@ -553,6 +605,8 @@ class CodexSdkRunner(AgentRunner):
                 )
             else:
                 self._conversation = factory(self.agent, self.options, resolved)
+            if self._resume_session_id:
+                self._conversation.note_session_id(self._resume_session_id)
             self._workdir = resolved
         elif self._workdir != resolved:
             raise RuntimeError("codex sdk conversation workdir changed between turns")

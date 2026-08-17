@@ -986,15 +986,15 @@ class AntigravityConversationLifecycleTests(unittest.TestCase):
 
         first, rejected, rejected_again = asyncio.run(scenario())
         self.assertEqual(first[1].outcome, "completed")
-        self.assertEqual(rejected[1].code, "provider_transport_failed")
-        self.assertEqual(rejected_again[1].code, "provider_transport_failed")
+        self.assertEqual(rejected[1].code, "resume_rejected")
+        self.assertEqual(rejected_again[1].code, "provider_session_quarantined")
         self.assertTrue(
             any(
                 event.type == "error" and "conversation not found" in event.text
                 for event in rejected[0]
             )
         )
-        self.assertEqual(resume_ids, [None, conversation_id, conversation_id])
+        self.assertEqual(resume_ids, [None, conversation_id])
         self.assertFalse(any(value is None for value in resume_ids[1:]))
 
     def test_unsupported_reopen_is_structured_without_new_agent(self):
@@ -1026,7 +1026,7 @@ class AntigravityConversationLifecycleTests(unittest.TestCase):
             return rejected
 
         events, outcome = asyncio.run(scenario())
-        self.assertEqual(outcome.code, "provider_transport_failed")
+        self.assertEqual(outcome.code, "resume_uncertain")
         self.assertTrue(any("strict resume is unsupported" in event.text for event in events))
         self.assertEqual(resume_ids, [None, conversation_id])
 
@@ -1461,7 +1461,7 @@ class SdkInterruptMappingTests(unittest.TestCase):
         caps = backends.capabilities_for("antigravity", "sdk")
         self.assertEqual(
             caps.to_dict(),
-            {"resume": False, "interrupt": False, "tool_gate": True, "continuity": True},
+            {"resume": True, "interrupt": False, "tool_gate": True, "continuity": True},
         )
         self.assertFalse(AntigravitySdkBackend().capabilities.interrupt)
 
@@ -1840,7 +1840,7 @@ class SdkSelectionTests(unittest.TestCase):
         self.assertEqual(
             entry["capabilities"],
             {
-                "resume": False,
+                "resume": True,
                 "interrupt": False,
                 "tool_gate": True,
                 "continuity": True,

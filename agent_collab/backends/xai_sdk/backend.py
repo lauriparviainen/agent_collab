@@ -155,9 +155,22 @@ class XaiSdkRunner(AgentRunner):
         self._conversation_factory = conversation_factory
         self._conversation: Optional[XaiConversation] = None
         self._workdir: Optional[Path] = None
+        self._resume_session_id: Optional[str] = None
+        self._resume_quarantined = False
 
     def conversation_active(self) -> bool:
+        if self._resume_quarantined:
+            return False
+        if self._resume_session_id:
+            return True
         return self._conversation is not None and self._conversation.active()
+
+    def seed_resume_descriptor(self, descriptor: Mapping[str, Any]) -> None:
+        session_id = descriptor.get("provider_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return
+        self._resume_session_id = session_id
+        self._resume_quarantined = False
 
     async def close(self) -> None:
         if self._conversation is not None:
@@ -241,6 +254,8 @@ class XaiSdkRunner(AgentRunner):
                 self.options,
                 resolved,
             )
+            if self._resume_session_id:
+                self._conversation.note_session_id(self._resume_session_id)
             self._workdir = resolved
         elif self._workdir != resolved:
             raise RuntimeError("xai sdk conversation workdir changed between turns")

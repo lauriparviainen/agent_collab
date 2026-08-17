@@ -56,8 +56,9 @@ the installed client with `approvalPolicy=on-request` and
 without the host handler. Production `tool_gate` remains false: in-process
 parks are proven; worker parks are not (issue #20). Inner worker
 `danger-full-access` remains the historical filesystem posture after
-outer proof; it also skips `requestApproval`. `resume` and `interrupt` remain
-false under their stricter public definitions (no restart-safe resume, no
+outer proof; it also skips `requestApproval`. `resume` is true: both
+worker and in-process paths passed a credentialed daemon-reload + public
+`resume_session` + delta-prompt proof. `interrupt` remains false (no
 credentialed interrupt proof). The adapter serializes run/reset/close;
 cancelling the asyncio waiter does not stop the provider — interrupt must
 go through `turn/interrupt`. Missing/incompatible runtime setup fails

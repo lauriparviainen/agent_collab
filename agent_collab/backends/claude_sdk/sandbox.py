@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
-from typing import Any, Mapping, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from ..claude_common import claude_accounting_peer_root
 from ...sandbox.plan import ResolvedSandboxPlan
@@ -110,6 +110,7 @@ class ClaudeSdkSandboxAdapter:
         cwd: Path,
         agent_env: Mapping[str, str],
         verbose: bool,
+        resume: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
         mapped = dict(options)
         # Outer Bubblewrap is the filesystem barrier. Do not force
@@ -121,16 +122,21 @@ class ClaudeSdkSandboxAdapter:
         if not isinstance(mode, str) or not mode.strip():
             mode = "default"
         mapped["permission_mode"] = mode
-        return {
-            "backend": "claude_sdk",
-            "agent_id": agent_id,
-            "workspace": str(workspace),
-            "cwd": str(cwd),
-            "options": mapped,
-            "agent_env": dict(agent_env),
-            "verbose": bool(verbose),
-            "native": {"permission_mode": mode},
-        }
+        from ...resume import attach_resume_block
+
+        return attach_resume_block(
+            {
+                "backend": "claude_sdk",
+                "agent_id": agent_id,
+                "workspace": str(workspace),
+                "cwd": str(cwd),
+                "options": mapped,
+                "agent_env": dict(agent_env),
+                "verbose": bool(verbose),
+                "native": {"permission_mode": mode},
+            },
+            resume,
+        )
 
 
 def _usable_config_dir(configured: object) -> bool:

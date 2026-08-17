@@ -113,7 +113,7 @@ class ClaudeSdkBackend:
     provider_session_id_kind = "session"
 
     def __init__(self, conversation_factory: Optional[ConversationFactory] = None) -> None:
-        self.capabilities = BackendCapabilities(continuity=True, tool_gate=True)
+        self.capabilities = BackendCapabilities(resume=True, continuity=True, tool_gate=True)
         self.checks_credentials = True
         # First-class but opt-in: a missing wheel / import failure fails the start
         # fast with an install hint instead of burning the first turn.
@@ -194,6 +194,9 @@ class ClaudeSdkRunner(AgentRunner):
         # not merely because a Bubblewrap worker process is still alive.
         self._worker_provider_active = False
         self._worker_soft_drop_cancelled = False
+        self._resume_session_id: Optional[str] = None
+        self._resume_kind = "session"
+        self._resume_quarantined = False
 
     async def _can_use_tool(self, tool_name: str, tool_input: dict, context: Any = None) -> Any:
         """In-process ``can_use_tool``: park in the session registry, no frames."""
@@ -208,6 +211,10 @@ class ClaudeSdkRunner(AgentRunner):
         )
 
     def conversation_active(self) -> bool:
+        if self._resume_quarantined:
+            return False
+        if self._resume_session_id:
+            return True
         if self._worker_terminal:
             return False
         if self._worker_session is not None:
@@ -229,6 +236,16 @@ class ClaudeSdkRunner(AgentRunner):
         if not callable(interrupt):
             return False
         return bool(await interrupt())
+
+    def seed_resume_descriptor(self, descriptor: Mapping[str, Any]) -> None:
+        session_id = descriptor.get("provider_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return
+        self._resume_session_id = session_id
+        kind = descriptor.get("provider_session_kind")
+        if isinstance(kind, str) and kind:
+            self._resume_kind = kind
+        self._resume_quarantined = False
 
     async def close(self) -> None:
         if self._worker_session is not None:
@@ -253,6 +270,16 @@ class ClaudeSdkRunner(AgentRunner):
             await self._conversation.close()
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
+        if self._resume_quarantined:
+            await emit(
+                Event.create(
+                    "error",
+                    "error",
+                    f"{self.name} provider conversation is quarantined",
+                    {"code": "provider_session_quarantined", "fatal": True},
+                )
+            )
+            return TurnOutcome("failed", "provider_session_quarantined")
         policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
         if policy is SandboxPolicy.READ_ONLY:
             return await self._run_turn_worker(prompt, workdir, emit)
@@ -312,15 +339,23 @@ class ClaudeSdkRunner(AgentRunner):
         except SandboxFailure as exc:
             await self._terminate_worker_session()
             await self._emit_sandbox_failure(emit, exc)
-            return TurnOutcome("failed", exc.code)
+            return self._resume_or_plain_failure(exc, exc.code)
         except WorkerProtocolError as exc:
             await self._terminate_worker_session()
             await self._emit_sandbox_failure(emit, exc)
-            return TurnOutcome("failed", exc.code)
+            return self._resume_or_plain_failure(exc, exc.code)
         except Exception as exc:
             await self._terminate_worker_session()
             await emit(sdk_error_event("claude", exc))
-            return TurnOutcome("failed", "provider_transport_failed")
+            return self._resume_or_plain_failure(exc, "provider_transport_failed")
+
+    def _resume_or_plain_failure(self, exc: BaseException, fallback: str) -> TurnOutcome:
+        if not self._resume_session_id:
+            return TurnOutcome("failed", fallback)
+        from ...resume import resume_failure_status_for_exception
+
+        self._resume_quarantined = True
+        return TurnOutcome("failed", resume_failure_status_for_exception(exc))
 
     async def _emit_sandbox_failure(self, emit: AsyncEventSink, exc: Any) -> None:
         try:
@@ -444,6 +479,12 @@ class ClaudeSdkRunner(AgentRunner):
             hello = await handshake_worker(reader, writer)
             adapter = ClaudeSdkSandboxAdapter()
             effective_cwd = getattr(getattr(plan, "context", None), "cwd", None) or resolved
+            resume = None
+            if self._resume_session_id:
+                resume = {
+                    "provider_session_id": self._resume_session_id,
+                    "provider_session_kind": self._resume_kind,
+                }
             payload = adapter.worker_open_payload_for_agent(
                 agent_id=self.name,
                 options=self.options,
@@ -451,6 +492,7 @@ class ClaudeSdkRunner(AgentRunner):
                 cwd=effective_cwd,
                 agent_env=agent_environment(self.agent),
                 verbose=self.verbose,
+                resume=resume,
             )
             session = SupervisedWorkerSession(
                 process,
@@ -528,9 +570,19 @@ class ClaudeSdkRunner(AgentRunner):
         except BackendUnavailable as exc:
             await emit(backend_unavailable_event(exc))
             exception_code = "provider_transport_failed"
+            if self._resume_session_id:
+                from ...resume import resume_failure_status_for_exception
+
+                self._resume_quarantined = True
+                exception_code = resume_failure_status_for_exception(exc)
         except Exception as exc:  # startup, auth, resume, and turn errors reach the transcript
             await emit(sdk_error_event("claude", exc))
             exception_code = "provider_transport_failed"
+            if self._resume_session_id:
+                from ...resume import resume_failure_status_for_exception
+
+                self._resume_quarantined = True
+                exception_code = resume_failure_status_for_exception(exc)
         if not clean_close and exception_code is None:
             exception_code = "provider_transport_failed"
         result = evidence.resolve(exception_code=exception_code)
@@ -558,6 +610,8 @@ class ClaudeSdkRunner(AgentRunner):
                 )
             else:
                 self._conversation = factory(self.agent, self.options, resolved)
+            if self._resume_session_id:
+                self._conversation.note_session_id(self._resume_session_id)
             self._workdir = resolved
         elif self._workdir != resolved:
             raise RuntimeError("claude sdk conversation workdir changed between turns")

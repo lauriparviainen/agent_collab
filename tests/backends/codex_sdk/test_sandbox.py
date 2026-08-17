@@ -54,6 +54,23 @@ class CodexSdkSandboxAdapterTests(unittest.TestCase):
             self.assertEqual(payload["native"]["sandbox"], "danger-full-access")
             self.assertEqual(payload["cwd"], str(workspace / "sub"))
 
+    def test_worker_open_payload_attaches_typed_resume_block(self) -> None:
+        adapter = CodexSdkSandboxAdapter()
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            payload = adapter.worker_open_payload_for_agent(
+                agent_id="reviewer",
+                options={"model": "gpt-5.6-luna"},
+                workspace=workspace,
+                cwd=workspace,
+                agent_env={},
+                codex_bin=None,
+                verbose=False,
+                resume={"provider_session_id": "thread-1", "provider_session_kind": "thread"},
+            )
+            self.assertEqual(payload["resume"]["provider_session_id"], "thread-1")
+            self.assertEqual(payload["resume"]["provider_session_kind"], "thread")
+
 
 class CodexSdkWorkerLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_runner_close_force_tears_down_worker_when_cancelled(self) -> None:

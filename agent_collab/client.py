@@ -164,6 +164,11 @@ class AgentCollabClient:
             self._request("POST", f"/sessions/{session_id}/approvals", payload)
         )
 
+    def resume_session(self, session_id: str) -> SessionStateModel:
+        return SessionStateModel.from_dict(
+            self._request("POST", f"/sessions/{session_id}/resume", {})
+        )
+
     def stop_session(self, session_id: str) -> SessionStateModel:
         return SessionStateModel.from_dict(self._request("POST", f"/sessions/{session_id}/stop"))
 

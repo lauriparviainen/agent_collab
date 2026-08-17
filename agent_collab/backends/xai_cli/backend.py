@@ -24,6 +24,7 @@ from ..common.cli import (
 )
 from ..common.health import default_version_runner, probe_cli_backend, xai_cli_credentials
 from ..common.options import canonical_reasoning
+from .invocation import CLI_OWNERSHIP_FLAGS, finalize_xai_cli_invocation
 from .parser import XaiStreamingParser
 from .sandbox import XaiCliSandboxAdapter
 
@@ -45,6 +46,8 @@ class XaiCliBackend:
     event_fidelity = "message_first"
     provider_session_id_kind = "session"
     capabilities = BackendCapabilities()
+    cli_ownership_flags = CLI_OWNERSHIP_FLAGS
+    finalize_cli_invocation = staticmethod(finalize_xai_cli_invocation)
     sandbox_adapter = XaiCliSandboxAdapter()
     checks_credentials = True
     block_on_unavailable = True

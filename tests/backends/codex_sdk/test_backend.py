@@ -1296,7 +1296,7 @@ class CodexBackendSurfaceTests(unittest.TestCase):
         caps = backends.capabilities_for("codex", "sdk")
         self.assertEqual(
             caps.to_dict(),
-            {"resume": False, "interrupt": False, "tool_gate": False, "continuity": True},
+            {"resume": True, "interrupt": False, "tool_gate": False, "continuity": True},
         )
 
     def test_probe_reports_unavailable_with_install_hint(self):

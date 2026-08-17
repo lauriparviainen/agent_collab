@@ -96,9 +96,10 @@ The adapter publishes the live `ChatResponse` and issues
 without taking the run lock. Host `policy.ask_user("*")` is wired on the
 worker path and on in-process sessions that have a session approval
 callback. `tool_gate` is true: both production paths park `ask_user`
-for an explicit approve/deny (issue #20). `resume` and `interrupt`
-remain false under their stricter public definitions (no restart-safe
-resume; live interrupt abort is proven on both paths, but
+for an explicit approve/deny (issue #20). `resume` is true: both worker
+and in-process paths passed a credentialed daemon-reload + public
+`resume_session` + delta-prompt proof against the durable trajectory
+root. `interrupt` remains false (live abort is proven on both paths, but
 continue-after-interrupt fails at the session layer via
 `RequiredTurnFailed`).
 `LocalAgentConfig(workspaces=[...])`

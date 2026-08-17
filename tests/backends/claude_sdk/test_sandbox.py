@@ -107,6 +107,32 @@ class ClaudeSdkSandboxAdapterTests(unittest.TestCase):
             self.assertEqual(payload["options"]["permission_mode"], "bypassPermissions")
             self.assertEqual(payload["native"]["permission_mode"], "bypassPermissions")
 
+    def test_worker_open_payload_attaches_typed_resume_block(self) -> None:
+        adapter = ClaudeSdkSandboxAdapter()
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            payload = adapter.worker_open_payload_for_agent(
+                agent_id="reviewer",
+                options={"model": "sonnet"},
+                workspace=workspace,
+                cwd=workspace,
+                agent_env={},
+                verbose=False,
+                resume={"provider_session_id": "sess-resume", "provider_session_kind": "session"},
+            )
+            self.assertEqual(payload["resume"]["provider_session_id"], "sess-resume")
+            self.assertNotIn("conversation_id", payload)
+            with self.assertRaises(RuntimeError):
+                adapter.worker_open_payload_for_agent(
+                    agent_id="reviewer",
+                    options={"model": "sonnet"},
+                    workspace=workspace,
+                    cwd=workspace,
+                    agent_env={},
+                    verbose=False,
+                    resume={"provider_session_id": ""},
+                )
+
     def test_empty_or_home_config_dir_fails_closed(self) -> None:
         adapter = ClaudeSdkSandboxAdapter()
         with tempfile.TemporaryDirectory() as raw:

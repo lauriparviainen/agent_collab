@@ -839,7 +839,7 @@ class AntigravitySdkToolGateCapabilityTests(unittest.TestCase):
         caps = backends.capabilities_for("antigravity", "sdk")
         self.assertEqual(
             caps.to_dict(),
-            {"resume": False, "interrupt": False, "tool_gate": True, "continuity": True},
+            {"resume": True, "interrupt": False, "tool_gate": True, "continuity": True},
         )
 
 

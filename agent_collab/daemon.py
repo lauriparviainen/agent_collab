@@ -210,16 +210,21 @@ class SessionState:
     turn_outcomes: Optional[List[Dict[str, Any]]] = None
     settings: Optional[Dict[str, Any]] = None
     # Honest session-level capability summary: conservative AND of live backend
-    # flags plus the current capture set. Continuity can be true for all-SDK
-    # sessions at start; resumable/interruptible stay false until those backend
-    # flags flip. Re-evaluated after capture, turn commit, and restore.
+    # flags plus the current eligible-resume set (started agents) union
+    # unstarted selected members. Continuity can be true for all-SDK sessions
+    # at start; resumable stays false until every started agent holds a fully
+    # eligible descriptor, remaining members have no row, and every selected
+    # backend advertises resume. Re-evaluated after capture, turn commit, and
+    # restore.
     capabilities: Optional[Dict[str, bool]] = None
-    # Per-agent provider session identity captured from runner events, keyed by
-    # workflow agent id: {agent_id: {backend, provider_session_id,
-    # provider_session_kind}}. One uniform schema across providers (the provider's
-    # own term lives in provider_session_kind). Persisted, but nothing resumes it
-    # this stage — resume stays capability-false.
+    # Per-agent resume descriptor keyed by workflow agent id. Capture fields
+    # (backend, provider_session_id, provider_session_kind) plus handoff fields
+    # (backend_version, resume_fingerprint, last_turn_status, prompt_event_cursor,
+    # interrupt_acknowledged, quarantined). No credentials or raw SDK objects.
     agent_sessions: Optional[Dict[str, Dict[str, Any]]] = None
+    # Session-level workflow phase: completed planned-stage count and whether
+    # the referee was parked in the interactive input loop.
+    workflow_phase: Optional[Dict[str, Any]] = None
     # Park payload for a live approval wait. In-memory view only; stripped
     # before the session index is written.
     pending_approvals: List[Dict[str, Any]] = field(default_factory=list)
@@ -369,6 +374,7 @@ class _ManagedSession:
     appender_ready: asyncio.Event = field(default_factory=asyncio.Event)
     append_event: Optional[EventAppender] = None
     post_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    resume_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     turn_active: bool = False
     # True while the referee's interactive input loop is live and will consume a
     # posted message; set by the referee around _await_interactive_input and
@@ -378,8 +384,9 @@ class _ManagedSession:
     input_accepting: bool = False
     # Per-agent latest completed-turn answer pointer, keyed by agent id:
     # {agent_id: {text, event_id, timestamp}}. Recorded by the referee when a
-    # completed outcome commits; failed/refused turns contribute nothing. In
-    # memory only — restored sessions derive answers from persisted events.
+    # completed outcome commits; failed/refused turns contribute nothing.
+    # Restored sessions derive answers from persisted events; resume seeds
+    # this ledger from that derivation when the session becomes live again.
     answer_ledger: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     task: Optional[asyncio.Task] = None
     referee: Optional[Referee] = None
@@ -593,6 +600,7 @@ class SessionManager:
                 settings=prepared.settings,
                 capabilities=prepared.capabilities,
                 turn_outcomes=[],
+                workflow_phase={"completed_stages": 0, "parked_in_input_loop": False},
             )
             managed = _ManagedSession(
                 request=request,
@@ -885,36 +893,17 @@ class SessionManager:
 
     @staticmethod
     def _captured_resume_agent_ids(state: SessionState) -> FrozenSet[str]:
-        """Agent ids that currently hold a captured ``provider_session_id``.
+        """Ids treated as captured for the session-capability reducer.
 
-        Today's eligibility is capture alone. Stage 4 replaces "has a captured
-        id" with "holds a fully eligible resume descriptor" (captured id,
-        eligible last_turn_status, valid cursor, compatible fingerprint, not
-        quarantined, mock agents excluded).
+        Eligible descriptors plus selected non-mock agents that have never
+        been invoked (no ``agent_sessions`` row). An ineligible or quarantined
+        row is not unstarted. Capture alone is not readiness. One quarantined
+        agent empties the eligible set and therefore this set.
         """
 
-        # Mock/dry-run sessions cannot produce a true resumable; they contribute
-        # no capture set even if a provider id was recorded.
-        if state.mock or state.dry_run:
-            return frozenset()
-        agents = (state.settings or {}).get("agents") or {}
-        if not isinstance(agents, dict):
-            agents = {}
-        sessions = state.agent_sessions or {}
-        if not isinstance(sessions, dict):
-            return frozenset()
-        captured: Set[str] = set()
-        for agent_id, entry in sessions.items():
-            if not isinstance(agent_id, str) or not agent_id or not isinstance(entry, dict):
-                continue
-            provider_session_id = entry.get("provider_session_id")
-            if not isinstance(provider_session_id, str) or not provider_session_id:
-                continue
-            agent_entry = agents.get(agent_id)
-            if isinstance(agent_entry, dict) and agent_entry.get("type") == "mock":
-                continue
-            captured.add(agent_id)
-        return frozenset(captured)
+        from .resume import projection_captured_resume_agent_ids
+
+        return projection_captured_resume_agent_ids(state)
 
     @staticmethod
     def _project_session_capabilities(state: SessionState) -> Dict[str, bool]:
@@ -1003,6 +992,10 @@ class SessionManager:
 
     async def stop_session(self, session_id: str) -> SessionState:
         managed = self._get_managed(session_id)
+        async with managed.resume_lock:
+            return await self._stop_session_locked(managed)
+
+    async def _stop_session_locked(self, managed: _ManagedSession) -> SessionState:
         task = managed.task
         if managed.state.status in TERMINAL_STATUSES:
             return self._view_state(managed.state, "full", managed)
@@ -1105,93 +1098,124 @@ class SessionManager:
                 )
 
             # Revalidate on the event loop and build a detached unlink plan;
-            # the worker thread never touches manager state.
+            # the worker thread never touches manager state. Lock order is
+            # ``_prune_lock`` (already held) then per-session ``resume_lock``.
+            # Resume takes only ``resume_lock``, so this cannot deadlock.
             plans: List[Tuple[str, List[Path], List[Tuple[str, str]]]] = []
             candidates_by_id = {}
-            for candidate in selection.expired:
-                managed = self._sessions.get(candidate.session_id)
-                if managed is None:
-                    continue
-                state = managed.state
-                task = managed.task
-                if state.status not in TERMINAL_STATUSES or (task is not None and not task.done()):
-                    details.append(
-                        PruneSessionDetail(
-                            session_id=candidate.session_id,
-                            status=state.status,
-                            disposition="skipped_live",
-                            effective_at=candidate.effective_at.isoformat(),
+            held_resume_locks: List[asyncio.Lock] = []
+            try:
+                for candidate in selection.expired:
+                    managed = self._sessions.get(candidate.session_id)
+                    if managed is None:
+                        continue
+                    if self._resume_claim_blocks_prune(managed):
+                        details.append(
+                            PruneSessionDetail(
+                                session_id=candidate.session_id,
+                                status=managed.state.status,
+                                disposition="skipped_live",
+                                effective_at=candidate.effective_at.isoformat(),
+                            )
                         )
+                        continue
+                    await managed.resume_lock.acquire()
+                    if managed.state.status not in TERMINAL_STATUSES or (
+                        managed.task is not None and not managed.task.done()
+                    ):
+                        managed.resume_lock.release()
+                        details.append(
+                            PruneSessionDetail(
+                                session_id=candidate.session_id,
+                                status=managed.state.status,
+                                disposition="skipped_live",
+                                effective_at=candidate.effective_at.isoformat(),
+                            )
+                        )
+                        continue
+                    held_resume_locks.append(managed.resume_lock)
+                    plan = classify_transcript_paths(managed.state.to_dict(), session_dir)
+                    plans.append((candidate.session_id, plan.deletable, plan.preserved))
+                    candidates_by_id[candidate.session_id] = candidate
+
+                outcomes = await asyncio.to_thread(_execute_transcript_unlinks, plans, apply)
+
+                removable: List[str] = []
+                for session_id, deletable, preserved in plans:
+                    candidate = candidates_by_id[session_id]
+                    removed, preserved_fs, size, error = outcomes[session_id]
+                    detail = PruneSessionDetail(
+                        session_id=session_id,
+                        status=candidate.status,
+                        disposition="preview" if not apply else ("failed" if error else "pruned"),
+                        effective_at=candidate.effective_at.isoformat(),
+                        removed_files=removed,
+                        preserved_files=[
+                            {"path": path, "reason": reason}
+                            for path, reason in preserved + preserved_fs
+                        ],
+                        bytes_reclaimed=size,
+                        error=error,
                     )
-                    continue
-                plan = classify_transcript_paths(state.to_dict(), session_dir)
-                plans.append((candidate.session_id, plan.deletable, plan.preserved))
-                candidates_by_id[candidate.session_id] = candidate
+                    details.append(detail)
+                    if apply and error is None:
+                        removable.append(session_id)
 
-            outcomes = await asyncio.to_thread(_execute_transcript_unlinks, plans, apply)
+                index_error: Optional[str] = None
+                if apply and removable and self._index is not None:
+                    try:
+                        self._index.remove_many(removable)
+                    except OSError as exc:
+                        index_error = f"failed to rewrite session index: {exc}"
+                        self._log_lifecycle(index_error)
+                if apply and index_error is None:
+                    for session_id in removable:
+                        self._sessions.pop(session_id, None)
+                elif apply and index_error is not None:
+                    # Files may already be gone; the records stay so the next run
+                    # re-selects them and retries the index rewrite (convergence).
+                    for detail in details:
+                        if detail.session_id in removable and detail.disposition == "pruned":
+                            detail.disposition = "failed"
+                            detail.error = index_error
 
-            removable: List[str] = []
-            for session_id, deletable, preserved in plans:
-                candidate = candidates_by_id[session_id]
-                removed, preserved_fs, size, error = outcomes[session_id]
-                detail = PruneSessionDetail(
-                    session_id=session_id,
-                    status=candidate.status,
-                    disposition="preview" if not apply else ("failed" if error else "pruned"),
-                    effective_at=candidate.effective_at.isoformat(),
-                    removed_files=removed,
-                    preserved_files=[
-                        {"path": path, "reason": reason}
-                        for path, reason in preserved + preserved_fs
-                    ],
-                    bytes_reclaimed=size,
-                    error=error,
+                pruned = sum(1 for detail in details if detail.disposition == "pruned")
+                failed = sum(1 for detail in details if detail.disposition == "failed")
+                result = PruneResult(
+                    apply=apply,
+                    cutoff=cutoff.isoformat(),
+                    keep=keep,
+                    candidates=len(plans),
+                    pruned=pruned,
+                    failed=failed,
+                    bytes_reclaimed=sum(
+                        detail.bytes_reclaimed
+                        for detail in details
+                        if detail.disposition in {"pruned", "preview"}
+                    ),
+                    unparseable_records=self._count_unparseable_index_records(),
+                    sessions=details,
                 )
-                details.append(detail)
-                if apply and error is None:
-                    removable.append(session_id)
+                if apply:
+                    self._log_lifecycle(
+                        f"pruned {result.pruned} session(s), {result.failed} failure(s), "
+                        f"{result.bytes_reclaimed} bytes reclaimed, cutoff {result.cutoff}"
+                    )
+                return result
+            finally:
+                for lock in held_resume_locks:
+                    if lock.locked():
+                        lock.release()
 
-            index_error: Optional[str] = None
-            if apply and removable and self._index is not None:
-                try:
-                    self._index.remove_many(removable)
-                except OSError as exc:
-                    index_error = f"failed to rewrite session index: {exc}"
-                    self._log_lifecycle(index_error)
-            if apply and index_error is None:
-                for session_id in removable:
-                    self._sessions.pop(session_id, None)
-            elif apply and index_error is not None:
-                # Files may already be gone; the records stay so the next run
-                # re-selects them and retries the index rewrite (convergence).
-                for detail in details:
-                    if detail.session_id in removable and detail.disposition == "pruned":
-                        detail.disposition = "failed"
-                        detail.error = index_error
+    def _resume_claim_blocks_prune(self, managed: _ManagedSession) -> bool:
+        """True when a resume claim is live and prune must skip this session."""
 
-            pruned = sum(1 for detail in details if detail.disposition == "pruned")
-            failed = sum(1 for detail in details if detail.disposition == "failed")
-            result = PruneResult(
-                apply=apply,
-                cutoff=cutoff.isoformat(),
-                keep=keep,
-                candidates=len(plans),
-                pruned=pruned,
-                failed=failed,
-                bytes_reclaimed=sum(
-                    detail.bytes_reclaimed
-                    for detail in details
-                    if detail.disposition in {"pruned", "preview"}
-                ),
-                unparseable_records=self._count_unparseable_index_records(),
-                sessions=details,
-            )
-            if apply:
-                self._log_lifecycle(
-                    f"pruned {result.pruned} session(s), {result.failed} failure(s), "
-                    f"{result.bytes_reclaimed} bytes reclaimed, cutoff {result.cutoff}"
-                )
-            return result
+        if managed.resume_lock.locked():
+            return True
+        task = managed.task
+        if task is not None and not task.done():
+            return True
+        return False
 
     def _managed_session_dir(self) -> Path:
         return self.default_log_dir or GlobalDataPaths.resolve().session_dir
@@ -1456,9 +1480,10 @@ class SessionManager:
         )
 
     def _session_answers(self, managed: _ManagedSession) -> List[Dict[str, Any]]:
-        if managed.request is None:
-            # Restored session: the in-memory ledger is gone, so derive a
-            # best-effort answer per completed agent from the persisted events.
+        if managed.request is None or not managed.answer_ledger:
+            # Restored session, or resume that has not yet committed a new
+            # turn: the in-memory ledger is empty, so derive a best-effort
+            # answer per completed agent from the persisted events.
             return self._derive_restored_answers(managed)
         answers = []
         for agent_id, entry in managed.answer_ledger.items():
@@ -1518,6 +1543,18 @@ class SessionManager:
                     slot["final"] = entry
         return list(ledger.values())
 
+    def _seed_answer_ledger(self, managed: _ManagedSession) -> None:
+        managed.answer_ledger = {}
+        for answer in self._derive_restored_answers(managed):
+            agent_id = answer.get("agent_id")
+            if not isinstance(agent_id, str) or not agent_id:
+                continue
+            managed.answer_ledger[agent_id] = {
+                "text": str(answer.get("text", "")),
+                "event_id": int(answer.get("event_id", 0)),
+                "timestamp": str(answer.get("timestamp", "")),
+            }
+
     def read_transcript(self, session_id: str, *, tool_output: str = "summary") -> str:
         managed = self._get_managed(session_id)
         tool_output = self._normalize_tool_output(tool_output)
@@ -1549,13 +1586,40 @@ class SessionManager:
             tool_output,
         )
 
-    async def _run_session(self, managed: _ManagedSession) -> None:
+    async def _run_session(self, managed: _ManagedSession, *, resume: bool = False) -> None:
         request = managed.request
         if request is None:
             return
         state = managed.state
         workdir = Path(state.workdir)
         log_dir = Path(state.jsonl_path).parent
+        resume_events = None
+        resume_watermarks = None
+        resume_phase = None
+        resume_descriptors = None
+        if resume:
+            from .resume import normalize_workflow_phase, watermarks_from_descriptors
+
+            resume_events = [
+                Event.from_dict(item) for item in managed.events if isinstance(item, dict)
+            ]
+            resume_descriptors = {
+                agent_id: dict(entry)
+                for agent_id, entry in (state.agent_sessions or {}).items()
+                if isinstance(entry, dict)
+            }
+            resume_watermarks = watermarks_from_descriptors(resume_descriptors)
+            resume_phase = normalize_workflow_phase(state.workflow_phase)
+
+        async def commit_outcome(record, event, completed_stages=None, persist=True):
+            await self._record_turn_outcome(
+                managed,
+                record,
+                event,
+                completed_stages=completed_stages,
+                persist=persist,
+            )
+
         config = RefereeConfig(
             workflow=request.workflow,
             max_turns=int(request.max_turns),
@@ -1583,9 +1647,7 @@ class SessionManager:
             input_accepting_callback=lambda accepting: self._set_input_accepting(
                 managed, accepting
             ),
-            outcome_commit_callback=lambda record, event: self._record_turn_outcome(
-                managed, record, event
-            ),
+            outcome_commit_callback=commit_outcome,
             answer_commit_callback=lambda answer: self._record_session_answer(managed, answer),
             stop_signal=managed.stop_signal,
             # `sandbox_plan` is what a prepared start supplies and it wins outright.
@@ -1606,6 +1668,18 @@ class SessionManager:
             ],
             approval_generation=lambda: managed.approval_generation,
             wait_approval_generation=lambda seen: self._wait_approval_generation(managed, seen),
+            resume=resume,
+            resume_events=resume_events,
+            resume_watermarks=resume_watermarks,
+            resume_phase=resume_phase,
+            resume_descriptors=resume_descriptors,
+            resume_turn_outcomes=list(state.turn_outcomes or []),
+            prompt_handoff_callback=lambda agent_id, cursor: self._persist_prompt_handoff(
+                managed, agent_id, cursor
+            ),
+            phase_commit_callback=lambda completed, parked: self._persist_workflow_phase(
+                managed, completed, parked
+            ),
         )
 
         try:
@@ -1657,6 +1731,8 @@ class SessionManager:
         managed: _ManagedSession,
         record: TurnOutcomeRecord,
         boundary_event: Event,
+        completed_stages: Optional[int] = None,
+        persist: bool = True,
     ) -> None:
         outcomes = list(managed.state.turn_outcomes or [])
         if any(item.get("turn_id") == record.turn_id for item in outcomes):
@@ -1668,15 +1744,23 @@ class SessionManager:
         # the event-loop thread before the single watcher notification.
         managed.events.append(boundary_event.to_dict())
         self._maybe_capture_provider_session(managed, boundary_event)
+        self._persist_turn_status(managed, record)
+        if completed_stages is not None:
+            current = managed.state.workflow_phase or {}
+            managed.state.workflow_phase = {
+                "completed_stages": int(completed_stages),
+                "parked_in_input_loop": bool(current.get("parked_in_input_loop", False)),
+            }
         self._refresh_session_capabilities(managed.state)
-        self._persist(managed.state)
+        if persist:
+            self._persist(managed.state)
         self._schedule_notify(managed)
 
     def _maybe_capture_provider_session(self, managed: _ManagedSession, event: Event) -> None:
         # CLI and SDK runners emit a status event with trusted in-process
         # identity metadata (see backends.common.sdk.provider_session_event).
-        # Record it into central session state under one uniform schema; this is
-        # capture only — nothing resumes it and capabilities stay honest.
+        # Merge into the existing descriptor so a mid-turn capture cannot
+        # clobber handoff-persisted fields (cursor, status, fingerprint).
         identity = event.provider_session
         if identity is None:
             return
@@ -1714,6 +1798,275 @@ class SessionManager:
         managed.state.updated_at = utc_timestamp()
         self._refresh_session_capabilities(managed.state)
         self._persist(managed.state)
+
+    def _persist_turn_status(self, managed: _ManagedSession, record: TurnOutcomeRecord) -> None:
+        from .resume import last_turn_status_from_record
+
+        agent_id = record.agent_id
+        sessions = dict(managed.state.agent_sessions or {})
+        entry = dict(sessions.get(agent_id) or {})
+        status = last_turn_status_from_record(record)
+        entry["last_turn_status"] = status
+        if status in {"resume_rejected", "resume_uncertain"}:
+            entry["quarantined"] = True
+        if "interrupt_acknowledged" not in entry:
+            entry["interrupt_acknowledged"] = False
+        if record.backend and not entry.get("backend"):
+            entry["backend"] = record.backend
+        sessions[agent_id] = entry
+        managed.state.agent_sessions = sessions
+
+    async def _persist_prompt_handoff(
+        self, managed: _ManagedSession, agent_id: str, cursor: int
+    ) -> None:
+        from .resume import compute_resume_fingerprint, fingerprint_from_session
+
+        sessions = dict(managed.state.agent_sessions or {})
+        entry = dict(sessions.get(agent_id) or {})
+        entry["prompt_event_cursor"] = int(cursor)
+        entry["last_turn_status"] = "in_flight"
+        if "interrupt_acknowledged" not in entry:
+            entry["interrupt_acknowledged"] = False
+        fingerprint = fingerprint_from_session(managed.state, agent_id)
+        if fingerprint is None:
+            agent_type, backend_id = self._agent_type_and_backend(managed, agent_id)
+            if agent_type and backend_id:
+                fingerprint = compute_resume_fingerprint(
+                    agent_type=agent_type,
+                    backend_id=backend_id,
+                    workdir=managed.state.workdir,
+                )
+        if fingerprint is not None:
+            entry["resume_fingerprint"] = fingerprint
+            if fingerprint.get("backend_version") and not entry.get("backend_version"):
+                entry["backend_version"] = fingerprint["backend_version"]
+        backend_id = entry.get("backend")
+        if not backend_id:
+            _agent_type, backend_id = self._agent_type_and_backend(managed, agent_id)
+            if backend_id:
+                entry["backend"] = backend_id
+        sessions[agent_id] = entry
+        managed.state.agent_sessions = sessions
+        managed.state.updated_at = utc_timestamp()
+        self._refresh_session_capabilities(managed.state)
+        self._persist(managed.state)
+
+    async def _persist_workflow_phase(
+        self, managed: _ManagedSession, completed_stages: int, parked: bool
+    ) -> None:
+        managed.state.workflow_phase = {
+            "completed_stages": int(completed_stages),
+            "parked_in_input_loop": bool(parked),
+        }
+        managed.state.updated_at = utc_timestamp()
+        self._refresh_session_capabilities(managed.state)
+        self._persist(managed.state)
+
+    def _agent_type_and_backend(
+        self, managed: _ManagedSession, agent_id: str
+    ) -> Tuple[Optional[str], Optional[str]]:
+        request = managed.request
+        backend_id = None
+        agent_type = None
+        if request and request.resolved_backends:
+            backend_id = request.resolved_backends.get(agent_id)
+        if request and request.collab_config:
+            agent = request.collab_config.agents.get(agent_id)
+            if agent is not None:
+                agent_type = agent.type
+        entry = ((managed.state.settings or {}).get("agents") or {}).get(agent_id) or {}
+        if isinstance(entry, dict):
+            if not agent_type and isinstance(entry.get("type"), str):
+                agent_type = entry["type"]
+            if not backend_id and isinstance(entry.get("backend"), str):
+                backend_id = entry["backend"]
+        return agent_type, backend_id
+
+    async def resume_session(self, session_id: str) -> SessionState:
+        from .resume import ResumeError
+
+        managed = self._get_managed(session_id)
+        async with managed.resume_lock:
+            if self._sessions.get(session_id) is not managed:
+                raise ResumeError("not_found", f"unknown session_id {session_id}")
+            return await self._resume_session_locked(managed)
+
+    async def _resume_session_locked(self, managed: _ManagedSession) -> SessionState:
+        from .resume import (
+            ResumeError,
+            session_is_live_for_resume,
+            validate_session_resume,
+        )
+
+        task = managed.task
+        task_running = task is not None and not task.done()
+        if session_is_live_for_resume(managed.state, task_running=task_running):
+            raise ResumeError("conflict", "session is live")
+        events = []
+        jsonl_path = Path(managed.state.jsonl_path)
+        if jsonl_path.is_file():
+            events = await asyncio.to_thread(_load_events_from_jsonl, jsonl_path)
+        if not events:
+            events = list(managed.events)
+        claim = validate_session_resume(managed.state, transcript_len=len(events))
+        request = self._request_from_restored_state(managed.state)
+        try:
+            prepared = await asyncio.to_thread(self._prepare_session_start, request)
+        except StartOptionsError as exc:
+            raise ResumeError("incompatible", str(exc)) from exc
+        except SessionRequestError as exc:
+            raise ResumeError("incompatible", str(exc)) from exc
+        try:
+            self._validate_resume_backends(managed.state, prepared, claim["descriptors"])
+            request.backend_options = prepared.normalized_options
+            request.agent_options = prepared.agent_options
+            request.resolved_backends = prepared.agent_backends
+            request.collab_config = prepared.collab_config
+            request.sandbox_plan = prepared.sandbox_plan
+            request.interactive_idle_timeout = prepared.interactive_idle_timeout
+            request.approval_deadline = prepared.approval_deadline
+            managed.request = request
+            managed.state.settings = prepared.settings
+            managed.events = events
+            self._seed_answer_ledger(managed)
+            managed.input_queue = _TrackedInputQueue()
+            managed.input_queue.set_task_done_hook(lambda: self._schedule_notify(managed))
+            managed.turn_active = False
+            managed.input_accepting = False
+            managed.referee = None
+            managed.stop_signal = RefereeStopSignal()
+            managed.append_event = None
+            managed.appender_ready = asyncio.Event()
+            self._reopen_for_resume(managed)
+            self._refresh_session_capabilities(managed.state)
+            self._persist(managed.state)
+            managed.task = asyncio.create_task(
+                self._run_session(managed, resume=True),
+                name=f"agent-collab-session-{managed.state.session_id}",
+            )
+            self._log_lifecycle(
+                f"session {managed.state.session_id} resumed workflow={managed.state.workflow}"
+            )
+            return self._view_state(managed.state, "full", managed)
+        except Exception:
+            self._cleanup_sandbox_plan_roots(prepared.sandbox_plan, failed_start=True)
+            raise
+
+    def _request_from_restored_state(self, state: SessionState) -> StartSessionRequest:
+        from .resume import backend_options_from_settings, members_from_settings
+
+        settings = state.settings or {}
+        sandbox = settings.get("sandbox") if isinstance(settings, dict) else None
+        requested = None
+        if isinstance(sandbox, dict):
+            raw = sandbox.get("requested")
+            if isinstance(raw, str) and raw:
+                requested = raw
+        try:
+            config = load_config(Path(state.workdir))
+            workflow = config.workflows.get(state.workflow)
+        except ConfigError:
+            config = None
+            workflow = None
+        members = members_from_settings(settings, workflow) if config is not None else None
+        return StartSessionRequest(
+            task=state.task,
+            workflow=state.workflow,
+            workdir=state.workdir,
+            max_turns=state.max_turns,
+            timeout=state.timeout,
+            mock=state.mock,
+            dry_run=state.dry_run,
+            interactive=state.interactive,
+            interactive_idle_timeout=state.interactive_idle_timeout,
+            approval_deadline=state.approval_deadline,
+            session_id=state.session_id,
+            sandbox=requested,
+            backend_options=backend_options_from_settings(settings),
+            members=members,
+        )
+
+    def _validate_resume_backends(
+        self,
+        state: SessionState,
+        prepared: Any,
+        descriptors: Mapping[str, Mapping[str, Any]],
+    ) -> None:
+        from . import backends as backend_registry
+        from .resume import ResumeError, fingerprints_match, fingerprint_from_session
+
+        persisted_agents = (state.settings or {}).get("agents") or {}
+        if not isinstance(persisted_agents, dict):
+            persisted_agents = {}
+        prepared_backends = dict(prepared.agent_backends or {})
+        for agent_id, entry in persisted_agents.items():
+            if not isinstance(entry, dict) or entry.get("type") == "mock":
+                continue
+            if agent_id not in prepared_backends:
+                raise ResumeError(
+                    "incompatible",
+                    f"agent {agent_id!r} disappeared or is disabled after reload",
+                )
+            expected_backend = entry.get("backend")
+            if (
+                isinstance(expected_backend, str)
+                and expected_backend
+                and prepared_backends.get(agent_id) != expected_backend
+            ):
+                raise ResumeError(
+                    "incompatible",
+                    f"agent {agent_id!r} backend changed after reload",
+                )
+        for agent_id, backend_id in prepared_backends.items():
+            agent = prepared.collab_config.agents.get(agent_id)
+            if agent is None or not agent.enabled:
+                raise ResumeError(
+                    "incompatible",
+                    f"agent {agent_id!r} disappeared or is disabled after reload",
+                )
+            caps = backend_registry.capabilities_for(agent.type, backend_id)
+            if not caps.resume:
+                raise ResumeError(
+                    "incompatible",
+                    f"backend {agent.type}_{backend_id} does not advertise restart-safe resume",
+                )
+            if agent_id not in descriptors:
+                continue
+            stored = (descriptors.get(agent_id) or {}).get("resume_fingerprint")
+            current = fingerprint_from_session(state, agent_id)
+            # Recompute against the reloaded settings snapshot once assigned.
+            reloaded_state = SessionState(
+                session_id=state.session_id,
+                status=state.status,
+                task=state.task,
+                workflow=state.workflow,
+                workdir=str(prepared.workdir),
+                jsonl_path=state.jsonl_path,
+                markdown_path=state.markdown_path,
+                created_at=state.created_at,
+                updated_at=state.updated_at,
+                max_turns=state.max_turns,
+                timeout=state.timeout,
+                mock=state.mock,
+                dry_run=state.dry_run,
+                interactive=state.interactive,
+                settings=prepared.settings,
+            )
+            current = fingerprint_from_session(reloaded_state, agent_id) or current
+            if not fingerprints_match(stored, current):
+                raise ResumeError(
+                    "incompatible",
+                    f"resume fingerprint for agent {agent_id!r} does not match reloaded config",
+                )
+
+    def _reopen_for_resume(self, managed: _ManagedSession) -> None:
+        state = managed.state
+        state.status = RUNNING
+        state.ended_at = None
+        state.error = None
+        state.failure = None
+        state.updated_at = utc_timestamp()
+        self._persist(state)
 
     async def _set_event_appender(
         self, managed: _ManagedSession, appender: Optional[EventAppender]

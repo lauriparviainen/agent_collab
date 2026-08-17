@@ -1,8 +1,10 @@
 # Provider session control: interrupt, tool approval, restart-safe resume
 
 **Status:** Open. Continuity shipped (#47); production `claude_sdk.tool_gate`
-and `antigravity_sdk.tool_gate` are true. `interrupt` and `resume` remain
-false for every backend, and `tool_gate` remains false for Codex and xAI.
+and `antigravity_sdk.tool_gate` are true. Production `antigravity_sdk.resume`,
+`claude_sdk.resume`, and `codex_sdk.resume` are true. `interrupt` remains
+false for every backend; CLI and `xai_sdk` `resume` remain false;
+`tool_gate` remains false for Codex and xAI.
 xAI Stage 3 interrupt and tool_gate are recorded negatives.
 Design resynced 2026-07-30 against 0.13.0,
 which made the outer read-only Bubblewrap worker the default execution path and
@@ -190,13 +192,30 @@ take it:
    `worker_open_payload_for_agent(conversation_id=...)` → `open` +
    `note_session_id`; a parent-process factory spy cannot observe
    worker-side Agent construction. The trajectory directory still existed
-   after session stop. Production `antigravity_sdk.resume` stays false.
-   Remaining two increments: persisted explicit resume plus its public
-   operation; and turn-level interrupt public surfaces. Mind the pieces
-   added in review: the session-level workflow-phase record (no stage
-   replay on resume), the atomic per-session resume claim, the
-   `interrupt_acknowledged` eligibility marker, and the `xai_sdk`
-   close-deletes-resume-material conflict.
+   after session stop. Increment 4 later flipped `antigravity_sdk.resume`
+   after both-path reload proof. Increment 4 landed persisted explicit resume and the public operation:
+   `POST /sessions/{id}/resume`, `agent_collab_resume`,
+   `agent-collab resume`, and TUI `/resume`. Descriptors now carry
+   `backend_version`, `resume_fingerprint`, `last_turn_status`,
+   `prompt_event_cursor`, and `interrupt_acknowledged`. Eligibility is
+   `completed` only; one quarantined agent makes session resume
+   permanently unavailable. The referee restores the session-level
+   workflow phase and does not replay completed stages. Resume seeds
+   `_next_turn_number` and `_committed_turn_ids` from persisted
+   `turn_outcomes` so the next directed turn cannot collide with
+   `turn-1`. Concurrent resumes serialize on `resume_lock` (one winner,
+   HTTP 409). Capture alone no longer projects `resumable`. Production `antigravity_sdk.resume`,
+   `claude_sdk.resume`, and `codex_sdk.resume` are true: both worker and
+   in-process credentialed daemon-reload + `resume_session` + delta-prompt
+   proofs passed (2026-08-18). CLI `resume` stays false: Claude, Grok,
+   and Antigravity CLI directs passed, but every outer path was skipped
+   (dedicated sandbox-state env unset). Codex CLI never reached resume
+   (first ordinary turn `subprocess_exit_nonzero`).
+   `antigravity_cli.continuity` stays false
+   (`AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE` unset). `xai_sdk.resume`
+   stays false (close still deletes stored completions). Remaining
+   increment 5: turn-level interrupt public surfaces. Do not add
+   `wait_approval`, `list_approvals`, or `interrupt` MCP tools.
 
 ## Purpose and scope
 
@@ -471,20 +490,33 @@ Four properties of that transport decide the designs below:
 
 ### What is persisted today
 
-`_maybe_capture_provider_session` (`agent_collab/daemon.py`) writes, per agent,
-into `SessionState.agent_sessions`:
+`_maybe_capture_provider_session` is a keyed merge into
+`SessionState.agent_sessions`. Capture updates identity only and does not
+clobber handoff-persisted fields. The increment-4 descriptor is:
 
 ```json
-{"backend": "codex_cli", "provider_session_id": "...", "provider_session_kind": "thread"}
+{
+  "backend": "codex_cli",
+  "provider_session_id": "...",
+  "provider_session_kind": "thread",
+  "backend_version": "...",
+  "resume_fingerprint": {"provider_type": "...", "backend": "...", "workdir": "..."},
+  "last_turn_status": "completed",
+  "prompt_event_cursor": 123,
+  "interrupt_acknowledged": false,
+  "quarantined": false
+}
 ```
 
-Identity is accepted only from a selected agent whose `event.source` matches its
-configured provider type. The Claude, Codex, and Grok CLI parsers already emit
-their provider identity (`session_id`, `thread_id`, and `sessionId`
-respectively); the shipped Antigravity plain-text parser does not, while its new
-structured print shape is unverified. Identity is **capture only** — nothing
-resumes it. The `backend_version`, `resume_fingerprint`, and `last_turn_status`
-fields proposed under the resume design do not exist yet.
+No credentials or raw SDK objects. The fingerprint is a structured object
+(provider type, canonical backend, binary/SDK identity and version, model,
+workdir, permission/sandbox posture and execution path, provider state-root
+*kind*, normalized static config). Q7 floors are included only when
+re-verified (`antigravity_cli` `1.1.8` only). Session-level
+`workflow_phase` records `{completed_stages, parked_in_input_loop}`.
+Identity is accepted only from a selected agent whose `event.source`
+matches its configured provider type. Claude, Codex, Grok, and Antigravity
+CLI/SDK parsers emit provider identity. Capture alone is not readiness.
 
 ## Capability semantics and decisions
 
@@ -766,17 +798,14 @@ Stage 3 negatives, not as unverified work.
 
 Capabilities remain facts declared by each concrete backend; the reducer
 (`summarize_session_capabilities`) keeps its conservative AND shape when
-inputs flip, but its shipped second input is still capture alone
-(`captured_session_ids`). Start-time `_session_capabilities` still passes an
-empty set — no descriptor exists yet. The live production projection
-re-evaluates through the same reducer after identity capture, turn commit,
-and restore, supplying the agent ids that currently hold a captured
-`provider_session_id`. Stage 4 must replace that capture-only set with, per
-agent, "holds a fully eligible resume descriptor" — captured id, eligible
-`last_turn_status`, valid `prompt_event_cursor`, compatible fingerprint, not
-quarantined, mock agents excluded — or the projection will report
-`resumable` wrongly in both directions: stuck false because nothing is
-eligible, or true for sessions the operation must reject.
+inputs flip. Start-time `_session_capabilities` still passes an empty set —
+no descriptor exists yet. The live production projection re-evaluates
+through the same reducer after identity capture, turn commit, and restore,
+supplying the agent ids that currently hold a *fully eligible* resume
+descriptor: captured id, `last_turn_status=completed`, valid
+`prompt_event_cursor`, well-formed fingerprint, not quarantined, mock
+agents excluded. Capture alone is not readiness and does not project
+`resumable`. One quarantined agent empties the eligible set.
 Wiring the start-time call site alone remains wrong: `_session_capabilities`
 runs during start preparation and would freeze `SessionState.capabilities`
 with no descriptor possible, pinning `resumable` false for the session's
@@ -1689,7 +1718,9 @@ the feature. A skipped provider keeps the production capability false.
   launch paths, while `resume` additionally requires persisted cursor and
   fingerprint validation, daemon reload, and the explicit public operation;
   `antigravity_cli` may advertise `continuity` only after both launch paths
-  pass the credentialed two-turn proof; `resume` stays false until increment 4.
+  pass the credentialed two-turn proof; increment 4 landed the public
+  resume operation, but `resume` stays false until continuity is true on
+  both launch paths *and* the reload + public-operation proof also passes.
 - Before `xai_cli` flips either flag, configured `--continue`, `--resume`,
   `--session-id`, and related ownership selectors are rejected under both
   sandbox policies; only the typed internal descriptor may select a session.
@@ -1779,9 +1810,10 @@ the feature. A skipped provider keeps the production capability false.
    `resume` stays false. `continuity` stays false until both launch paths
    pass the credentialed two-turn proof. (Stage 4)
 7. What minimum CLI versions or feature probes should gate the other strict
-   resume builders? `antigravity_cli` is decided at `agy >= 1.1.8`. The binary
-   identity/version belongs in the fingerprint, but Claude, Codex, and Grok
-   still need durable compatibility rules. (Stage 4)
+   resume builders? `antigravity_cli` is decided at `agy >= 1.1.8` and that
+   floor is the only `version_floor` written into the resume fingerprint.
+   Claude, Codex, and Grok floors were not re-verified in increment 4 and
+   were not invented. (Stage 4)
 8. Grok's current documentation describes `--session-id` differently from the
    installed 0.2.112 help, which says it creates a new session and must not
    already exist. Re-verify on upgrade; use explicit `--resume`, never
@@ -1850,9 +1882,12 @@ the tests, not this document, are their guarantee.
   `CLAUDE_CONFIG_DIR`, so the local session material needed by a later process
   is host-persistent.
 - *[negative]* `--no-session-persistence` is incompatible with advertised
-  resume. The exact two-process reconnect and unknown-id failure behavior still
-  require a credentialed smoke test on both launch paths before either flag
-  flips.
+  resume. Increment 4 landed the `--resume <id>` finalizer on both launch
+  paths. 2026-08-18 live: the direct (`sandbox=none`) daemon-reload +
+  public-resume + delta-prompt proof passed. The outer
+  (`sandbox=read-only`) proof was skipped because
+  `AGENT_COLLAB_IT_CLAUDE_SANDBOX_STATE` was unset; that skip does not
+  flip the flag. Production `claude_cli.resume` stays false.
 - *[interrupt/tool_gate]* The one-shot print transport has no verified
   bidirectional control path; both remain false even when resume ships.
 
@@ -1880,9 +1915,14 @@ the tests, not this document, are their guarantee.
   falls back to `thread/start` for selected not-found errors; agent-collab must
   deliberately differ and fail the resume because its capability contract
   forbids silent fresh sessions.
-- *[negative]* The exact two-process reconnect and unknown-id failure behavior
-  still require a credentialed smoke test on both launch paths before either
-  flag flips. One-shot CLI interrupt/tool gating remain false.
+- *[negative]* Increment 4 landed the `codex exec resume` finalizer on both
+  launch paths. 2026-08-18 live: the direct (`sandbox=none`) reload proof
+  never reached resume — the first ordinary turn failed
+  `subprocess_exit_nonzero` (exit 1), and a separate basic live turn
+  failed the same way. The outer proof was skipped because
+  `AGENT_COLLAB_IT_CODEX_SANDBOX_STATE` was unset. Production
+  `codex_cli.resume` stays false. One-shot CLI interrupt/tool gating
+  remain false.
 
 ### xai_cli — Grok CLI 0.2.112 (verified 2026-07-30)
 
@@ -1893,18 +1933,22 @@ the tests, not this document, are their guarantee.
 - *[resume substrate]* The shipped parser captures `end.sessionId` as provider
   identity kind `session`, and the outer-sandbox adapter preserves the complete
   effective `GROK_HOME`.
-- *[safety]* The current outer-sandbox audit rejects user-configured
-  `--continue`, `--resume`, and related ownership-changing shapes, but does not
-  yet reject `--session-id`. Stage 4 must add that rejection for both sandbox
-  policies. Resume then uses only the typed finalizer path after the captured id
-  and sandbox descriptor are validated.
+- *[safety]* The outer-sandbox audit and `prepare_cli_invocation` reject
+  user-configured `--continue`, `--resume`, `--fork-session`, and
+  `--session-id` under both sandbox policies. Resume uses only the typed
+  finalizer path (`grok --resume <id>`) after the captured id and
+  descriptor are validated. Recorded 2026-08-18.
 - *[version caveat]* The official page currently describes `--session-id` as
   create-or-resume, while installed help says it creates a new session and the
   id must not already exist. Treat the installed pin's explicit `--resume` as
   authoritative for implementation and re-verify this mismatch on upgrade.
-- *[negative]* The exact two-process reconnect and unknown-id failure behavior
-  still require a credentialed smoke test on both launch paths. One-shot CLI
-  interrupt/tool gating remain false.
+- *[negative]* Increment 4 landed the `grok --resume <id>` finalizer and
+  `--session-id` rejection on both launch paths. 2026-08-18 live: the
+  direct (`sandbox=none`) daemon-reload + public-resume + delta-prompt
+  proof passed. The outer (`sandbox=read-only`) proof was skipped
+  because `AGENT_COLLAB_IT_XAI_SANDBOX_STATE` was unset; that skip does
+  not flip the flag. Production `xai_cli.resume` stays false. One-shot
+  CLI interrupt/tool gating remain false.
 
 ### antigravity_cli — `agy` 1.1.8 floor, installed 1.1.13 (verified 2026-08-16)
 
@@ -1914,7 +1958,14 @@ the tests, not this document, are their guarantee.
   expose `--conversation <conversation-id>` and `--continue`. Only the explicit
   id form is acceptable. Increment 2 uses `--conversation <id>` for in-session
   continuation after a completed capture. `--continue` is never used.
-  Persisted explicit resume remains increment 4.
+  Increment 4 landed the public resume operation. 2026-08-18 live: the
+  direct (`sandbox=none`) daemon-reload + public-resume + delta-prompt
+  proof passed. The outer (`sandbox=read-only`) proof was skipped
+  because `AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE` was unset;
+  `continuity` stays false for the same reason. Production
+  `antigravity_cli.resume` stays false until `continuity` is true on
+  both launch paths and the reload + public-operation proof also
+  passes.
 - *[resume opportunity]* Print-mode `--output-format stream-json` emits typed
   `init`, `step_update`, and terminal `result` events. A stable **root**
   conversation id is present on `init.conversation_id` (top-level),
@@ -1949,6 +2000,16 @@ the tests, not this document, are their guarantee.
   `integration_tests/backends/claude_sdk/test_live.py::test_provider_memory_across_interactive_turns`.
 - *[resume]* After `disconnect()`, `ClaudeAgentOptions(resume=<sid>,
   fork_session=False)` reconnects the exact captured id with memory intact.
+  Increment 4 landed the public resume operation and a typed worker
+  `resume` block. 2026-08-18 live: both worker (`sandbox=read-only`) and
+  in-process (`sandbox=none`) daemon-reload + `resume_session` +
+  delta-prompt proofs passed. After SessionManager A completed one
+  interactive turn and SessionManager B restored the same isolated
+  home/index, public resume re-entered the input loop, the delta
+  recalled the first-turn project id, the transcript appended without
+  re-emitting the task, and the resumed prompt cursor started at the
+  persisted `prompt_event_cursor`. Production `claude_sdk.resume` is
+  therefore true.
 - *[resume]* An unknown id fails `connect()` with `ProcessError` (CLI exit 1,
   "No conversation found with session ID") — never a silent fresh session.
 - *[resume]* A session materializes incrementally during its first turn: a
@@ -2022,7 +2083,16 @@ the tests, not this document, are their guarantee.
   `integration_tests/backends/codex_sdk/test_live.py::test_provider_memory_across_interactive_turns`.
 - *[resume]* `AsyncCodex.thread_resume(thread_id, ...)` reopens a materialized
   thread after the first client closes; a one-turn fixture resumed the exact id
-  and read its persisted turn.
+  and read its persisted turn. Increment 4 landed the public resume
+  operation and a typed worker `resume` block. 2026-08-18 live: both
+  worker (`sandbox=read-only`) and in-process (`sandbox=none`)
+  daemon-reload + `resume_session` + delta-prompt proofs passed. After
+  SessionManager A completed one interactive turn and SessionManager B
+  restored the same isolated home/index, public resume re-entered the
+  input loop, the delta recalled the first-turn project id, the
+  transcript appended without re-emitting the task, and the resumed
+  prompt cursor started at the persisted `prompt_event_cursor`.
+  Production `codex_sdk.resume` is therefore true.
 - *[resume]* A no-model `thread_start` alone does not materialize the thread
   (`includeTurns` is rejected before the first user message), so one lowest-cost
   turn is the minimum reconnect fixture. Starting a new thread with the same
@@ -2115,8 +2185,10 @@ the tests, not this document, are their guarantee.
   only labels OpenTelemetry spans.
 - *[resume]* An unknown stored id fails with gRPC `NOT_FOUND`, so continuation
   failure is structural. The adapter deletes captured stored completions
-  best-effort on final close, which restart-safe resume would have to reconcile
-  with retention.
+  best-effort on final close. Increment 4 recorded this as a completed
+  negative (2026-08-18): close was left as-is, so `xai_sdk.resume` stays
+  false. Flipping it requires close to retain the stored-response chain
+  and retention to own its lifetime.
 - *[interrupt]* **Permanently false (re-verified 2026-08-16).** Installed
   `xai_sdk.aio.chat.Chat.sample()` is one unary gRPC `GetCompletion`
   (`channel.unary_unary`). `Chat` and collected `Response` have no
@@ -2179,8 +2251,17 @@ the tests, not this document, are their guarantee.
   reopened the same captured id against that `save_dir` and recalled
   first-turn memory; the directory still existed after session stop.
   In-process factory calls are observable in the parent; worker-side
-  Agent construction is not. The public `resume` flag stays false — see
-  *Durable trajectory root*.
+  Agent construction is not.   Increment 4 landed the public resume
+  operation and a typed worker `resume` block. 2026-08-18 live: both
+  worker (`sandbox=read-only`) and in-process (`sandbox=none`)
+  daemon-reload + `resume_session` + delta-prompt proofs passed on
+  Vertex `gemini-2.5-flash`. After SessionManager A completed one
+  interactive turn and SessionManager B restored the same isolated
+  home/index, public resume re-entered the input loop, the delta
+  recalled the first-turn project id, the transcript appended without
+  re-emitting the task, and the resumed prompt cursor started at the
+  persisted `prompt_event_cursor`. Production `antigravity_sdk.resume`
+  is therefore true. See *Durable trajectory root*.
 - *[tool_gate]* Installed `google-antigravity` 0.1.8
   `LocalAgentConfig.policies` default is `confirm_run_command()`:
   denies `run_command`, allows all other tools including file write.

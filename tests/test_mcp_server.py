@@ -116,7 +116,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_stop", names)
         self.assertIn("agent_collab_guidance", names)
         self.assertNotIn("agent_collab_interrupt", names)
-        self.assertNotIn("agent_collab_resume", names)
+        self.assertIn("agent_collab_resume", names)
         self.assertNotIn("agent_collab_wait_approval", names)
         self.assertNotIn("agent_collab_list_approvals", names)
 
@@ -259,6 +259,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("timeout_ms is not the approval deadline", instructions)
         self.assertIn("agent_collab_approval", instructions)
         self.assertIn("approval_request", instructions)
+        self.assertIn("agent_collab_resume", instructions)
 
     def test_event_tools_advertise_projection_arguments(self):
         tools = {tool["name"]: tool for tool in TOOLS}
@@ -692,6 +693,33 @@ class McpServerTests(unittest.TestCase):
 
         client.stop_session.assert_called_once_with("s1")
         _assert_tool_result(self, result, state.to_dict())
+
+    def test_resume_maps_to_client_resume_session(self):
+        with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:
+            client = client_cls.return_value
+            state = _state(status="running")
+            client.resume_session.return_value = state
+
+            result = handle_tool("agent_collab_resume", {"session_id": "s1"})
+
+        client.resume_session.assert_called_once_with("s1")
+        _assert_tool_result(self, result, state.to_dict())
+
+    def test_session_manager_backend_maps_resume_conflict(self):
+        from agent_collab.mcp_tools import SessionManagerToolBackend, handle_tool_sync
+        from agent_collab.resume import ResumeError
+
+        manager = mock.Mock()
+        manager.resume_session = mock.AsyncMock(
+            side_effect=ResumeError("conflict", "session is live")
+        )
+        result = handle_tool_sync(
+            "agent_collab_resume",
+            {"session_id": "s1"},
+            SessionManagerToolBackend(manager),
+        )
+        self.assertTrue(result["isError"])
+        self.assertEqual(_payload(result)["code"], "conflict")
 
     def test_client_error_returns_tool_content_error(self):
         with mock.patch("agent_collab.mcp_server.AgentCollabClient") as client_cls:

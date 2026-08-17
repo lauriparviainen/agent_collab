@@ -89,6 +89,16 @@ class AgentRunner:
 
         self._approval_callback = callback
 
+    def seed_resume_descriptor(self, descriptor: Mapping[str, Any]) -> None:
+        """Seed a validated restart-safe descriptor before the first post-reload prompt.
+
+        Default no-op. CLI runners become ``active`` with the captured id; SDK
+        runners store the id so ``conversation_active()`` is true immediately
+        and the first provider command is strict resume-by-id.
+        """
+
+        return None
+
     async def close(self) -> None:
         """Release any client or subprocess held across turns. Default no-op;
         must be idempotent and concurrency-safe against an in-flight or adopted
@@ -234,6 +244,17 @@ class SubprocessRunner(AgentRunner):
 
     def conversation_active(self) -> bool:
         return self.resume_finalizer is not None and self._cli_state == CLI_RESUME_ACTIVE
+
+    def seed_resume_descriptor(self, descriptor: Mapping[str, Any]) -> None:
+        if not self._resume_enabled():
+            return
+        session_id = descriptor.get("provider_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return
+        self._cli_state = CLI_RESUME_ACTIVE
+        self._active_id = session_id
+        self._id_seen = True
+        self._pending_id = None
 
     def _resume_enabled(self) -> bool:
         return self.resume_finalizer is not None

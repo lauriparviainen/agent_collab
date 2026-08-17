@@ -60,12 +60,17 @@ class CodexSdkWorkerBackend:
             loop=self._approval_loop,
             park_async=self._park_tool_approval,
         )
+        from ...resume import require_resume_session_id
+
+        resume_id = require_resume_session_id(payload)
         conversation = _default_conversation(
             agent,
             options,
             cwd,
             approval_handler=self._sync_approval_handler,
         )
+        if resume_id is not None:
+            conversation.note_session_id(resume_id)
         self._conversation = conversation
         self._verbose = verbose
         self._workspace = workspace

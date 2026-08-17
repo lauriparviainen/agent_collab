@@ -128,19 +128,34 @@ def reject_cli_ownership_flags(command: Sequence[str], flags: Sequence[str]) -> 
         return
     from ...sandbox.specs import SandboxFailure
 
+    def _reject() -> None:
+        raise SandboxFailure(
+            "outer_sandbox_backend_incompatible",
+            "Provider arguments include a user-configured session-ownership selector",
+            remediation=(
+                "Remove configured session-ownership flags "
+                "(--conversation, --continue, --resume, --session-id, -c, -r); "
+                "only the typed internal descriptor may select a session.",
+            ),
+        )
+
     for item in command[1:]:
         if item == "--":
             break
         for flag in flags:
             if item == flag or item.startswith(f"{flag}="):
-                raise SandboxFailure(
-                    "outer_sandbox_backend_incompatible",
-                    "Provider arguments include a user-configured session-ownership selector",
-                    remediation=(
-                        "Remove configured --conversation and --continue flags; "
-                        "only the typed internal descriptor may select a session.",
-                    ),
-                )
+                _reject()
+            # Glued short-option forms: -cSESSION, -rSESSION. Long flags are
+            # already covered by the exact / flag= checks above.
+            if (
+                len(flag) == 2
+                and flag.startswith("-")
+                and not flag.startswith("--")
+                and len(item) > 2
+                and item.startswith(flag)
+                and not item.startswith("--")
+            ):
+                _reject()
 
 
 def prepare_cli_invocation(

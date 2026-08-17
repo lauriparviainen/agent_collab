@@ -1571,7 +1571,7 @@ class ClaudeBackendSurfaceTests(unittest.TestCase):
         caps = backends.capabilities_for("claude", "sdk")
         self.assertEqual(
             caps.to_dict(),
-            {"resume": False, "interrupt": False, "tool_gate": True, "continuity": True},
+            {"resume": True, "interrupt": False, "tool_gate": True, "continuity": True},
         )
 
     def test_probe_reports_unavailable_with_install_hint(self):
