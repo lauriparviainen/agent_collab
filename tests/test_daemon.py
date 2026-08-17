@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -2644,16 +2645,18 @@ sequence = ["claude_cli.a", "claude_cli.b"]
                 self.assertTrue(answer["text"].startswith(f"Mock {agent_id} response for:"))
 
     async def test_cancelled_prepare_still_cleans_session_private_roots(self):
-        """Shielded prepare + cancel callback must reclaim private roots."""
+        """Shielded prepare + cancel callback must reclaim SESSION and HOST roots."""
         from types import SimpleNamespace
 
         cleaned: list[str] = []
         released = asyncio.Event()
+        session_id = "sess-cancel-prepare"
 
         class _Prepared:
             def __init__(self):
                 self.sandbox_plan = SimpleNamespace(
-                    cleanup_created_session_private_roots=lambda: cleaned.append("ok")
+                    cleanup_failed_start_roots=lambda: cleaned.append("failed-start"),
+                    cleanup_created_session_private_roots=lambda: cleaned.append("session-only"),
                 )
 
         async def _slow_prepare():
@@ -2661,13 +2664,14 @@ sequence = ["claude_cli.a", "claude_cli.b"]
             return _Prepared()
 
         manager = SessionManager()
+        manager._reserved_session_ids.add(session_id)
         prepare_task = asyncio.create_task(_slow_prepare())
 
         async def _cancelled_start():
             try:
                 await asyncio.shield(prepare_task)
             except asyncio.CancelledError:
-                manager._cleanup_prepare_task_on_cancel(prepare_task)
+                manager._cleanup_prepare_task_on_cancel(prepare_task, session_id)
                 raise
 
         start_task = asyncio.create_task(_cancelled_start())
@@ -2676,11 +2680,110 @@ sequence = ["claude_cli.a", "claude_cli.b"]
         with self.assertRaises(asyncio.CancelledError):
             await start_task
         self.assertEqual(cleaned, [])
+        self.assertIn(session_id, manager._reserved_session_ids)
         released.set()
         await prepare_task
         await asyncio.sleep(0)
-        self.assertEqual(cleaned, ["ok"])
+        self.assertEqual(cleaned, ["failed-start"])
+        self.assertNotIn(session_id, manager._reserved_session_ids)
         self.assertFalse(prepare_task.cancelled())
+
+    async def test_cancelled_start_keeps_session_id_reserved_until_host_cleanup(self):
+        """A second explicit-id start is rejected while cancelled-start HOST cleanup is pending."""
+        from types import SimpleNamespace
+
+        session_id = "explicit-cancel-id"
+        gate = threading.Event()
+        cleaned = asyncio.Event()
+        prepare_calls: list[str] = []
+
+        class _Prepared:
+            sandbox_plan = SimpleNamespace(
+                cleanup_failed_start_roots=cleaned.set,
+                cleanup_created_session_private_roots=lambda: None,
+            )
+
+        def blocking_prepare(request):
+            prepare_calls.append(request.session_id)
+            if len(prepare_calls) > 1:
+                raise AssertionError("second prepare must not run while the id is reserved")
+            gate.wait(timeout=5)
+            return _Prepared()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.object(manager, "_prepare_session_start", side_effect=blocking_prepare):
+                start_task = asyncio.create_task(
+                    manager.start_session(
+                        StartSessionRequest(
+                            task="cancel reserve",
+                            mock=True,
+                            max_turns=1,
+                            timeout=5,
+                            workdir=root,
+                            session_id=session_id,
+                        )
+                    )
+                )
+                try:
+                    for _ in range(100):
+                        if session_id in manager._reserved_session_ids:
+                            break
+                        await asyncio.sleep(0.01)
+                    else:
+                        self.fail("start_session never reserved the session id")
+                    start_task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await start_task
+                    self.assertIn(session_id, manager._reserved_session_ids)
+                    self.assertFalse(cleaned.is_set())
+                    with self.assertRaises(SessionRequestError) as raised:
+                        await manager.start_session(
+                            StartSessionRequest(
+                                task="second start",
+                                mock=True,
+                                max_turns=1,
+                                timeout=5,
+                                workdir=root,
+                                session_id=session_id,
+                            )
+                        )
+                    self.assertIn("already exists", str(raised.exception))
+                    self.assertEqual(prepare_calls, [session_id])
+                    gate.set()
+                    await asyncio.wait_for(cleaned.wait(), timeout=2.0)
+                    for _ in range(100):
+                        if session_id not in manager._reserved_session_ids:
+                            break
+                        await asyncio.sleep(0.01)
+                    else:
+                        self.fail("reservation was not released after HOST cleanup")
+                finally:
+                    gate.set()
+
+    async def test_cancelled_prepare_already_done_cleans_and_releases_reservation(self):
+        from types import SimpleNamespace
+
+        cleaned: list[str] = []
+        session_id = "sess-cancel-done"
+
+        class _Prepared:
+            sandbox_plan = SimpleNamespace(
+                cleanup_failed_start_roots=lambda: cleaned.append("failed-start"),
+                cleanup_created_session_private_roots=lambda: cleaned.append("session-only"),
+            )
+
+        async def _instant_prepare():
+            return _Prepared()
+
+        manager = SessionManager()
+        manager._reserved_session_ids.add(session_id)
+        prepare_task = asyncio.create_task(_instant_prepare())
+        await prepare_task
+        manager._cleanup_prepare_task_on_cancel(prepare_task, session_id)
+        self.assertEqual(cleaned, ["failed-start"])
+        self.assertNotIn(session_id, manager._reserved_session_ids)
 
 
 class SessionManagerPruneTests(unittest.IsolatedAsyncioTestCase):

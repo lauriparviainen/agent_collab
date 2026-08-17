@@ -270,10 +270,11 @@ re-check on every xai-sdk upgrade). `pip check` in the durable venv reports
 the xai-sdk metadata conflict by design. The
 credentialed two-turn Vertex provider-memory fixture passed with
 `gemini-2.5-flash`, a stable native conversation id, and a Stage 3 delta prompt
-that omitted the original task and codeword. Strict reconnect also retains one
-runner-owned trajectory `save_dir` across resets and removes it on close.
-`antigravity_sdk.continuity` is therefore true; restart-safe `resume`,
-`interrupt`, and `tool_gate` remain false.
+that omitted the original task and codeword. Strict reconnect reopens the
+captured id with `SessionContinuationMode.RESUME` against a host-persistent,
+session-keyed trajectory `save_dir` that is not removed on close.
+`antigravity_sdk.continuity` and `antigravity_sdk.tool_gate` are therefore
+true; restart-safe `resume` and `interrupt` remain false.
 
 xAI is opt-in. Grok Build 0.2.93 passed a real headless CLI turn and exposed
 `thought`, `text`, `end`, and explicit `error` records. A disposable shell-tool

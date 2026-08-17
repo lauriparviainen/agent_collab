@@ -94,6 +94,9 @@ class ResolvedSandboxPlan:
     alias_audit_timeout_seconds: int = 10
     # Session-private roots created during plan resolve (CREATE_PRIVATE_DIRECTORY).
     created_session_private_roots: Tuple[Path, ...] = ()
+    # Host-persistent CREATE_PRIVATE_DIRECTORY roots created during plan resolve.
+    # Session-end cleanup must not remove these; failed-start rollback may.
+    created_host_roots: Tuple[Path, ...] = ()
     alias_audit_log: Optional[Callable[[str], None]] = field(
         default=None,
         compare=False,
@@ -104,6 +107,12 @@ class ResolvedSandboxPlan:
         """Best-effort removal of session-private directories this plan created."""
 
         remove_created_session_private_roots(self.created_session_private_roots)
+
+    def cleanup_failed_start_roots(self) -> None:
+        """Remove session-private roots and HOST roots created for a start that never went live."""
+
+        self.cleanup_created_session_private_roots()
+        remove_created_session_private_roots(self.created_host_roots)
 
     def prepare_inner(self, command: Sequence[str]) -> Tuple[str, ...]:
         return self.adapter.prepare_inner(self, command)
@@ -184,6 +193,10 @@ class ResolvedSandboxSessionPlan:
         for plan in self.agents.values():
             plan.cleanup_created_session_private_roots()
 
+    def cleanup_failed_start_roots(self) -> None:
+        for plan in self.agents.values():
+            plan.cleanup_failed_start_roots()
+
 
 def resolve_session_plan(
     *,
@@ -194,15 +207,18 @@ def resolve_session_plan(
     command_previews: Optional[Mapping[str, Sequence[str]]] = None,
     audit: bool = True,
     alias_audit_log: Optional[Callable[[str], None]] = None,
+    session_id: Optional[str] = None,
 ) -> ResolvedSandboxSessionPlan:
     workspace = resolve_workspace(workspace_path)
     previews = command_previews or {}
     resolved: dict[str, ResolvedSandboxPlan] = {}
     # Paths created for the agent currently being resolved (not yet owned by a plan).
     in_progress_created: list[Path] = []
+    in_progress_created_host: list[Path] = []
     try:
         for agent_id, (configured_cwd, environment, adapter) in agents.items():
             in_progress_created = []
+            in_progress_created_host = []
             cwd = resolve_effective_cwd(workspace, configured_cwd)
             inherited = os.environ.copy()
             inherited.update(environment)
@@ -211,6 +227,7 @@ def resolve_session_plan(
                 cwd,
                 inherited,
                 tuple(previews.get(agent_id, ())),
+                session_id,
             )
             spec = adapter.describe(context)
             if policy.effective not in spec.policies:
@@ -272,10 +289,26 @@ def resolve_session_plan(
 
             declarations: list[ResolvedSandboxPath] = []
             for state_spec in spec.state_roots:
+                if (
+                    session_id is None
+                    and state_spec.persistence is Persistence.HOST
+                    and state_spec.creation is CreationPolicy.CREATE_PRIVATE_DIRECTORY
+                ):
+                    raise SandboxFailure(
+                        "outer_sandbox_scratch_anchor_invalid",
+                        "HOST CREATE_PRIVATE_DIRECTORY roots require a session_id",
+                        phase="validation",
+                        remediation=(
+                            "Pass a validated session_id before resolving a sandbox plan "
+                            "that creates host-persistent private directories.",
+                        ),
+                    )
                 resolved_path = resolve_state_root(state_spec)
                 declarations.append(resolved_path)
                 if resolved_path.created and resolved_path.persistence is Persistence.SESSION:
                     in_progress_created.append(resolved_path.destination)
+                elif resolved_path.created and resolved_path.persistence is Persistence.HOST:
+                    in_progress_created_host.append(resolved_path.destination)
             for visible_spec in spec.provider_visible_paths:
                 declarations.append(resolve_state_root(visible_spec))
             for label, access, paths in (
@@ -329,11 +362,13 @@ def resolve_session_plan(
                 alias_audit_max_entries=operator.alias_audit_max_entries,
                 alias_audit_timeout_seconds=operator.alias_audit_timeout_seconds,
                 created_session_private_roots=tuple(in_progress_created),
+                created_host_roots=tuple(in_progress_created_host),
                 alias_audit_log=alias_audit_log,
             )
             # Ownership transferred to the plan; do not double-clean on later
             # agents' failures via in_progress_created.
             in_progress_created = []
+            in_progress_created_host = []
 
         enforcement = {item.enforcement for item in resolved.values()}
         if policy.effective is SandboxPolicy.NONE:
@@ -352,10 +387,12 @@ def resolve_session_plan(
     except Exception:
         # Roll back roots already owned by successfully resolved earlier agents,
         # plus any in-progress CREATE_PRIVATE dirs for the failing agent
-        # (including empty shared random parents).
+        # (including empty shared parents). Failed resolve never went live, so
+        # HOST CREATE_PRIVATE_DIRECTORY roots created here are rolled back too.
         for plan in resolved.values():
-            plan.cleanup_created_session_private_roots()
+            plan.cleanup_failed_start_roots()
         remove_created_session_private_roots(in_progress_created)
+        remove_created_session_private_roots(in_progress_created_host)
         raise
 
 

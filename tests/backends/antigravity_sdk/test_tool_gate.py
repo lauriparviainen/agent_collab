@@ -40,6 +40,17 @@ from agent_collab.sandbox.worker_codec import make_frame, recv_frame, send_frame
 AGENT = AgentConfig(id="claude_cli", type="antigravity", backend="sdk")
 
 
+def _attach_durable_plan(runner: AntigravitySdkRunner, root: Path | None = None) -> Path:
+    base = Path(root) if root is not None else Path(tempfile.mkdtemp(prefix="ag-traj-"))
+    save_dir = base / "trajectories" / "sess-gate"
+    runner.sandbox_plan = SimpleNamespace(
+        spec=SimpleNamespace(
+            environment=SimpleNamespace(set_values={"ANTIGRAVITY_SAVE_DIR": str(save_dir)})
+        )
+    )
+    return base
+
+
 def _tool_call(name: str, args: Mapping[str, Any] | None = None) -> SimpleNamespace:
     return SimpleNamespace(name=name, args=dict(args or {}))
 
@@ -520,6 +531,7 @@ class AntigravitySdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
         runner = AntigravitySdkRunner(AGENT, False, {}, conversation_factory=_default_conversation)
         runner.set_approval_callback(callback)
         runner.bind_turn(turn_id="turn-1", agent_id="claude_cli")
+        _attach_durable_plan(runner)
         with mock.patch.dict(sys.modules, _fake_antigravity_modules(state)):
             events: list[Event] = []
 
@@ -555,6 +567,7 @@ class AntigravitySdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
         runner = AntigravitySdkRunner(AGENT, False, {}, conversation_factory=_default_conversation)
         runner.set_approval_callback(callback)
         runner.bind_turn(turn_id="turn-1", agent_id="claude_cli")
+        _attach_durable_plan(runner)
         with mock.patch.dict(sys.modules, _fake_antigravity_modules(state)):
 
             async def emit(_event: Event) -> None:
@@ -584,6 +597,7 @@ class AntigravitySdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
         runner = AntigravitySdkRunner(AGENT, False, {}, conversation_factory=_default_conversation)
         runner.set_approval_callback(callback)
         runner.bind_turn(turn_id="turn-1", agent_id="claude_cli")
+        _attach_durable_plan(runner)
         with mock.patch.dict(sys.modules, _fake_antigravity_modules(state)):
 
             async def emit(_event: Event) -> None:
@@ -607,6 +621,7 @@ class AntigravitySdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
     async def test_ungated_in_process_does_not_install_ask_user(self) -> None:
         state: dict[str, Any] = {}
         runner = AntigravitySdkRunner(AGENT, False, {}, conversation_factory=_default_conversation)
+        _attach_durable_plan(runner)
         with mock.patch.dict(sys.modules, _fake_antigravity_modules(state)):
 
             async def emit(_event: Event) -> None:
@@ -623,6 +638,7 @@ class AntigravitySdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
         state: dict[str, Any] = {"require_gate": True}
         runner = AntigravitySdkRunner(AGENT, False, {}, conversation_factory=_default_conversation)
         runner.set_approval_callback(lambda payload: None)
+        _attach_durable_plan(runner)
         with mock.patch.dict(sys.modules, _fake_antigravity_modules(state, policies_field=False)):
             events: list[Event] = []
 
@@ -639,6 +655,7 @@ class AntigravitySdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
         state: dict[str, Any] = {"require_gate": True}
         runner = AntigravitySdkRunner(AGENT, False, {}, conversation_factory=_default_conversation)
         runner.set_approval_callback(lambda payload: None)
+        _attach_durable_plan(runner)
         with mock.patch.dict(sys.modules, _fake_antigravity_modules(state, policy_api=False)):
             events: list[Event] = []
 
@@ -710,6 +727,7 @@ class AntigravitySdkSessionToolGateTests(unittest.IsolatedAsyncioTestCase):
         approval_deadline: float = 2.0,
     ):
         runner = AntigravitySdkRunner(AGENT, False, {}, conversation_factory=_default_conversation)
+        _attach_durable_plan(runner, root)
 
         def _runners(self: Referee):
             if self.config.approval_callback is not None:

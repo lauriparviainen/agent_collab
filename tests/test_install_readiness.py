@@ -284,6 +284,75 @@ class InstallReadinessCollectionTests(unittest.TestCase):
             self.assertEqual(rows["xai_sdk"]["state_root"], "—")
             self.assertEqual(rows["xai_sdk"]["state"], "usable")
 
+    def test_antigravity_sdk_host_trajectory_is_reportable_without_signin(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            config = builtin_config()
+            merge_config_data(
+                config,
+                {
+                    "backends": {
+                        "antigravity_cli": {"enabled": False},
+                        "antigravity_sdk": {"enabled": True},
+                        "claude_cli": {"enabled": False},
+                        "codex_cli": {"enabled": False},
+                        "xai_cli": {"enabled": False},
+                    }
+                },
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"HOME": str(home), "AGENT_COLLAB_HOME": str(home)},
+                clear=False,
+            ):
+                with mock.patch("pathlib.Path.home", return_value=home):
+                    payload = collect_install_readiness(
+                        config, health=lambda backend: _sdk_health("google.antigravity")
+                    )
+            row = {item["backend"]: item for item in payload["rows"]}["antigravity_sdk"]
+            self.assertEqual(row["state_root"], "ok")
+            self.assertNotIn(
+                "initialize_provider_state",
+                [item.get("code") for item in row["remediation"]],
+            )
+            self.assertFalse((home / "trajectories").exists())
+
+    def test_antigravity_sdk_unusable_home_is_invalid_not_signin(self):
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            workspace = home / "workspace"
+            workspace.mkdir(mode=0o700)
+            overlapping = workspace / ".agent-collab"
+            overlapping.mkdir(mode=0o700)
+            config = builtin_config()
+            merge_config_data(
+                config,
+                {
+                    "backends": {
+                        "antigravity_cli": {"enabled": False},
+                        "antigravity_sdk": {"enabled": True},
+                        "claude_cli": {"enabled": False},
+                        "codex_cli": {"enabled": False},
+                        "xai_cli": {"enabled": False},
+                    }
+                },
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"HOME": str(home), "AGENT_COLLAB_HOME": str(overlapping)},
+                clear=False,
+            ):
+                with mock.patch("pathlib.Path.home", return_value=home):
+                    with mock.patch("pathlib.Path.cwd", return_value=workspace):
+                        payload = collect_install_readiness(
+                            config, health=lambda backend: _sdk_health("google.antigravity")
+                        )
+            row = {item["backend"]: item for item in payload["rows"]}["antigravity_sdk"]
+            self.assertEqual(row["state_root"], "invalid")
+            codes = [item.get("code") for item in row["remediation"]]
+            self.assertIn("repair_agent_collab_state", codes)
+            self.assertNotIn("initialize_provider_state", codes)
+
     def test_missing_state_directory_is_reported_but_not_blocking_under_outer_none(self):
         with tempfile.TemporaryDirectory() as raw:
             payload = self._state_root_payload(Path(raw), sandbox_default="none")

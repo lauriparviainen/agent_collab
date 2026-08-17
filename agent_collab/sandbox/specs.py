@@ -155,6 +155,7 @@ class SandboxContext:
     cwd: Path
     inherited_environment: Mapping[str, str]
     command_preview: Tuple[str, ...] = ()
+    session_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "workspace", self.workspace)
@@ -165,6 +166,7 @@ class SandboxContext:
             MappingProxyType(dict(self.inherited_environment)),
         )
         object.__setattr__(self, "command_preview", tuple(self.command_preview))
+        object.__setattr__(self, "session_id", self.session_id)
 
 
 @runtime_checkable

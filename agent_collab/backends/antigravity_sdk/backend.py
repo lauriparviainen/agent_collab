@@ -48,7 +48,6 @@ import enum
 import inspect
 import platform
 from pathlib import Path
-import tempfile
 from typing import (
     Any,
     Callable,
@@ -416,6 +415,7 @@ class AntigravitySdkRunner(AgentRunner):
         # Daemon-side mirror of in-worker resume_missing_id after soft-drop.
         self._worker_resume_blocked = False
         self._worker_soft_drop_cancelled = False
+        self._captured_conversation_id: Optional[str] = None
 
     def conversation_active(self) -> bool:
         if self._worker_terminal or self._worker_resume_blocked:
@@ -425,7 +425,9 @@ class AntigravitySdkRunner(AgentRunner):
             if getattr(session, "terminal", False):
                 return False
             return self._worker_provider_active
-        return self._conversation is not None and self._conversation.active()
+        if self._conversation is not None:
+            return self._conversation.active()
+        return bool(self._captured_conversation_id)
 
     async def interrupt_request(self) -> bool:
         from ...sandbox.worker_session import interrupt_active_session
@@ -470,6 +472,7 @@ class AntigravitySdkRunner(AgentRunner):
             self._cleanup_session_state()
         if self._conversation is not None:
             await self._conversation.close()
+        self._captured_conversation_id = None
 
     async def run_turn(self, prompt: str, workdir: Path, emit: AsyncEventSink) -> TurnOutcome:
         policy = getattr(getattr(self.sandbox_plan, "policy", None), "effective", None)
@@ -534,12 +537,14 @@ class AntigravitySdkRunner(AgentRunner):
 
             async def tracking_emit(event: Any) -> None:
                 session_meta = getattr(event, "provider_session", None)
-                if isinstance(session_meta, Mapping) and session_meta.get("provider_session_id"):
-                    self._worker_provider_active = True
+                captured = None
+                if isinstance(session_meta, Mapping):
+                    captured = session_meta.get("provider_session_id")
                 elif isinstance(getattr(event, "raw", None), Mapping):
-                    raw = event.raw
-                    if raw.get("provider_session_id"):
-                        self._worker_provider_active = True
+                    captured = event.raw.get("provider_session_id")
+                if isinstance(captured, str) and captured:
+                    self._worker_provider_active = True
+                    self._captured_conversation_id = captured
                 await emit(event)
 
             _buffered, outcome = await session.run(
@@ -595,7 +600,7 @@ class AntigravitySdkRunner(AgentRunner):
             pass
 
     def _cleanup_session_state(self) -> None:
-        """Remove session-private trajectory/app-data/home created for this plan."""
+        """Remove session-private app-data/home. Never delete the HOST trajectory."""
 
         import os
         import shutil
@@ -608,12 +613,21 @@ class AntigravitySdkRunner(AgentRunner):
         if not isinstance(env, Mapping):
             return
         root = env.get("ANTIGRAVITY_STATE_ROOT")
+        save_dir = env.get("ANTIGRAVITY_SAVE_DIR")
         if not isinstance(root, str) or not root:
             return
         path = Path(root)
         # Only remove our namespaced runtime roots.
         if "antigravity-sdk" not in path.parts:
             return
+        if isinstance(save_dir, str) and save_dir:
+            try:
+                Path(save_dir).resolve().relative_to(path.resolve())
+            except ValueError:
+                pass
+            else:
+                # Trajectory lives under the session-private parent; do not rmtree.
+                return
 
         def _onerror(func: Any, target: str, _exc_info: Any) -> None:
             try:
@@ -745,6 +759,7 @@ class AntigravitySdkRunner(AgentRunner):
                 verbose=self.verbose,
                 save_dir=env_values.get("ANTIGRAVITY_SAVE_DIR"),
                 app_data_dir=env_values.get("ANTIGRAVITY_APP_DATA_DIR"),
+                conversation_id=self._captured_conversation_id,
             )
             session = SupervisedWorkerSession(
                 process,
@@ -809,6 +824,7 @@ class AntigravitySdkRunner(AgentRunner):
                 exception_code = "provider_empty_response"
             if turn.conversation_id:
                 conversation.note_session_id(turn.conversation_id)
+                self._captured_conversation_id = turn.conversation_id
                 await emit(
                     provider_session_event(
                         "antigravity",
@@ -860,10 +876,16 @@ class AntigravitySdkRunner(AgentRunner):
                 else None
             )
             if factory is _default_conversation:
+                save_dir = _plan_env_value(self.sandbox_plan, "ANTIGRAVITY_SAVE_DIR")
+                if not save_dir:
+                    raise RuntimeError("antigravity sdk requires a durable trajectory save_dir")
+                _ensure_durable_save_dir(save_dir)
                 self._conversation = factory(
                     self.agent,
                     self.options,
                     resolved,
+                    save_dir=save_dir,
+                    app_data_dir=_plan_env_value(self.sandbox_plan, "ANTIGRAVITY_APP_DATA_DIR"),
                     ask_user_handler=ask_user_handler,
                 )
             else:
@@ -1126,11 +1148,8 @@ def _default_conversation(
     ``Agent.__init__`` ``model_copy(deep=True)`` does not walk the runner.
     """
 
-    cleanup: Optional[Callable[[], None]] = None
-    if save_dir is None:
-        save_directory = tempfile.TemporaryDirectory(prefix="agent-collab-antigravity-")
-        save_dir = save_directory.name
-        cleanup = save_directory.cleanup
+    if not isinstance(save_dir, str) or not save_dir.strip():
+        raise RuntimeError("antigravity sdk requires a durable trajectory save_dir")
     extras = tuple(extra_workspaces or ())
     return _PersistentAntigravityConversation(
         lambda conversation_id: _default_agent_factory(
@@ -1144,7 +1163,6 @@ def _default_conversation(
             extra_workspaces=extras,
             ask_user_handler=ask_user_handler,
         ),
-        close_cleanup=cleanup,
     )
 
 
@@ -1245,6 +1263,13 @@ def _default_agent_factory(
         if "policies" in fields:
             config_kwargs["policies"] = [policy.allow_all()]
     if conversation_id is not None:
+        if not isinstance(save_dir, str) or not save_dir.strip():
+            raise RuntimeError("antigravity sdk cannot resume without a durable save_dir")
+        save_path = Path(save_dir)
+        if not save_path.is_dir():
+            raise RuntimeError(
+                "antigravity sdk cannot resume: durable save_dir is missing or unusable"
+            )
         resume = getattr(SessionContinuationMode, "RESUME", None)
         if (
             "conversation_id" not in fields
@@ -1493,6 +1518,31 @@ class _PersistentAntigravityConversation:
 def _conversation_id(sdk_agent: Any) -> Optional[str]:
     value = getattr(sdk_agent, "conversation_id", None)
     return value if isinstance(value, str) and value else None
+
+
+def _plan_env_value(plan: Any, key: str) -> Optional[str]:
+    env = getattr(getattr(getattr(plan, "spec", None), "environment", None), "set_values", None)
+    if not isinstance(env, Mapping):
+        return None
+    raw = env.get(key)
+    return raw.strip() if isinstance(raw, str) and raw.strip() else None
+
+
+def _ensure_durable_save_dir(save_dir: str) -> str:
+    from ...sandbox.paths import create_private_directory
+    from ...sandbox.specs import SandboxFailure
+
+    path = Path(save_dir).expanduser()
+    if not path.is_absolute():
+        raise RuntimeError("antigravity sdk save_dir must be an absolute path")
+    try:
+        if not path.exists():
+            create_private_directory(path)
+        if not path.is_dir() or path.is_symlink():
+            raise RuntimeError("antigravity sdk save_dir is unusable")
+    except SandboxFailure as exc:
+        raise RuntimeError(f"antigravity sdk save_dir is unusable: {exc}") from exc
+    return str(path)
 
 
 async def _cancel_response_bounded(response: Any) -> bool:

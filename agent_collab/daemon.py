@@ -78,6 +78,7 @@ from .retention import (
     STOPPED,
     TERMINAL_STATUSES,
     classify_transcript_paths,
+    is_valid_session_id,
     select_expired_sessions,
     transcript_unlink_blocker,
 )
@@ -432,6 +433,7 @@ class SessionManager:
         # refresher is running; a ``cached`` describe that served a stale or
         # missing catalog nudges it (never blocks on it).
         self.model_catalog_kick: Optional[Callable[[], None]] = None
+        self._reserved_session_ids: Set[str] = set()
         self._restore_from_index()
 
     def _restore_from_index(self) -> None:
@@ -532,87 +534,88 @@ class SessionManager:
             self._log_lifecycle(f"failed to persist session index for {state.session_id}: {exc}")
 
     async def start_session(self, request: StartSessionRequest) -> SessionState:
-        # Preparation may create session-private roots. Run it as a child task
-        # shielded from parent cancellation so a cancelled start_session still
-        # owns cleanup when the thread finishes (bare await would cancel the
-        # child task and make result() unavailable).
-        prepare_task = asyncio.create_task(
-            asyncio.to_thread(self._prepare_session_start, request),
-            name="agent-collab-prepare-session-start",
-        )
-        try:
-            prepared = await asyncio.shield(prepare_task)
-        except asyncio.CancelledError:
-            self._cleanup_prepare_task_on_cancel(prepare_task)
-            raise
-
-        workdir = prepared.workdir
-        log_dir = prepared.log_dir
-        request.backend_options = prepared.normalized_options
-        request.agent_options = prepared.agent_options
-        request.resolved_backends = prepared.agent_backends
-        request.collab_config = prepared.collab_config
-        request.sandbox_plan = prepared.sandbox_plan
-        request.interactive = bool(request.interactive)
-        request.interactive_idle_timeout = prepared.interactive_idle_timeout
-        request.approval_deadline = prepared.approval_deadline
-
+        # Allocate and validate the session id before plan resolve so describe()
+        # can key host-persistent roots. Failed/duplicate ids never create them.
         session_id = request.session_id or self._new_session_id()
+        self._validate_new_session_id(session_id)
+        self._reserved_session_ids.add(session_id)
+        request.session_id = session_id
+        # Cancel during prepare must keep this id reserved until the shielded
+        # prepare-task callback finishes HOST+SESSION rollback. Discarding in
+        # finally would let a second start reuse the id while cleanup_failed_start_roots
+        # can still rmtree the durable trajectory.
+        hold_reservation_for_cleanup = False
         try:
-            self._validate_new_session_id(session_id)
-        except Exception:
-            # Plan resolve can create session-private roots before a managed
-            # session exists to own cleanup (duplicate/invalid session_id).
-            plan = prepared.sandbox_plan
-            cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
-            if callable(cleanup):
-                try:
-                    cleanup()
-                except Exception:
-                    pass
-            raise
+            # Preparation may create session-private and HOST CREATE_PRIVATE roots.
+            # Run it as a child task shielded from parent cancellation so a
+            # cancelled start_session still owns cleanup when the thread finishes
+            # (bare await would cancel the child task and make result() unavailable).
+            prepare_task = asyncio.create_task(
+                asyncio.to_thread(self._prepare_session_start, request),
+                name="agent-collab-prepare-session-start",
+            )
+            try:
+                prepared = await asyncio.shield(prepare_task)
+            except asyncio.CancelledError:
+                hold_reservation_for_cleanup = True
+                self._cleanup_prepare_task_on_cancel(prepare_task, session_id)
+                raise
 
-        created_at = utc_timestamp()
-        state = SessionState(
-            session_id=session_id,
-            status=RUNNING,
-            task=request.task,
-            workflow=request.workflow,
-            workdir=str(workdir),
-            jsonl_path=str(log_dir / f"{session_id}.jsonl"),
-            markdown_path=str(log_dir / f"{session_id}.md"),
-            created_at=created_at,
-            updated_at=created_at,
-            max_turns=int(request.max_turns),
-            timeout=int(request.timeout),
-            mock=bool(request.mock),
-            dry_run=bool(request.dry_run),
-            interactive=bool(request.interactive),
-            interactive_idle_timeout=float(request.interactive_idle_timeout),
-            approval_deadline=float(request.approval_deadline),
-            settings=prepared.settings,
-            capabilities=prepared.capabilities,
-            turn_outcomes=[],
-        )
-        managed = _ManagedSession(
-            request=request,
-            state=state,
-            events=[],
-            condition=asyncio.Condition(),
-        )
-        # Draining the last in-flight input settles an awaiting_input session, so
-        # a task_done must wake wait_result waiters via the coalesced notifier.
-        managed.input_queue.set_task_done_hook(lambda: self._schedule_notify(managed))
-        self._sessions[session_id] = managed
-        self._persist(state)
-        managed.task = asyncio.create_task(
-            self._run_session(managed), name=f"agent-collab-session-{session_id}"
-        )
-        self._log_lifecycle(
-            f"session {session_id} started workflow={state.workflow} max_turns={state.max_turns} "
-            f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
-        )
-        return self._view_state(state, request.detail, managed)
+            workdir = prepared.workdir
+            log_dir = prepared.log_dir
+            request.backend_options = prepared.normalized_options
+            request.agent_options = prepared.agent_options
+            request.resolved_backends = prepared.agent_backends
+            request.collab_config = prepared.collab_config
+            request.sandbox_plan = prepared.sandbox_plan
+            request.interactive = bool(request.interactive)
+            request.interactive_idle_timeout = prepared.interactive_idle_timeout
+            request.approval_deadline = prepared.approval_deadline
+
+            created_at = utc_timestamp()
+            state = SessionState(
+                session_id=session_id,
+                status=RUNNING,
+                task=request.task,
+                workflow=request.workflow,
+                workdir=str(workdir),
+                jsonl_path=str(log_dir / f"{session_id}.jsonl"),
+                markdown_path=str(log_dir / f"{session_id}.md"),
+                created_at=created_at,
+                updated_at=created_at,
+                max_turns=int(request.max_turns),
+                timeout=int(request.timeout),
+                mock=bool(request.mock),
+                dry_run=bool(request.dry_run),
+                interactive=bool(request.interactive),
+                interactive_idle_timeout=float(request.interactive_idle_timeout),
+                approval_deadline=float(request.approval_deadline),
+                settings=prepared.settings,
+                capabilities=prepared.capabilities,
+                turn_outcomes=[],
+            )
+            managed = _ManagedSession(
+                request=request,
+                state=state,
+                events=[],
+                condition=asyncio.Condition(),
+            )
+            # Draining the last in-flight input settles an awaiting_input session, so
+            # a task_done must wake wait_result waiters via the coalesced notifier.
+            managed.input_queue.set_task_done_hook(lambda: self._schedule_notify(managed))
+            self._sessions[session_id] = managed
+            self._persist(state)
+            managed.task = asyncio.create_task(
+                self._run_session(managed), name=f"agent-collab-session-{session_id}"
+            )
+            self._log_lifecycle(
+                f"session {session_id} started workflow={state.workflow} max_turns={state.max_turns} "
+                f"timeout={state.timeout}s mock={state.mock} dry_run={state.dry_run} workdir={state.workdir}"
+            )
+            return self._view_state(state, request.detail, managed)
+        finally:
+            if not hold_reservation_for_cleanup:
+                self._reserved_session_ids.discard(session_id)
 
     def _prepare_session_start(self, request: StartSessionRequest) -> _PreparedSessionStart:
         """Load and validate start inputs outside the daemon event loop."""
@@ -751,12 +754,7 @@ class SessionManager:
             )
         except Exception as exc:
             if sandbox_plan is not None:
-                cleanup = getattr(sandbox_plan, "cleanup_created_session_private_roots", None)
-                if callable(cleanup):
-                    try:
-                        cleanup()
-                    except Exception:
-                        pass
+                self._cleanup_sandbox_plan_roots(sandbox_plan, failed_start=True)
             from .sandbox.specs import SandboxFailure
 
             if isinstance(exc, SandboxFailure):
@@ -827,6 +825,7 @@ class SessionManager:
             operator=operator,
             command_previews=command_previews,
             alias_audit_log=self._log_lifecycle,
+            session_id=request.session_id,
         )
         try:
             enforced = [
@@ -842,11 +841,11 @@ class SessionManager:
                         asyncio.run(supervisor.preflight(item))
                 else:
                     # Dry-run never launches a runner that would clean session-
-                    # private roots created at plan resolve.
-                    plan.cleanup_created_session_private_roots()
+                    # private or unused HOST roots created at plan resolve.
+                    self._cleanup_sandbox_plan_roots(plan, failed_start=True)
             return plan
         except Exception:
-            plan.cleanup_created_session_private_roots()
+            self._cleanup_sandbox_plan_roots(plan, failed_start=True)
             raise
 
     def _model_catalog_warnings(
@@ -1646,12 +1645,7 @@ class SessionManager:
             managed.referee = None
             plan = getattr(managed.request, "sandbox_plan", None) if managed.request else None
             if plan is not None:
-                cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
-                if callable(cleanup):
-                    try:
-                        cleanup()
-                    except Exception:
-                        pass
+                self._cleanup_sandbox_plan_roots(plan, failed_start=False)
 
     def _record_event(self, managed: _ManagedSession, event: Event) -> None:
         managed.events.append(event.to_dict())
@@ -2223,37 +2217,53 @@ class SessionManager:
             raise SessionNotFoundError(f"unknown session_id {session_id}") from exc
 
     def _validate_new_session_id(self, session_id: str) -> None:
-        if not session_id or "/" in session_id or "\\" in session_id or session_id in {".", ".."}:
+        if not is_valid_session_id(session_id):
             raise SessionRequestError(f"invalid session_id {session_id!r}")
-        if session_id in self._sessions:
+        if session_id in self._sessions or session_id in self._reserved_session_ids:
             raise SessionRequestError(f"session_id already exists: {session_id}")
 
     @staticmethod
-    def _cleanup_prepared_session_private_roots(prepared: Any) -> None:
-        plan = getattr(prepared, "sandbox_plan", None)
-        cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
+    def _cleanup_sandbox_plan_roots(plan: Any, *, failed_start: bool) -> None:
+        cleanup = (
+            getattr(plan, "cleanup_failed_start_roots", None)
+            if failed_start
+            else getattr(plan, "cleanup_created_session_private_roots", None)
+        )
+        if failed_start and not callable(cleanup):
+            cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
         if callable(cleanup):
             try:
                 cleanup()
             except Exception:
                 pass
 
-    def _cleanup_prepare_task_on_cancel(self, prepare_task: "asyncio.Task[Any]") -> None:
+    @staticmethod
+    def _cleanup_prepared_session_private_roots(prepared: Any) -> None:
+        plan = getattr(prepared, "sandbox_plan", None)
+        SessionManager._cleanup_sandbox_plan_roots(plan, failed_start=True)
+
+    def _cleanup_prepare_task_on_cancel(
+        self, prepare_task: "asyncio.Task[Any]", session_id: str
+    ) -> None:
         """Best-effort cleanup if preparation finishes after start_session is cancelled.
 
         ``prepare_task`` must be shielded from parent cancellation so it can still
         complete with a prepared plan (and created private roots) after the
-        caller is cancelled.
+        caller is cancelled. The session id stays reserved until this callback
+        finishes ``cleanup_failed_start_roots`` (HOST + SESSION).
         """
 
         def _on_done(task: "asyncio.Task[Any]") -> None:
-            if task.cancelled():
-                return
             try:
-                prepared = task.result()
-            except Exception:
-                return
-            self._cleanup_prepared_session_private_roots(prepared)
+                if not task.cancelled():
+                    try:
+                        prepared = task.result()
+                    except Exception:
+                        prepared = None
+                    if prepared is not None:
+                        self._cleanup_prepared_session_private_roots(prepared)
+            finally:
+                self._reserved_session_ids.discard(session_id)
 
         if prepare_task.done():
             _on_done(prepare_task)

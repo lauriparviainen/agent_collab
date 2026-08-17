@@ -6,6 +6,7 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+from typing import Mapping
 from unittest import mock
 
 from agent_collab.backends.antigravity_sdk.backend import AntigravitySdkRunner
@@ -260,6 +261,12 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
     def test_interrupt_continue_in_process(self):
         self._run_interrupt_continue(sandbox="none")
 
+    def test_resume_establishment_worker(self):
+        self._run_resume_establishment(sandbox="read-only")
+
+    def test_resume_establishment_in_process(self):
+        self._run_resume_establishment(sandbox="none")
+
     def _run_tool_gate_park(self, *, sandbox, decision, clock_exclusion=False):
         token = f"PARK-{secrets.token_hex(4).upper()}"
         timeout = 20 if clock_exclusion else 180
@@ -346,6 +353,158 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
             "Do not only reply in chat. Do not use a read-only tool. "
             "Call a write or run_command tool now."
         )
+
+    def _run_resume_establishment(self, *, sandbox):
+        from agent_collab.backends.antigravity_sdk import backend as backend_mod
+
+        codeword = f"SABLE-{secrets.token_hex(4).upper()}"
+        factory_calls = []
+        original_factory = backend_mod._default_agent_factory
+
+        def recording_factory(*args, **kwargs):
+            factory_calls.append(
+                {
+                    "conversation_id": kwargs.get("conversation_id"),
+                    "save_dir": kwargs.get("save_dir"),
+                }
+            )
+            return original_factory(*args, **kwargs)
+
+        async def scenario(workdir):
+            manager = SessionManager()
+            state = None
+            save_dir = None
+            try:
+                state = await manager.start_session(
+                    StartSessionRequest(
+                        task=(
+                            f"For this session the project id is {codeword}. "
+                            "Reply exactly STORED without repeating the project id."
+                        ),
+                        workflow="solo",
+                        members={"claude_cli": "antigravity_sdk"},
+                        backend_options={"antigravity_sdk": self.requested_options()},
+                        max_turns=1,
+                        timeout=180,
+                        workdir=workdir,
+                        sandbox=sandbox,
+                        interactive=True,
+                        interactive_idle_timeout=300,
+                    )
+                )
+            except StartOptionsError as exc:
+                codes = [detail.get("code") for detail in exc.details]
+                self.fail(
+                    f"resume-establishment start failed sandbox={sandbox} codes={codes} error={exc}"
+                )
+            try:
+                first = await manager.wait_result(state.session_id, timeout_ms=240_000)
+                self.assertTrue(first.settled)
+                if first.status != "awaiting_input":
+                    events = self._session_events(manager, state.session_id)
+                    errors = [event["text"] for event in events if event.get("type") == "error"]
+                    self.fail(f"first turn failed: {first.failure}; errors={errors}")
+                conversation_ids = self._conversation_ids(manager, state.session_id)
+                if not conversation_ids:
+                    self.fail("first turn produced no conversation id; cannot prove resume")
+                captured_id = conversation_ids[0]
+                save_dir = self._durable_save_dir(manager, state.session_id)
+                if not save_dir:
+                    self.fail("session plan did not declare a durable save_dir")
+                await self._drop_live_provider(manager, state.session_id, sandbox)
+                await manager.post_message(
+                    state.session_id,
+                    "What is the project id? Reply with only the id.",
+                )
+                second = await manager.wait_result(state.session_id, timeout_ms=240_000)
+                self.assertTrue(second.settled)
+                self.assertEqual(second.status, "awaiting_input")
+                self.assertEqual(len(second.answers), 1)
+                self.assertIn(codeword, second.answers[0]["text"].upper())
+                later_ids = self._conversation_ids(manager, state.session_id)
+                self.assertEqual(len(set(later_ids)), 1)
+                self.assertEqual(later_ids[0], captured_id)
+                if sandbox == "none":
+                    resume_calls = [
+                        call for call in factory_calls if call.get("conversation_id") == captured_id
+                    ]
+                    if not resume_calls:
+                        self.fail("in-process reconnect never reopened the captured id with RESUME")
+                    self.assertTrue(
+                        all(call.get("save_dir") == save_dir for call in resume_calls),
+                        resume_calls,
+                    )
+                # Worker Agent construction happens in the isolated process.
+                # The parent-process factory spy cannot see those calls; do not
+                # treat an empty spy as proof. Same conversation id, recalled
+                # memory, and the surviving HOST trajectory are the worker
+                # evidence (asserted above).
+            finally:
+                if state is not None:
+                    await manager.stop_session(state.session_id)
+            if not save_dir:
+                self.fail("resume-establishment never observed a durable save_dir")
+            self.assertTrue(
+                Path(save_dir).is_dir(),
+                "durable trajectory was removed after session stop",
+            )
+
+        with mock.patch.object(backend_mod, "_default_agent_factory", recording_factory):
+            self._run_isolated_session(scenario)
+
+    def _conversation_ids(self, manager, session_id):
+        return [
+            event["raw"]["provider_session_id"]
+            for event in self._session_events(manager, session_id)
+            if isinstance(event.get("raw"), dict)
+            and event["raw"].get("provider_session_kind") == "conversation"
+        ]
+
+    def _durable_save_dir(self, manager, session_id):
+        managed = manager._sessions.get(session_id)
+        referee = getattr(managed, "referee", None)
+        if referee is None:
+            return None
+        plans = []
+        for runner in getattr(referee, "_live_runners", {}).values():
+            plans.append(getattr(runner, "sandbox_plan", None))
+        session_plan = getattr(referee, "sandbox_plan", None)
+        agents = getattr(session_plan, "agents", None)
+        if isinstance(agents, Mapping):
+            plans.extend(agents.values())
+        for plan in plans:
+            env = getattr(
+                getattr(getattr(plan, "spec", None), "environment", None),
+                "set_values",
+                None,
+            )
+            if isinstance(env, Mapping):
+                raw = env.get("ANTIGRAVITY_SAVE_DIR")
+                if isinstance(raw, str) and raw.strip():
+                    return raw.strip()
+        return None
+
+    async def _drop_live_provider(self, manager, session_id, sandbox):
+        managed = manager._sessions.get(session_id)
+        referee = getattr(managed, "referee", None)
+        if referee is None:
+            self.fail("no live referee after first turn; cannot drop provider")
+        runners = list(getattr(referee, "_live_runners", {}).values())
+        if not runners:
+            self.fail("no live runner after first turn; cannot drop provider")
+        runner = runners[0]
+        if sandbox == "none":
+            conversation = getattr(runner, "_conversation", None)
+            if conversation is None or not hasattr(conversation, "reset"):
+                self.fail("in-process conversation was missing; never resumed")
+            await conversation.reset()
+            return
+        drop = getattr(runner, "_drop_worker_session", None)
+        if not callable(drop):
+            self.fail("worker runner cannot drop the worker process")
+        await drop()
+        if getattr(runner, "_worker_session", None) is not None:
+            self.fail("worker process was not dropped")
 
     def _run_isolated_session(self, scenario):
         with (

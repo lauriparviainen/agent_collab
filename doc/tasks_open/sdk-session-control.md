@@ -173,14 +173,30 @@ take it:
    delta prompt). The outer (`sandbox=read-only`) two-turn was skipped
    because `AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE` was unset; that skip
    does not flip the flag. Production `antigravity_cli.continuity` stays
-   false until both launch paths pass; `resume` stays false. Remaining three
-   increments: the durable Antigravity trajectory root and SDK resume
-   establishment; persisted explicit resume plus its public operation; and
-   turn-level interrupt public surfaces. Mind the pieces added in review:
-   the session-level workflow-phase record (no stage replay on resume), the
-   atomic per-session resume claim, the `interrupt_acknowledged` eligibility
-   marker, the `xai_sdk` close-deletes-resume-material conflict, and the
-   durable Antigravity trajectory root.
+   false until both launch paths pass; `resume` stays false. Increment 3
+   landed the durable Antigravity SDK trajectory root and adapter-level
+   resume establishment: `{AGENT_COLLAB_HOME}/trajectories/{session_id}` is
+   `Persistence.HOST` + `CREATE_PRIVATE_DIRECTORY`, keyed to a validated
+   session id allocated before plan resolve; session-private app-data/home
+   are still removed on close; `TemporaryDirectory` and the shared `/tmp`
+   worker fallback are gone.    2026-08-17 live: both worker
+   (`sandbox=read-only`) and in-process (`sandbox=none`)
+   resume-establishment tests passed on Vertex `gemini-2.5-flash`. After
+   the live Agent/worker conversation was dropped, the next turn reopened
+   the same captured conversation id against the same durable `save_dir`
+   and recalled the first-turn project id. In-process factory calls used
+   that captured id and `save_dir`. The worker path drops the worker
+   process (HOST trajectory kept) so the next turn goes through
+   `worker_open_payload_for_agent(conversation_id=...)` → `open` +
+   `note_session_id`; a parent-process factory spy cannot observe
+   worker-side Agent construction. The trajectory directory still existed
+   after session stop. Production `antigravity_sdk.resume` stays false.
+   Remaining two increments: persisted explicit resume plus its public
+   operation; and turn-level interrupt public surfaces. Mind the pieces
+   added in review: the session-level workflow-phase record (no stage
+   replay on resume), the atomic per-session resume claim, the
+   `interrupt_acknowledged` eligibility marker, and the `xai_sdk`
+   close-deletes-resume-material conflict.
 
 ## Purpose and scope
 
@@ -1393,28 +1409,34 @@ resume yields one winner and one persisted terminal state.
 
 A provider session id is not always the whole of what resume needs. Antigravity
 reopens against **local** artifacts too: `SessionContinuationMode.RESUME` needs
-the same `save_dir` back, and both paths that supply it destroy it at session
-end. Sandboxed, the outer sandbox sets `ANTIGRAVITY_SAVE_DIR`
-(`backends/antigravity_sdk/sandbox.py`) to `<daemon runtime base>/<random
-hex>/trajectory`, freshly randomized per `describe()`, declared
-`Persistence.SESSION` + `CreationPolicy.CREATE_PRIVATE_DIRECTORY`, and removed by
-`cleanup_created_session_private_roots`. Unsandboxed, it falls back to a
-process-lifetime `tempfile.TemporaryDirectory` (`backend.py`).
+the same `save_dir` back. Increment 3 landed that root:
+`{AGENT_COLLAB_HOME}/trajectories/{session_id}` as `ANTIGRAVITY_SAVE_DIR`,
+`Persistence.HOST` + `CreationPolicy.CREATE_PRIVATE_DIRECTORY`, keyed to a
+validated agent-collab session id allocated before plan resolve. Describe
+without a session id reports the host-persistent `{AGENT_COLLAB_HOME}/trajectories`
+base only and does not invent a random SESSION hex. `resolve_session_plan`
+without a `session_id` fails closed rather than mkdir the HOST base.
+Session-private app-data and home remain `Persistence.SESSION` and are still
+removed on close; the HOST trajectory is not after a live run. Never-live
+starts (failed, cancelled, dry-run, mock, or preflight failure) roll the
+HOST root back. A cancelled daemon start keeps the explicit session id
+reserved until that rollback finishes. Missing durable `save_dir` fails
+closed on both production paths; worker `open` with a captured
+`conversation_id` must not mkdir a missing `save_dir`. No sweeper or
+retention policy was added — see open question 4.
 
-Stage 4 must therefore give this backend a host-persistent, agent-collab-owned
-trajectory root keyed to the agent-collab session, which pulls in three
-consequences no other backend has:
+This backend still has three consequences no other backend has:
 
-1. it becomes a writable exception the outer read-only sandbox mounts rather than
-   a directory it discards, so it needs the same ownership and overlap validation
-   `_select_session_state_base` already applies;
-2. it becomes reportable state: the install-readiness `state dir` column (0.13.0)
-   prints `—` for this backend today precisely because nothing here is
-   host-persistent, and unlike the provider homes that column reports for
-   `claude_cli`/`codex_cli`, this directory is agent-collab's to create;
-3. provider chat trajectories then outlive the session on disk, so retention must
-   cover them the way it covers transcripts — reopen must not become an
-   unbounded, unswept chat archive.
+1. the trajectory is a writable exception the outer read-only sandbox mounts
+   rather than a directory it discards, using the same ownership and overlap
+   validation `_select_session_state_base` already applies (via a
+   host-persistent base, never `XDG_RUNTIME_DIR`);
+2. it is reportable state: the install-readiness `state dir` column reports
+   the agent-collab-created trajectory base without a "sign in" remediation
+   and without mkdir as a side effect of inspection;
+3. provider chat trajectories now outlive the session on disk, so a later
+   retention decision must cover them the way it covers transcripts — reopen
+   must not become an unbounded, unswept chat archive. Policy is undecided.
 
 `xai_sdk` is unaffected (remote handle, `state_roots=()`). Claude and Codex
 reopen against provider-side state plus their own provider home, which the
@@ -1706,7 +1728,13 @@ the feature. A skipped provider keeps the production capability false.
 3. Antigravity's unknown/expired-id rejection has never been exercised against a
    live provider — only the documented `RESUME` contract backs it. (Stage 4)
 4. What retention policy governs durable trajectory roots once they outlive the
-   session? (Stage 4)
+   session? **Recorded 2026-08-17.** Increment 3 made Antigravity SDK
+   trajectories host-persistent and session-keyed
+   (`{AGENT_COLLAB_HOME}/trajectories/{session_id}`). They are no longer
+   removed on session close, runner cleanup, or
+   `cleanup_created_session_private_roots`. No sweeper, prune hook, or
+   retention policy was added. Roots now outlive the session; policy is
+   undecided. (Stage 4)
 5. Do any providers gate tool-approval callbacks behind account or plan
    entitlements that a credentialed test would silently skip? **Claude:
    no.** `can_use_tool` is not plan-gated; silent skip is permission-mode
@@ -2120,7 +2148,7 @@ the tests, not this document, are their guarantee.
   protobuf-major gate. Re-check on any `xai-sdk` bump whether upstream accepts
   protobuf 7 so the shim can retire.
 
-### antigravity_sdk — `google-antigravity` 0.1.8, Python 3.14.4 (verified 2026-08-16)
+### antigravity_sdk — `google-antigravity` 0.1.8, Python 3.14.4 (verified 2026-08-17)
 
 - *[continuity — shipped]* One entered `Agent` owns one stateful
   `Conversation`/localharness connection; `chat()` sends on that connection,
@@ -2141,7 +2169,17 @@ the tests, not this document, are their guarantee.
   the enum and id handling and that malformed ids fail Pydantic validation
   distinctly — a live rejection is still unexercised (open question 3).
 - *[resume]* `save_dir` maps to the localharness trajectory `storage_directory`.
-  Letting each `Agent` synthesize a new temporary directory breaks reopen — see
+  Increment 3 owns a host-persistent, session-keyed root
+  (`{AGENT_COLLAB_HOME}/trajectories/{session_id}`) on both production paths.
+  A captured id always reopens with `SessionContinuationMode.RESUME` against
+  that directory; missing/unusable `save_dir` or a rejected reopen fails
+  structurally. 2026-08-17 live: after dropping the live Agent (in-process
+  `conversation.reset()`) or the worker process (`_drop_worker_session`,
+  HOST trajectory kept), both `sandbox=read-only` and `sandbox=none`
+  reopened the same captured id against that `save_dir` and recalled
+  first-turn memory; the directory still existed after session stop.
+  In-process factory calls are observable in the parent; worker-side
+  Agent construction is not. The public `resume` flag stays false — see
   *Durable trajectory root*.
 - *[tool_gate]* Installed `google-antigravity` 0.1.8
   `LocalAgentConfig.policies` default is `confirm_run_command()`:

@@ -13,6 +13,11 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Keep Antigravity SDK trajectories in a host-persistent, session-keyed
+  directory and reopen a captured conversation id against that `save_dir`
+  after the live Agent is dropped. Never-live starts roll the HOST root
+  back; live session end keeps it. `resume` stays false (#20).
+
 - Capture the Antigravity CLI root conversation id and continue an in-session
   thread with `agy --conversation <id>` on later turns. `continuity` stays
   false until both launch paths pass a credentialed two-turn proof; `resume`

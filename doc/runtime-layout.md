@@ -26,6 +26,8 @@ Global user-owned state (root overridable with `AGENT_COLLAB_HOME`):
     tmp/
       usage-windows/
     session-index.json
+  trajectories/
+    SESSION_ID/      (Antigravity SDK chat trajectories; outlive the session)
 ```
 
 A source-helper user installation defaults to a separate durable environment

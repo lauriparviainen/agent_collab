@@ -16,9 +16,11 @@ import dataclasses
 import json
 import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from agent_collab import backends
@@ -630,7 +632,7 @@ class AntigravityConversationLifecycleTests(unittest.TestCase):
         self.assertEqual(second.conversation_id, conversation_id)
         self.assertEqual(resume_ids, [None, conversation_id])
 
-    def test_default_conversation_reuses_save_dir_until_close(self):
+    def test_default_conversation_reuses_durable_save_dir_across_reset(self):
         conversation_id = "conv-" + ("i" * 32)
         factory_calls = []
 
@@ -653,29 +655,133 @@ class AntigravityConversationLifecycleTests(unittest.TestCase):
                 conversation_id="conv-" + ("i" * 32),
             )
 
-        with mock.patch(
-            "agent_collab.backends.antigravity_sdk.backend._default_agent_factory",
-            side_effect=fake_agent_factory,
+        with tempfile.TemporaryDirectory() as raw:
+            save_dir = str(Path(raw) / "trajectories" / "sess-keep")
+            Path(save_dir).mkdir(parents=True)
+            with mock.patch(
+                "agent_collab.backends.antigravity_sdk.backend._default_agent_factory",
+                side_effect=fake_agent_factory,
+            ):
+                conversation = _default_conversation(
+                    AGENT, {}, Path("/workspace"), save_dir=save_dir
+                )
+
+                async def scenario():
+                    await conversation.run("first")
+                    self.assertEqual(factory_calls[0][1], save_dir)
+                    self.assertTrue(Path(save_dir).is_dir())
+                    await conversation.reset()
+                    await conversation.run("resumed")
+                    await conversation.close()
+
+                asyncio.run(scenario())
+
+            self.assertEqual(
+                factory_calls,
+                [(None, save_dir), (conversation_id, save_dir)],
+            )
+            self.assertTrue(Path(save_dir).is_dir())
+
+    def test_default_conversation_requires_durable_save_dir(self):
+        with self.assertRaises(RuntimeError) as raised:
+            _default_conversation(AGENT, {}, Path("/workspace"))
+        self.assertIn("durable trajectory save_dir", str(raised.exception))
+
+    def test_resume_without_save_dir_never_starts_fresh(self):
+        constructed = []
+
+        class LocalAgentConfig:
+            model_fields = {
+                "conversation_id": object(),
+                "save_dir": object(),
+                "session_continuation_mode": object(),
+            }
+
+            def __init__(self, **kwargs):
+                constructed.append(kwargs)
+
+        class Agent:
+            def __init__(self, config):
+                del config
+
+        fake_module = types.ModuleType("google.antigravity")
+        fake_types = types.ModuleType("google.antigravity.types")
+
+        class SessionContinuationMode:
+            RESUME = "resume"
+            CREATE_OR_RESUME = "create_or_resume"
+
+        fake_types.SessionContinuationMode = SessionContinuationMode
+        fake_module.LocalAgentConfig = LocalAgentConfig
+        fake_module.Agent = Agent
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "google.antigravity": fake_module,
+                "google.antigravity.types": fake_types,
+            },
         ):
-            conversation = _default_conversation(AGENT, {}, Path("/workspace"))
+            with self.assertRaises(RuntimeError) as raised:
+                _default_agent_factory(
+                    AGENT,
+                    {},
+                    Path("/workspace"),
+                    conversation_id="conv-" + ("z" * 32),
+                )
+        self.assertIn("durable save_dir", str(raised.exception))
+        self.assertEqual(constructed, [])
 
-            async def scenario():
-                await conversation.run("first")
-                save_dir = factory_calls[0][1]
-                self.assertIsNotNone(save_dir)
-                self.assertTrue(Path(save_dir).is_dir())
-                await conversation.reset()
-                await conversation.run("resumed")
-                await conversation.close()
-                return save_dir
+    def test_in_process_factory_receives_plan_save_dir(self):
+        captured = {}
 
-            save_dir = asyncio.run(scenario())
+        def fake_agent_factory(
+            _agent,
+            _options,
+            _workdir,
+            *,
+            conversation_id=None,
+            save_dir=None,
+            app_data_dir=None,
+            allow_all_policy=False,
+            extra_workspaces=None,
+            ask_user_handler=None,
+        ):
+            del allow_all_policy, extra_workspaces, ask_user_handler
+            captured["conversation_id"] = conversation_id
+            captured["save_dir"] = save_dir
+            captured["app_data_dir"] = app_data_dir
+            return _FakeAgent(
+                _FakeResponse({"chunks": [{"type": "Text", "step_index": 0, "text": "ok"}]}),
+                conversation_id="conv-" + ("p" * 32),
+            )
 
-        self.assertEqual(
-            factory_calls,
-            [(None, save_dir), (conversation_id, save_dir)],
-        )
-        self.assertFalse(Path(save_dir).exists())
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            save_dir = root / "trajectories" / "sess-plan"
+            app_data = root / "app-data"
+            runner = AntigravitySdkRunner(
+                AGENT, False, {}, conversation_factory=_default_conversation
+            )
+            runner.sandbox_plan = SimpleNamespace(
+                spec=SimpleNamespace(
+                    environment=SimpleNamespace(
+                        set_values={
+                            "ANTIGRAVITY_SAVE_DIR": str(save_dir),
+                            "ANTIGRAVITY_APP_DATA_DIR": str(app_data),
+                        }
+                    )
+                )
+            )
+            with mock.patch(
+                "agent_collab.backends.antigravity_sdk.backend._default_agent_factory",
+                side_effect=fake_agent_factory,
+            ):
+                events = asyncio.run(_collect(runner, "hello"))
+            asyncio.run(runner.close())
+            self.assertTrue(any(event.type == "message" for event in events))
+            self.assertEqual(captured["save_dir"], str(save_dir))
+            self.assertEqual(captured["app_data_dir"], str(app_data))
+            self.assertTrue(save_dir.is_dir())
 
     def test_abnormal_completion_resets_exactly_once_and_keeps_identity_active(self):
         conversation_id = "conv-" + ("c" * 32)
@@ -1416,13 +1522,17 @@ class SdkMissingExtraTests(unittest.TestCase):
                 Path("/tmp/antigravity-workspace"),
             )
             fresh_config = dict(captured["config"])
-            resumed = _default_agent_factory(
-                VERTEX_AGENT,
-                {"model": "gemini-test"},
-                Path("/tmp/antigravity-workspace"),
-                conversation_id="conv-" + ("r" * 32),
-                save_dir="/tmp/antigravity-state",
-            )
+            with tempfile.TemporaryDirectory() as raw:
+                save_dir = str(Path(raw) / "antigravity-state")
+                Path(save_dir).mkdir()
+                resumed = _default_agent_factory(
+                    VERTEX_AGENT,
+                    {"model": "gemini-test"},
+                    Path("/tmp/antigravity-workspace"),
+                    conversation_id="conv-" + ("r" * 32),
+                    save_dir=save_dir,
+                )
+                resumed_save_dir = save_dir
 
         self.assertIsInstance(result, Agent)
         self.assertEqual(
@@ -1439,19 +1549,26 @@ class SdkMissingExtraTests(unittest.TestCase):
         self.assertIsInstance(resumed, Agent)
         self.assertEqual(captured["config"]["conversation_id"], "conv-" + ("r" * 32))
         self.assertEqual(captured["config"]["session_continuation_mode"], "resume")
-        self.assertEqual(captured["config"]["save_dir"], "/tmp/antigravity-state")
+        self.assertEqual(captured["config"]["save_dir"], resumed_save_dir)
 
     def test_runner_with_default_factory_emits_actionable_error_event(self):
         runner = AntigravitySdkBackend().create_runner(AGENT, False, {})
+        with tempfile.TemporaryDirectory() as raw:
+            save_dir = Path(raw) / "trajectories" / "sess-err"
+            runner.sandbox_plan = SimpleNamespace(
+                spec=SimpleNamespace(
+                    environment=SimpleNamespace(set_values={"ANTIGRAVITY_SAVE_DIR": str(save_dir)})
+                )
+            )
 
-        async def scenario():
-            try:
-                with mock.patch.dict(sys.modules, {"google.antigravity": None}):
-                    return await _collect(runner)
-            finally:
-                await runner.close()
+            async def scenario():
+                try:
+                    with mock.patch.dict(sys.modules, {"google.antigravity": None}):
+                        return await _collect(runner)
+                finally:
+                    await runner.close()
 
-        events = asyncio.run(scenario())
+            events = asyncio.run(scenario())
         self.assertTrue(any(e.type == "error" and "google-antigravity" in e.text for e in events))
 
 

@@ -373,8 +373,10 @@ def _state_root_summary(backend: Any, agent: Any) -> Tuple[str, Optional[Dict[st
     The verdict comes from ``resolve_state_root`` itself rather than a private
     existence check, so install cannot green-light a path the session-start plan
     resolver would refuse — a symlinked or group-writable directory exists but
-    is rejected there. Only ``MUST_EXIST`` roots reach it, so the resolver's
-    create branch is unreachable and this stays a read-only inspection.
+    is rejected there. ``MUST_EXIST`` roots reach the resolver's validate-only
+    branch. Host-persistent ``CREATE_PRIVATE_DIRECTORY`` roots (agent-collab
+    creates them at session start) are reported without mkdir and without the
+    provider-home "sign in once" remediation.
     """
 
     adapter = getattr(backend, "sandbox_adapter", None)
@@ -389,9 +391,15 @@ def _state_root_summary(backend: Any, agent: Any) -> Tuple[str, Optional[Dict[st
             for root in spec.state_roots
             if root.persistence is Persistence.HOST and root.creation is CreationPolicy.MUST_EXIST
         ]
+        created_by_us = [
+            root
+            for root in spec.state_roots
+            if root.persistence is Persistence.HOST
+            and root.creation is CreationPolicy.CREATE_PRIVATE_DIRECTORY
+        ]
     except Exception:
         return "unknown", None
-    if not required:
+    if not required and not created_by_us:
         return STATE_ROOT_NOT_APPLICABLE, None
     for root in required:
         display = _display_path(root.destination)
@@ -429,7 +437,36 @@ def _state_root_summary(backend: Any, agent: Any) -> Tuple[str, Optional[Dict[st
             }
         except Exception:
             return "unknown", None
+    for root in created_by_us:
+        destination = root.destination
+        display = _display_path(destination)
+        if _is_sentinel_state_root(destination):
+            return "invalid", {
+                "code": "repair_agent_collab_state",
+                "message": (
+                    "Set AGENT_COLLAB_HOME to a daemon-owned directory outside the "
+                    "workspace. Agent-collab creates this trajectory directory at "
+                    "session start."
+                ),
+            }
+        if destination.exists():
+            try:
+                resolve_state_root(root)
+            except SandboxFailure as failure:
+                return "invalid", {
+                    "code": "repair_agent_collab_state",
+                    "message": (
+                        f"{display} cannot be the host-persistent trajectory root: {failure}. "
+                        "Repair AGENT_COLLAB_HOME or select sandbox='none'."
+                    ),
+                }
+            except Exception:
+                return "unknown", None
     return "ok", None
+
+
+def _is_sentinel_state_root(path: Path) -> bool:
+    return "nonexistent" in path.parts
 
 
 def _path_presence(path: Path) -> str:

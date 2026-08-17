@@ -64,12 +64,15 @@ The runner lazily opens one `Agent` and reuses it across sequential turns.
 `Agent.conversation_id` is captured as identity kind `conversation`. After an
 abnormal turn, reset closes the suspect live object but retains the ID; the
 next connection uses `LocalAgentConfig(conversation_id=...,
-session_continuation_mode=RESUME)` with the same runner-owned trajectory
-`save_dir`. That directory survives resets and is removed on final close. A
-rejected ID fails structurally and never falls back to `CREATE_OR_RESUME` or a
-fresh conversation. If an abnormal first connection never exposes an ID, the
-next continuation attempt fails structurally once; only a later, explicit
-full-prompt user turn may open a new conversation.
+session_continuation_mode=RESUME)` against the same host-persistent,
+session-keyed trajectory `save_dir`
+(`$AGENT_COLLAB_HOME/trajectories/<session_id>`). That directory survives
+resets and session close; agent-collab does not sweep it. A rejected or
+missing ID, or a missing/unusable `save_dir`, fails structurally and never
+falls back to `CREATE_OR_RESUME` or a fresh conversation. If an abnormal
+first connection never exposes an ID, the next continuation attempt fails
+structurally once; only a later, explicit full-prompt user turn may open a
+new conversation.
 
 ## Turn outcome
 
@@ -107,9 +110,10 @@ Stage 7 advertises outer `sandbox = "read-only"` as an `sdk_worker` backend.
 Agent-collab launches a supervised Bubblewrap namespace, proves establishment,
 then runs `python -I -m agent_collab.sandbox.sdk_worker`. The worker owns the
 complete Antigravity SDK client, callbacks, and bundled `localharness` plus
-tool descendants. Session-private trajectory and app-data directories are created
-for the session; configured Application Default Credentials are mounted
-read-only. After outer proof, the worker installs `policy.ask_user("*")` so
+tool descendants. A host-persistent, session-keyed trajectory directory is mounted writable
+for the session; session-private app-data and home directories are still
+created and removed at session end. Configured Application Default
+Credentials are mounted read-only. After outer proof, the worker installs `policy.ask_user("*")` so
 tool calls park for host approval. It does **not** force `allow_all` — that
 policy skips the host gate (Claude analog of `bypassPermissions`). Ungated
 in-process (`sandbox = "none"`) keeps the SDK default

@@ -45,12 +45,23 @@ class AntigravitySdkWorkerBackend:
             self._agent_id = agent_id
         save_dir = payload.get("save_dir")
         app_data_dir = payload.get("app_data_dir")
+        conversation_id = payload.get("conversation_id")
         if not isinstance(save_dir, str) or not save_dir:
             raise RuntimeError("antigravity sdk worker open requires save_dir")
         if not isinstance(app_data_dir, str) or not app_data_dir:
             raise RuntimeError("antigravity sdk worker open requires app_data_dir")
-        Path(save_dir).mkdir(parents=True, exist_ok=True)
-        Path(app_data_dir).mkdir(parents=True, exist_ok=True)
+        reopen = isinstance(conversation_id, str) and bool(conversation_id)
+        if reopen:
+            # A captured id must reopen the existing durable root. mkdir here
+            # would create an empty save_dir and the factory would RESUME into
+            # emptiness instead of failing closed.
+            if not Path(save_dir).is_dir():
+                raise RuntimeError(
+                    "antigravity sdk cannot resume: durable save_dir is missing or unusable"
+                )
+        else:
+            Path(save_dir).mkdir(parents=True, exist_ok=True)
+            Path(app_data_dir).mkdir(parents=True, exist_ok=True)
 
         agent = _WorkerAgent(
             agent_id=self._agent_id,
@@ -79,6 +90,8 @@ class AntigravitySdkWorkerBackend:
             extra_workspaces=extras,
             ask_user_handler=PinnedAskUserHandler(self._ask_user),
         )
+        if isinstance(conversation_id, str) and conversation_id:
+            conversation.note_session_id(conversation_id)
         self._conversation = conversation
         self._verbose = verbose
         self._workspace = workspace

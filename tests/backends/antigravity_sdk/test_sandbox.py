@@ -10,10 +10,14 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from agent_collab.backends.antigravity_sdk.sandbox import AntigravitySdkSandboxAdapter
+from agent_collab.backends.antigravity_sdk.sandbox import (
+    AntigravitySdkSandboxAdapter,
+    durable_trajectory_dir,
+)
 from agent_collab.config import AgentConfig
 from agent_collab.outcomes import TurnOutcome
 from agent_collab.sandbox.specs import (
+    Persistence,
     SandboxContext,
     SandboxFailure,
     SandboxPolicy,
@@ -28,7 +32,14 @@ class AntigravitySdkSandboxAdapterTests(unittest.TestCase):
             workspace = root / "workspace"
             workspace.mkdir(mode=0o700)
             adapter = AntigravitySdkSandboxAdapter()
-            spec = adapter.describe(SandboxContext(workspace, workspace, {"HOME": str(root)}))
+            spec = adapter.describe(
+                SandboxContext(
+                    workspace,
+                    workspace,
+                    {"HOME": str(root), "AGENT_COLLAB_HOME": str(root / "ac-home")},
+                    session_id="sess-describe",
+                )
+            )
             self.assertIs(spec.support, SandboxSupport.SDK_WORKER)
             self.assertIn(SandboxPolicy.READ_ONLY, spec.policies)
             self.assertIn(SandboxPolicy.NONE, spec.policies)
@@ -36,8 +47,15 @@ class AntigravitySdkSandboxAdapterTests(unittest.TestCase):
             self.assertIn("Antigravity SDK trajectory", labels)
             self.assertIn("Antigravity SDK app data", labels)
             self.assertIn("Antigravity SDK private home", labels)
+            by_label = {item.label: item for item in spec.state_roots}
+            self.assertEqual(by_label["Antigravity SDK trajectory"].persistence, Persistence.HOST)
+            self.assertEqual(
+                by_label["Antigravity SDK app data"].persistence.value, "session_private"
+            )
+            self.assertEqual(
+                by_label["Antigravity SDK private home"].persistence.value, "session_private"
+            )
             for item in spec.state_roots:
-                self.assertEqual(item.persistence.value, "session_private")
                 self.assertEqual(item.creation.value, "create_private_directory")
             self.assertEqual(dict(spec.native_profile.sdk_options).get("policy"), "ask_user")
             self.assertEqual(
@@ -66,6 +84,91 @@ class AntigravitySdkSandboxAdapterTests(unittest.TestCase):
             self.assertEqual(payload["app_data_dir"], str(root / "app"))
             self.assertEqual(payload["cwd"], str(workspace / "sub"))
             self.assertEqual(payload["backend_config"]["project"], "p")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "ANTIGRAVITY_SAVE_DIR": str(root / "ambient-traj"),
+                    "ANTIGRAVITY_APP_DATA_DIR": str(root / "ambient-app"),
+                },
+            ):
+                with self.assertRaises(RuntimeError) as raised:
+                    adapter.worker_open_payload_for_agent(
+                        agent_id="reviewer",
+                        options={},
+                        workspace=workspace,
+                        cwd=workspace,
+                        agent_env={},
+                        backend_config={},
+                        verbose=False,
+                    )
+            self.assertIn("durable save_dir", str(raised.exception))
+            self.assertNotIn("agent-collab-antigravity-sdk", str(raised.exception))
+            self.assertNotIn("ambient-traj", str(raised.exception))
+            with self.assertRaises(RuntimeError) as raised_app:
+                adapter.worker_open_payload_for_agent(
+                    agent_id="reviewer",
+                    options={},
+                    workspace=workspace,
+                    cwd=workspace,
+                    agent_env={},
+                    backend_config={},
+                    verbose=False,
+                    save_dir=str(root / "traj"),
+                )
+            self.assertIn("app_data_dir", str(raised_app.exception))
+
+    def test_session_keyed_trajectory_is_stable_and_host_persistent(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir(mode=0o700)
+            home = root / "ac-home"
+            home.mkdir(mode=0o700)
+            adapter = AntigravitySdkSandboxAdapter()
+            env = {"HOME": str(root / "home"), "AGENT_COLLAB_HOME": str(home)}
+            first = adapter.describe(SandboxContext(workspace, workspace, env, session_id="sess-a"))
+            second = adapter.describe(
+                SandboxContext(workspace, workspace, env, session_id="sess-a")
+            )
+            other = adapter.describe(SandboxContext(workspace, workspace, env, session_id="sess-b"))
+            base_only = adapter.describe(SandboxContext(workspace, workspace, env))
+            traj_a = first.state_roots[0].destination
+            self.assertEqual(traj_a, second.state_roots[0].destination)
+            self.assertNotEqual(traj_a, other.state_roots[0].destination)
+            self.assertEqual(traj_a, home / "trajectories" / "sess-a")
+            self.assertEqual(other.state_roots[0].destination, home / "trajectories" / "sess-b")
+            self.assertEqual(base_only.state_roots[0].destination, home / "trajectories")
+            self.assertEqual(first.state_roots[0].persistence, Persistence.HOST)
+            self.assertNotIn("sess-a", str(base_only.state_roots[0].destination))
+            self.assertFalse(any(part == "trajectory" and "hex" in part for part in traj_a.parts))
+            self.assertEqual(
+                durable_trajectory_dir(
+                    SandboxContext(workspace, workspace, env, session_id="sess-a")
+                ),
+                traj_a,
+            )
+
+    def test_invalid_session_id_is_not_interpolated_into_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir(mode=0o700)
+            home = root / "ac-home"
+            home.mkdir(mode=0o700)
+            spec = AntigravitySdkSandboxAdapter().describe(
+                SandboxContext(
+                    workspace,
+                    workspace,
+                    {"HOME": str(root), "AGENT_COLLAB_HOME": str(home)},
+                    session_id="../escape",
+                )
+            )
+            self.assertNotIn("escape", spec.state_roots[0].destination.parts)
+            with self.assertRaises(SandboxFailure) as raised:
+                for item in spec.compatibility:
+                    if item.name == "session_id_path_safety":
+                        item.check()
+            self.assertEqual(raised.exception.code, "outer_sandbox_scratch_anchor_invalid")
 
     def test_adc_must_be_absolute_existing_file_when_set(self) -> None:
         adapter = AntigravitySdkSandboxAdapter()
@@ -202,6 +305,17 @@ class AntigravitySdkSandboxAdapterTests(unittest.TestCase):
                 )
             )
             self.assertIsNone(base)
+            persistent = sandbox_mod._select_persistent_trajectory_base(
+                SandboxContext(
+                    workspace,
+                    workspace,
+                    {
+                        "HOME": str(root / "home"),
+                        "AGENT_COLLAB_HOME": str(overlapping_home),
+                    },
+                )
+            )
+            self.assertIsNone(persistent)
 
     def test_protobuf_incompatible_fails_closed(self) -> None:
         adapter = AntigravitySdkSandboxAdapter()
@@ -317,6 +431,107 @@ class AntigravitySdkWorkerBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(captured["kwargs"].get("allow_all_policy"), True)
         self.assertTrue(callable(captured["kwargs"].get("ask_user_handler")))
         self.assertEqual(tuple(captured.get("extra_workspaces") or ()), ())
+
+    async def test_open_seeds_captured_conversation_id_for_resume(self) -> None:
+        from agent_collab.backends.antigravity_sdk.worker import AntigravitySdkWorkerBackend
+
+        noted: list[str] = []
+
+        def fake_default_conversation(agent, options, workdir, **kwargs):
+            del agent, options, workdir, kwargs
+
+            class _Conv:
+                def active(self):
+                    return True
+
+                async def run(self, prompt):
+                    raise RuntimeError("unused")
+
+                def note_session_id(self, conversation_id):
+                    noted.append(conversation_id)
+
+                async def reset(self):
+                    return None
+
+                async def close(self):
+                    return None
+
+            return _Conv()
+
+        with mock.patch(
+            "agent_collab.backends.antigravity_sdk.worker._default_conversation",
+            side_effect=fake_default_conversation,
+        ):
+            backend = AntigravitySdkWorkerBackend()
+            with tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                workspace = root / "workspace"
+                traj = root / "traj"
+                app = root / "app"
+                workspace.mkdir()
+                traj.mkdir()
+                app.mkdir()
+                await backend.open(
+                    {
+                        "workspace": str(workspace),
+                        "cwd": str(workspace),
+                        "options": {},
+                        "backend_config": {},
+                        "agent_env": {},
+                        "agent_id": "reviewer",
+                        "verbose": False,
+                        "save_dir": str(traj),
+                        "app_data_dir": str(app),
+                        "conversation_id": "conv-resume-1",
+                    }
+                )
+        self.assertEqual(noted, ["conv-resume-1"])
+
+    async def test_open_with_conversation_id_does_not_recreate_missing_save_dir(self) -> None:
+        from agent_collab.backends.antigravity_sdk.worker import AntigravitySdkWorkerBackend
+
+        def unused_conversation(*_args, **_kwargs):
+            raise AssertionError(
+                "worker open must not construct a conversation when save_dir is missing"
+            )
+
+        with (
+            mock.patch(
+                "agent_collab.backends.antigravity_sdk.worker._default_conversation",
+                side_effect=unused_conversation,
+            ),
+            mock.patch(
+                "agent_collab.backends.antigravity_sdk.backend._default_agent_factory",
+                side_effect=unused_conversation,
+            ),
+        ):
+            backend = AntigravitySdkWorkerBackend()
+            with tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                workspace = root / "workspace"
+                traj = root / "traj"
+                app = root / "app"
+                workspace.mkdir()
+                traj.mkdir()
+                app.mkdir()
+                traj.rmdir()
+                with self.assertRaises(RuntimeError) as raised:
+                    await backend.open(
+                        {
+                            "workspace": str(workspace),
+                            "cwd": str(workspace),
+                            "options": {},
+                            "backend_config": {},
+                            "agent_env": {},
+                            "agent_id": "reviewer",
+                            "verbose": False,
+                            "save_dir": str(traj),
+                            "app_data_dir": str(app),
+                            "conversation_id": "conv-resume-missing",
+                        }
+                    )
+                self.assertIn("save_dir is missing or unusable", str(raised.exception))
+                self.assertFalse(traj.exists())
 
     async def test_open_declares_external_cwd_as_extra_workspace(self) -> None:
         from agent_collab.backends.antigravity_sdk.worker import AntigravitySdkWorkerBackend
@@ -616,6 +831,8 @@ class AntigravitySdkPlanCleanupTests(unittest.TestCase):
                     del plan
                     return tuple(command)
 
+            ac_home = root / "home-ac"
+            ac_home.mkdir(mode=0o700)
             with (
                 mock.patch(
                     "agent_collab.backends.antigravity_sdk.sandbox._select_session_state_base",
@@ -639,17 +856,23 @@ class AntigravitySdkPlanCleanupTests(unittest.TestCase):
                         policy=resolve_sandbox_policy("read-only", "none"),
                         workspace_path=workspace,
                         agents={
-                            "a": (None, {"HOME": str(root / "home")}, good),
+                            "a": (
+                                None,
+                                {"HOME": str(root / "home"), "AGENT_COLLAB_HOME": str(ac_home)},
+                                good,
+                            ),
                             "b": (None, {}, _FailingAdapter()),
                         },
                         operator=SandboxOperatorConfig(
                             scratch_root=root / "scratch",
-                            agent_collab_home=root / "home-ac",
+                            agent_collab_home=ac_home,
                         ),
                         audit=False,
+                        session_id="sess-multi",
                     )
             after = {p for p in state_base.iterdir()} if state_base.exists() else set()
             self.assertEqual(after, before)
+            self.assertFalse((ac_home / "trajectories" / "sess-multi").exists())
 
     def test_in_agent_failure_removes_empty_shared_parent(self) -> None:
         """Rollback must delete children and empty random token parent."""
@@ -689,6 +912,7 @@ class AntigravitySdkPlanCleanupTests(unittest.TestCase):
             adc.write_text("{}\n", encoding="utf-8")
             link_dir = root / "adc-link"
             link_dir.symlink_to(real_adc_dir, target_is_directory=True)
+            (root / "home-ac").mkdir(mode=0o700)
             before = set(state_base.iterdir())
             with (
                 mock.patch(
@@ -717,6 +941,7 @@ class AntigravitySdkPlanCleanupTests(unittest.TestCase):
                                 None,
                                 {
                                     "HOME": str(home),
+                                    "AGENT_COLLAB_HOME": str(root / "home-ac"),
                                     "GOOGLE_APPLICATION_CREDENTIALS": str(link_dir / "adc.json"),
                                 },
                                 adapter,
@@ -727,6 +952,7 @@ class AntigravitySdkPlanCleanupTests(unittest.TestCase):
                             agent_collab_home=root / "home-ac",
                         ),
                         audit=False,
+                        session_id="sess-adc-fail",
                     )
             after = set(state_base.iterdir())
             self.assertEqual(after, before)
@@ -914,6 +1140,145 @@ class AntigravitySdkRunnerWorkerPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(runner._worker_terminal)
         self.assertTrue(runner._worker_resume_blocked)
         self.assertEqual(cleanups, 0)
+
+
+class AntigravitySdkDurableRootCleanupTests(unittest.TestCase):
+    def test_session_private_cleanup_leaves_host_trajectory(self) -> None:
+        from agent_collab.sandbox.plan import SandboxOperatorConfig, resolve_session_plan
+        from agent_collab.sandbox.policy import resolve_sandbox_policy
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir(mode=0o700)
+            ac_home = root / "ac-home"
+            ac_home.mkdir(mode=0o700)
+            state_base = root / "runtime" / "antigravity-sdk"
+            state_base.mkdir(parents=True, mode=0o700)
+            with (
+                mock.patch(
+                    "agent_collab.backends.antigravity_sdk.sandbox._select_session_state_base",
+                    return_value=state_base,
+                ),
+                mock.patch(
+                    "agent_collab.backends.antigravity_sdk.sandbox.package_version",
+                    return_value="7.35.0",
+                ),
+                mock.patch(
+                    "agent_collab.backends.antigravity_sdk.sandbox.platform.libc_ver",
+                    return_value=("glibc", "2.35"),
+                ),
+                mock.patch(
+                    "agent_collab.sandbox.plan.resolve_scratch_anchor",
+                    return_value=root / "scratch",
+                ),
+            ):
+                plan = resolve_session_plan(
+                    policy=resolve_sandbox_policy("read-only", "none"),
+                    workspace_path=workspace,
+                    agents={
+                        "ag": (
+                            None,
+                            {"HOME": str(root / "home"), "AGENT_COLLAB_HOME": str(ac_home)},
+                            AntigravitySdkSandboxAdapter(),
+                        )
+                    },
+                    operator=SandboxOperatorConfig(
+                        scratch_root=root / "scratch",
+                        agent_collab_home=ac_home,
+                    ),
+                    audit=False,
+                    session_id="sess-keep",
+                )
+            trajectory = ac_home / "trajectories" / "sess-keep"
+            self.assertTrue(trajectory.is_dir())
+            plan.cleanup_created_session_private_roots()
+            self.assertTrue(trajectory.is_dir())
+            self.assertFalse((state_base / "sess-keep").exists())
+
+    def test_resolve_without_session_id_does_not_mkdir_host_trajectory(self) -> None:
+        from agent_collab.sandbox.plan import SandboxOperatorConfig, resolve_session_plan
+        from agent_collab.sandbox.policy import resolve_sandbox_policy
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir(mode=0o700)
+            ac_home = root / "ac-home"
+            ac_home.mkdir(mode=0o700)
+            state_base = root / "runtime" / "antigravity-sdk"
+            state_base.mkdir(parents=True, mode=0o700)
+            with (
+                mock.patch(
+                    "agent_collab.backends.antigravity_sdk.sandbox._select_session_state_base",
+                    return_value=state_base,
+                ),
+                mock.patch(
+                    "agent_collab.backends.antigravity_sdk.sandbox.package_version",
+                    return_value="7.35.0",
+                ),
+                mock.patch(
+                    "agent_collab.backends.antigravity_sdk.sandbox.platform.libc_ver",
+                    return_value=("glibc", "2.35"),
+                ),
+                mock.patch(
+                    "agent_collab.sandbox.plan.resolve_scratch_anchor",
+                    return_value=root / "scratch",
+                ),
+            ):
+                with self.assertRaises(SandboxFailure) as raised:
+                    resolve_session_plan(
+                        policy=resolve_sandbox_policy("read-only", "none"),
+                        workspace_path=workspace,
+                        agents={
+                            "ag": (
+                                None,
+                                {"HOME": str(root / "home"), "AGENT_COLLAB_HOME": str(ac_home)},
+                                AntigravitySdkSandboxAdapter(),
+                            )
+                        },
+                        operator=SandboxOperatorConfig(
+                            scratch_root=root / "scratch",
+                            agent_collab_home=ac_home,
+                        ),
+                        audit=False,
+                    )
+            self.assertIn("session_id", str(raised.exception))
+            self.assertFalse((ac_home / "trajectories").exists())
+            self.assertFalse((state_base / "session-private").exists())
+
+    def test_runner_close_does_not_delete_host_trajectory(self) -> None:
+        from agent_collab.backends.antigravity_sdk.backend import AntigravitySdkRunner
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            trajectory = root / "trajectories" / "sess-keep"
+            state_root = root / "runtime" / "antigravity-sdk" / "sess-keep"
+            app_data = state_root / "app-data"
+            trajectory.mkdir(parents=True, mode=0o700)
+            app_data.mkdir(parents=True, mode=0o700)
+            (trajectory / "marker").write_text("keep\n", encoding="utf-8")
+            runner = AntigravitySdkRunner(
+                AgentConfig(id="ag", type="antigravity", backend="sdk"),
+                False,
+                {},
+                conversation_factory=AntigravitySdkRunnerWorkerPathTests._unused_conversation_factory,
+            )
+            runner.sandbox_plan = SimpleNamespace(
+                spec=SimpleNamespace(
+                    environment=SimpleNamespace(
+                        set_values={
+                            "ANTIGRAVITY_SAVE_DIR": str(trajectory),
+                            "ANTIGRAVITY_APP_DATA_DIR": str(app_data),
+                            "ANTIGRAVITY_STATE_ROOT": str(state_root),
+                        }
+                    )
+                )
+            )
+            runner._cleanup_session_state()
+            self.assertTrue(trajectory.is_dir())
+            self.assertTrue((trajectory / "marker").is_file())
+            self.assertFalse(state_root.exists())
 
 
 if __name__ == "__main__":

@@ -6,10 +6,9 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import platform
-import secrets
-import tempfile
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
+from ...retention import is_valid_session_id
 from ...sandbox.plan import ResolvedSandboxPlan
 from ...sandbox.specs import (
     BackendSandboxSpec,
@@ -40,11 +39,12 @@ class AntigravitySdkSandboxAdapter:
 
     def describe(self, context: SandboxContext) -> BackendSandboxSpec:
         inherited = context.inherited_environment
-        # Session-private provider roots are created at plan resolve for
+        # Session-private app-data/home are created at plan resolve for
         # read-only starts (CREATE_PRIVATE_DIRECTORY). Discovery/none paths
-        # never materialise them.
+        # never materialise them. The trajectory is host-persistent and
+        # session-keyed; without a session_id, describe() reports the base only.
         state_root = _session_state_root(context)
-        trajectory = state_root / "trajectory"
+        trajectory = durable_trajectory_dir(context)
         app_data = state_root / "app-data"
         private_home = state_root / "home"
 
@@ -92,7 +92,7 @@ class AntigravitySdkSandboxAdapter:
                     label="Antigravity SDK trajectory",
                     destination=trajectory,
                     access=PathAccess.WRITABLE,
-                    persistence=Persistence.SESSION,
+                    persistence=Persistence.HOST,
                     creation=CreationPolicy.CREATE_PRIVATE_DIRECTORY,
                 ),
                 StateRootSpec(
@@ -125,7 +125,7 @@ class AntigravitySdkSandboxAdapter:
                 summary={
                     "shape": "sdk_worker",
                     "policy": "ask_user",
-                    "trajectory": "session_private_save_dir",
+                    "trajectory": "host_persistent_session_keyed_save_dir",
                     "app_data": "session_private_app_data_dir",
                     "adc": "read_only_when_configured",
                     "keyring": "external_service_outside_filesystem_boundary",
@@ -142,6 +142,14 @@ class AntigravitySdkSandboxAdapter:
                 CompatibilityCheck(
                     "session_state_anchor",
                     lambda: _require_session_state_base(context),
+                ),
+                CompatibilityCheck(
+                    "trajectory_state_anchor",
+                    lambda: _require_persistent_trajectory_base(context),
+                ),
+                CompatibilityCheck(
+                    "session_id_path_safety",
+                    lambda: _require_safe_session_id(context),
                 ),
             ),
             external_services=(
@@ -170,18 +178,13 @@ class AntigravitySdkSandboxAdapter:
         verbose: bool,
         save_dir: Optional[str] = None,
         app_data_dir: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ) -> dict[str, Any]:
-        effective_save = save_dir or os.environ.get("ANTIGRAVITY_SAVE_DIR")
-        effective_app = app_data_dir or os.environ.get("ANTIGRAVITY_APP_DATA_DIR")
-        if not effective_save:
-            effective_save = str(
-                Path(tempfile.gettempdir()) / "agent-collab-antigravity-sdk" / "trajectory"
-            )
-        if not effective_app:
-            effective_app = str(
-                Path(tempfile.gettempdir()) / "agent-collab-antigravity-sdk" / "app-data"
-            )
-        return {
+        if not isinstance(save_dir, str) or not save_dir.strip():
+            raise RuntimeError("antigravity sdk worker open requires a durable save_dir")
+        if not isinstance(app_data_dir, str) or not app_data_dir.strip():
+            raise RuntimeError("antigravity sdk worker open requires app_data_dir")
+        payload = {
             "backend": "antigravity_sdk",
             "agent_id": agent_id,
             "workspace": str(workspace),
@@ -190,10 +193,41 @@ class AntigravitySdkSandboxAdapter:
             "backend_config": dict(backend_config),
             "agent_env": dict(agent_env),
             "verbose": bool(verbose),
-            "save_dir": effective_save,
-            "app_data_dir": effective_app,
+            "save_dir": save_dir,
+            "app_data_dir": app_data_dir,
             "native": {"policy": "ask_user"},
         }
+        if isinstance(conversation_id, str) and conversation_id:
+            payload["conversation_id"] = conversation_id
+        return payload
+
+
+_SENTINEL_ROOT = Path("/nonexistent/agent-collab-antigravity-sdk")
+_TRAJECTORIES = "trajectories"
+_SESSION_PRIVATE_KEY = "session-private"
+
+
+def _workspace_absolute(context: SandboxContext) -> Path:
+    return Path(os.path.normpath(str(context.workspace.absolute())))
+
+
+def _owned_absolute_base(candidate: Path, workspace: Path) -> Optional[Path]:
+    try:
+        absolute = candidate.expanduser()
+        if not absolute.is_absolute():
+            return None
+        absolute = Path(os.path.normpath(str(absolute.absolute())))
+        if _path_overlaps(absolute, workspace):
+            return None
+        parent = absolute
+        while not parent.exists() and parent.parent != parent:
+            parent = parent.parent
+        if parent.exists() and parent.is_dir() and not parent.is_symlink():
+            if os.stat(parent).st_uid == os.getuid():
+                return absolute
+    except OSError:
+        return None
+    return None
 
 
 def _session_state_root(context: SandboxContext) -> Path:
@@ -201,9 +235,35 @@ def _session_state_root(context: SandboxContext) -> Path:
     # describe() must not raise: when no safe base exists, use a sentinel path
     # and fail closed in the session_state_anchor compatibility check.
     base = _select_session_state_base(context)
+    key = _session_path_key(context)
+    if key is False:
+        return _SENTINEL_ROOT / _SESSION_PRIVATE_KEY
     if base is None:
-        return Path("/nonexistent/agent-collab-antigravity-sdk") / secrets.token_hex(8)
-    return (base / secrets.token_hex(8)).absolute()
+        return _SENTINEL_ROOT / (key or _SESSION_PRIVATE_KEY)
+    return (base / (key or _SESSION_PRIVATE_KEY)).absolute()
+
+
+def durable_trajectory_dir(context: SandboxContext) -> Path:
+    """Host-persistent trajectory path, or the trajectories base when session_id is absent."""
+
+    base = _select_persistent_trajectory_base(context)
+    key = _session_path_key(context)
+    if key is False or base is None:
+        return _SENTINEL_ROOT / _TRAJECTORIES
+    if key is None:
+        return (base / _TRAJECTORIES).absolute()
+    return (base / _TRAJECTORIES / key).absolute()
+
+
+def _session_path_key(context: SandboxContext) -> Optional[str] | bool:
+    """Validated session_id, None when describe-only, False when unsafe."""
+
+    session_id = context.session_id
+    if session_id is None:
+        return None
+    if not is_valid_session_id(session_id):
+        return False
+    return session_id
 
 
 def _select_session_state_base(context: SandboxContext) -> Optional[Path]:
@@ -220,25 +280,27 @@ def _select_session_state_base(context: SandboxContext) -> Optional[Path]:
         candidates.append(Path(home).expanduser() / "runtime" / "antigravity-sdk")
     else:
         candidates.append(Path.home() / ".agent-collab" / "runtime" / "antigravity-sdk")
-    # Normalize lexical .. before overlap checks so paths like
-    # /home/x/../home/x/workspace cannot bypass the workspace guard.
-    workspace = Path(os.path.normpath(str(context.workspace.absolute())))
+    workspace = _workspace_absolute(context)
     for candidate in candidates:
-        try:
-            absolute = candidate.expanduser()
-            if not absolute.is_absolute():
-                continue
-            absolute = Path(os.path.normpath(str(absolute.absolute())))
-            if _path_overlaps(absolute, workspace):
-                continue
-            parent = absolute
-            while not parent.exists() and parent.parent != parent:
-                parent = parent.parent
-            if parent.exists() and parent.is_dir() and not parent.is_symlink():
-                if os.stat(parent).st_uid == os.getuid():
-                    return absolute
-        except OSError:
-            continue
+        selected = _owned_absolute_base(candidate, workspace)
+        if selected is not None:
+            return selected
+    return None
+
+
+def _select_persistent_trajectory_base(context: SandboxContext) -> Optional[Path]:
+    """Host-persistent AGENT_COLLAB_HOME (never XDG_RUNTIME_DIR)."""
+
+    home = context.inherited_environment.get("AGENT_COLLAB_HOME")
+    if home:
+        candidates = [Path(home).expanduser()]
+    else:
+        candidates = [Path.home() / ".agent-collab"]
+    workspace = _workspace_absolute(context)
+    for candidate in candidates:
+        selected = _owned_absolute_base(candidate, workspace)
+        if selected is not None:
+            return selected
     return None
 
 
@@ -253,6 +315,32 @@ def _require_session_state_base(context: SandboxContext) -> None:
                 "path outside the workspace (do not point AGENT_COLLAB_HOME inside "
                 "the session workspace).",
             ),
+        )
+
+
+def _require_persistent_trajectory_base(context: SandboxContext) -> None:
+    if _select_persistent_trajectory_base(context) is None:
+        raise SandboxFailure(
+            "outer_sandbox_scratch_anchor_invalid",
+            "no safe host-persistent trajectory root for Antigravity SDK",
+            phase="validation",
+            remediation=(
+                "Set AGENT_COLLAB_HOME to a daemon-owned absolute path outside the "
+                "workspace. Durable Antigravity trajectories are not stored under "
+                "XDG_RUNTIME_DIR.",
+            ),
+        )
+
+
+def _require_safe_session_id(context: SandboxContext) -> None:
+    if context.session_id is None:
+        return
+    if not is_valid_session_id(context.session_id):
+        raise SandboxFailure(
+            "outer_sandbox_scratch_anchor_invalid",
+            "session_id is not safe for a filesystem path",
+            phase="validation",
+            remediation=("Use a session id without path separators or '.' / '..'.",),
         )
 
 

@@ -16,8 +16,9 @@ from .config import (
     validate_workflow,
     workflow_members,
 )
-from .events import Event
+from .events import Event, utc_timestamp
 from .logging import SessionLogger
+from .retention import is_valid_session_id
 from .outcomes import SessionFailure, TurnOutcome, TurnOutcomeRecord
 from .paths import GlobalDataPaths
 from .runners import (
@@ -228,12 +229,26 @@ class Referee:
         # transcript[watermark:] minus the agent's own events. Never advanced to
         # completion-time length, so peer events emitted mid-turn stay in the delta.
         self._agent_watermarks: Dict[str, int] = {}
+        self._ensure_session_id()
         self._direct_sandbox_plan = config.sandbox_plan is None
         self.sandbox_plan = config.sandbox_plan
         if self.sandbox_plan is None:
             self.sandbox_plan = self._resolve_direct_sandbox_plan()
         self._live_runners: Dict[str, AgentRunner] = {}
         self._in_flight_runner_tasks: Set[asyncio.Task] = set()
+        # HOST CREATE_PRIVATE roots survive only after the session starts live
+        # work. Dry-run, mock, preflight failure, and other never-live starts
+        # must roll them back with cleanup_failed_start_roots.
+        self._plan_went_live = False
+
+    def _ensure_session_id(self) -> None:
+        current = self.config.session_id
+        if current:
+            if not is_valid_session_id(current):
+                raise ValueError(f"invalid session_id {current!r}")
+            return
+        stamp = utc_timestamp().replace(":", "").replace("+00:00", "Z")
+        self.config.session_id = f"{stamp}-session"
 
     def _resolve_direct_sandbox_plan(self) -> Any:
         from . import backends as backend_registry
@@ -282,6 +297,7 @@ class Referee:
                 scratch_root=system.sandbox_scratch_root,
                 agent_collab_home=AgentCollabHome.resolve().root,
             ),
+            session_id=self.config.session_id,
         )
 
     def request_stop(self) -> None:
@@ -1087,13 +1103,18 @@ class Referee:
     def _cleanup_sandbox_plan_private_roots(self) -> None:
         """Best-effort cleanup for CREATE_PRIVATE_DIRECTORY roots on the plan.
 
-        Daemon sessions already clean on dry-run / prepare-fail / session end.
-        Direct CLI Referee paths (including dry-run BackendDryRunRunner) must
-        reclaim plan-owned roots here when no runtime runner owns them.
+        Live session end keeps HOST trajectories and removes SESSION roots.
+        Never-live starts (dry-run, mock, preflight failure, or stages never
+        started) roll back HOST and SESSION via cleanup_failed_start_roots.
         """
 
         plan = self.sandbox_plan
-        cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
+        if self._plan_went_live:
+            cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
+        else:
+            cleanup = getattr(plan, "cleanup_failed_start_roots", None)
+            if not callable(cleanup):
+                cleanup = getattr(plan, "cleanup_created_session_private_roots", None)
         if callable(cleanup):
             try:
                 cleanup()
@@ -1165,6 +1186,8 @@ class Referee:
             await self._preflight_direct_sandbox_plan()
             runners = self._runners()
             self._live_runners = runners
+            if not self.config.mock and not self.config.dry_run:
+                self._plan_went_live = True
             return await self._run_stages(task, transcript, runners, stages)
         finally:
             # Close every runner within a bound, shielded so it runs on normal
