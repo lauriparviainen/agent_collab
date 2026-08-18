@@ -151,7 +151,7 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
                 encoding="utf-8",
             )
             index_path = home / "data" / "session-index.json"
-            expected = {"resumable": False, "interruptible": False, "continuity": True}
+            expected = {"resumable": False, "interruptible": True, "continuity": True}
 
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(home)}):
                 manager = SessionManager(index_path=index_path)
@@ -230,7 +230,7 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
 
             manager = SessionManager(index_path=index_path)
             restored = manager.get_session("stale-pin")
-            expected = {"resumable": False, "interruptible": False, "continuity": True}
+            expected = {"resumable": False, "interruptible": True, "continuity": True}
             self.assertEqual(restored.capabilities, expected)
             self.assertEqual(index.load()["stale-pin"]["capabilities"], expected)
 
@@ -287,7 +287,7 @@ class SessionManagerIndexTests(unittest.IsolatedAsyncioTestCase):
                 manager = SessionManager(index_path=index_path)
                 restored = manager.get_session("captured-resume")
 
-            expected = {"resumable": False, "interruptible": False, "continuity": True}
+            expected = {"resumable": False, "interruptible": True, "continuity": True}
             self.assertEqual(restored.capabilities, expected)
             self.assertEqual(index.load()["captured-resume"]["capabilities"], expected)
 

@@ -221,7 +221,11 @@ non-`completed` required turn to session failure. Remaining planned stages
 are abandoned in the same park transition (`parked_in_input_loop=True`).
 Stop still terminates the session. Resume eligibility remains completed-only;
 an acknowledged interrupt persists `interrupt_acknowledged` but does not
-widen eligibility. Production `*.interrupt` stays false.
+widen eligibility. Production `claude_sdk.interrupt` and
+`antigravity_sdk.interrupt` are true after both-path credentialed
+continue-after-interrupt with a distinguishable abort
+(`interrupted` / `local_turn_interrupted`); other `*.interrupt`
+flags stay false.
 
 The original Stage 5.1 A1 spike resolved all SDKs together under Python
 3.12.13:
@@ -296,7 +300,9 @@ that omitted the original task and codeword. Strict reconnect reopens the
 captured id with `SessionContinuationMode.RESUME` against a host-persistent,
 session-keyed trajectory `save_dir` that is not removed on close.
 `antigravity_sdk.continuity`, `antigravity_sdk.tool_gate`, and
-`antigravity_sdk.resume` are therefore true; `interrupt` remains false.
+`antigravity_sdk.resume` are therefore true; `interrupt` is true after
+both-path credentialed continue-after-interrupt on the same conversation
+with `interrupted` / `local_turn_interrupted`.
 
 xAI is opt-in. Grok Build 0.2.93 passed a real headless CLI turn and exposed
 `thought`, `text`, `end`, and explicit `error` records. A disposable shell-tool

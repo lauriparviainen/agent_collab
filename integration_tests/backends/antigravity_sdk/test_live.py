@@ -590,6 +590,17 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
                 await self._wait_provider_in_flight(manager, state.session_id)
                 interrupted = await manager.interrupt_session(state.session_id)
                 self._assert_continue_parked(interrupted, manager, state.session_id)
+                self._assert_continue_aborted(interrupted, manager, state.session_id)
+                before_ids = self._conversation_ids(manager, state.session_id)
+                if not before_ids:
+                    self._fail_interrupt(
+                        interrupted,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail="continue-after-interrupt captured no conversation id",
+                    )
+                captured_id = before_ids[0]
                 try:
                     await manager.post_message(
                         state.session_id,
@@ -615,6 +626,37 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
                             "continue-after-interrupt did not accept the follow-up; "
                             f"status={follow.status} settled={follow.settled}"
                         ),
+                    )
+                later_ids = self._conversation_ids(manager, state.session_id)
+                if len(later_ids) <= len(before_ids):
+                    self._fail_interrupt(
+                        follow,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail="continue-after-interrupt follow-up captured no conversation id",
+                    )
+                if any(item != captured_id for item in later_ids):
+                    self._fail_interrupt(
+                        follow,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail="continue-after-interrupt follow-up used a different conversation id",
+                    )
+                session = manager.get_session(state.session_id, detail="full")
+                stored = (
+                    (session.agent_sessions or {})
+                    .get("antigravity_sdk", {})
+                    .get("provider_session_id")
+                )
+                if stored != captured_id:
+                    self._fail_interrupt(
+                        follow,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail="continue-after-interrupt follow-up stored a different conversation id",
                     )
             finally:
                 if state is not None:
@@ -806,6 +848,33 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
                 "public interrupt did not park at awaiting_input; "
                 f"interrupt_session status={state.status} "
                 f"get_session status={session.status}"
+            ),
+        )
+
+    def _assert_continue_aborted(self, state, manager, session_id):
+        pairs = self._turn_outcome_pairs(state)
+        if pairs and pairs[0][0] == "completed":
+            self._fail_interrupt(
+                state,
+                manager,
+                session_id,
+                issued=True,
+                detail=(
+                    "continue-after-interrupt parked after a completed first turn "
+                    "(completion-wins park); required interrupted / "
+                    "local_turn_interrupted"
+                ),
+            )
+        if self._has_local_interrupt(state):
+            return
+        self._fail_interrupt(
+            state,
+            manager,
+            session_id,
+            issued=True,
+            detail=(
+                "continue-after-interrupt lacked abort marker "
+                "(interrupted / local_turn_interrupted)"
             ),
         )
 

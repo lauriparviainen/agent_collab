@@ -13,6 +13,14 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Flip production `claude_sdk.interrupt` and `antigravity_sdk.interrupt`
+  after both-path credentialed continue-after-interrupt (park at
+  `awaiting_input`, distinguishable abort `interrupted` /
+  `local_turn_interrupted`, accepted follow-up `post_message`, same
+  provider thread). A completion-wins park alone does not flip the
+  flag. `codex_sdk`, `xai_sdk`, and all CLI `interrupt` flags stay
+  false (#20).
+
 - Add the public turn-level interrupt operation
   (`POST /sessions/{id}/interrupt`, `agent_collab_interrupt`,
   `agent-collab interrupt`, TUI `/interrupt`). An operator interrupt parks

@@ -321,6 +321,17 @@ class ClaudeSdkLiveTests(LiveBackendTestCase):
                 await self._wait_provider_in_flight(manager, state.session_id)
                 interrupted = await manager.interrupt_session(state.session_id)
                 self._assert_continue_parked(interrupted, manager, state.session_id)
+                self._assert_continue_aborted(interrupted, manager, state.session_id)
+                before_ids = self._provider_session_ids(manager, state.session_id)
+                if not before_ids:
+                    self._fail_interrupt(
+                        interrupted,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail="continue-after-interrupt captured no provider_session_id",
+                    )
+                captured_id = before_ids[0]
                 try:
                     await manager.post_message(
                         state.session_id,
@@ -347,6 +358,14 @@ class ClaudeSdkLiveTests(LiveBackendTestCase):
                             f"status={follow.status} settled={follow.settled}"
                         ),
                     )
+                self._assert_same_provider_thread(
+                    follow,
+                    manager,
+                    state.session_id,
+                    captured_id,
+                    before_count=len(before_ids),
+                    agent_id="claude_sdk",
+                )
             finally:
                 if state is not None:
                     await manager.stop_session(state.session_id)
@@ -508,6 +527,73 @@ class ClaudeSdkLiveTests(LiveBackendTestCase):
                 f"get_session status={session.status}"
             ),
         )
+
+    def _assert_continue_aborted(self, state, manager, session_id):
+        pairs = self._turn_outcome_pairs(state)
+        if pairs and pairs[0][0] == "completed":
+            self._fail_interrupt(
+                state,
+                manager,
+                session_id,
+                issued=True,
+                detail=(
+                    "continue-after-interrupt parked after a completed first turn "
+                    "(completion-wins park); required interrupted / "
+                    "local_turn_interrupted"
+                ),
+            )
+        if self._has_local_interrupt(state):
+            return
+        self._fail_interrupt(
+            state,
+            manager,
+            session_id,
+            issued=True,
+            detail=(
+                "continue-after-interrupt lacked abort marker "
+                "(interrupted / local_turn_interrupted)"
+            ),
+        )
+
+    def _provider_session_ids(self, manager, session_id):
+        return [
+            event["raw"]["provider_session_id"]
+            for event in self._session_events(manager, session_id)
+            if isinstance(event.get("raw"), dict)
+            and event["raw"].get("provider_session_kind") == "session"
+            and event["raw"].get("provider_session_id")
+        ]
+
+    def _assert_same_provider_thread(
+        self, state, manager, session_id, captured_id, *, before_count, agent_id
+    ):
+        later_ids = self._provider_session_ids(manager, session_id)
+        if len(later_ids) <= before_count:
+            self._fail_interrupt(
+                state,
+                manager,
+                session_id,
+                issued=True,
+                detail="continue-after-interrupt follow-up captured no provider_session_id",
+            )
+        if any(item != captured_id for item in later_ids):
+            self._fail_interrupt(
+                state,
+                manager,
+                session_id,
+                issued=True,
+                detail="continue-after-interrupt follow-up used a different provider_session_id",
+            )
+        session = manager.get_session(session_id, detail="full")
+        stored = (session.agent_sessions or {}).get(agent_id, {}).get("provider_session_id")
+        if stored != captured_id:
+            self._fail_interrupt(
+                state,
+                manager,
+                session_id,
+                issued=True,
+                detail="continue-after-interrupt follow-up stored a different provider_session_id",
+            )
 
     def _has_local_interrupt(self, result):
         return any(

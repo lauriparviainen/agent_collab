@@ -2,9 +2,10 @@
 
 **Status:** Open. Continuity shipped (#47); production `claude_sdk.tool_gate`
 and `antigravity_sdk.tool_gate` are true. Production `antigravity_sdk.resume`,
-`claude_sdk.resume`, and `codex_sdk.resume` are true. `interrupt` remains
-false for every backend; CLI and `xai_sdk` `resume` remain false;
-`tool_gate` remains false for Codex and xAI.
+`claude_sdk.resume`, and `codex_sdk.resume` are true. Production
+`claude_sdk.interrupt` and `antigravity_sdk.interrupt` are true.
+`codex_sdk`, `xai_sdk`, and all CLI `interrupt` remain false; CLI and
+`xai_sdk` `resume` remain false; `tool_gate` remains false for Codex and xAI.
 xAI Stage 3 interrupt and tool_gate are recorded negatives.
 Design resynced 2026-07-30 against 0.13.0,
 which made the outer read-only Bubblewrap worker the default execution path and
@@ -222,11 +223,27 @@ take it:
    Non-interactive and idle `awaiting_input` are structured conflicts.
    Resume eligibility stays `completed` only; `interrupt_acknowledged` is
    persisted on a provider-acknowledged abort and does not widen
-   eligibility. Production `*.interrupt` stays false. Do not add
+   eligibility. Increment 5 left production `*.interrupt` false. Do not add
    `wait_approval` or `list_approvals`. Stage 4 is complete; leftover
    capability-flag flips are later work on #20, not a sixth Stage 4
    increment. Hermetic park+continue coverage landed; credentialed
-   continue-after-interrupt was not re-run in this increment.
+   continue-after-interrupt was not re-run in increment 5.
+
+   Leftover flag flips 2026-08-18: credentialed continue-after-interrupt
+   was re-run on the public `interrupt_session` → park `awaiting_input`
+   → distinguishable abort (`interrupted` / `local_turn_interrupted`)
+   → accepted `post_message` harness, plus same-thread id after the
+   follow-up. A completion-wins park alone does not flip the flag.
+   `claude_sdk` worker and in-process both passed (abort marker and
+   same session id). `antigravity_sdk` worker and in-process both
+   passed (abort marker and same conversation id after cancel). Production
+   `claude_sdk.interrupt` and `antigravity_sdk.interrupt` are now true.
+   `codex_sdk` continue was not proven: in-process parked with
+   `interrupted` / `local_turn_interrupted` but captured no thread id
+   before the follow-up; worker settled `completed` before interrupt.
+   `codex_sdk.interrupt` stays false. `xai_sdk.interrupt` stays false
+   (recorded negative: `sample()` unary gRPC, no server abort). All CLI
+   `*.interrupt` stay false.
 
 ## Purpose and scope
 
@@ -1754,19 +1771,19 @@ the feature. A skipped provider keeps the production capability false.
 1. Yes. Installed `openai-codex` 0.144.4 exposes `turn/interrupt` via
    `AsyncTurnHandle.interrupt()`. Hermetic mapping landed on worker and
    in-process paths (`interrupted` / `local_turn_interrupted`, retain).
-   Production `codex_sdk.interrupt` stays false pending credentialed
-   coverage / continue-after-interrupt. Live proof is not claimed. (Stage 3)
+   Leftover 2026-08-18 continue-after-interrupt was not proven:
+   in-process parked but captured no thread id; worker settled
+   `completed` before interrupt. Production `codex_sdk.interrupt` stays
+   false.
 2. Is an Antigravity conversation still usable for a following turn after
-   `ChatResponse.cancel()`? **Still open.** Live abort proof 2026-08-16:
-   `interrupt_in_flight()` on worker (`sandbox=read-only`) and
-   in-process (`sandbox=none`) produced `TurnOutcome("interrupted",
-   "local_turn_interrupted")`. That does not prove a following `chat()`
-   on the same conversation after cancel. Continue-after-interrupt at
-   the session layer still hits `RequiredTurnFailed` / rejected
-   `post_message` (same as Claude), so the session cannot continue.
-   Wheel `test_cancel_e2e_raises_cancelled_error` still only proves
-   halt + `AntigravityCancelledError`. Production
-   `antigravity_sdk.interrupt` stays false. (Stage 3)
+   `ChatResponse.cancel()`? **Closed 2026-08-18.** Both-path credentialed
+   continue-after-interrupt produced `interrupted` /
+   `local_turn_interrupted` (not a completion-wins park), parked at
+   `awaiting_input`, and the follow-up `post_message` continued on the
+   same conversation id after cancel (worker `sandbox=read-only` and
+   in-process `sandbox=none`). Abort-only 2026-08-16 remains on the
+   record but does not itself close this question. Production
+   `antigravity_sdk.interrupt` is therefore true.
 3. Antigravity's unknown/expired-id rejection has never been exercised against a
    live provider — only the documented `RESUME` contract backs it. (Stage 4)
 4. What retention policy governs durable trajectory roots once they outlive the
@@ -2053,9 +2070,11 @@ the tests, not this document, are their guarantee.
   turn, hang, or fail-closed transport error. Increment 5 landed the public
   interrupt + park-at-`awaiting_input` contract hermetically, so a
   non-`completed` operator interrupt no longer raises `RequiredTurnFailed`.
-  Credentialed continue-after-interrupt was not re-run in this increment.
-  Adapter retain on a clean interrupt win is unproven at the session layer.
-  `claude_sdk.interrupt` stays false.
+  Leftover 2026-08-18: both-path credentialed continue-after-interrupt
+  passed (park at `awaiting_input`, `interrupted` /
+  `local_turn_interrupted`, accepted follow-up `post_message`,
+  same provider session id). A completion-wins park alone does not
+  flip the flag. Production `claude_sdk.interrupt` is true.
 - *[interrupt]* Cancelling the local consumer does **not** stop provider work:
   the detached reader and CLI subprocess run until `disconnect()`, whose
   subprocess close is internally bounded (~20 s worst-case terminate/kill
@@ -2078,8 +2097,9 @@ the tests, not this document, are their guarantee.
   and deny/approve outcomes on both paths; full tool-input shape / CLI
   result-type inventory still unverified. Whether two fire at once, and
   whether the CLI aborts a park during the 120 s window, remain unverified.
-  Production `claude_sdk.tool_gate` is true; `claude_sdk.interrupt` stays
-  false.
+  Production `claude_sdk.tool_gate` is true; leftover 2026-08-18 flipped
+  `claude_sdk.interrupt` after both-path continue-after-interrupt
+  including `interrupted` / `local_turn_interrupted`.
 - *[all]* The client is loop-scoped but usable across tasks in one loop (its
   reader is detached via `spawn_detached` -> `loop.create_task`); an `atexit`
   child killer reaps orphaned CLI subprocesses. `disconnect()` is idempotent,
@@ -2124,8 +2144,11 @@ the tests, not this document, are their guarantee.
   waiter still does **not** stop the provider worker; interrupt must go
   through `turn/interrupt`. Cleanup of an uninterruptible waiter still
   requires `AsyncCodex.close()` to terminate the app-server transport.
-  Mapping landed; production `codex_sdk.interrupt` stays false pending
-  credentialed coverage / continue-after-interrupt. API inspect was the
+  Mapping landed. Leftover 2026-08-18 continue-after-interrupt was not
+  proven: in-process public interrupt parked at `awaiting_input` with
+  `interrupted` / `local_turn_interrupted` but captured no thread id
+  before the follow-up; worker settled `completed` before interrupt.
+  Production `codex_sdk.interrupt` stays false. API inspect was the
   0.144.4 wheel, not the configured local CLI 0.147.0. See open question 1.
 - *[tool_gate]* Installed `openai-codex` 0.144.4 `CodexClient` accepts
   `approval_handler`. Public `AsyncCodex` / `AsyncCodexClient` do not;
@@ -2211,8 +2234,9 @@ the tests, not this document, are their guarantee.
   in-flight `sample()` and retains ownership until it settles. That
   shield is ownership, not a provider interrupt. `XaiSdkRunner` does not
   override `interrupt_request` (default False). Do not invent an abort
-  path. Production `xai_sdk.interrupt` stays false. See *Decision
-  (2026-08-16): xAI Stage 3 interrupt and tool-gate policy*.
+  path.   Production `xai_sdk.interrupt` stays false (leftover 2026-08-18 did
+  not re-derive this). See *Decision (2026-08-16): xAI Stage 3 interrupt
+  and tool-gate policy*.
 - *[tool_gate]* **Recorded negative (re-verified 2026-08-16).**
   `xai_sdk.tools` defines server-side tools (`web_search`, `x_search`,
   `code_execution`, `collections_search`, `mcp`) and `chat.create`
@@ -2295,8 +2319,10 @@ the tests, not this document, are their guarantee.
   `policy.ask_user` fails closed (`BackendUnavailable`) when a host
   gate was requested. Hermetic tests cover park / approve / deny /
   overlap / unbound deny / missing-API fail-closed on both paths.
-  Production `antigravity_sdk.tool_gate` is true;
-  `antigravity_sdk.interrupt` stays false. 2026-08-16
+  Production `antigravity_sdk.tool_gate` is true; leftover 2026-08-18
+  flipped `antigravity_sdk.interrupt` after both-path continue-after-
+  interrupt on the same conversation with `interrupted` /
+  `local_turn_interrupted`. 2026-08-16
   credentialed parks: worker
   (`sandbox=read-only`) and in-process (`sandbox=none`) parked on
   deny, approve, and parked-interval clock exclusion (20 s turn
@@ -2315,8 +2341,11 @@ the tests, not this document, are their guarantee.
   `types.AntigravityCancelledError`, which subclasses
   `asyncio.CancelledError` and must be distinguished from a host cancel.
   Wheel test `test_cancel_e2e_raises_cancelled_error` proves halt +
-  `AntigravityCancelledError`; it does not prove a following `chat()` on
-  the same conversation (open question 2). Agent-collab publishes the live
+  `AntigravityCancelledError`; leftover 2026-08-18 continue-after-interrupt
+  proved a following turn on the same conversation after a
+  distinguishable abort (`interrupted` / `local_turn_interrupted`;
+  open question 2 closed).
+  Agent-collab publishes the live
   `ChatResponse` while `run()` is in flight, issues
   `ChatResponse.cancel()` out of band on both worker and in-process
   adapters without taking the conversation run lock and without awaiting
@@ -2329,14 +2358,15 @@ the tests, not this document, are their guarantee.
   `TurnOutcome("interrupted", "local_turn_interrupted")` — not a
   completed turn, hang, or fail-closed transport error. A worker wait
   of 10 s after `run_started` was too late (turn completed); 2 s after
-  `run_started` aborted. Increment 5 landed the public interrupt +
+  `run_started` aborted.   Increment 5 landed the public interrupt +
   park-at-`awaiting_input` contract hermetically, so a non-`completed`
-  operator interrupt no longer raises `RequiredTurnFailed`. Credentialed
-  continue-after-interrupt was not re-run in this increment. Adapter
-  retain on a clean interrupt win is unproven at the session layer. A
-  following `chat()` on the same conversation after cancel is still
-  unproven (open question 2). Production `antigravity_sdk.interrupt`
-  stays false.
+  operator interrupt no longer raises `RequiredTurnFailed`.   Leftover
+  2026-08-18: both-path credentialed continue-after-interrupt passed
+  (park at `awaiting_input`, `interrupted` /
+  `local_turn_interrupted`, accepted follow-up `post_message`, same
+  conversation id after cancel). A completion-wins park alone does
+  not close this question. That closes open question 2.
+  Production `antigravity_sdk.interrupt` is true.
 - *[all]* `Agent.__aexit__()` disconnects: processor tasks and reader cancelled,
   WebSocket close bounded to 0.5 s, stdin closed, native process waited up to
   180 s before terminate/kill escalation. Disconnect is not safe to race with

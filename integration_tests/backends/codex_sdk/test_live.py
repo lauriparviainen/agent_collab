@@ -6,7 +6,7 @@ import secrets
 import tempfile
 
 from agent_collab.config import builtin_config
-from agent_collab.daemon import SessionManager, StartSessionRequest
+from agent_collab.daemon import SessionManager, SessionRequestError, StartSessionRequest
 from agent_collab.options import StartOptionsError
 from integration_tests.harness import LiveBackendTestCase, REPO_ROOT
 
@@ -108,6 +108,12 @@ class CodexSdkLiveTests(LiveBackendTestCase):
                 else:
                     os.environ["AGENT_COLLAB_HOME"] = previous
 
+    def test_interrupt_continue_worker(self):
+        self._run_interrupt_continue(sandbox="read-only")
+
+    def test_interrupt_continue_in_process(self):
+        self._run_interrupt_continue(sandbox="none")
+
     def test_reload_public_resume_worker(self):
         self._run_reload_public_resume(sandbox="read-only")
 
@@ -132,6 +138,258 @@ class CodexSdkLiveTests(LiveBackendTestCase):
             self.assertTrue(proof["resumed"], "public resume was never invoked")
 
         self._run_isolated_session(scenario, isolate_codex_home=(sandbox == "read-only"))
+
+    def _run_interrupt_continue(self, *, sandbox):
+        async def scenario(workdir):
+            manager = SessionManager()
+            state = None
+            try:
+                state = await self._start_interrupt_session(manager, workdir, sandbox)
+                await self._wait_provider_in_flight(manager, state.session_id)
+                interrupted = await manager.interrupt_session(state.session_id)
+                self._assert_continue_parked(interrupted, manager, state.session_id)
+                self._assert_continue_aborted(interrupted, manager, state.session_id)
+                before_ids = self._provider_thread_ids(manager, state.session_id)
+                if not before_ids:
+                    self._fail_interrupt(
+                        interrupted,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail="continue-after-interrupt captured no provider_session_id",
+                    )
+                captured_id = before_ids[0]
+                try:
+                    await manager.post_message(
+                        state.session_id,
+                        "Reply with the single word: ready.",
+                    )
+                except SessionRequestError as exc:
+                    peek = await manager.wait_result(state.session_id, timeout_ms=0)
+                    self._fail_interrupt(
+                        peek,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail=(f"continue-after-interrupt post_message was rejected: {exc!r}"),
+                    )
+                follow = await manager.wait_result(state.session_id, timeout_ms=240_000)
+                if follow.status == "failed" or not follow.settled:
+                    self._fail_interrupt(
+                        follow,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail=(
+                            "continue-after-interrupt did not accept the follow-up; "
+                            f"status={follow.status} settled={follow.settled}"
+                        ),
+                    )
+                later_ids = self._provider_thread_ids(manager, state.session_id)
+                if len(later_ids) <= len(before_ids):
+                    self._fail_interrupt(
+                        follow,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail="continue-after-interrupt follow-up captured no provider_session_id",
+                    )
+                if any(item != captured_id for item in later_ids):
+                    self._fail_interrupt(
+                        follow,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail="continue-after-interrupt follow-up used a different provider_session_id",
+                    )
+                session = manager.get_session(state.session_id, detail="full")
+                stored = (
+                    (session.agent_sessions or {}).get("codex_sdk", {}).get("provider_session_id")
+                )
+                if stored != captured_id:
+                    self._fail_interrupt(
+                        follow,
+                        manager,
+                        state.session_id,
+                        issued=True,
+                        detail="continue-after-interrupt follow-up stored a different provider_session_id",
+                    )
+            finally:
+                if state is not None:
+                    await manager.stop_session(state.session_id)
+
+        self._run_isolated_session(scenario, isolate_codex_home=(sandbox == "read-only"))
+
+    async def _start_interrupt_session(self, manager, workdir, sandbox):
+        try:
+            return await manager.start_session(
+                StartSessionRequest(
+                    task=self._interrupt_prompt(),
+                    workflow="solo",
+                    members={"claude_cli": "codex_sdk"},
+                    backend_options={"codex_sdk": self.requested_options()},
+                    max_turns=1,
+                    timeout=180,
+                    workdir=workdir,
+                    sandbox=sandbox,
+                    interactive=True,
+                    interactive_idle_timeout=300,
+                )
+            )
+        except StartOptionsError as exc:
+            codes = [detail.get("code") for detail in exc.details]
+            self.fail(
+                f"worker start failed structurally sandbox={sandbox} codes={codes} error={exc}"
+            )
+
+    def _interrupt_prompt(self):
+        return (
+            "Count slowly from 1 to 40 in chat. Write each number as its own "
+            "short sentence on its own line, like 'Number 1 is one.' Do not use "
+            "any tools. Do not skip numbers. Do not summarize. Keep going until "
+            "you reach 40."
+        )
+
+    async def _wait_provider_in_flight(self, manager, session_id, timeout_s=90.0):
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        last = None
+        while asyncio.get_running_loop().time() < deadline:
+            remaining_ms = max(50, int((deadline - asyncio.get_running_loop().time()) * 1000))
+            last = await manager.wait_result(session_id, timeout_ms=min(remaining_ms, 500))
+            if last.settled:
+                code = self._failure_code(last)
+                kinds = self._event_kinds(manager, session_id)
+                if isinstance(code, str) and code.startswith("outer_sandbox_"):
+                    self.fail(
+                        "worker start failed structurally; never reached in-flight; "
+                        f"status={last.status} code={code} kinds={kinds}"
+                    )
+                self._fail_interrupt(
+                    last,
+                    manager,
+                    session_id,
+                    issued=None,
+                    detail="settled before interrupt",
+                )
+            if last.status == "running" and self._has_provider_progress(manager, session_id):
+                return last
+        self._fail_interrupt(
+            last,
+            manager,
+            session_id,
+            issued=None,
+            detail="no provider progress before interrupt",
+        )
+
+    def _has_provider_progress(self, manager, session_id):
+        if self._has_in_process_live_handle(manager, session_id):
+            return True
+        for event in self._session_events(manager, session_id):
+            raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
+            if raw.get("phase") == "run_started":
+                continue
+            if raw.get("provider_session_id"):
+                return True
+            if event.get("type") in {"message", "tool"} and event.get("source") not in {
+                "human",
+                "referee",
+            }:
+                return True
+        return False
+
+    def _has_in_process_live_handle(self, manager, session_id):
+        managed = manager._sessions.get(session_id)
+        referee = getattr(managed, "referee", None)
+        if referee is None:
+            return False
+        for runner in getattr(referee, "_live_runners", {}).values():
+            conversation = getattr(runner, "_conversation", None)
+            if getattr(conversation, "_live_handle", None) is not None:
+                return True
+        return False
+
+    def _assert_continue_parked(self, state, manager, session_id):
+        session = manager.get_session(session_id)
+        if state.status == "awaiting_input" and session.status == "awaiting_input":
+            return
+        peek = session
+        self._fail_interrupt(
+            peek,
+            manager,
+            session_id,
+            issued=True,
+            detail=(
+                "public interrupt did not park at awaiting_input; "
+                f"interrupt_session status={state.status} "
+                f"get_session status={session.status}"
+            ),
+        )
+
+    def _assert_continue_aborted(self, state, manager, session_id):
+        pairs = self._turn_outcome_pairs(state)
+        if pairs and pairs[0][0] == "completed":
+            self._fail_interrupt(
+                state,
+                manager,
+                session_id,
+                issued=True,
+                detail=(
+                    "continue-after-interrupt parked after a completed first turn "
+                    "(completion-wins park); required interrupted / "
+                    "local_turn_interrupted"
+                ),
+            )
+        if self._has_local_interrupt(state):
+            return
+        self._fail_interrupt(
+            state,
+            manager,
+            session_id,
+            issued=True,
+            detail=(
+                "continue-after-interrupt lacked abort marker "
+                "(interrupted / local_turn_interrupted)"
+            ),
+        )
+
+    def _has_local_interrupt(self, result):
+        return any(
+            outcome == "interrupted" and code == "local_turn_interrupted"
+            for outcome, code in self._turn_outcome_pairs(result)
+        )
+
+    def _provider_thread_ids(self, manager, session_id):
+        return [
+            event["raw"]["provider_session_id"]
+            for event in self._session_events(manager, session_id)
+            if isinstance(event.get("raw"), dict)
+            and event["raw"].get("provider_session_kind") == "thread"
+            and event["raw"].get("provider_session_id")
+        ]
+
+    def _turn_outcome_pairs(self, result):
+        pairs = []
+        for item in result.turn_outcomes or []:
+            if isinstance(item, dict):
+                pairs.append((item.get("outcome"), item.get("code")))
+        return pairs
+
+    def _failure_code(self, result):
+        if result is None:
+            return None
+        failure = result.failure
+        if isinstance(failure, dict):
+            return failure.get("code")
+        return None
+
+    def _fail_interrupt(self, result, manager, session_id, *, issued, detail):
+        status = getattr(result, "status", None)
+        code = self._failure_code(result)
+        pairs = self._turn_outcome_pairs(result) if result is not None else []
+        kinds = self._event_kinds(manager, session_id)
+        self.fail(
+            f"{detail}; status={status} code={code} issued={issued} outcomes={pairs} kinds={kinds}"
+        )
 
     def test_tool_gate_park_deny_worker(self):
         self._run_tool_gate_park(sandbox="read-only", decision="deny")

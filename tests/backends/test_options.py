@@ -284,7 +284,7 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         )
         self.assertEqual(
             state.capabilities,
-            {"resumable": False, "interruptible": False, "continuity": True},
+            {"resumable": False, "interruptible": True, "continuity": True},
         )
 
     def test_capture_of_every_agent_with_resume_stub_becomes_resumable(self):
@@ -383,7 +383,7 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         )
         self.assertEqual(
             state.capabilities,
-            {"resumable": False, "interruptible": False, "continuity": True},
+            {"resumable": False, "interruptible": True, "continuity": True},
         )
 
     def test_full_eligible_descriptor_projects_resumable(self):
@@ -420,7 +420,7 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         summary = asyncio.run(run())
         self.assertEqual(
             summary,
-            {"resumable": True, "interruptible": False, "continuity": True},
+            {"resumable": True, "interruptible": True, "continuity": True},
         )
 
     def test_mid_workflow_unstarted_peer_projects_resumable(self):
@@ -563,7 +563,7 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         summary = asyncio.run(run())
         self.assertEqual(
             summary,
-            {"resumable": False, "interruptible": False, "continuity": True},
+            {"resumable": False, "interruptible": True, "continuity": True},
         )
 
 

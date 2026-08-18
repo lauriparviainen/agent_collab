@@ -1457,13 +1457,13 @@ class SdkInterruptMappingTests(unittest.TestCase):
         self.assertFalse(_is_provider_cancelled(asyncio.CancelledError()))
         self.assertTrue(_is_provider_cancelled(AntigravityCancelledError()))
 
-    def test_production_interrupt_capability_stays_false(self):
+    def test_production_interrupt_capability_is_true(self):
         caps = backends.capabilities_for("antigravity", "sdk")
         self.assertEqual(
             caps.to_dict(),
-            {"resume": True, "interrupt": False, "tool_gate": True, "continuity": True},
+            {"resume": True, "interrupt": True, "tool_gate": True, "continuity": True},
         )
-        self.assertFalse(AntigravitySdkBackend().capabilities.interrupt)
+        self.assertTrue(AntigravitySdkBackend().capabilities.interrupt)
 
 
 class SdkMissingExtraTests(unittest.TestCase):
@@ -1841,7 +1841,7 @@ class SdkSelectionTests(unittest.TestCase):
             entry["capabilities"],
             {
                 "resume": True,
-                "interrupt": False,
+                "interrupt": True,
                 "tool_gate": True,
                 "continuity": True,
             },

@@ -129,8 +129,10 @@ class CapabilityReducerTests(unittest.TestCase):
         self.assertTrue(claude.resume)
         self.assertTrue(codex.resume)
         self.assertFalse(xai.resume)
-        for caps in (codex, claude, antigravity, xai):
-            self.assertFalse(caps.interrupt)
+        self.assertTrue(claude.interrupt)
+        self.assertTrue(antigravity.interrupt)
+        self.assertFalse(codex.interrupt)
+        self.assertFalse(xai.interrupt)
         self.assertTrue(claude.tool_gate)
         self.assertTrue(antigravity.tool_gate)
         for caps in (codex, xai):

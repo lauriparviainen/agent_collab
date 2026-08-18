@@ -99,11 +99,11 @@ callback. `tool_gate` is true: both production paths park `ask_user`
 for an explicit approve/deny (issue #20). `resume` is true: both worker
 and in-process paths passed a credentialed daemon-reload + public
 `resume_session` + delta-prompt proof against the durable trajectory
-root. `interrupt` remains false (live abort is proven on both paths, but
-continue-after-interrupt fails at the session layer via
-`RequiredTurnFailed`).
-`LocalAgentConfig(workspaces=[...])`
-receives only the resolved workspace.
+root. `interrupt` is true: both worker and in-process paths passed a
+credentialed public `interrupt_session` park at `awaiting_input`, an
+accepted follow-up `post_message`, and the same conversation id after
+cancel. `LocalAgentConfig(workspaces=[...])` receives only the resolved
+workspace.
 
 ## Outer filesystem sandbox
 
