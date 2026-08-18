@@ -254,6 +254,15 @@ def _optional_stop(data: Dict[str, Any]) -> Optional[SessionStopModel]:
     return SessionStopModel.from_dict(value)
 
 
+def _optional_interrupt(data: Dict[str, Any]) -> Optional[SessionStopModel]:
+    value = data.get("interrupt")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("interrupt must be an object")
+    return SessionStopModel.from_dict(value)
+
+
 @dataclass
 class SessionStateModel:
     """A daemon session's state; mirrors ``daemon.SessionState.to_dict()``.
@@ -292,6 +301,7 @@ class SessionStateModel:
     pending_approvals: List[PendingApprovalModel] = field(default_factory=list)
     pending_approvals_omitted: int = 0
     stop: Optional[SessionStopModel] = None
+    interrupt: Optional[SessionStopModel] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionStateModel":
@@ -325,6 +335,7 @@ class SessionStateModel:
             ],
             pending_approvals_omitted=_integer(data, "pending_approvals_omitted", 0),
             stop=_optional_stop(data),
+            interrupt=_optional_interrupt(data),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -358,6 +369,7 @@ class SessionStateModel:
             "pending_approvals": [item.to_dict() for item in self.pending_approvals],
             "pending_approvals_omitted": self.pending_approvals_omitted,
             "stop": None if self.stop is None else self.stop.to_dict(),
+            "interrupt": None if self.interrupt is None else self.interrupt.to_dict(),
         }
 
 
@@ -963,6 +975,19 @@ class ResumeSessionRequestModel:
 
 
 @dataclass
+class InterruptSessionRequestModel:
+    """``POST /sessions/{id}/interrupt`` request. Empty body; reserved for options."""
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "InterruptSessionRequestModel":
+        del data
+        return cls()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {}
+
+
+@dataclass
 class ResumeSessionResponseModel:
     """``POST /sessions/{id}/resume`` response: the reopened session state."""
 
@@ -1349,6 +1374,14 @@ ROUTES: Tuple[Route, ...] = (
     ),
     Route(
         "POST",
+        "/sessions/{session_id}/interrupt",
+        "interrupt_session",
+        "interrupt_session",
+        InterruptSessionRequestModel,
+        SessionStateModel,
+    ),
+    Route(
+        "POST",
         "/sessions/{session_id}/stop",
         "stop_session",
         "stop_session",
@@ -1390,6 +1423,7 @@ __all__ = [
     "ApprovalDecisionResponseModel",
     "ResumeSessionRequestModel",
     "ResumeSessionResponseModel",
+    "InterruptSessionRequestModel",
     "ErrorModel",
     "PruneResultModel",
     "PruneSessionDetailModel",

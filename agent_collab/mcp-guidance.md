@@ -102,6 +102,10 @@ Run another agent as a subagent and collect its result over MCP alone:
    `settings.agents.<id>.capabilities.continuity`: when true, the turn
    continues the provider thread natively (only new events sent); when false,
    it re-sends the task and a recent window, costing like a fresh turn.
+   If a turn is still in flight and you need to steer, call
+   `agent_collab_interrupt`. That parks at `awaiting_input` without ending
+   the session; then `post_message` from that park. Do not use
+   `agent_collab_stop` to keep a session alive — stop terminates it.
 6. End with `agent_collab_stop`, or let the session close on its
    `interactive_idle_timeout` (raise it for long conversations). Stop ends
    the session; it is not a keep-alive turn interrupt. After a daemon reload
@@ -295,7 +299,9 @@ decide whether to intervene. Do not rebuild a result from it, and do not page
 back over every message event to recover the full text. Once the session is
 terminal, `agent_collab_wait_result` returns immediately with each agent's
 answer, and that is the cheapest complete result there is. `awaiting_input`
-is a follow-up park (`post_message`). `awaiting_approval` is a mid-turn park:
+is a follow-up park (`post_message`). Interrupt an in-flight turn with
+`agent_collab_interrupt` to return to that park, then `post_message`; do not
+use `stop` to keep the session alive. `awaiting_approval` is a mid-turn park:
 decide from `pending_approvals` with `agent_collab_approval`; do not harvest
 `answers` as the gated turn's result.
 

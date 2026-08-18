@@ -14,7 +14,7 @@ from .api_schema import (
     WaitResultRequestModel,
 )
 from .approvals import ApprovalDecisionError
-from .resume import ResumeError
+from .resume import InterruptError, ResumeError
 from .client import ClientError
 from .daemon import (
     SessionManager,
@@ -286,6 +286,20 @@ TOOLS = [
         },
     },
     {
+        "name": "agent_collab_interrupt",
+        "description": (
+            "Interrupt the in-flight turn of a live interactive session and park at "
+            "awaiting_input so the next post_message can steer. The session stays alive. "
+            "A session that is not live, not interactive, or has no in-flight turn is a "
+            "conflict. Stop ends the session; do not use stop to keep a session alive."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"session_id": {"type": "string"}},
+            "required": ["session_id"],
+        },
+    },
+    {
         "name": "agent_collab_stop",
         "description": (
             "Request cancellation of a running daemon-owned session. Stop ends the session; "
@@ -352,6 +366,8 @@ class ToolBackend(Protocol):
     ) -> Dict[str, Any]: ...
 
     async def resume_session(self, session_id: str) -> Dict[str, Any]: ...
+
+    async def interrupt_session(self, session_id: str) -> Dict[str, Any]: ...
 
     async def stop_session(self, session_id: str) -> Dict[str, Any]: ...
 
@@ -434,6 +450,9 @@ class SessionManagerToolBackend:
 
     async def resume_session(self, session_id: str) -> Dict[str, Any]:
         return (await self.manager.resume_session(session_id)).to_dict()
+
+    async def interrupt_session(self, session_id: str) -> Dict[str, Any]:
+        return (await self.manager.interrupt_session(session_id)).to_dict()
 
     async def stop_session(self, session_id: str) -> Dict[str, Any]:
         return (await self.manager.stop_session(session_id)).to_dict()
@@ -523,6 +542,9 @@ class HttpClientToolBackend:
 
     async def resume_session(self, session_id: str) -> Dict[str, Any]:
         return self.client_factory().resume_session(session_id).to_dict()
+
+    async def interrupt_session(self, session_id: str) -> Dict[str, Any]:
+        return self.client_factory().interrupt_session(session_id).to_dict()
 
     async def stop_session(self, session_id: str) -> Dict[str, Any]:
         return self.client_factory().stop_session(session_id).to_dict()
@@ -690,6 +712,8 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
             )
         if name == "agent_collab_resume":
             return content(await backend.resume_session(session_id))
+        if name == "agent_collab_interrupt":
+            return content(await backend.interrupt_session(session_id))
         if name == "agent_collab_stop":
             return content(await backend.stop_session(session_id))
     except StartOptionsError as exc:
@@ -697,6 +721,8 @@ async def handle_tool(name: str, args: Dict[str, Any], backend: ToolBackend) -> 
     except ApprovalDecisionError as exc:
         return content({"error": str(exc), "code": exc.code}, is_error=True)
     except ResumeError as exc:
+        return content({"error": str(exc), "code": exc.code}, is_error=True)
+    except InterruptError as exc:
         return content({"error": str(exc), "code": exc.code}, is_error=True)
     except (McpToolError, SessionNotFoundError, SessionRequestError) as exc:
         return content({"error": str(exc)}, is_error=True)
@@ -733,14 +759,14 @@ async def handle_request(request: Dict[str, Any], backend: ToolBackend) -> Optio
                     "agent_collab_start, then watch with agent_collab_wait_events (timeout_ms "
                     "20000-30000, view='digest', types=['message','error','approval_request',"
                     "'approval_resolved']), always advancing the returned cursor, never stopping "
-                    "on an empty batch. Short polls keep you steerable; clients kill calls near "
-                    "60 s. Stop on terminal, awaiting_input, or awaiting_approval. wait_result: "
-                    "terminal harvests answers; awaiting_input is ready for post_message; "
-                    "awaiting_approval is a park (terminal=false, pending_approvals) — one "
-                    "agent_collab_approval per request_id. timeout_ms is not the approval "
-                    "deadline. Resume reloaded sessions with agent_collab_resume. Confirm "
-                    "models before a paid start. interactive=false for parallel review "
-                    "workflows. On validation errors, fix the named field paths."
+                    "on an empty batch. Clients kill calls near 60 s. Stop on terminal, "
+                    "awaiting_input, or awaiting_approval. wait_result: terminal harvests "
+                    "answers; awaiting_input is ready for post_message; awaiting_approval is "
+                    "a park (terminal=false, pending_approvals) — one agent_collab_approval "
+                    "per request_id. timeout_ms is not the approval deadline. Resume with "
+                    "agent_collab_resume. Interrupt a turn with agent_collab_interrupt, then "
+                    "post_message. Confirm models before a paid start. interactive=false "
+                    "for parallel workflows. On validation errors, fix the named field paths."
                 ),
                 "serverInfo": {"name": "agent-collab", "version": "0.1"},
             },

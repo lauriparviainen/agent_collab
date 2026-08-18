@@ -94,6 +94,18 @@ class ResumeError(ValueError):
         self.code = code
 
 
+class InterruptError(ValueError):
+    """Structured turn-interrupt failure.
+
+    Codes: ``conflict``, ``not_found``. HTTP maps ``conflict`` to 409 and
+    ``not_found`` to 404 — same shape as ``ResumeError``.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def last_turn_status_from_record(record: Any) -> str:
     """Map a committed ``TurnOutcomeRecord`` onto the persisted turn status."""
 

@@ -13,6 +13,13 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Add the public turn-level interrupt operation
+  (`POST /sessions/{id}/interrupt`, `agent_collab_interrupt`,
+  `agent-collab interrupt`, TUI `/interrupt`). An operator interrupt parks
+  an interactive session at `awaiting_input` instead of failing it;
+  remaining planned stages are abandoned. Resume eligibility stays
+  completed-only. Production `*.interrupt` stays false (#20).
+
 - Close increment-4 resume holes: one index write for planned-stage
   completion plus `completed_stages`, prune honors a live resume claim,
   `wait_result` keeps restored answers after resume, and Grok `-c`/`-r`

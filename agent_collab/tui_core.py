@@ -17,6 +17,7 @@ SLASH_COMMANDS = {
     "follow": "jump to tail and follow",
     "refresh": "re-read the active session",
     "stop": "stop the active session",
+    "interrupt": "interrupt the in-flight turn",
     "resume": "resume an interrupted or reloaded session",
     "approval": "approve or deny a parked tool request",
     "quit": "exit",

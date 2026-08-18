@@ -213,9 +213,20 @@ take it:
    (first ordinary turn `subprocess_exit_nonzero`).
    `antigravity_cli.continuity` stays false
    (`AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE` unset). `xai_sdk.resume`
-   stays false (close still deletes stored completions). Remaining
-   increment 5: turn-level interrupt public surfaces. Do not add
-   `wait_approval`, `list_approvals`, or `interrupt` MCP tools.
+   stays false (close still deletes stored completions). Increment 5
+   landed the public turn-level interrupt: `POST /sessions/{id}/interrupt`,
+   `agent_collab_interrupt`, `agent-collab interrupt`, and TUI
+   `/interrupt`. Operator interrupt parks an interactive session at
+   `awaiting_input`, abandons remaining planned stages, and persists
+   `parked_in_input_loop=True` so increment-4 resume does not replay them.
+   Non-interactive and idle `awaiting_input` are structured conflicts.
+   Resume eligibility stays `completed` only; `interrupt_acknowledged` is
+   persisted on a provider-acknowledged abort and does not widen
+   eligibility. Production `*.interrupt` stays false. Do not add
+   `wait_approval` or `list_approvals`. Stage 4 is complete; leftover
+   capability-flag flips are later work on #20, not a sixth Stage 4
+   increment. Hermetic park+continue coverage landed; credentialed
+   continue-after-interrupt was not re-run in this increment.
 
 ## Purpose and scope
 
@@ -2039,11 +2050,12 @@ the tests, not this document, are their guarantee.
   Live proof 2026-08-16: `interrupt_in_flight()` on both production paths
   (worker `sandbox=read-only`, in-process `sandbox=none`) produced
   `TurnOutcome("interrupted", "local_turn_interrupted")` — not a completed
-  turn, hang, or fail-closed transport error. Continue-after-interrupt did
-  not: the referee still raises `RequiredTurnFailed` on a non-`completed`
-  required turn, the session becomes `failed`, and `post_message` is
-  rejected. Adapter retain on a clean interrupt win is unproven at the
-  session layer. `claude_sdk.interrupt` stays false.
+  turn, hang, or fail-closed transport error. Increment 5 landed the public
+  interrupt + park-at-`awaiting_input` contract hermetically, so a
+  non-`completed` operator interrupt no longer raises `RequiredTurnFailed`.
+  Credentialed continue-after-interrupt was not re-run in this increment.
+  Adapter retain on a clean interrupt win is unproven at the session layer.
+  `claude_sdk.interrupt` stays false.
 - *[interrupt]* Cancelling the local consumer does **not** stop provider work:
   the detached reader and CLI subprocess run until `disconnect()`, whose
   subprocess close is internally bounded (~20 s worst-case terminate/kill
@@ -2317,9 +2329,10 @@ the tests, not this document, are their guarantee.
   `TurnOutcome("interrupted", "local_turn_interrupted")` — not a
   completed turn, hang, or fail-closed transport error. A worker wait
   of 10 s after `run_started` was too late (turn completed); 2 s after
-  `run_started` aborted. Continue-after-interrupt did not: the referee
-  still raises `RequiredTurnFailed` on a non-`completed` required turn,
-  the session becomes `failed`, and `post_message` is rejected. Adapter
+  `run_started` aborted. Increment 5 landed the public interrupt +
+  park-at-`awaiting_input` contract hermetically, so a non-`completed`
+  operator interrupt no longer raises `RequiredTurnFailed`. Credentialed
+  continue-after-interrupt was not re-run in this increment. Adapter
   retain on a clean interrupt win is unproven at the session layer. A
   following `chat()` on the same conversation after cancel is still
   unproven (open question 2). Production `antigravity_sdk.interrupt`

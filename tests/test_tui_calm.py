@@ -542,6 +542,7 @@ class RenderIntegrationTests(unittest.TestCase):
             "/follow",
             "/refresh",
             "/stop",
+            "/interrupt",
             "/resume",
             "/approval",
             "/quit",

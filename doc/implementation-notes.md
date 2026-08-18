@@ -214,6 +214,15 @@ proof. CLI backends and `xai_sdk` stay false until the same proof passes
 on both of that backend's production paths. Live backend health gates starts on
 certainty and is reported by `describe_options`, not by daemon status.
 
+The public turn-level interrupt (`POST /sessions/{id}/interrupt`,
+`agent_collab_interrupt`, `agent-collab interrupt`, TUI `/interrupt`) parks a
+live interactive session at `awaiting_input` instead of mapping a
+non-`completed` required turn to session failure. Remaining planned stages
+are abandoned in the same park transition (`parked_in_input_loop=True`).
+Stop still terminates the session. Resume eligibility remains completed-only;
+an acknowledged interrupt persists `interrupt_acknowledged` but does not
+widen eligibility. Production `*.interrupt` stays false.
+
 The original Stage 5.1 A1 spike resolved all SDKs together under Python
 3.12.13:
 

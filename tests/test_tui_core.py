@@ -246,7 +246,12 @@ class TuiCoreTests(unittest.TestCase):
             [match.name for match in filter_slash_commands("/r")],
             ["/refresh", "/resume"],
         )
+        self.assertEqual(
+            [match.name for match in filter_slash_commands("/i")],
+            ["/interrupt"],
+        )
         self.assertEqual(parse_input("/resume").command, "resume")
+        self.assertEqual(parse_input("/interrupt").command, "interrupt")
         self.assertEqual(filter_slash_commands("/session x"), ())
 
     def test_slash_completion_state_moves_and_accepts_selected_command(self):

@@ -168,6 +168,38 @@ class StopPollerTests(unittest.TestCase):
         self.assertEqual(app.session.status, "stopped")
         self.assertEqual(app.message, f"stopped {SESSION_ID}")
 
+    def test_interrupt_slash_keeps_poller_and_refreshes(self):
+        class Client:
+            def __init__(self):
+                self.interrupt_calls = []
+
+            def interrupt_session(self, session_id):
+                self.interrupt_calls.append(session_id)
+                return _session("awaiting_input")
+
+            def get_session(self, session_id, detail="compact"):
+                del detail
+                return _session("awaiting_input")
+
+            def read_events(self, session_id, cursor):
+                del session_id
+                return _batch([], cursor=cursor)
+
+            def wait_events(self, session_id, cursor, timeout_ms):
+                del session_id, cursor, timeout_ms
+                return _batch([], cursor=0)
+
+        client = Client()
+        app = _app(client)
+        with mock.patch.object(app, "activate_session") as activate:
+            with mock.patch.object(app, "_stop_poller") as stop_poller:
+                app._dispatch(parse_input("/interrupt"))
+
+        self.assertEqual(client.interrupt_calls, [SESSION_ID])
+        activate.assert_called_once_with(SESSION_ID)
+        stop_poller.assert_not_called()
+        self.assertEqual(app.message, f"interrupted {SESSION_ID}")
+
     def test_approval_slash_dispatches_decision(self):
         from agent_collab.api_schema import ApprovalDecisionResponseModel
 

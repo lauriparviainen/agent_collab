@@ -231,6 +231,8 @@ class SessionState:
     pending_approvals_omitted: int = 0
     # In-memory stop-path detail; stripped from the session index like park payload.
     stop: Optional[Dict[str, Any]] = None
+    # In-memory turn-interrupt detail; stripped from the session index like stop.
+    interrupt: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -481,6 +483,7 @@ class SessionManager:
         data.pop("pending_approvals", None)
         data.pop("pending_approvals_omitted", None)
         data.pop("stop", None)
+        data.pop("interrupt", None)
         if not data.get("session_id") or not data.get("status"):
             return None
         if "failure" in data and data["failure"] is not None:
@@ -536,6 +539,7 @@ class SessionManager:
             record.pop("pending_approvals", None)
             record.pop("pending_approvals_omitted", None)
             record.pop("stop", None)
+            record.pop("interrupt", None)
             self._index.upsert(record)
         except OSError as exc:
             self._log_lifecycle(f"failed to persist session index for {state.session_id}: {exc}")
@@ -1044,6 +1048,111 @@ class SessionManager:
         else:
             await self._set_status(managed, STOPPED)
         return self._view_state(managed.state, "full", managed)
+
+    async def interrupt_session(self, session_id: str) -> SessionState:
+        from .resume import InterruptError
+
+        managed = self._get_managed(session_id)
+        async with managed.resume_lock:
+            if self._sessions.get(session_id) is not managed:
+                raise InterruptError("not_found", f"unknown session_id {session_id}")
+            return await self._interrupt_session_locked(managed)
+
+    async def _interrupt_session_locked(self, managed: _ManagedSession) -> SessionState:
+        from .resume import InterruptError
+
+        if not managed.state.interactive:
+            raise InterruptError(
+                "conflict",
+                "turn-level interrupt requires an interactive session",
+            )
+        if managed.state.status not in LIVE_WAIT_STATUSES:
+            raise InterruptError("conflict", f"session is not live: {managed.state.status}")
+        referee = managed.referee
+        in_flight_tasks = referee.in_flight_runner_tasks() if referee is not None else []
+        if (
+            managed.state.status == AWAITING_INPUT
+            and not managed.turn_active
+            and not in_flight_tasks
+        ):
+            raise InterruptError("conflict", "no in-flight turn to interrupt")
+
+        managed.stop_signal.mark_turn_interrupt()
+        denied = await self._auto_deny_pending(managed, reason="interrupt")
+        requested = False
+        acknowledged = False
+        fallback = False
+        if referee is not None:
+            requested = await referee.interrupt_in_flight()
+            in_flight = referee.in_flight_runner_tasks()
+            if requested:
+                if in_flight:
+                    _done, pending = await asyncio.wait(
+                        set(in_flight),
+                        timeout=INTERRUPT_ACKNOWLEDGE_SECONDS,
+                    )
+                    acknowledged = not pending
+                else:
+                    acknowledged = True
+                fallback = not acknowledged
+            elif in_flight:
+                fallback = True
+            if fallback:
+                referee.request_turn_interrupt()
+        else:
+            managed.stop_signal.request_turn_interrupt()
+        await self._wait_interrupt_parked(managed)
+        if acknowledged and not fallback:
+            self._mark_interrupt_acknowledged(managed)
+        managed.state.interrupt = {
+            "requested": bool(requested),
+            "provider_acknowledged": bool(acknowledged),
+            "fallback_cancelled": bool(fallback),
+            "approvals_denied": int(denied),
+        }
+        managed.state.updated_at = utc_timestamp()
+        return self._view_state(managed.state, "full", managed)
+
+    async def _wait_interrupt_parked(self, managed: _ManagedSession) -> None:
+        """Wait until the session parks at awaiting_input or the fallback deadline."""
+
+        timeout = INTERRUPT_ACKNOWLEDGE_SECONDS + RUNNER_CLEANUP_GRACE_SECONDS
+
+        def parked() -> bool:
+            if managed.state.status != AWAITING_INPUT or not managed.input_accepting:
+                return False
+            if managed.turn_active:
+                return False
+            referee = managed.referee
+            return referee is None or not referee.in_flight_runner_tasks()
+
+        if parked():
+            return
+        async with managed.condition:
+            if parked():
+                return
+            try:
+                await asyncio.wait_for(managed.condition.wait_for(parked), timeout=timeout)
+            except asyncio.TimeoutError:
+                return
+
+    def _mark_interrupt_acknowledged(self, managed: _ManagedSession) -> None:
+        sessions = dict(managed.state.agent_sessions or {})
+        changed = False
+        for agent_id, raw in sessions.items():
+            if not isinstance(raw, dict):
+                continue
+            if raw.get("last_turn_status") != "interrupted":
+                continue
+            entry = dict(raw)
+            entry["interrupt_acknowledged"] = True
+            sessions[agent_id] = entry
+            changed = True
+        if not changed:
+            return
+        managed.state.agent_sessions = sessions
+        self._refresh_session_capabilities(managed.state)
+        self._persist(managed.state)
 
     async def prune_sessions(
         self,
@@ -1809,8 +1918,7 @@ class SessionManager:
         entry["last_turn_status"] = status
         if status in {"resume_rejected", "resume_uncertain"}:
             entry["quarantined"] = True
-        if "interrupt_acknowledged" not in entry:
-            entry["interrupt_acknowledged"] = False
+        entry["interrupt_acknowledged"] = False
         if record.backend and not entry.get("backend"):
             entry["backend"] = record.backend
         sessions[agent_id] = entry
@@ -1825,8 +1933,7 @@ class SessionManager:
         entry = dict(sessions.get(agent_id) or {})
         entry["prompt_event_cursor"] = int(cursor)
         entry["last_turn_status"] = "in_flight"
-        if "interrupt_acknowledged" not in entry:
-            entry["interrupt_acknowledged"] = False
+        entry["interrupt_acknowledged"] = False
         fingerprint = fingerprint_from_session(managed.state, agent_id)
         if fingerprint is None:
             agent_type, backend_id = self._agent_type_and_backend(managed, agent_id)

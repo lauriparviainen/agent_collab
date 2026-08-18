@@ -32,6 +32,7 @@ PUBLIC_COMMANDS = (
     ("result", "Wait for a daemon-owned session to settle and print its result."),
     ("watch", "Watch a live session or stored JSONL transcript."),
     ("stop", "Stop a daemon-owned session."),
+    ("interrupt", "Interrupt the in-flight turn of a live interactive session."),
     ("resume", "Resume an interrupted or reloaded daemon-owned session."),
     ("approval", "Approve or deny a parked tool-approval request."),
     ("sessions", "Manage stored sessions, including pruning old terminal sessions."),
@@ -1319,6 +1320,23 @@ def _main_stop(argv) -> int:
     return 0
 
 
+def _main_interrupt(argv) -> int:
+    parser = build_session_parser(
+        "agent-collab interrupt",
+        "Interrupt the in-flight turn of a live interactive session.",
+    )
+    args = parser.parse_args(argv)
+    try:
+        step(f"Interrupting session {args.session_id}")
+        session = _client(args.server_url).interrupt_session(args.session_id)
+        ok(f"Interrupted {session.session_id}")
+        _print_session(session)
+    except Exception as exc:
+        error(str(exc))
+        return 1
+    return 0
+
+
 def _main_resume(argv) -> int:
     parser = build_session_parser(
         "agent-collab resume",
@@ -1545,6 +1563,7 @@ def _command_handlers():
         "events": _main_events,
         "result": _main_result,
         "stop": _main_stop,
+        "interrupt": _main_interrupt,
         "resume": _main_resume,
         "approval": _main_approval,
         "sessions": _main_sessions,

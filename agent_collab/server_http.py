@@ -29,7 +29,7 @@ from .api_schema import (
     WaitResultRequestModel,
 )
 from .approvals import ApprovalDecisionError
-from .resume import ResumeError
+from .resume import InterruptError, ResumeError
 from .config import CollaborationConfig, SessionsConfig
 from .daemon import (
     SessionManager,
@@ -235,6 +235,10 @@ class AgentCollabHttpServer:
                 status = 409
             else:
                 status = 400
+            self._log_request(f"request error {status} {exc}")
+            await self._write_json(writer, status, {"error": str(exc), "code": exc.code})
+        except InterruptError as exc:
+            status = 404 if exc.code == "not_found" else 409
             self._log_request(f"request error {status} {exc}")
             await self._write_json(writer, status, {"error": str(exc), "code": exc.code})
         except StartOptionsError as exc:
@@ -489,6 +493,14 @@ class AgentCollabHttpServer:
 
         _parse(ResumeSessionRequestModel.from_dict, _decode_json_object(body))
         return (await self.manager.resume_session(path["session_id"])).to_dict()
+
+    async def _route_interrupt_session(
+        self, _route: Route, path: Dict[str, str], _query: Dict[str, str], body: bytes
+    ) -> Any:
+        from .api_schema import InterruptSessionRequestModel
+
+        _parse(InterruptSessionRequestModel.from_dict, _decode_json_object(body))
+        return (await self.manager.interrupt_session(path["session_id"])).to_dict()
 
     async def _route_stop_session(
         self, _route: Route, path: Dict[str, str], _query: Dict[str, str], _body: bytes

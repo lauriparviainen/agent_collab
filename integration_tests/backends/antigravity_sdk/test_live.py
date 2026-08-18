@@ -587,22 +587,33 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
             state = None
             try:
                 state = await self._start_interrupt_session(manager, workdir, sandbox)
-                result, issued = await self._interrupt_live_turn(manager, state.session_id)
-                self._assert_distinguishable_interrupt(result, manager, state.session_id, issued)
-                self._assert_continue_rejected(result, manager, state.session_id)
-                with self.assertRaises(SessionRequestError) as ctx:
+                await self._wait_provider_in_flight(manager, state.session_id)
+                interrupted = await manager.interrupt_session(state.session_id)
+                self._assert_continue_parked(interrupted, manager, state.session_id)
+                try:
                     await manager.post_message(
                         state.session_id,
                         "Reply with the single word: ready.",
                     )
-                if "session is not live: failed" not in str(ctx.exception):
+                except SessionRequestError as exc:
+                    peek = await manager.wait_result(state.session_id, timeout_ms=0)
                     self._fail_interrupt(
-                        result,
+                        peek,
                         manager,
                         state.session_id,
-                        issued=issued,
+                        issued=True,
+                        detail=(f"continue-after-interrupt post_message was rejected: {exc!r}"),
+                    )
+                follow = await manager.wait_result(state.session_id, timeout_ms=240_000)
+                if follow.status == "failed" or not follow.settled:
+                    self._fail_interrupt(
+                        follow,
+                        manager,
+                        state.session_id,
+                        issued=True,
                         detail=(
-                            f"continue-after-interrupt post_message rejection was {ctx.exception!r}"
+                            "continue-after-interrupt did not accept the follow-up; "
+                            f"status={follow.status} settled={follow.settled}"
                         ),
                     )
             finally:
@@ -781,26 +792,20 @@ class AntigravitySdkLiveTests(LiveBackendTestCase):
             detail="interrupt lacked abort marker",
         )
 
-    def _assert_continue_rejected(self, result, manager, session_id):
+    def _assert_continue_parked(self, state, manager, session_id):
         session = manager.get_session(session_id)
-        result_code = self._failure_code(result)
-        session_code = self._failure_code(session)
-        if (
-            result.status == "failed"
-            and result_code == "local_turn_interrupted"
-            and session.status == "failed"
-            and session_code == "local_turn_interrupted"
-        ):
+        if state.status == "awaiting_input" and session.status == "awaiting_input":
             return
+        peek = session
         self._fail_interrupt(
-            result,
+            peek,
             manager,
             session_id,
             issued=True,
             detail=(
-                "continue-after-interrupt did not fail the session; "
-                f"wait_result status={result.status} code={result_code} "
-                f"get_session status={session.status} code={session_code}"
+                "public interrupt did not park at awaiting_input; "
+                f"interrupt_session status={state.status} "
+                f"get_session status={session.status}"
             ),
         )
 

@@ -69,11 +69,12 @@ class ParallelStageFailed(RuntimeError):
 
 
 class RefereeStopSignal:
-    """Daemon-owned stop cause registered before task cancellation."""
+    """Daemon-owned stop and turn-interrupt cause registered before cancellation."""
 
     def __init__(self) -> None:
         self._requested = False
         self._session_stopping = False
+        self._turn_interrupt = False
         self._event: Optional[asyncio.Event] = None
 
     def mark_session_stopping(self) -> None:
@@ -87,6 +88,28 @@ class RefereeStopSignal:
         if self._event is not None:
             self._event.set()
 
+    def mark_turn_interrupt(self) -> None:
+        """Record an operator turn-interrupt without waking the in-flight wait."""
+
+        self._turn_interrupt = True
+
+    def request_turn_interrupt(self) -> None:
+        """Ask the current turn to abort without stopping the session."""
+
+        self._turn_interrupt = True
+        if self._event is not None:
+            self._event.set()
+
+    def turn_interrupt_requested(self) -> bool:
+        return self._turn_interrupt
+
+    def consume_turn_interrupt(self) -> None:
+        """Clear the one-shot turn interrupt after the park decision."""
+
+        self._turn_interrupt = False
+        if self._event is not None and not self._requested:
+            self._event.clear()
+
     def is_set(self) -> bool:
         return self._requested
 
@@ -94,7 +117,7 @@ class RefereeStopSignal:
         return self._session_stopping or self._requested
 
     async def wait(self) -> None:
-        if self._requested:
+        if self._requested or self._turn_interrupt:
             return
         if self._event is None:
             self._event = asyncio.Event()
@@ -327,6 +350,9 @@ class Referee:
 
     def request_stop(self) -> None:
         self.stop_signal.request()
+
+    def request_turn_interrupt(self) -> None:
+        self.stop_signal.request_turn_interrupt()
 
     async def interrupt_in_flight(self) -> bool:
         """Ask every live runner to interrupt its active turn. True if any issued."""
@@ -962,7 +988,7 @@ class Referee:
         task: str,
         members: List[str],
         stage_index: int,
-    ) -> None:
+    ) -> bool:
         snapshot = list(transcript)
         prompt = self._parallel_prompt_for(task, snapshot)
         # Every member shares this one prompt built from the snapshot; advance
@@ -1050,7 +1076,10 @@ class Referee:
             ),
         )
         if not accepted:
+            if self.stop_signal.turn_interrupt_requested():
+                return False
             raise ParallelStageFailed(stage_index)
+        return True
 
     async def _process_input_item(
         self,
@@ -1095,6 +1124,8 @@ class Referee:
             turn_id=turn_id,
         )
         if record.outcome != "completed":
+            if self.stop_signal.turn_interrupt_requested():
+                return record
             raise RequiredTurnFailed(record)
         return record
 
@@ -1117,6 +1148,8 @@ class Referee:
                 await self._process_input_item(logger, transcript, runners, task, item)
             finally:
                 queue.task_done()
+            if self.stop_signal.turn_interrupt_requested():
+                return
 
     async def _await_interactive_input(
         self,
@@ -1153,7 +1186,40 @@ class Referee:
                 await self._process_input_item(logger, transcript, runners, task, item)
             finally:
                 queue.task_done()
+            if self.stop_signal.turn_interrupt_requested():
+                self.stop_signal.consume_turn_interrupt()
             await self._process_pending_inputs(logger, transcript, runners, task)
+            if self.stop_signal.turn_interrupt_requested():
+                self.stop_signal.consume_turn_interrupt()
+
+    async def _park_after_turn_interrupt(
+        self,
+        logger: SessionLogger,
+        transcript: List[Event],
+        runners: Dict[str, AgentRunner],
+        task: str,
+        completed_stages: int,
+        total_stages: int,
+    ) -> Dict[str, str]:
+        """Abandon remaining planned stages and park at awaiting_input."""
+
+        await self._commit_phase(completed_stages, True)
+        self.stop_signal.consume_turn_interrupt()
+        if self.config.interactive:
+            await self._set_input_accepting(True)
+            await self._set_status("awaiting_input")
+            try:
+                await self._await_interactive_input(logger, transcript, runners, task)
+            finally:
+                await self._set_input_accepting(False)
+            await self._commit_phase(completed_stages, False)
+            await self._emit_final_summary(logger, transcript, total_stages)
+            await self._set_status("done")
+        return {
+            "session_id": logger.session_id,
+            "jsonl_path": str(logger.jsonl_path),
+            "markdown_path": str(logger.markdown_path),
+        }
 
     async def _emit_final_summary(
         self,
@@ -1361,11 +1427,21 @@ class Referee:
                         "jsonl_path": str(logger.jsonl_path),
                         "markdown_path": str(logger.markdown_path),
                     }
+                last_completed = completed_stages
                 for turn, stage in enumerate(stages, start=1):
                     if self.config.resume and turn <= completed_stages:
                         continue
                     if self.config.interactive:
                         await self._process_pending_inputs(logger, transcript, runners, task)
+                        if self.stop_signal.turn_interrupt_requested():
+                            return await self._park_after_turn_interrupt(
+                                logger,
+                                transcript,
+                                runners,
+                                task,
+                                last_completed,
+                                len(stages),
+                            )
                     if len(stage) > 1:
                         await self._emit(
                             logger,
@@ -1376,7 +1452,7 @@ class Referee:
                                 f"stage {turn} (parallel): {', '.join(stage)}",
                             ),
                         )
-                        await self._run_parallel_stage(
+                        accepted = await self._run_parallel_stage(
                             logger,
                             transcript,
                             runners,
@@ -1384,7 +1460,18 @@ class Referee:
                             stage,
                             turn,
                         )
-                        await self._commit_phase(turn, False)
+                        if accepted:
+                            last_completed = turn
+                            await self._commit_phase(turn, False)
+                        if self.stop_signal.turn_interrupt_requested():
+                            return await self._park_after_turn_interrupt(
+                                logger,
+                                transcript,
+                                runners,
+                                task,
+                                last_completed,
+                                len(stages),
+                            )
                         continue
                     agent_name = stage[0]
                     await self._emit(
@@ -1417,10 +1504,31 @@ class Referee:
                         turn_id=turn_id,
                         planned_completed_stages=turn,
                     )
+                    if self.stop_signal.turn_interrupt_requested():
+                        if record.outcome == "completed":
+                            last_completed = turn
+                        return await self._park_after_turn_interrupt(
+                            logger,
+                            transcript,
+                            runners,
+                            task,
+                            last_completed,
+                            len(stages),
+                        )
                     if record.outcome != "completed":
                         raise RequiredTurnFailed(record)
+                    last_completed = turn
                 if self.config.interactive:
                     await self._process_pending_inputs(logger, transcript, runners, task)
+                    if self.stop_signal.turn_interrupt_requested():
+                        return await self._park_after_turn_interrupt(
+                            logger,
+                            transcript,
+                            runners,
+                            task,
+                            last_completed,
+                            len(stages),
+                        )
                     # Accept input before announcing awaiting_input, and clear it
                     # before any unwinding: the finally runs the moment the loop
                     # exits (idle timeout, a failed directed turn, or a stop

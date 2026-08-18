@@ -91,6 +91,7 @@ HELP_LINES = (
     "/follow                  jump to tail and resume follow",
     "/refresh                 re-read active session from cursor 0",
     "/stop                    stop active daemon session",
+    "/interrupt               interrupt the in-flight turn",
     "/resume                  resume an interrupted or reloaded session",
     "/approval REQ approve|deny  decide a parked tool request",
     "/quit                    exit",
@@ -685,6 +686,16 @@ class TuiApp:
                 self._stop_poller()
                 self._catch_up_and_rotate_epoch()
                 self.message = f"stopped {self.session_id}"
+            except Exception as exc:
+                self.message = str(exc)
+        elif command == "interrupt":
+            if not self.session_id:
+                self.message = "no active session"
+                return
+            try:
+                self.session = self.client.interrupt_session(self.session_id)
+                self.activate_session(self.session_id)
+                self.message = f"interrupted {self.session_id}"
             except Exception as exc:
                 self.message = str(exc)
         elif command == "resume":
