@@ -13,6 +13,14 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Stream `xai_cli` answer text as live message chunks and map documented
+  Grok `tool_call` / `tool_call_update` records to Codex-like dim tool
+  rows. Harvest prefers `raw.full_text` so `wait_result` stays the full
+  turn, not the last fragment. Reset the streaming parser at each turn
+  so a follow-up does not concatenate the previous answer. `event_fidelity`
+  stays `message_first` until a live current-Grok recapture confirms more
+  than `kind=read`. `xai_sdk` streaming is unchanged (#62).
+
 - Flip production `codex_sdk.interrupt` after both-path credentialed
   continue-after-interrupt (park at `awaiting_input`, distinguishable
   abort `interrupted` / `local_turn_interrupted`, accepted follow-up

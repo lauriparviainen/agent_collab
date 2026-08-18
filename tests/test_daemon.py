@@ -2469,6 +2469,56 @@ sequence = ["claude_cli.a", "claude_cli.b"]
                     answer["text"].startswith(f"Mock {answer['agent_id']} response for:")
                 )
 
+    async def test_restored_answers_prefer_raw_full_text(self):
+        manager = SessionManager()
+        managed = _ManagedSession(
+            request=None, state=None, events=[], condition=asyncio.Condition()
+        )
+        managed.events = [
+            {
+                "timestamp": "t1",
+                "source": "xai",
+                "type": "message",
+                "agent_id": "xai_cli",
+                "text": "last fragment",
+                "raw": {"full_text": "the whole streamed answer"},
+            },
+            {
+                "timestamp": "t2",
+                "source": "referee",
+                "type": "status",
+                "agent_id": "xai_cli",
+                "text": "turn completed",
+                "raw": {"turn_outcome": {"agent_id": "xai_cli", "outcome": "completed"}},
+            },
+        ]
+        answers = {
+            item["agent_id"]: item["text"] for item in manager._derive_restored_answers(managed)
+        }
+        self.assertEqual(answers, {"xai_cli": "the whole streamed answer"})
+
+        managed.events = [
+            {
+                "timestamp": "t1",
+                "source": "codex",
+                "type": "message",
+                "agent_id": "codex_cli",
+                "text": "Final answer.",
+                "raw": {"final": True},
+            },
+            {
+                "timestamp": "t2",
+                "source": "referee",
+                "type": "status",
+                "text": "turn completed",
+                "raw": {"turn_outcome": {"agent_id": "codex_cli", "outcome": "completed"}},
+            },
+        ]
+        answers = {
+            item["agent_id"]: item["text"] for item in manager._derive_restored_answers(managed)
+        }
+        self.assertEqual(answers, {"codex_cli": "Final answer."})
+
     async def test_wait_result_restored_excludes_failed_followup_answer(self):
         # A completed turn 1 followed by a failed directed turn 2 for the same
         # agent: the restored derivation must return the completed answer, not

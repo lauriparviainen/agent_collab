@@ -1,0 +1,6 @@
+{"type":"thought","data":"Analyzing the directory structure..."}
+{"type":"tool_call","toolCallId":"call_1","title":"Read","kind":"read","status":"in_progress","toolName":"read_file","rawInput":{"path":"src/main.rs"},"content":[],"locations":[]}
+{"type":"tool_call_update","toolCallId":"call_1","status":"completed","content":[],"rawOutput":{"lines":42},"locations":[]}
+{"type":"text","data":"Here's a summary"}
+{"type":"usage","messageId":"resp_1","stopReason":"end_turn","usage":{"input_tokens":812,"output_tokens":45,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"reasoning_tokens":0},"signature":"redacted"}
+{"type":"end","stopReason":"end_turn","sessionId":"session-documented","requestId":"request-documented"}

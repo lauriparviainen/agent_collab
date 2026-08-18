@@ -45,7 +45,7 @@ from .config import (
     resolve_existing_workdir,
     workflow_members,
 )
-from .events import VALID_TYPES, Event, compact_json, utc_timestamp
+from .events import VALID_TYPES, Event, compact_json, harvest_message_text, utc_timestamp
 from .outcomes import CANONICAL_MESSAGES, SessionFailure, TurnOutcomeRecord
 from .options import (
     StartOptionsError,
@@ -1642,7 +1642,10 @@ class SessionManager:
             ):
                 entry = {
                     "agent_id": agent_id,
-                    "text": _truncate_text(str(event.get("text", "")), MAX_FULL_TOOL_BYTES),
+                    "text": _truncate_text(
+                        harvest_message_text(str(event.get("text", "")), raw),
+                        MAX_FULL_TOOL_BYTES,
+                    ),
                     "event_id": event_id,
                     "timestamp": str(event.get("timestamp", "")),
                 }

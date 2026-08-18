@@ -17,7 +17,7 @@ from .config import (
     validate_workflow,
     workflow_members,
 )
-from .events import Event, utc_timestamp
+from .events import Event, harvest_message_text, utc_timestamp
 from .logging import SessionLogger
 from .retention import is_valid_session_id
 from .outcomes import SessionFailure, TurnOutcome, TurnOutcomeRecord
@@ -637,7 +637,7 @@ class Referee:
         event = transcript[chosen]
         return {
             "agent_id": agent_id,
-            "text": event.text,
+            "text": harvest_message_text(event.text, event.raw),
             "event_id": chosen,
             "timestamp": event.timestamp,
         }

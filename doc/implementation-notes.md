@@ -306,10 +306,20 @@ with `interrupted` / `local_turn_interrupted`. Production
 `codex_sdk.interrupt` is true after the same both-path continue proof
 on the same thread.
 
-xAI is opt-in. Grok Build 0.2.93 passed a real headless CLI turn and exposed
-`thought`, `text`, `end`, and explicit `error` records. A disposable shell-tool
-turn emitted no typed action record, so `xai_cli` deliberately maps no tool
-events while capturing `end.sessionId` as provider identity kind `session`.
+xAI is opt-in. Grok Build `streaming-json` exposes `thought`, `text`, `end`,
+and explicit `error` records; current Grok (≥0.2.116 / 1.0.4) also emits
+`tool_call`, `tool_call_update`, and `usage`. `xai_cli` now flushes live
+answer chunks and maps documented tool records to dim `source="tool"` rows,
+while capturing `end.sessionId` as provider identity kind `session`.
+`event_fidelity` stays `message_first`: a live Grok 1.0.5 read turn
+confirmed `kind=read` and a `pending` / null-status / `completed` update
+sequence, but no other kind tokens. Older 0.2.93 captures still emit no
+typed action record and stay tool-silent. The streaming parser resets
+each turn so harvest `raw.full_text` cannot leak into the next answer.
+In-session continue inserts `grok --resume <id>`; public
+`xai_cli.resume` stays false. The optional MCP live-supervision watch is
+`types=["message","error","tool_call","command","file_change"]`; the default
+recipe stays `types=["message","error"]`.
 Headless CLI runs default to permission-bypassed execution inside Grok's
 read-only sandbox, expose Grok's internal turn limit as `provider_max_turns`,
 and treat non-success terminals (`cancelled`/`Cancelled`, incomplete, refusal,

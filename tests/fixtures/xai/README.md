@@ -21,6 +21,24 @@ mapping disabled, not a synthetic action fixture.
 `streaming-json-error.ndjson` is a real explicit error record produced by an
 invalid disposable model name. It contains no provider ID.
 
+`streaming-json-documented-tools.ndjson` is **not** a live capture. It is the
+documented Grok 1.0.4 / user-guide `streaming-json` tool example (ACP-shaped
+`tool_call` / `tool_call_update` / `usage` / `end`), with the signature
+redacted. Use it for hermetic parser mapping only.
+
+`streaming-json-live-tools-1.0.5.ndjson` is a redacted live `streaming-json`
+read turn on Grok Build 1.0.5 (`grok-4.6` / low). Thought prose, ids,
+signatures, host paths, and file bytes are removed. Record boundaries and
+field names are preserved: start `tool_call` with `kind=read`,
+`status=pending`, `title`/`toolName=read_file`, and `rawInput.target_file`;
+a `tool_call_update` with `status=null`; a completed update that omits
+`kind`; `text`; `usage` without `stopReason`; `end` with `end_turn`. Live
+also emitted many `thought` and `available_commands` records; those are
+collapsed here. This pins the current-Grok start/update sequence the
+user-guide example does not show. Only `kind=read` was observed, so
+`event_fidelity` stays `message_first`. This task stays on
+`streaming-json`.
+
 ## xAI SDK 1.17.0
 
 `sdk-introspection.json` records non-secret public facts captured after

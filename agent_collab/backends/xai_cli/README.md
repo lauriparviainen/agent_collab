@@ -41,19 +41,35 @@ it is separate from agent-collab's workflow `max_turns` and has no backend
 default, so Grok retains its version-specific default unless a caller overrides
 it.
 
-Observed Grok records map `text` to xAI messages, `thought` to verbose status,
-explicit errors to transcript errors, and `end.sessionId` to the uniform
-provider-session event (kind `session`). The raw `sessionId` and `requestId` are
-preserved. Successful completion is `stopReason=end_turn` (current Grok
-streaming-json / ACP snake_case); legacy `EndTurn` from older captures is still
-accepted. Cancel maps from `cancelled` or legacy `Cancelled`. Incomplete
-terminals (`max_tokens`, `max_turn_requests`) map to
-`provider_output_incomplete`; `refusal` maps to `provider_turn_refused`; other
-end reasons emit a structured fatal error while retaining session identity.
-Streaming text deltas are coalesced into one transcript message per turn; a
-partial turn is flushed at EOF. A real tool-use capture emitted no typed action
-record, so tool, command, and file-change fidelity is intentionally not claimed.
-Resume, interrupt, and tool-gate capabilities are all false.
+Observed Grok records map `text` to live xAI message chunks (`event.text` is
+new text only; incremental flushes carry running `raw.full_text`), `thought`
+to a one-line `thinking…` heartbeat (full thought prose only when verbose),
+documented `tool_call` / `tool_call_update` records (Grok ≥0.2.116) to dim
+`source="tool"` rows (`tool_call`, `command`, or `file_change` from ACP
+`kind`), explicit errors to transcript errors, and `end.sessionId` to the
+uniform provider-session event (kind `session`). The raw `sessionId` and
+`requestId` are preserved. Successful completion is `stopReason=end_turn`
+(current Grok streaming-json / ACP snake_case); legacy `EndTurn` from older
+captures is still accepted. Cancel maps from `cancelled` or legacy
+`Cancelled`. Incomplete terminals (`max_tokens`, `max_turn_requests`) map to
+`provider_output_incomplete`; `refusal` maps to `provider_turn_refused`;
+other end reasons emit a structured fatal error while retaining session
+identity. Text flushes at about 200 new characters, at a semantic boundary
+(`tool_*`, `usage`, `end`, `error`, or thought→text), or at EOF. Tiny deltas
+still coalesce. `usage` is never a turn terminal. Older Grok (0.2.93
+fixtures) still emits no typed action records. A live Grok 1.0.5 read turn
+confirmed `kind=read` plus a `pending` / null-status / `completed` update
+sequence. `event_fidelity` stays `message_first` because only `read` was
+observed. The streaming parser resets at the start of each turn so
+`raw.full_text` does not concatenate a prior answer into the next harvest.
+Resume, interrupt, and tool-gate capabilities are all false. In-session
+`post_message` still continues a captured Grok `sessionId` with
+`grok --resume <id>`; that is not the public restart-safe resume flag.
+
+The default MCP watch recipe stays `types=["message","error"]` (initialize
+also includes approval types). For live tool-row supervision, callers may
+add `tool_call`, `command`, and `file_change`. Mid-turn `message` events are
+fragments; harvest the full answer with `wait_result`.
 
 The typed turn outcome uses the same evidence: `end_turn`/`EndTurn` completes,
 `cancelled`/`Cancelled` maps to `cancelled`, incomplete and refusal terminals

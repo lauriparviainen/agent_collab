@@ -7,7 +7,7 @@ from unittest import mock
 from agent_collab import backends
 from agent_collab.backend_contract import OPTION_UNSET, BackendOptionError
 from agent_collab.backends.common.health import xai_cli_credentials
-from agent_collab.backends.xai_cli import XaiCliBackend, parse_xai_line
+from agent_collab.backends.xai_cli import XaiCliBackend, XaiStreamingParser, parse_xai_line
 from agent_collab.config import (
     AgentConfig,
     SUBPROCESS_AGENT_TYPES,
@@ -15,7 +15,7 @@ from agent_collab.config import (
     load_config,
     merge_config_data,
 )
-from agent_collab.events import VALID_SOURCES
+from agent_collab.events import VALID_SOURCES, Event, harvest_message_text
 from agent_collab.options import build_session_settings, describe_options
 from agent_collab.referee import Referee, RefereeConfig
 from agent_collab.runners import PROVIDER_SOURCES, DryRunRunner, SubprocessRunner
@@ -47,6 +47,7 @@ class XaiCliBackendTests(unittest.TestCase):
     def test_registration_and_all_provider_allowlists(self):
         self.assertIs(backends.get_backend("xai", "cli").__class__, XaiCliBackend)
         self.assertIn("xai", VALID_SOURCES)
+        self.assertEqual(self.backend.event_fidelity, "message_first")
         self.assertIn("xai", PROVIDER_SOURCES)
         self.assertIn("xai", SUBPROCESS_AGENT_TYPES)
         self.assertEqual(backends.backend_name("xai", "cli"), "xai_cli")
@@ -232,6 +233,8 @@ sequence = ["xai_cli"]
             (events[0].source, events[0].type, events[0].text), ("xai", "message", "hello world")
         )
         self.assertEqual(events[0].raw["delta_count"], 2)
+        self.assertTrue(events[0].raw.get("final"))
+        self.assertNotIn("full_text", events[0].raw)
         self.assertEqual(events[1].raw["provider_session_id"], "sess")
 
     def test_current_grok_end_turn_completes_and_keeps_session_identity(self):
@@ -409,6 +412,390 @@ class XaiParserFixtureTests(unittest.TestCase):
                 parse_xai_line(line, verbose=True)
         self.assertIsNone(parse_xai_line("not-json"))
         self.assertIsNotNone(parse_xai_line("not-json", verbose=True))
+
+
+def _feed_parser(parser, lines, verbose=False):
+    events = []
+    for line in lines:
+        parsed = parser(line, verbose)
+        if parsed is None:
+            continue
+        events.extend(parsed if isinstance(parsed, list) else [parsed])
+    return events
+
+
+def _harvest(events, agent_id="xai"):
+    for event in events:
+        event.agent_id = agent_id
+    referee = Referee(RefereeConfig(mock=True, workdir=Path("."), color=False))
+    return referee._find_turn_answer(events, 0, agent_id)
+
+
+class XaiStreamingParserTests(unittest.TestCase):
+    def fixture_lines(self, name):
+        return (FIXTURES / name).read_text(encoding="utf-8").splitlines()
+
+    def test_legacy_reasoning_fixture_heartbeats_and_coalesces_without_tools(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(parser, self.fixture_lines("streaming-json-reasoning.ndjson"))
+        self.assertEqual([event.source for event in events], ["xai", "xai", "xai"])
+        self.assertEqual([event.type for event in events], ["status", "message", "status"])
+        self.assertEqual(events[0].text, "thinking…")
+        self.assertEqual(events[1].text, "fixture-ok")
+        self.assertFalse(any(event.source == "tool" for event in events))
+        evidence = parser.take_terminal_evidence()
+        self.assertEqual(evidence[0].outcome, "completed")
+        self.assertEqual(evidence[0].provider_stop_reason, "EndTurn")
+
+    def test_legacy_tooluse_fixture_still_has_no_typed_action_rows(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(parser, self.fixture_lines("streaming-json-tooluse.ndjson"))
+        self.assertFalse(any(event.source == "tool" for event in events))
+        self.assertFalse(
+            any(event.type in {"tool_call", "command", "file_change"} for event in events)
+        )
+        evidence = parser.take_terminal_evidence()
+        self.assertEqual(evidence[0].outcome, "completed")
+        self.assertEqual(evidence[0].provider_stop_reason, "EndTurn")
+
+    def test_two_hundred_char_flush_keeps_running_full_text_for_harvest(self):
+        first = "a" * 200
+        parser = XaiStreamingParser()
+        first_events = _feed_parser(parser, [json.dumps({"type": "text", "data": first})])
+        self.assertEqual(len(first_events), 1)
+        self.assertEqual(first_events[0].text, first)
+        self.assertEqual(first_events[0].raw["full_text"], first)
+        self.assertFalse(first_events[0].raw.get("final"))
+
+        rest = _feed_parser(
+            parser,
+            [
+                json.dumps({"type": "text", "data": " more"}),
+                json.dumps({"type": "end", "stopReason": "end_turn", "sessionId": "sess"}),
+            ],
+        )
+        messages = [event for event in rest if event.type == "message"]
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].text, " more")
+        self.assertEqual(messages[0].raw["full_text"], first + " more")
+        self.assertTrue(messages[0].raw["final"])
+        answer = _harvest(first_events + rest)
+        self.assertEqual(answer["text"], first + " more")
+
+    def test_usage_flushes_text_but_is_not_terminal(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(
+            parser,
+            [
+                json.dumps({"type": "text", "data": "ready"}),
+                json.dumps({"type": "usage", "stopReason": "tool_use", "messageId": "resp"}),
+                json.dumps({"type": "end", "stopReason": "end_turn", "sessionId": "sess"}),
+            ],
+        )
+        messages = [event for event in events if event.type == "message"]
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].text, "ready")
+        self.assertFalse(messages[0].raw.get("final"))
+        self.assertEqual(messages[0].raw["full_text"], "ready")
+        evidence = parser.take_terminal_evidence()
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0].outcome, "completed")
+        self.assertEqual(evidence[0].provider_stop_reason, "end_turn")
+        answer = _harvest(events)
+        self.assertEqual(answer["text"], "ready")
+
+    def test_thought_only_end_turn_completes_without_harvested_message(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(
+            parser,
+            [
+                json.dumps({"type": "thought", "data": "planning"}),
+                json.dumps({"type": "thought", "data": "still planning"}),
+                json.dumps({"type": "end", "stopReason": "EndTurn", "sessionId": "sess"}),
+            ],
+        )
+        self.assertEqual([event.type for event in events], ["status", "status"])
+        self.assertEqual(events[0].text, "thinking…")
+        self.assertFalse(any(event.type == "message" for event in events))
+        self.assertIsNone(_harvest(events))
+        verbose = _feed_parser(
+            XaiStreamingParser(),
+            [
+                json.dumps({"type": "thought", "data": "planning"}),
+                json.dumps({"type": "thought", "data": "still planning"}),
+            ],
+            verbose=True,
+        )
+        self.assertEqual([event.text for event in verbose], ["planning", "still planning"])
+
+    def test_unknown_types_are_ignored_and_non_terminal(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(
+            parser,
+            [
+                json.dumps({"type": "plan", "entries": []}),
+                json.dumps({"type": "available_commands", "tools": []}),
+                json.dumps({"type": "end", "stopReason": "end_turn", "sessionId": "sess"}),
+            ],
+        )
+        self.assertFalse(any(event.source == "error" for event in events))
+        self.assertEqual(parser.take_terminal_evidence()[0].outcome, "completed")
+        loud = _feed_parser(
+            XaiStreamingParser(),
+            [json.dumps({"type": "plan", "entries": []})],
+            verbose=True,
+        )
+        self.assertEqual(loud[0].type, "status")
+
+    def test_invalid_json_still_fails_closed(self):
+        with self.assertRaises(ValueError):
+            XaiStreamingParser()("not-json")
+
+    def test_documented_tool_update_merges_start_fields_on_close(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(parser, self.fixture_lines("streaming-json-documented-tools.ndjson"))
+        tools = [event for event in events if event.source == "tool"]
+        self.assertEqual(len(tools), 2)
+        self.assertEqual(tools[0].type, "tool_call")
+        self.assertEqual(tools[0].text, 'Read {"path": "src/main.rs"}')
+        self.assertEqual(tools[1].type, "tool_call")
+        self.assertEqual(tools[1].text, 'Read {"path": "src/main.rs"} · completed')
+        self.assertNotIn("diff", tools[1].raw)
+        self.assertNotIn("patch", tools[1].raw)
+        self.assertEqual(tools[1].raw["name"], "read_file")
+        self.assertEqual(tools[1].raw["input"], {"path": "src/main.rs"})
+        messages = [event for event in events if event.type == "message"]
+        self.assertEqual([event.text for event in messages], ["Here's a summary"])
+        self.assertEqual(parser.take_terminal_evidence()[0].outcome, "completed")
+
+    def test_live_1_0_5_read_turn_coalesces_pending_and_null_status_update(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(parser, self.fixture_lines("streaming-json-live-tools-1.0.5.ndjson"))
+        tools = [event for event in events if event.source == "tool"]
+        self.assertEqual(
+            [(event.type, event.text) for event in tools],
+            [
+                ("tool_call", 'read_file {"target_file": "note.txt"}'),
+                ("tool_call", 'read_file {"target_file": "note.txt"} · completed'),
+            ],
+        )
+        self.assertEqual(tools[0].raw["kind"], "read")
+        self.assertNotIn("diff", tools[1].raw)
+        self.assertNotIn("patch", tools[1].raw)
+        self.assertEqual(events[0].text, "thinking…")
+        messages = [event for event in events if event.type == "message"]
+        self.assertEqual([event.text for event in messages], ["OK"])
+        self.assertEqual(parser.take_terminal_evidence()[0].provider_stop_reason, "end_turn")
+
+    def test_kind_table_maps_execute_edit_and_unknown(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(
+            parser,
+            [
+                json.dumps(
+                    {
+                        "type": "tool_call",
+                        "toolCallId": "exec",
+                        "title": "Shell",
+                        "kind": "execute",
+                        "status": "in_progress",
+                        "rawInput": {"command": "ls"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_call",
+                        "toolCallId": "edit",
+                        "title": "Edit",
+                        "kind": "edit",
+                        "status": "in_progress",
+                        "rawInput": {"path": "a.py"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_call",
+                        "toolCallId": "weird",
+                        "title": "Other",
+                        "kind": "not-a-kind",
+                        "status": "in_progress",
+                    }
+                ),
+            ],
+        )
+        self.assertEqual(
+            [(event.type, event.text) for event in events],
+            [
+                ("command", 'Shell {"command": "ls"}'),
+                ("file_change", 'Edit {"path": "a.py"}'),
+                ("tool_call", "Other"),
+            ],
+        )
+
+    def test_failed_close_row_and_identical_status_updates_are_coalesced(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(
+            parser,
+            [
+                json.dumps(
+                    {
+                        "type": "tool_call",
+                        "toolCallId": "call_2",
+                        "title": "Read",
+                        "kind": "read",
+                        "status": "in_progress",
+                        "rawInput": {"path": "a"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_call_update",
+                        "toolCallId": "call_2",
+                        "status": "in_progress",
+                        "content": [{"type": "spam"}],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_call_update",
+                        "toolCallId": "call_2",
+                        "status": "failed",
+                    }
+                ),
+            ],
+        )
+        self.assertEqual(
+            [event.text for event in events],
+            ['Read {"path": "a"}', 'Read {"path": "a"} · failed'],
+        )
+
+    def test_pending_then_in_progress_does_not_double_open_when_first_has_args(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(
+            parser,
+            [
+                json.dumps(
+                    {
+                        "type": "tool_call",
+                        "toolCallId": "call_3",
+                        "title": "Read",
+                        "status": "pending",
+                        "rawInput": {"path": "a"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_call_update",
+                        "toolCallId": "call_3",
+                        "status": "in_progress",
+                    }
+                ),
+            ],
+        )
+        self.assertEqual([event.text for event in events], ['Read {"path": "a"}'])
+
+    def test_bare_pending_then_in_progress_with_args_emits_second_open_row(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(
+            parser,
+            [
+                json.dumps(
+                    {
+                        "type": "tool_call",
+                        "toolCallId": "call_4",
+                        "status": "pending",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool_call_update",
+                        "toolCallId": "call_4",
+                        "status": "in_progress",
+                        "title": "Read",
+                        "rawInput": {"path": "a"},
+                    }
+                ),
+            ],
+        )
+        self.assertEqual([event.text for event in events], ["tool", 'Read {"path": "a"}'])
+
+    def test_missing_tool_call_id_emits_once_without_crashing(self):
+        parser = XaiStreamingParser()
+        events = _feed_parser(
+            parser,
+            [
+                json.dumps(
+                    {
+                        "type": "tool_call",
+                        "title": "Read",
+                        "kind": "execute",
+                        "status": "in_progress",
+                    }
+                )
+            ],
+        )
+        self.assertEqual(
+            [(events[0].source, events[0].type, events[0].text)], [("tool", "tool_call", "Read")]
+        )
+
+    def test_harvest_prefers_full_text_without_requiring_final(self):
+        events = [
+            Event.create(
+                "xai",
+                "message",
+                "last fragment",
+                {"full_text": "the whole answer"},
+                agent_id="xai",
+            )
+        ]
+        self.assertEqual(_harvest(events)["text"], "the whole answer")
+        self.assertEqual(
+            harvest_message_text("last fragment", {"full_text": "the whole answer"}),
+            "the whole answer",
+        )
+
+    def test_reset_clears_full_text_so_the_next_turn_does_not_concatenate(self):
+        parser = XaiStreamingParser()
+        first = _feed_parser(
+            parser,
+            [
+                json.dumps({"type": "text", "data": "first-turn answer"}),
+                json.dumps({"type": "end", "stopReason": "end_turn", "sessionId": "sess"}),
+            ],
+        )
+        parser.reset()
+        second = _feed_parser(
+            parser,
+            [
+                json.dumps({"type": "text", "data": "ready"}),
+                json.dumps({"type": "end", "stopReason": "end_turn", "sessionId": "sess"}),
+            ],
+        )
+        messages = [event for event in second if event.type == "message"]
+        self.assertEqual([event.text for event in messages], ["ready"])
+        self.assertNotIn("full_text", messages[0].raw)
+        self.assertNotIn("first-turn", messages[0].text)
+        self.assertEqual(_harvest(first)["text"], "first-turn answer")
+        self.assertEqual(_harvest(second)["text"], "ready")
+
+    def test_codex_style_final_without_full_text_still_harvests_event_text(self):
+        events = [
+            Event.create(
+                "codex",
+                "message",
+                "Final answer.",
+                {"final": True},
+                agent_id="codex",
+            ),
+            Event.create(
+                "codex",
+                "message",
+                "Trailing commentary.",
+                {"phase": "commentary"},
+                agent_id="codex",
+            ),
+        ]
+        self.assertEqual(_harvest(events, "codex")["text"], "Final answer.")
 
 
 class XaiCredentialTests(unittest.TestCase):

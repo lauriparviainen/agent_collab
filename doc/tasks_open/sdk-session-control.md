@@ -1996,7 +1996,13 @@ the tests, not this document, are their guarantee.
   proof passed. The outer (`sandbox=read-only`) proof was skipped
   because `AGENT_COLLAB_IT_XAI_SANDBOX_STATE` was unset; that skip does
   not flip the flag. Production `xai_cli.resume` stays false. One-shot
-  CLI interrupt/tool gating remain false.
+  CLI interrupt/tool gating remain false. 2026-08-18 play (during #62):
+  in-session continue inserted `grok --resume <id>` after a captured
+  `end.sessionId`. Public resume on the live session was rejected
+  (`session is live`). A graceful daemon restart of that parked
+  interactive session ended `failed` (`referee_cancelled_unexpected`)
+  rather than `interrupted`, so public resume stayed ineligible. That
+  does not flip the flag.
 
 ### antigravity_cli — `agy` 1.1.8 floor, installed 1.1.13 (verified 2026-08-16)
 

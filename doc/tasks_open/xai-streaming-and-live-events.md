@@ -1,9 +1,9 @@
 # xAI live streaming and event fidelity
 
-**Status:** Open. Planning reviewed 2026-08-16 (four independent
-read-only reviews: facts, live UX, compatibility, harvest/TUI). Implement
-against the decisions below; recapture current Grok `streaming-json`
-fixtures before claiming tool fidelity.
+**Status:** Open. Stage A and Stage B **mapping** landed 2026-08-18
+on `xai_cli` only. `event_fidelity` stays `message_first` (live Grok
+1.0.5 recapture saw only `kind=read`). Stage C (`xai_sdk` `stream()`)
+is still open. Planning reviewed 2026-08-16.
 
 **Created:** 2026-08-16.
 
@@ -713,3 +713,32 @@ is allowed. Full always-on thought was rejected because the TUI styles
 by source. An 8-delta flush was demoted because it would spin MCP watch
 loops. Stage A was narrowed so it is not sold as the fix for the
 measured 12.5-minute think+tools silence.
+
+## Implementation leftover
+
+### Landed on `xai_cli` (2026-08-18)
+
+- Stage A: live new-text flushes, coarse `thinking…` heartbeat,
+  `raw.full_text` harvest in referee and restore. `XaiStreamingParser.reset()`
+  clears that state at each turn so a follow-up does not concatenate the
+  previous answer.
+- Stage B mapping: documented 1.0.4 shape plus a redacted live Grok 1.0.5
+  read turn (`kind=read`, start `status=pending`, a `status=null` update,
+  completed update omits `kind`). Hermetic fixtures stay in
+  `tests/fixtures/xai/`.
+- MCP: one additive guidance sentence that mid-turn `message` events are
+  fragments. Initialize instructions were left unchanged (length cap).
+- Live interactive play: first-turn stream + `wait_result` harvested the
+  full answer; `post_message` inserted `grok --resume <id>` and completed.
+
+### Still open
+
+- `event_fidelity` stays `message_first` until a live capture shows kinds
+  other than `read`. Do not flip `typed` on the documented-shape fixture
+  alone.
+- Stage C (`xai_sdk` `chat.stream()` with `sample()` fallback) is untouched.
+- Public `agent-collab resume` stays off (`xai_cli.resume` is false; #20).
+  A graceful daemon restart of a parked interactive session ended `failed`
+  (`referee_cancelled_unexpected`) rather than `interrupted`. Recorded
+  on #20; do not invent a resume flip here.
+- Do not close #62 until Stage C is decided.

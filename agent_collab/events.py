@@ -160,3 +160,19 @@ def parse_json_line(line: str) -> Optional[Any]:
         return json.loads(stripped)
     except json.JSONDecodeError:
         return None
+
+
+def harvest_message_text(text: str, raw: Any) -> str:
+    """Return the turn answer text for one chosen message event.
+
+    Streaming backends may put only the latest fragment in ``text`` and the
+    concatenation so far in ``raw.full_text``. Prefer a non-empty ``full_text``
+    without requiring ``raw.final``. Backends that omit ``full_text`` keep
+    ``text``.
+    """
+
+    if isinstance(raw, dict):
+        full = raw.get("full_text")
+        if isinstance(full, str) and full.strip():
+            return full
+    return text

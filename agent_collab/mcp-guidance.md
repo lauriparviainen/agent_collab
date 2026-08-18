@@ -54,7 +54,9 @@ Run another agent as a subagent and collect its result over MCP alone:
    `terminal` alone would poll until the idle timeout closes a session that
    was already done talking, or miss a parked approval. An empty batch while
    parked is normal (`types` filters the returned events, not the cursor).
-   `timeout_ms` is your poll bound, not the approval deadline.
+   Mid-turn `message` events are fragments, not findings — harvest with
+   `wait_result`; an empty digest batch can also mean the new events were
+   filtered out. `timeout_ms` is your poll bound, not the approval deadline.
 4. **Harvest or decide** with `agent_collab_wait_result`. On a terminal or
    parked session it settles immediately — no block, no waiting.
 

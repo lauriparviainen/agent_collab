@@ -1,0 +1,7 @@
+{"type":"thought","data":"[redacted real thought delta]"}
+{"type":"tool_call","toolCallId":"call_1","title":"read_file","kind":"read","status":"pending","toolName":"read_file","rawInput":{"target_file":"note.txt"},"content":[],"locations":[]}
+{"type":"tool_call_update","toolCallId":"call_1","status":null,"content":[],"rawOutput":null,"locations":[{"path":"note.txt"}]}
+{"type":"tool_call_update","toolCallId":"call_1","status":"completed","content":[],"rawOutput":{"type":"ReadFile"},"locations":[]}
+{"type":"text","data":"OK"}
+{"type":"usage","signature":"redacted"}
+{"type":"end","stopReason":"end_turn","sessionId":"session-redacted","requestId":"request-redacted","num_turns":2}
