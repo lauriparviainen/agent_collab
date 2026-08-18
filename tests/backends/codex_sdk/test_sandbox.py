@@ -421,6 +421,68 @@ class CodexSdkWorkerLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(conversation.reset_calls, 0)
         self.assertIs(backend._conversation, conversation)
 
+    async def test_interrupt_collect_emits_already_known_thread_id(self) -> None:
+        class _Conversation:
+            def __init__(self) -> None:
+                self._thread_id = "thread-known"
+                self.noted: list[str] = []
+                self.interrupt_calls = 0
+                self.reset_calls = 0
+                self.started = asyncio.Event()
+                self._release = asyncio.Event()
+
+            async def run(self, prompt: str):
+                del prompt
+                self.started.set()
+                await self._release.wait()
+                return CodexTurnOutcome(
+                    "",
+                    SimpleNamespace(
+                        id="turn-1",
+                        status=SimpleNamespace(value="interrupted"),
+                        error=None,
+                        final_response=None,
+                        items=[],
+                    ),
+                )
+
+            def note_session_id(self, thread_id: str) -> None:
+                self.noted.append(thread_id)
+
+            async def interrupt(self) -> bool:
+                self.interrupt_calls += 1
+                self._release.set()
+                return True
+
+            async def reset(self) -> None:
+                self.reset_calls += 1
+
+            async def close(self) -> None:
+                return None
+
+        conversation = _Conversation()
+        backend = CodexSdkWorkerBackend()
+        backend._conversation = conversation
+        task = asyncio.create_task(backend.run("hello", run_id="r1"))
+        await conversation.started.wait()
+        await backend.interrupt("r1")
+        residual, outcome = await task
+        captured = [
+            event
+            for event in residual
+            if (getattr(event, "raw", None) or {}).get("provider_session_id") == "thread-known"
+        ]
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0].raw["provider_session_kind"], "thread")
+        self.assertEqual(conversation.interrupt_calls, 1)
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertEqual(conversation.noted, ["thread-known"])
+        self.assertIs(backend._conversation, conversation)
+
     async def test_interrupt_completion_race_keeps_completed_outcome(self) -> None:
         class _Conversation:
             def __init__(self) -> None:

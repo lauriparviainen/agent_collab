@@ -13,6 +13,14 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Flip production `codex_sdk.interrupt` after both-path credentialed
+  continue-after-interrupt (park at `awaiting_input`, distinguishable
+  abort `interrupted` / `local_turn_interrupted`, accepted follow-up
+  `post_message`, same provider thread). The worker harness waits
+  2.0s after `run_started` then interrupt; post-collect emit uses the
+  already-known thread id when the collected outcome omits it.
+  `xai_sdk` and all CLI `interrupt` flags stay false (#20).
+
 - Flip production `claude_sdk.interrupt` and `antigravity_sdk.interrupt`
   after both-path credentialed continue-after-interrupt (park at
   `awaiting_input`, distinguishable abort `interrupted` /

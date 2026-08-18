@@ -921,13 +921,13 @@ class CodexSdkSessionToolGateTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CodexSdkToolGateCapabilityTests(unittest.TestCase):
-    def test_production_capabilities_stay_false_except_continuity(self):
+    def test_production_capabilities(self):
         from agent_collab import backends
 
         caps = backends.capabilities_for("codex", "sdk")
         self.assertEqual(
             caps.to_dict(),
-            {"resume": True, "interrupt": False, "tool_gate": False, "continuity": True},
+            {"resume": True, "interrupt": True, "tool_gate": False, "continuity": True},
         )
 
 

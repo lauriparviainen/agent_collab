@@ -114,7 +114,7 @@ class CodexSdkBackend:
     provider_session_id_kind = "thread"
 
     def __init__(self, conversation_factory: Optional[ConversationFactory] = None) -> None:
-        self.capabilities = BackendCapabilities(resume=True, continuity=True)
+        self.capabilities = BackendCapabilities(resume=True, interrupt=True, continuity=True)
         self.checks_credentials = True
         self.block_on_unavailable = True
         self._conversation_factory = conversation_factory
@@ -536,8 +536,8 @@ class CodexSdkRunner(AgentRunner):
         try:
             conversation = self._conversation_for(workdir)
             outcome = await conversation.run(prompt)
-            if outcome.thread_id:
-                thread_id = outcome.thread_id
+            thread_id = outcome.thread_id or stringify(getattr(conversation, "_thread_id", None))
+            if thread_id:
                 conversation.note_session_id(thread_id)
                 await emit(provider_session_event("codex", self.name, thread_id, "thread"))
             mapped = _collected_turn_evidence(outcome.result)

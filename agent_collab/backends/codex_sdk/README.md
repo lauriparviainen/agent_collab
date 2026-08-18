@@ -58,8 +58,11 @@ parks are proven; worker parks are not (issue #20). Inner worker
 `danger-full-access` remains the historical filesystem posture after
 outer proof; it also skips `requestApproval`. `resume` is true: both
 worker and in-process paths passed a credentialed daemon-reload + public
-`resume_session` + delta-prompt proof. `interrupt` remains false (no
-credentialed interrupt proof). The adapter serializes run/reset/close;
+`resume_session` + delta-prompt proof. `interrupt` is true: both worker
+and in-process paths passed a credentialed continue-after-interrupt
+proof (park at `awaiting_input`, `interrupted` /
+`local_turn_interrupted`, accepted follow-up, same thread id). The
+adapter serializes run/reset/close;
 cancelling the asyncio waiter does not stop the provider — interrupt must
 go through `turn/interrupt`. Missing/incompatible runtime setup fails
 probing or produces an error event.

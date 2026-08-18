@@ -131,7 +131,7 @@ class CapabilityReducerTests(unittest.TestCase):
         self.assertFalse(xai.resume)
         self.assertTrue(claude.interrupt)
         self.assertTrue(antigravity.interrupt)
-        self.assertFalse(codex.interrupt)
+        self.assertTrue(codex.interrupt)
         self.assertFalse(xai.interrupt)
         self.assertTrue(claude.tool_gate)
         self.assertTrue(antigravity.tool_gate)

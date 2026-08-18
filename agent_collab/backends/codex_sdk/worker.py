@@ -91,16 +91,19 @@ class CodexSdkWorkerBackend:
         try:
             # Codex settles handle.run before events are available, so residual
             # return-list delivery remains the primary path; emit is optional.
-            outcome: CodexTurnOutcome = await self._conversation.run(prompt)
-            if outcome.thread_id:
-                self._conversation.note_session_id(outcome.thread_id)
-                from ..common.sdk import provider_session_event
+            from ..common.sdk import provider_session_event, stringify
 
+            outcome: CodexTurnOutcome = await self._conversation.run(prompt)
+            thread_id = outcome.thread_id or stringify(
+                getattr(self._conversation, "_thread_id", None)
+            )
+            if thread_id:
+                self._conversation.note_session_id(thread_id)
                 events.append(
                     provider_session_event(
                         "codex",
                         self._agent_id,
-                        outcome.thread_id,
+                        thread_id,
                         "thread",
                     )
                 )

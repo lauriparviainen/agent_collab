@@ -14,6 +14,13 @@ from integration_tests.harness import LiveBackendTestCase, REPO_ROOT
 class CodexSdkLiveTests(LiveBackendTestCase):
     provider = "codex"
     backend_id = "sdk"
+    # Worker run_started is before connect/turn publishes _live_handle.
+    # Codex collects the whole turn before message/tool/thread-id events, so
+    # waiting for those is waiting for collect (completion-wins). After
+    # run_started, wait this long for the worker-side handle, then interrupt.
+    # Do not interrupt on run_started alone. Keep it short so the count
+    # cannot finish first. Same settle as Antigravity's worker chat().
+    _WORKER_CHAT_SETTLE_S = 2.0
 
     def live_agent(self):
         return replace(
@@ -253,6 +260,7 @@ class CodexSdkLiveTests(LiveBackendTestCase):
     async def _wait_provider_in_flight(self, manager, session_id, timeout_s=90.0):
         deadline = asyncio.get_running_loop().time() + timeout_s
         last = None
+        worker_started_at = None
         while asyncio.get_running_loop().time() < deadline:
             remaining_ms = max(50, int((deadline - asyncio.get_running_loop().time()) * 1000))
             last = await manager.wait_result(session_id, timeout_ms=min(remaining_ms, 500))
@@ -273,6 +281,14 @@ class CodexSdkLiveTests(LiveBackendTestCase):
                 )
             if last.status == "running" and self._has_provider_progress(manager, session_id):
                 return last
+            if last.status == "running" and self._has_worker_run_started(manager, session_id):
+                now = asyncio.get_running_loop().time()
+                if worker_started_at is None:
+                    worker_started_at = now
+                # Worker run_started is before turn() publishes _live_handle.
+                # Interrupting then is a no-op (turn completes).
+                elif now - worker_started_at >= self._WORKER_CHAT_SETTLE_S:
+                    return last
         self._fail_interrupt(
             last,
             manager,
@@ -294,6 +310,13 @@ class CodexSdkLiveTests(LiveBackendTestCase):
                 "human",
                 "referee",
             }:
+                return True
+        return False
+
+    def _has_worker_run_started(self, manager, session_id):
+        for event in self._session_events(manager, session_id):
+            raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
+            if raw.get("phase") == "run_started":
                 return True
         return False
 

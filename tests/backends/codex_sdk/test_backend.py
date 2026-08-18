@@ -441,6 +441,69 @@ class CodexEventMappingTests(unittest.TestCase):
         )
         self.assertEqual(conversation.reset_calls, 0)
 
+    def test_interrupted_collect_emits_already_known_thread_id(self):
+        async def scenario():
+            entered = asyncio.Event()
+
+            class BlockingConversation(_FakeConversation):
+                def __init__(self):
+                    super().__init__([])
+                    self._thread_id = "thread-known"
+                    self._blocked = asyncio.Event()
+
+                async def run(self, prompt):
+                    self.prompts.append(prompt)
+                    self.is_active = True
+                    entered.set()
+                    await self._blocked.wait()
+                    return CodexTurnOutcome(
+                        "",
+                        _turn_result(status=_TurnStatus.interrupted),
+                    )
+
+                async def interrupt(self):
+                    self.interrupt_calls += 1
+                    self._blocked.set()
+                    return True
+
+            conversation = BlockingConversation()
+            runner = CodexSdkRunner(
+                AGENT,
+                False,
+                {},
+                conversation_factory=_conversation_factory(conversation),
+            )
+            events = []
+
+            async def collect():
+                async def emit(event):
+                    events.append(event)
+
+                return await runner.run_turn("stop me", Path("."), emit)
+
+            turn = asyncio.create_task(collect())
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            issued = await runner.interrupt_request()
+            outcome = await asyncio.wait_for(turn, timeout=1.0)
+            return issued, outcome, conversation, events
+
+        issued, outcome, conversation, events = asyncio.run(scenario())
+        self.assertTrue(issued)
+        self.assertEqual(conversation.interrupt_calls, 1)
+        captured = [
+            event
+            for event in events
+            if (event.raw or {}).get("provider_session_id") == "thread-known"
+        ]
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0].raw["provider_session_kind"], "thread")
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("interrupted", "local_turn_interrupted"),
+        )
+        self.assertEqual(conversation.reset_calls, 0)
+        self.assertIn("thread-known", conversation.noted_ids)
+
     def test_interrupt_completion_race_keeps_completed_outcome(self):
         async def scenario():
             entered = asyncio.Event()
@@ -1296,7 +1359,7 @@ class CodexBackendSurfaceTests(unittest.TestCase):
         caps = backends.capabilities_for("codex", "sdk")
         self.assertEqual(
             caps.to_dict(),
-            {"resume": True, "interrupt": False, "tool_gate": False, "continuity": True},
+            {"resume": True, "interrupt": True, "tool_gate": False, "continuity": True},
         )
 
     def test_probe_reports_unavailable_with_install_hint(self):

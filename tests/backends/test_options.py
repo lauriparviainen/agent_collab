@@ -317,7 +317,7 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         self.assertTrue(after_one["continuity"])
         self.assertEqual(
             after_both,
-            {"resumable": False, "interruptible": False, "continuity": True},
+            {"resumable": False, "interruptible": True, "continuity": True},
         )
 
     def test_mock_and_dry_run_cannot_become_resumable(self):
@@ -462,7 +462,7 @@ class ProviderSessionCaptureTests(unittest.TestCase):
         summary = asyncio.run(run())
         self.assertEqual(
             summary,
-            {"resumable": True, "interruptible": False, "continuity": True},
+            {"resumable": True, "interruptible": True, "continuity": True},
         )
 
     def test_quarantined_agent_makes_session_not_resumable(self):
@@ -584,7 +584,7 @@ class SessionCapabilityStartTests(unittest.TestCase):
             summary = manager._session_capabilities(config, {"claude": "sdk", "codex": "sdk"})
         self.assertEqual(
             summary,
-            {"resumable": False, "interruptible": False, "continuity": True},
+            {"resumable": False, "interruptible": True, "continuity": True},
         )
 
     def test_start_time_continuity_is_true_only_for_all_sdk_selection(self):

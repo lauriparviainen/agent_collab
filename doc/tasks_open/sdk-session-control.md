@@ -3,9 +3,10 @@
 **Status:** Open. Continuity shipped (#47); production `claude_sdk.tool_gate`
 and `antigravity_sdk.tool_gate` are true. Production `antigravity_sdk.resume`,
 `claude_sdk.resume`, and `codex_sdk.resume` are true. Production
-`claude_sdk.interrupt` and `antigravity_sdk.interrupt` are true.
-`codex_sdk`, `xai_sdk`, and all CLI `interrupt` remain false; CLI and
-`xai_sdk` `resume` remain false; `tool_gate` remains false for Codex and xAI.
+`claude_sdk.interrupt`, `antigravity_sdk.interrupt`, and
+`codex_sdk.interrupt` are true. `xai_sdk` and all CLI `interrupt` remain
+false; CLI and `xai_sdk` `resume` remain false; `tool_gate` remains false
+for Codex and xAI.
 xAI Stage 3 interrupt and tool_gate are recorded negatives.
 Design resynced 2026-07-30 against 0.13.0,
 which made the outer read-only Bubblewrap worker the default execution path and
@@ -244,6 +245,19 @@ take it:
    `codex_sdk.interrupt` stays false. `xai_sdk.interrupt` stays false
    (recorded negative: `sample()` unary gRPC, no server abort). All CLI
    `*.interrupt` stay false.
+
+   Leftover 2026-08-18 Codex continue replay: the worker harness now
+   waits 2.0s after `run_started` (Antigravity worker pattern) so the
+   worker-side handle can publish before interrupt; it does not
+   interrupt on `run_started` alone and does not wait for collect. In-
+   process still waits for the published live handle. Post-collect
+   emit uses the already-known `AsyncThread` / conversation
+   `_thread_id` when the collected outcome omits it. Both-path
+   credentialed continue-after-interrupt then passed (abort marker,
+   park at `awaiting_input`, accepted `post_message`, same thread id;
+   not a completion-wins park). Production `codex_sdk.interrupt` is
+   now true. `xai_sdk.interrupt` stays false (recorded negative). All
+   CLI `*.interrupt` stay false.
 
 ## Purpose and scope
 
@@ -1771,10 +1785,16 @@ the feature. A skipped provider keeps the production capability false.
 1. Yes. Installed `openai-codex` 0.144.4 exposes `turn/interrupt` via
    `AsyncTurnHandle.interrupt()`. Hermetic mapping landed on worker and
    in-process paths (`interrupted` / `local_turn_interrupted`, retain).
-   Leftover 2026-08-18 continue-after-interrupt was not proven:
-   in-process parked but captured no thread id; worker settled
-   `completed` before interrupt. Production `codex_sdk.interrupt` stays
-   false.
+   **Closed 2026-08-18 (Codex continue replay).** Both-path credentialed
+   continue-after-interrupt produced `interrupted` /
+   `local_turn_interrupted` (not a completion-wins park), parked at
+   `awaiting_input`, and the follow-up `post_message` continued on the
+   same thread id (worker `sandbox=read-only` and in-process
+   `sandbox=none`). Worker in-flight now waits 2.0s after `run_started`
+   then interrupt; post-collect emit uses the already-known
+   `AsyncThread` / conversation `_thread_id` when the collected
+   outcome omits it. Production `codex_sdk.interrupt` is therefore
+   true.
 2. Is an Antigravity conversation still usable for a following turn after
    `ChatResponse.cancel()`? **Closed 2026-08-18.** Both-path credentialed
    continue-after-interrupt produced `interrupted` /
@@ -2147,9 +2167,18 @@ the tests, not this document, are their guarantee.
   Mapping landed. Leftover 2026-08-18 continue-after-interrupt was not
   proven: in-process public interrupt parked at `awaiting_input` with
   `interrupted` / `local_turn_interrupted` but captured no thread id
-  before the follow-up; worker settled `completed` before interrupt.
-  Production `codex_sdk.interrupt` stays false. API inspect was the
-  0.144.4 wheel, not the configured local CLI 0.147.0. See open question 1.
+  before the follow-up; worker settled `completed` before interrupt
+  because in-flight waited for post-collect message/tool/thread-id
+  events. Codex continue replay 2026-08-18: worker in-flight waits
+  2.0s after `run_started` then interrupt (handle publish, not collect);
+  in-process still uses the live handle; post-collect emit uses the
+  already-known `AsyncThread` / conversation `_thread_id` when the
+  collected outcome omits it. Both-path credentialed continue-after-interrupt
+  then passed (abort marker, park at `awaiting_input`, accepted
+  `post_message`, same thread id; not a completion-wins park).
+  Production `codex_sdk.interrupt` is therefore true. API inspect was
+  the 0.144.4 wheel, not the configured local CLI 0.147.0. See open
+  question 1.
 - *[tool_gate]* Installed `openai-codex` 0.144.4 `CodexClient` accepts
   `approval_handler`. Public `AsyncCodex` / `AsyncCodexClient` do not;
   the host installs on `async_codex._client._sync._approval_handler`.
