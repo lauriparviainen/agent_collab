@@ -169,7 +169,7 @@ SDK MCP, same one-line task, `thinking_level=low`. Flags unchanged.
 | `antigravity_sdk` gemini-3.5-flash-low, `sandbox=read-only` | accepted | `status=failed`; `code=provider_transport_failed`; exception `AntigravityValidationError` |
 | `antigravity_sdk` gemini-3.5-flash-low, `sandbox=none` | accepted | `status=failed`; `code=provider_transport_failed`; in-process named missing Gemini API key |
 
-`antigravity_sdk` skipped as host-unrunnable (no Gemini/Vertex credentials). Flags unchanged. Q4 not opened; #20 stays open.
+`antigravity_sdk` both cells host-unrunnable leftover, not unrun skips (start accepted; harvest `status=failed` / `code=provider_transport_failed`). Flags unchanged. Q4 not opened; #20 stays open.
 
 ## Purpose and scope
 
