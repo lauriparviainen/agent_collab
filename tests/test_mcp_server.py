@@ -164,11 +164,14 @@ class McpServerTests(unittest.TestCase):
         for required in (
             "git diff --name-status -z",
             "interactive: false",
-            "timeout_ms=20000",
             "[<session_id> <canonical_backend>]",
-            "Advisory backend quirks (2026-07-15)",
+            "Delegate",
+            "agent_collab_wait_events",
+            "schema wins",
         ):
             self.assertIn(required, text)
+        self.assertNotIn("timeout_ms=20000", text)
+        self.assertNotIn("Advisory backend quirks (2026-07-15)", text)
         self.assertNotIn("## Errors", text)
 
     def test_overview_topic_returns_only_its_section(self):
@@ -235,27 +238,137 @@ class McpServerTests(unittest.TestCase):
 
         text = handle_tool("agent_collab_guidance", {"topic": "delegate"})["content"][0]["text"]
         self.assertTrue(text.startswith("## Delegate"))
-        for required in ("agent_collab_describe_options", "agent_collab_wait_result", "answer"):
+        for required in (
+            "agent_collab_describe_options",
+            "agent_collab_wait_events",
+            "agent_collab_wait_result",
+            "agent_collab_approval",
+            "agent_collab_post_message",
+            "agent_collab_interrupt",
+            "agent_collab_stop",
+            "answer",
+            "continuity",
+            "awaiting_input",
+            "awaiting_approval",
+            "pending_approvals",
+            "wait_approval",
+            "list_approvals",
+        ):
             self.assertIn(required, text)
-        # The follow-up-cost note names the continuity capability (Stage 3).
-        self.assertIn("continuity", text)
-        self.assertIn("awaiting_approval", text)
-        self.assertIn("pending_approvals", text)
-        self.assertIn("agent_collab_approval", text)
-        self.assertIn("`timeout_ms` is your poll bound, not the approval deadline", text)
-        self.assertIn("Gating is for exceptions, not throughput", text)
-        self.assertIn("agent_collab_stop", text)
-        self.assertIn("not a keep-alive turn interrupt", text)
         self.assertNotIn("## Start", text)
+        self.assertNotIn("Gating is for exceptions, not throughput", text)
+        self.assertNotIn("not a keep-alive turn interrupt", text)
 
     def test_watch_topic_includes_approval_park_contract(self):
         text = handle_tool("agent_collab_guidance", {"topic": "watch"})["content"][0]["text"]
         self.assertTrue(text.startswith("## Watch"))
-        self.assertIn("awaiting_approval", text)
-        self.assertIn("pending_approvals", text)
-        self.assertIn("approval_request", text)
-        self.assertIn("not the approval deadline", text)
+        for required in (
+            "cursor",
+            "digest",
+            "approval_request",
+            "terminal",
+            "awaiting_input",
+            "awaiting_approval",
+            "empty batch",
+            "wait_result",
+            "pending_approvals",
+        ):
+            self.assertIn(required, text)
+        self.assertNotIn("post_message", text)
         self.assertNotIn("## Delegate", text)
+
+    def test_overview_pins_capability_flag_contract(self):
+        text = handle_tool("agent_collab_guidance", {"topic": "overview"})["content"][0]["text"]
+        self.assertTrue(text.startswith("## Overview"))
+        for required in ("interruptible", "tool_gate", "resumable", "AND-reduced"):
+            self.assertIn(required, text)
+        self.assertNotIn("## Delegate", text)
+        self.assertNotIn("## Interrupt", text)
+
+    def test_guidance_contracts_live_on_owner_headings(self):
+        def topic(name):
+            return handle_tool("agent_collab_guidance", {"topic": name})["content"][0]["text"]
+
+        whole = handle_tool("agent_collab_guidance", {})["content"][0]["text"]
+        headings = [line for line in whole.splitlines() if line.startswith("## ")]
+        self.assertEqual(len(headings), len(set(headings)))
+        self.assertEqual(
+            set(headings),
+            {
+                "## Overview",
+                "## Delegate",
+                "## Start",
+                "## Watch",
+                "## Interrupt",
+                "## Resume",
+                "## Options",
+                "## Workflows",
+                "## Errors",
+                "## Review recipe",
+            },
+        )
+
+        overview, delegate, start = topic("overview"), topic("delegate"), topic("start")
+        watch, interrupt, resume = topic("watch"), topic("interrupt"), topic("resume")
+        options, workflows, errors = topic("options"), topic("workflows"), topic("errors")
+
+        for required in ("interruptible", "tool_gate", "resumable", "AND-reduced"):
+            self.assertIn(required, overview)
+        self.assertNotIn("AND-reduced", interrupt)
+        self.assertNotIn("AND-reduced", resume)
+
+        self.assertIn("absolute", start)
+        self.assertIn("never apply", start)
+        self.assertIn("Omitted", start)
+        self.assertIn("cross-review", start)
+        self.assertIn("control-loop proof", start)
+        self.assertNotIn("Omitted", workflows)
+        self.assertNotIn("jsonl_path", start)
+        self.assertNotIn("markdown_path", start)
+
+        self.assertIn("paid start", options)
+        self.assertIn("model_refresh", options)
+
+        for required in (
+            "cursor",
+            "digest",
+            "empty batch",
+            "terminal",
+            "awaiting_input",
+            "awaiting_approval",
+        ):
+            self.assertIn(required, watch)
+        self.assertNotIn("empty batch", delegate)
+
+        self.assertIn("wait_result", delegate)
+        self.assertIn("pending_approvals", delegate)
+        self.assertIn("agent_collab_post_message", delegate)
+        self.assertIn("wait_approval", delegate)
+        self.assertIn("list_approvals", delegate)
+        self.assertIn("timeout_ms: 0", delegate)
+        self.assertIn("continuity", delegate)
+
+        self.assertIn("unsupported", interrupt)
+        self.assertIn("local_turn_interrupted", interrupt)
+        self.assertIn("completed", resume)
+        self.assertIn("quarantin", resume)
+
+        self.assertIn("invalid_start_options", errors)
+        self.assertIn("ineligible", errors)
+        self.assertIn("unsupported", errors)
+        self.assertIn("stale", errors)
+
+        self.assertIn("fail closed", workflows)
+        self.assertIn("interactive: false", workflows)
+        self.assertIn("parallel", workflows)
+
+    def test_guidance_is_mcp_only_and_skips_filesystem_paths(self):
+        text = handle_tool("agent_collab_guidance", {})["content"][0]["text"]
+        self.assertIn("agent_collab_read_transcript", text)
+        self.assertIn("agent_collab_read_events", text)
+        self.assertNotIn("jsonl_path", text)
+        self.assertNotIn("markdown_path", text)
+        self.assertNotIn("~/.agent-collab/data/sessions", text)
 
     def test_start_and_status_schemas_expose_detail(self):
         response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
