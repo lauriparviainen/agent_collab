@@ -2923,8 +2923,7 @@ class SessionManager:
 def _unsupported_interrupt_blockers(managed: _ManagedSession) -> List[Tuple[str, str]]:
     """In-flight agents whose frozen ``capabilities.interrupt`` is not true.
 
-    Reads only ``managed.state.settings["agents"][id]["capabilities"]["interrupt"]``.
-    Missing dict or missing key is false. Does not consult the live registry.
+    Does not consult the live registry.
     """
 
     referee = managed.referee
