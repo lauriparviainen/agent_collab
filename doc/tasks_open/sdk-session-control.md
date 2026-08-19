@@ -140,6 +140,23 @@ retention policy when #20 closes. Does not block #20.
 Q3 (expired Antigravity id), Q7 (CLI version floors), and Q8 (Grok
 `--session-id`) stay recorded follow-ups, not close blockers.
 
+### MCP campaign leftover log (2026-08-20)
+
+CLI MCP against the installed user daemon. Low reasoning. Flags unchanged.
+No harvest status recorded here.
+
+| Cell | Start | Interrupt (in-flight) | Resume (live) |
+|---|---|---|---|
+| `claude_cli` sonnet/`thinking_level=low`, `sandbox=read-only` | accepted | `code=unsupported` (agent named); no mutation | `code=conflict` |
+| `codex_cli` luna/`thinking_level=low`, default `sandbox=read-only` | rejected `code=outer_sandbox_path_permissions` (group/world-writable state dirs) | — | — |
+| `codex_cli` luna/`thinking_level=low`, `sandbox=none` | accepted | `code=unsupported` (agent named); no mutation | `code=conflict` |
+| `xai_cli` grok-4.6/`thinking_level=low`, default `sandbox=read-only` | rejected `code=outer_sandbox_path_permissions` (group/world-writable state dirs) | — | — |
+| `xai_cli` grok-4.6/`thinking_level=low`, `sandbox=none` | accepted | `code=unsupported` (agent named); no mutation | `code=conflict` |
+| `antigravity_cli` gemini-3.5-flash-low/`mode=plan`, default `sandbox=read-only` | rejected `code=outer_sandbox_path_permissions` (group/world-writable state dirs) | — | — |
+| `antigravity_cli` gemini-3.5-flash-low/`mode=plan`, `sandbox=none` | accepted | `code=unsupported` (agent named); no mutation | `code=conflict` |
+
+SDK MCP cells not run in this log. `wait_approval` / `list_approvals` not added.
+
 ## Purpose and scope
 
 Turn captured provider session identities and shipped provider adapters into
