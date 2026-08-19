@@ -1,13 +1,17 @@
 # Provider session control: interrupt, tool approval, restart-safe resume
 
-**Status:** Open. Continuity shipped (#47); production `claude_sdk.tool_gate`
-and `antigravity_sdk.tool_gate` are true. Production `antigravity_sdk.resume`,
-`claude_sdk.resume`, and `codex_sdk.resume` are true. Production
-`claude_sdk.interrupt`, `antigravity_sdk.interrupt`, and
-`codex_sdk.interrupt` are true. `xai_sdk` and all CLI `interrupt` remain
-false; CLI and `xai_sdk` `resume` remain false; `tool_gate` remains false
-for Codex and xAI.
-xAI Stage 3 interrupt and tool_gate are recorded negatives.
+**Status:** Open. Stages 1–4 shipped. Production flags as of leftover
+2026-08-18: `claude_sdk` and `antigravity_sdk` have continuity, resume,
+interrupt, and tool_gate all true. `codex_sdk` has continuity, resume, and
+interrupt true; `tool_gate` stays false. `xai_sdk` has continuity only;
+resume stays false (close deletes stored completions); interrupt and
+tool_gate are recorded negatives. All CLI `continuity`, `resume`,
+`interrupt`, and `tool_gate` flags are false; CLI interrupt and tool_gate
+are recorded negatives. Remaining work is guidance unslop, an MCP
+experiential campaign after `./agent_collab.sh install`, and leftover
+honesty — not a Stage 5 protocol. Leftover flag flips are independent
+follow-ups, not close preconditions.
+
 Design resynced 2026-07-30 against 0.13.0,
 which made the outer read-only Bubblewrap worker the default execution path and
 so relocated where the SDK controls have to be built. Resume scope was widened
@@ -29,235 +33,112 @@ and SDK backends.
 (#47) built the substrate. [antigravity-read-only-bubblewrap-sandbox.md](../tasks_closed/antigravity-read-only-bubblewrap-sandbox.md)
 (#43) built the worker boundary.
 
-## Next work — pick up here (2026-08-16)
+## Completion — remaining work (2026-08-19)
 
-This design has been through multi-round adversarial review (three internal
-rounds plus eleven cross-vendor dual-review rounds against the shipped code on
-that date); treat the body below as settled and implement against it rather
-than re-deriving it. The outstanding work, in the order the next agent should
-take it:
+Stages 1–4 are settled substrate. Treat the body below as implemented
+rather than re-deriving it. This is not Stage 5: do not invent protocol,
+eligibility, clocks, or public operations, and do not add `wait_approval`
+or `list_approvals`. Remaining work is three workstreams:
 
-1. **Fix the shipped `codex_sdk` continuity gate first.** Landed as #61 on
-   branch `sdk-session-control`: worker-path `conversation_active()` now
-   requires a captured `thread_id`, and a no-id finish soft-drops the worker.
-   Next: Stage 1 shared control plane.
-2. **Stage 1 — shared control plane.** Protocol v2 frames, hello
-   advertisement, out-of-band interrupt writer, `approval_request`
-   plumbing, the event/status vocabulary, the session-scoped approval
-   registry, deny-by-default (turn-deadline, abandon-on-result, deny-before-
-   stop), the registry-keyed `_result_settled` arm, the one decision
-   operation across REST/MCP/CLI/TUI (including the mcp-guidance
-   delegate-loop rewrite), and interrupt seams (WorkerBackend hooks,
-   worker-backed `interrupt_request`, deny-then-interrupt-then-bounded-wait
-   stop) are on `sdk-session-control`. Capability projection wiring (item 3)
-   landed on `sdk-session-control`. Remaining is Stage 2. Keep MCP free of
-   wait_approval, list_approvals, and interrupt/resume tools until Stage 4.
-3. **Capability projection wiring.** Landed on `sdk-session-control`: the
-   production projection re-evaluates after identity capture, turn commit,
-   and restore through the same conservative reducer (see *Aggregation*).
-   Remaining is Stage 2.
-4. **Stage 2 — Claude SDK tool_gate mapping + clocks.** Interrupt mapping
-   landed earlier on `sdk-session-control` (worker + in-process
-   `interrupt()`; distinguishable `ResultMessage.terminal_reason`
-   `aborted_streaming` / `aborted_tools` →
-   `TurnOutcome("interrupted", "local_turn_interrupted")`; production
-   `claude_sdk.interrupt` stays false). `can_use_tool` is wired on both
-   production paths; the worker no longer forces `bypassPermissions`; the
-   per-turn clock excludes parked intervals (120 s default fail-closed
-   deny, list-shaped overlap, no provider-clock clamp). Hermetic coverage
-   is in place. The Decision (2026-08-16) hard blocker was credentialed
-   parks on both production paths; those landed. 2026-08-16 live run:
-   in-process (`sandbox=none`) parked on deny, approve, and parked-interval
-   clock exclusion (20 s turn timeout, 25 s hold, not `timed_out`). Worker
-   (`sandbox=read-only`) parked on the same three cases once the isolated
-   `-I` worker loaded this branch's protocol v2 (a leftover non-editable
-   copy in the durable venv had been shadowing the editable checkout). One
-   deny-worker attempt finished without a park (`status=done`); a retry
-   parked and denied. Not a permission-mode skip. Production
-   `claude_sdk.tool_gate` is now true. Live two-at-once /
-   abort-during-park remain unverified and are not a flip blocker.
-   Interrupt live proof 2026-08-16: `interrupt_in_flight()` (not
-   `stop_session`) on worker (`sandbox=read-only`) and in-process
-   (`sandbox=none`) produced `TurnOutcome("interrupted",
-   "local_turn_interrupted")`. An earlier worker attempt that interrupted
-   on the worker `run_started` status completed without the abort marker
-   (`issued=True`, `outcomes=[completed]`); waiting for a real provider
-   event then aborted. Continue-after-interrupt did not: both paths
-   settled `failed` / `local_turn_interrupted` because `RequiredTurnFailed`
-   still maps a non-`completed` required turn to session failure, so
-   `post_message` is rejected. Adapter retain is unproven at the session
-   layer. Production `claude_sdk.interrupt` stays false. Remaining Stage 2:
-   do not flip `interrupt` until a later increment can continue after the
-   abort (Stage 4 turn-level interrupt parks at `awaiting_input` instead of
-   raising `RequiredTurnFailed`). Keep MCP free of wait_approval,
-   list_approvals, and interrupt/resume tools until Stage 4.
-5. **Stage 3 — Codex, Antigravity, and xAI SDK controls.** Codex interrupt
-   *mapping* landed on `sdk-session-control` (worker + in-process
-   `AsyncTurnHandle.interrupt()` / `turn/interrupt`; collected
-   `TurnStatus.interrupted` → `TurnOutcome("interrupted",
-   "local_turn_interrupted")`; retain). Production `codex_sdk.interrupt`
-   stays false pending credentialed coverage / continue-after-interrupt
-   (same honesty as Claude). Antigravity interrupt *mapping* also landed
-   (worker + in-process live `ChatResponse.cancel()`;
-   `AntigravityCancelledError` → `TurnOutcome("interrupted",
-   "local_turn_interrupted")`; retain). Production
-   `antigravity_sdk.interrupt` stays false: open question 2 is still
-   unproven, and continue-after-interrupt at the session layer still hits
-   `RequiredTurnFailed` / rejected `post_message` (same as Claude).
-   Interrupt live proof 2026-08-16: `interrupt_in_flight()` (not
-   `stop_session`) on worker (`sandbox=read-only`) and in-process
-   (`sandbox=none`) produced `TurnOutcome("interrupted",
-   "local_turn_interrupted")`. An earlier worker attempt that waited
-   10 s after `run_started` settled `completed` / `awaiting_input`
-   before the abort (Flash finished the no-tool count); waiting 2 s
-   after `run_started` then aborted. In-process waits for the published
-   live `ChatResponse` rather than a streamed token. Continue-after-interrupt
-   did not: both paths settled `failed` / `local_turn_interrupted`
-   because `RequiredTurnFailed` still maps a non-`completed` required
-   turn to session failure, so `post_message` is rejected. Adapter
-   retain is unproven at the session layer. A following `chat()` on the
-   same conversation after cancel was not proven. Antigravity tool_gate *mapping*
-   also landed: host `policy.ask_user("*")` is wired on the worker
-   (always) and on in-process only when `_approval_callback` is set;
-   questions 5, 9, and 10 are recorded in the Antigravity Decision
-   below. The worker no longer forces `allow_all` after outer proof.
-   Ungated in-process keeps the SDK default `confirm_run_command`.
-   2026-08-16 credentialed parks: worker (`sandbox=read-only`) and
-   in-process (`sandbox=none`) parked on deny, approve, and
-   parked-interval clock exclusion (20 s turn timeout, 25 s hold, not
-   `timed_out`). In-process required a copy-stable `ask_user` wrapper
-   so `Agent` `model_copy(deep=True)` does not walk the runner
-   (`TypeError: cannot pickle 'mappingproxy' object`). Worker clock
-   holds stayed `awaiting_approval`; a slow pre-park can still settle
-   `timed_out` after resolve because startup counts against the 20 s
-   remainder. A never-parked test fails rather than skips. Production
-   `antigravity_sdk.tool_gate` is now true because both paths parked.
-   Do not flip `antigravity_sdk.interrupt`.
-   Codex tool_gate *mapping* also landed:
-   host `approval_handler` is wired on the worker (always) and on
-   in-process only when `_approval_callback` is set; questions 5, 9, and
-   10 are recorded in the Codex Decision below. Gated starts force
-   `approvalPolicy=on-request` / `approvalsReviewer=user` through the
-   installed client so public `auto_review` cannot decide without the
-   host handler. 2026-08-16 live parks: in-process (`sandbox=none`)
-   parked on deny, approve, and parked-interval clock exclusion (20 s
-   turn timeout, 25 s hold, not `timed_out`). Worker
-   (`sandbox=read-only`) did not park. Inner `danger-full-access` is
-   a permission skip (Claude analog of `bypassPermissions`) **and**
-   the historical worker filesystem posture. Stopping that force so
-   gated workers keep inner `read-only` did not emit
-   `requestApproval` (command ran with no park, or the model used no
-   tool). Further worker trials — `AskForApproval.untrusted`,
-   granular policy, turn-level host review, `externalSandbox`, and
-   `use_legacy_landlock` — were not a reliable gate and were
-   reverted. Isolated auth-only `CODEX_HOME` is not the skip
-   (in-process plus that isolation still parked). Nested Codex
-   bubblewrap cannot create a user namespace inside outer
-   `--unshare-user`; `on-request` then has no escalation. A
-   never-parked test fails rather than skips. Production
-   `codex_sdk.tool_gate` stays false. Codex worker parks remain a
-   recorded negative. xAI Stage 3 interrupt and tool_gate are
-   recorded negatives after re-verifying `xai-sdk` 1.17.0
-   (2026-08-16): both flags stay false. Questions 5, 9, and 10
-   are answered for xAI in the Decision below. Open question 2
-   is Antigravity-only and remains open: live abort is proven, but a
-   following `chat()` on the same conversation after cancel was not,
-   and session-layer continue is still blocked by `RequiredTurnFailed`.
-   Remaining Stage 3: none. Do not flip `antigravity_sdk.interrupt`.
-   Do not start Stage 4.
-6. **Stage 4 — CLI continuity, restart-safe resume, public surfaces**, in its
-   five increments. Increment 1 landed: `antigravity_cli` uses typed
-   `--output-format stream-json`, retires message-only/clean-EOF success, and
-   probes `agy >= 1.1.8`. Increment 2 landed in-session continuation by exact
-   captured root conversation id (`agy --conversation <id>`), keyed-merge
-   identity capture, the gated CLI runner state machine, and
-   `prepare_cli_invocation` plus the Antigravity finalizer. 2026-08-17 live:
-   the direct (`sandbox=none`) two-turn provider-memory path passed on
-   `gemini-3.5-flash-low` (same captured root id, `--conversation` on turn 2,
-   delta prompt). The outer (`sandbox=read-only`) two-turn was skipped
-   because `AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE` was unset; that skip
-   does not flip the flag. Production `antigravity_cli.continuity` stays
-   false until both launch paths pass; `resume` stays false. Increment 3
-   landed the durable Antigravity SDK trajectory root and adapter-level
-   resume establishment: `{AGENT_COLLAB_HOME}/trajectories/{session_id}` is
-   `Persistence.HOST` + `CREATE_PRIVATE_DIRECTORY`, keyed to a validated
-   session id allocated before plan resolve; session-private app-data/home
-   are still removed on close; `TemporaryDirectory` and the shared `/tmp`
-   worker fallback are gone.    2026-08-17 live: both worker
-   (`sandbox=read-only`) and in-process (`sandbox=none`)
-   resume-establishment tests passed on Vertex `gemini-2.5-flash`. After
-   the live Agent/worker conversation was dropped, the next turn reopened
-   the same captured conversation id against the same durable `save_dir`
-   and recalled the first-turn project id. In-process factory calls used
-   that captured id and `save_dir`. The worker path drops the worker
-   process (HOST trajectory kept) so the next turn goes through
-   `worker_open_payload_for_agent(conversation_id=...)` → `open` +
-   `note_session_id`; a parent-process factory spy cannot observe
-   worker-side Agent construction. The trajectory directory still existed
-   after session stop. Increment 4 later flipped `antigravity_sdk.resume`
-   after both-path reload proof. Increment 4 landed persisted explicit resume and the public operation:
-   `POST /sessions/{id}/resume`, `agent_collab_resume`,
-   `agent-collab resume`, and TUI `/resume`. Descriptors now carry
-   `backend_version`, `resume_fingerprint`, `last_turn_status`,
-   `prompt_event_cursor`, and `interrupt_acknowledged`. Eligibility is
-   `completed` only; one quarantined agent makes session resume
-   permanently unavailable. The referee restores the session-level
-   workflow phase and does not replay completed stages. Resume seeds
-   `_next_turn_number` and `_committed_turn_ids` from persisted
-   `turn_outcomes` so the next directed turn cannot collide with
-   `turn-1`. Concurrent resumes serialize on `resume_lock` (one winner,
-   HTTP 409). Capture alone no longer projects `resumable`. Production `antigravity_sdk.resume`,
-   `claude_sdk.resume`, and `codex_sdk.resume` are true: both worker and
-   in-process credentialed daemon-reload + `resume_session` + delta-prompt
-   proofs passed (2026-08-18). CLI `resume` stays false: Claude, Grok,
-   and Antigravity CLI directs passed, but every outer path was skipped
-   (dedicated sandbox-state env unset). Codex CLI never reached resume
-   (first ordinary turn `subprocess_exit_nonzero`).
-   `antigravity_cli.continuity` stays false
-   (`AGENT_COLLAB_IT_ANTIGRAVITY_SANDBOX_STATE` unset). `xai_sdk.resume`
-   stays false (close still deletes stored completions). Increment 5
-   landed the public turn-level interrupt: `POST /sessions/{id}/interrupt`,
-   `agent_collab_interrupt`, `agent-collab interrupt`, and TUI
-   `/interrupt`. Operator interrupt parks an interactive session at
-   `awaiting_input`, abandons remaining planned stages, and persists
-   `parked_in_input_loop=True` so increment-4 resume does not replay them.
-   Non-interactive and idle `awaiting_input` are structured conflicts.
-   Resume eligibility stays `completed` only; `interrupt_acknowledged` is
-   persisted on a provider-acknowledged abort and does not widen
-   eligibility. Increment 5 left production `*.interrupt` false. Do not add
-   `wait_approval` or `list_approvals`. Stage 4 is complete; leftover
-   capability-flag flips are later work on #20, not a sixth Stage 4
-   increment. Hermetic park+continue coverage landed; credentialed
-   continue-after-interrupt was not re-run in increment 5.
+1. **Guidance unslop** — rewrite `mcp-guidance.md` so each required
+   contract has exactly one `##` owner. Pin tests at contracts, not
+   ornamental sentences.
+2. **MCP experiential campaign** — after `./agent_collab.sh install`,
+   drive campaign-reachable backends through MCP tool calls to the
+   installed user daemon. Not in-process `SessionManager` IT.
+3. **Leftover honesty** — keep recorded negatives false; keep blocked
+   flags false until both-path proof exists; record campaign findings
+   without transcript dumps.
 
-   Leftover flag flips 2026-08-18: credentialed continue-after-interrupt
-   was re-run on the public `interrupt_session` → park `awaiting_input`
-   → distinguishable abort (`interrupted` / `local_turn_interrupted`)
-   → accepted `post_message` harness, plus same-thread id after the
-   follow-up. A completion-wins park alone does not flip the flag.
-   `claude_sdk` worker and in-process both passed (abort marker and
-   same session id). `antigravity_sdk` worker and in-process both
-   passed (abort marker and same conversation id after cancel). Production
-   `claude_sdk.interrupt` and `antigravity_sdk.interrupt` are now true.
-   `codex_sdk` continue was not proven: in-process parked with
-   `interrupted` / `local_turn_interrupted` but captured no thread id
-   before the follow-up; worker settled `completed` before interrupt.
-   `codex_sdk.interrupt` stays false. `xai_sdk.interrupt` stays false
-   (recorded negative: `sample()` unary gRPC, no server abort). All CLI
-   `*.interrupt` stay false.
+**Close bar (user-confirmed 2026-08-19).** #20 closes after the MCP
+campaign + guidance unslop + leftover honesty even if CLI
+resume/continuity, `xai_sdk.resume`, and `codex_sdk.tool_gate` stay
+false. Leftover flag flips are independent follow-ups, not close
+preconditions. Recorded negatives stay false.
 
-   Leftover 2026-08-18 Codex continue replay: the worker harness now
-   waits 2.0s after `run_started` (Antigravity worker pattern) so the
-   worker-side handle can publish before interrupt; it does not
-   interrupt on `run_started` alone and does not wait for collect. In-
-   process still waits for the published live handle. Post-collect
-   emit uses the already-known `AsyncThread` / conversation
-   `_thread_id` when the collected outcome omits it. Both-path
-   credentialed continue-after-interrupt then passed (abort marker,
-   park at `awaiting_input`, accepted `post_message`, same thread id;
-   not a completion-wins park). Production `codex_sdk.interrupt` is
-   now true. `xai_sdk.interrupt` stays false (recorded negative). All
-   CLI `*.interrupt` stay false.
+### Production capabilities (leftover 2026-08-18)
+
+| Backend | continuity | resume | interrupt | tool_gate | Notes |
+|---|---|---|---|---|---|
+| `claude_sdk` | T | T | T | T | Both worker and in-process. |
+| `antigravity_sdk` | T | T | T | T | Both paths. Vertex/glibc host caveat. |
+| `codex_sdk` | T | T | T | F | Worker parks never proven; workers still force inner `danger-full-access`. |
+| `xai_sdk` | T | F | F (permanent) | F (permanent) | Unary `sample()`; tools would revoke `no_local_effects`; close deletes stored completions. |
+| `claude_cli` / `codex_cli` / `xai_cli` / `antigravity_cli` | F | F | F (permanent) | F (permanent) | One-shot transports. CLI resume/continuity blocked on outer-sandbox live proof. Codex CLI first-turn `subprocess_exit_nonzero`. |
+
+Public `resume` / `interrupt` / `approval` already exist on REST, MCP,
+CLI, and TUI. MCP tools are `guidance`, `describe_options`, `start`,
+`list_sessions`, `status`, `read_events`, `wait_events`, `wait_result`,
+`read_transcript`, `post_message`, `approval`, `resume`, `interrupt`,
+`stop`. There is no `wait_approval` or `list_approvals`.
+
+Leftover 2026-08-18 flipped production `claude_sdk.interrupt`,
+`antigravity_sdk.interrupt`, and `codex_sdk.interrupt` after both-path
+credentialed continue-after-interrupt (park at `awaiting_input`,
+distinguishable abort, accepted follow-up `post_message`, same provider
+thread). A completion-wins park alone does not flip the flag.
+
+### Campaign checklist
+
+Hard gate before mock or paid MCP:
+
+1. `./agent_collab.sh install` this branch (non-editable; workers load
+   the durable-venv site-packages).
+2. Confirm isolated import with `python -I` against the durable venv:
+   both `agent_collab` and `agent_collab.sandbox.sdk_worker` must resolve
+   under that venv's site-packages, not the checkout, and the version
+   must match the installed tree.
+3. Restart the user daemon if needed.
+4. Restart the MCP client so `initialize` / `tools/list` refresh.
+   Repeat the client reconnect after every daemon restart.
+
+Then mock smoke, then backends in turn through MCP only. Fork sessions
+(interrupt / tool_gate / resume): do not combine an advertised-interrupt
+park with tool_gate or resume on the same session. Skip CLI
+outer-sandbox live MCP this campaign (do not set
+`AGENT_COLLAB_IT_*_SANDBOX_STATE`). If this host cannot run
+`antigravity_sdk` (glibc/Vertex), skip those MCP cells without
+unflipping. Close comment lists skipped cells.
+
+Fail-closed interrupt (`code=unsupported` when any in-flight backend
+does not advertise interrupt) lands before the campaign; do not start
+paid MCP against the current lying-success path.
+
+Order: mock → `claude_cli` → `codex_cli` → `xai_cli` →
+`antigravity_cli` → `claude_sdk` both sandboxes → `codex_sdk` both
+sandboxes → `xai_sdk` → `antigravity_sdk` last.
+
+### Finding taxonomy
+
+| Kind | Meaning | Close impact |
+|---|---|---|
+| **product bug** | Running agent cannot complete an advertised loop, or an operation lies. | Fix before close, or explicitly defer with a follow-up issue. |
+| **guidance gap** | Required contract missing or unusable. | Fix guidance; re-pin tests. |
+| **guidance slop** | Duplicated, hedged, or restated. | Cut or cross-ref. |
+| **recorded negative** | Flag is false for a documented technical reason. Leave false. | Note in leftover log; not a close blocker. |
+| **leftover flag still blocked** | Proof still missing (CLI outer sandbox, Codex CLI first turn, xAI retain-on-close, Codex worker parks, Antigravity host). | Independent PR later; not a close blocker. List skipped cells. |
+
+Public-content: describe evidence (status, failure codes, flags, park
+observed / not observed). Do not paste transcripts, prompts, tokens, or
+hostnames.
+
+### Leftover flags (independent of close)
+
+| Leftover | Blocker |
+|---|---|
+| `xai_sdk.resume` | Close still deletes stored completions. Flip only after retain-on-close plus credentialed reload proof. |
+| `xai_sdk.interrupt` / `tool_gate` | Permanent. Unary `GetCompletion`; no host permission callback. |
+| All CLI `interrupt` / `tool_gate` | Permanent. One-shot print transports. |
+| CLI `continuity` / `resume` | This campaign skips outer-sandbox live MCP. Codex CLI first ordinary turn `subprocess_exit_nonzero`. |
+| `codex_sdk.tool_gate` | Worker parks unproven; inner `danger-full-access`; nested Bubblewrap cannot create a user namespace. |
+
+**Q4 trajectory retention.** `{AGENT_COLLAB_HOME}/trajectories/{session_id}`
+outlives the session; no sweeper. Do not invent a sweeper now. Keep
+recorded-undecided. Open a small GitHub follow-up issue for the
+retention policy when #20 closes. Does not block #20.
+
+Q3 (expired Antigravity id), Q7 (CLI version floors), and Q8 (Grok
+`--session-id`) stay recorded follow-ups, not close blockers.
 
 ## Purpose and scope
 
