@@ -253,6 +253,7 @@ class McpServerTests(unittest.TestCase):
             "pending_approvals",
             "wait_approval",
             "list_approvals",
+            "not a watch loop",
         ):
             self.assertIn(required, text)
         self.assertNotIn("## Start", text)
@@ -271,7 +272,6 @@ class McpServerTests(unittest.TestCase):
             "awaiting_approval",
             "empty batch",
             "wait_result",
-            "pending_approvals",
         ):
             self.assertIn(required, text)
         self.assertNotIn("post_message", text)
@@ -343,6 +343,7 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("wait_result", delegate)
         self.assertIn("pending_approvals", delegate)
         self.assertIn("agent_collab_post_message", delegate)
+        self.assertIn("not a watch loop", delegate)
         self.assertIn("wait_approval", delegate)
         self.assertIn("list_approvals", delegate)
         self.assertIn("timeout_ms: 0", delegate)

@@ -38,8 +38,8 @@ Run another agent as a subagent and collect its result over MCP alone:
    Stop states: Watch (`terminal`, `awaiting_input`, `awaiting_approval`).
 4. Harvest or park with `agent_collab_wait_result`:
    - `settled` + terminal: harvest `answers` (preview-bounded; re-fetch via
-     `event_id`). A non-`done` terminal also carries `events_tail`. Read
-     `turn_outcomes` and `failure` when an agent has no answer.
+     `event_id` — Watch). A non-`done` terminal also carries `events_tail`.
+     Read `turn_outcomes` and `failure` when an agent has no answer.
    - `settled` + `awaiting_input`: follow-up-ready; you may `post_message`.
    - `settled` + `awaiting_approval`: park, not harvest (`terminal=false`,
      `pending_approvals`). One `agent_collab_approval` per `request_id`
@@ -49,9 +49,7 @@ Run another agent as a subagent and collect its result over MCP alone:
    - `settled: false`: heartbeat — re-poll immediately, no 20s pace.
    `timeout_ms: 0` is an instant peek. Default `timeout_ms` is 45000; do
    not exceed it (clients kill near 60 s). Use `wait_result` alone only
-   when you need nothing but the outcome. For one capped event,
-   `agent_collab_read_events` (`cursor: event_id`, `limit: 1`,
-   `tool_output: "full"`).
+   when you need nothing but the outcome.
 5. Follow-up (interactive only): `agent_collab_post_message`, then collect
    with `agent_collab_wait_result`, not a watch loop — status stays
    `awaiting_input` for the whole directed turn. `target` picks one agent;
