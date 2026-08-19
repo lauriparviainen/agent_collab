@@ -238,7 +238,12 @@ class AgentCollabHttpServer:
             self._log_request(f"request error {status} {exc}")
             await self._write_json(writer, status, {"error": str(exc), "code": exc.code})
         except InterruptError as exc:
-            status = 404 if exc.code == "not_found" else 409
+            if exc.code == "not_found":
+                status = 404
+            elif exc.code == "conflict":
+                status = 409
+            else:
+                status = 400
             self._log_request(f"request error {status} {exc}")
             await self._write_json(writer, status, {"error": str(exc), "code": exc.code})
         except StartOptionsError as exc:

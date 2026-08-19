@@ -119,6 +119,8 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("agent_collab_resume", names)
         self.assertNotIn("agent_collab_wait_approval", names)
         self.assertNotIn("agent_collab_list_approvals", names)
+        self.assertNotIn("wait_approval", names)
+        self.assertNotIn("list_approvals", names)
 
     def test_start_and_describe_options_require_workdir_in_schema(self):
         response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -178,6 +180,52 @@ class McpServerTests(unittest.TestCase):
         self.assertTrue(overview.startswith("## Overview"))
         self.assertNotIn("## Delegate", overview)
         self.assertNotIn("## Start", overview)
+
+    def test_guidance_topic_enum_includes_interrupt_and_resume(self):
+        response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        tools = {tool["name"]: tool for tool in response["result"]["tools"]}
+        topics = tools["agent_collab_guidance"]["inputSchema"]["properties"]["topic"]["enum"]
+        self.assertIn("interrupt", topics)
+        self.assertIn("resume", topics)
+        self.assertNotIn("wait_approval", topics)
+        self.assertNotIn("list_approvals", topics)
+
+    def test_interrupt_topic_pins_fail_closed_and_stop(self):
+        text = handle_tool("agent_collab_guidance", {"topic": "interrupt"})["content"][0]["text"]
+        self.assertTrue(text.startswith("## Interrupt"))
+        self.assertIn("unsupported", text)
+        self.assertIn("capabilities.interrupt", text)
+        self.assertIn("agent_collab_stop", text)
+        self.assertIn("interrupted", text)
+        self.assertIn("interruptible", text)
+        self.assertNotIn("## Resume", text)
+        self.assertNotIn("wait_approval", text)
+        self.assertNotIn("list_approvals", text)
+
+    def test_resume_topic_pins_completed_only_eligibility(self):
+        text = handle_tool("agent_collab_guidance", {"topic": "resume"})["content"][0]["text"]
+        self.assertTrue(text.startswith("## Resume"))
+        self.assertIn("completed", text)
+        self.assertIn("resumable", text)
+        self.assertIn("quarantin", text)
+        self.assertIn("conflict", text)
+        self.assertNotIn("## Interrupt", text)
+        self.assertNotIn("wait_approval", text)
+        self.assertNotIn("list_approvals", text)
+
+    def test_start_interrupt_resume_descriptions_match_contracts(self):
+        tools = {tool["name"]: tool for tool in TOOLS}
+        start = tools["agent_collab_start"]["description"]
+        interrupt = tools["agent_collab_interrupt"]["description"]
+        resume = tools["agent_collab_resume"]["description"]
+        self.assertIn("cross-review", start)
+        self.assertIn("solo", start)
+        self.assertIn("unsupported", interrupt)
+        self.assertIn("capabilities.interrupt", interrupt)
+        self.assertIn("completed", resume)
+        self.assertIn("resumable=false", resume)
+        self.assertNotIn("wait_approval", interrupt)
+        self.assertNotIn("list_approvals", interrupt)
 
     def test_delegate_topic_is_discoverable_and_describes_the_flow(self):
         response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -732,6 +780,24 @@ class McpServerTests(unittest.TestCase):
         )
         self.assertTrue(result["isError"])
         self.assertEqual(_payload(result)["code"], "conflict")
+
+    def test_session_manager_backend_maps_interrupt_unsupported(self):
+        from agent_collab.mcp_tools import SessionManagerToolBackend, handle_tool_sync
+        from agent_collab.resume import InterruptError
+
+        manager = mock.Mock()
+        manager.interrupt_session = mock.AsyncMock(
+            side_effect=InterruptError(
+                "unsupported", "interrupt is unsupported for in-flight agents: claude_cli"
+            )
+        )
+        result = handle_tool_sync(
+            "agent_collab_interrupt",
+            {"session_id": "s1"},
+            SessionManagerToolBackend(manager),
+        )
+        self.assertTrue(result["isError"])
+        self.assertEqual(_payload(result)["code"], "unsupported")
 
     def test_session_manager_backend_maps_resume_conflict(self):
         from agent_collab.mcp_tools import SessionManagerToolBackend, handle_tool_sync

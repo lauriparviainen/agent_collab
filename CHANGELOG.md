@@ -13,6 +13,12 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Fail closed on in-flight interrupt when any in-flight agent does not
+  advertise `interrupt`: `code=unsupported` with no session mutation.
+  Mixed-roster names the blocking agent. `fallback_cancelled` remains
+  only for advertised interrupt that missed ACK. Add Interrupt and
+  Resume MCP guidance topics (#20).
+
 - Stream `xai_cli` answer text as live message chunks and map documented
   Grok `tool_call` / `tool_call_update` records to Codex-like dim tool
   rows. Harvest prefers `raw.full_text` so `wait_result` stays the full

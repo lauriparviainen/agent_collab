@@ -4,7 +4,18 @@ from dataclasses import dataclass, replace
 import asyncio
 from pathlib import Path
 import re
-from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Set
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+)
 
 from .approvals import APPROVAL_PARK_EXCLUSION_FACTOR, DEFAULT_APPROVAL_DEADLINE_SECONDS
 
@@ -284,6 +295,7 @@ class Referee:
             self.sandbox_plan = self._resolve_direct_sandbox_plan()
         self._live_runners: Dict[str, AgentRunner] = {}
         self._in_flight_runner_tasks: Set[asyncio.Task] = set()
+        self._in_flight_agents: Dict[asyncio.Task, str] = {}
         # HOST CREATE_PRIVATE roots survive only after the session starts live
         # work. Dry-run, mock, preflight failure, and other never-live starts
         # must roll them back with cleanup_failed_start_roots.
@@ -368,6 +380,11 @@ class Referee:
 
     def in_flight_runner_tasks(self) -> List[asyncio.Task]:
         return [task for task in self._in_flight_runner_tasks if not task.done()]
+
+    def in_flight_agent_ids(self) -> FrozenSet[str]:
+        return frozenset(
+            agent_id for task, agent_id in self._in_flight_agents.items() if not task.done()
+        )
 
     async def _preflight_direct_sandbox_plan(self) -> None:
         """Run the engine control omitted by daemon-owned prepared starts.
@@ -801,6 +818,7 @@ class Referee:
             name=f"agent-collab-{turn_id}-{agent_id}",
         )
         self._in_flight_runner_tasks.add(runner_task)
+        self._in_flight_agents[runner_task] = agent_id
         budget = _TurnBudget(self.config.timeout, self.config.approval_deadline)
         stop_task = asyncio.create_task(self.stop_signal.wait())
         local_outcome: Optional[TurnOutcome] = None
@@ -898,6 +916,7 @@ class Referee:
             return record
         finally:
             self._in_flight_runner_tasks.discard(runner_task)
+            self._in_flight_agents.pop(runner_task, None)
             if not stop_task.done():
                 stop_task.cancel()
             await asyncio.gather(stop_task, return_exceptions=True)
@@ -1373,6 +1392,7 @@ class Referee:
             self._cleanup_sandbox_plan_private_roots()
             self._live_runners = {}
             self._in_flight_runner_tasks.clear()
+            self._in_flight_agents.clear()
 
     def _seed_resume_runners(self, runners: Dict[str, AgentRunner]) -> None:
         descriptors = self.config.resume_descriptors or {}

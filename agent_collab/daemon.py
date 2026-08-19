@@ -1077,6 +1077,16 @@ class SessionManager:
         ):
             raise InterruptError("conflict", "no in-flight turn to interrupt")
 
+        blockers = _unsupported_interrupt_blockers(managed)
+        if blockers:
+            named = ", ".join(
+                f"{agent_id} ({backend})" if backend else agent_id for agent_id, backend in blockers
+            )
+            raise InterruptError(
+                "unsupported",
+                f"interrupt is unsupported for in-flight agents: {named}",
+            )
+
         managed.stop_signal.mark_turn_interrupt()
         denied = await self._auto_deny_pending(managed, reason="interrupt")
         requested = False
@@ -2908,6 +2918,37 @@ class SessionManager:
     def _log_lifecycle(self, message: str) -> None:
         if self._lifecycle_logger is not None:
             self._lifecycle_logger(message)
+
+
+def _unsupported_interrupt_blockers(managed: _ManagedSession) -> List[Tuple[str, str]]:
+    """In-flight agents whose frozen ``capabilities.interrupt`` is not true.
+
+    Reads only ``managed.state.settings["agents"][id]["capabilities"]["interrupt"]``.
+    Missing dict or missing key is false. Does not consult the live registry.
+    """
+
+    referee = managed.referee
+    if referee is None:
+        return []
+    settings = managed.state.settings if isinstance(managed.state.settings, dict) else {}
+    agents = settings.get("agents") if isinstance(settings.get("agents"), dict) else {}
+    blockers: List[Tuple[str, str]] = []
+    for agent_id in sorted(referee.in_flight_agent_ids()):
+        entry = agents.get(agent_id) if isinstance(agents, dict) else None
+        caps = entry.get("capabilities") if isinstance(entry, dict) else None
+        advertised = isinstance(caps, dict) and bool(caps.get("interrupt"))
+        if advertised:
+            continue
+        backend = ""
+        if isinstance(entry, dict):
+            agent_type = str(entry.get("type") or "")
+            backend_id = str(entry.get("backend") or "")
+            if agent_type and backend_id:
+                backend = f"{agent_type}_{backend_id}"
+            elif agent_type:
+                backend = agent_type
+        blockers.append((agent_id, backend))
+    return blockers
 
 
 def _model_catalog_refresh_wanted(payload: Dict[str, Any]) -> bool:

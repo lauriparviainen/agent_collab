@@ -97,8 +97,9 @@ class ResumeError(ValueError):
 class InterruptError(ValueError):
     """Structured turn-interrupt failure.
 
-    Codes: ``conflict``, ``not_found``. HTTP maps ``conflict`` to 409 and
-    ``not_found`` to 404 — same shape as ``ResumeError``.
+    Codes: ``conflict``, ``not_found``, ``unsupported``. HTTP maps
+    ``conflict`` to 409, ``not_found`` to 404, and ``unsupported`` to 400 —
+    same shape as ``ResumeError``.
     """
 
     def __init__(self, code: str, message: str) -> None:

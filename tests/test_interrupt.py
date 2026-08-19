@@ -56,6 +56,24 @@ async def _wait_until(predicate, timeout=2.0, message="condition"):
     raise AssertionError(f"{message} not reached before timeout")
 
 
+def _advertise_interrupt(manager, session_id, flags=None, *, enabled=True):
+    """Write frozen settings.agents.*.capabilities.interrupt. Do not patch the registry."""
+
+    managed = manager._sessions[session_id]
+    settings = dict(managed.state.settings or {})
+    agents = dict(settings.get("agents") or {})
+    if flags is None:
+        flags = {agent_id: enabled for agent_id in agents}
+    for agent_id, value in flags.items():
+        entry = dict(agents.get(agent_id) or {})
+        caps = dict(entry.get("capabilities") or {})
+        caps["interrupt"] = bool(value)
+        entry["capabilities"] = caps
+        agents[agent_id] = entry
+    settings["agents"] = agents
+    managed.state.settings = settings
+
+
 class _CaptureWriter:
     def __init__(self):
         self.buffer = bytearray()
@@ -98,6 +116,7 @@ class HangRunner(AgentRunner):
         self.started = started
         self.acknowledge = acknowledge
         self.calls = 0
+        self.interrupt_calls = 0
         self.cancelled = False
         self.killed = False
         self._active = True
@@ -106,6 +125,7 @@ class HangRunner(AgentRunner):
         return self._active
 
     async def interrupt_request(self) -> bool:
+        self.interrupt_calls += 1
         return self.acknowledge
 
     async def cancel_active(self) -> None:
@@ -265,6 +285,7 @@ class InterruptParkTests(unittest.IsolatedAsyncioTestCase):
                             interactive_idle_timeout=30,
                         )
                     )
+                    _advertise_interrupt(manager, state.session_id)
                     await started.wait()
                     interrupted = await asyncio.wait_for(
                         manager.interrupt_session(state.session_id),
@@ -328,6 +349,7 @@ class InterruptParkTests(unittest.IsolatedAsyncioTestCase):
                             interactive_idle_timeout=30,
                         )
                     )
+                    _advertise_interrupt(live, state.session_id)
                     await started.wait()
                     interrupted = await asyncio.wait_for(
                         live.interrupt_session(state.session_id),
@@ -475,6 +497,7 @@ class InterruptParkTests(unittest.IsolatedAsyncioTestCase):
                             interactive_idle_timeout=30,
                         )
                     )
+                    _advertise_interrupt(manager, state.session_id)
                     await _wait_until(
                         lambda: manager.get_session(state.session_id).status == "awaiting_input",
                         message="first park",
@@ -517,6 +540,7 @@ class InterruptParkTests(unittest.IsolatedAsyncioTestCase):
                             interactive_idle_timeout=30,
                         )
                     )
+                    _advertise_interrupt(manager, state.session_id)
                     await asyncio.wait_for(runner.planned_started.wait(), timeout=2.0)
                     await manager.post_message(state.session_id, "queued after last stage")
                     runner.hold_planned.set()
@@ -567,6 +591,7 @@ class InterruptParkTests(unittest.IsolatedAsyncioTestCase):
                             interactive_idle_timeout=30,
                         )
                     )
+                    _advertise_interrupt(manager, state.session_id)
                     await asyncio.wait_for(runner.planned_started.wait(), timeout=2.0)
                     await manager.post_message(state.session_id, "first queued")
                     await manager.post_message(state.session_id, "second queued")
@@ -613,6 +638,7 @@ class InterruptParkTests(unittest.IsolatedAsyncioTestCase):
                             interactive_idle_timeout=30,
                         )
                     )
+                    _advertise_interrupt(manager, state.session_id)
                     await started.wait()
                     interrupted = await asyncio.wait_for(
                         manager.interrupt_session(state.session_id),
@@ -887,6 +913,7 @@ class InterruptLockTests(unittest.IsolatedAsyncioTestCase):
                             interactive_idle_timeout=30,
                         )
                     )
+                    _advertise_interrupt(manager, state.session_id)
                     await started.wait()
                     first = await asyncio.wait_for(
                         manager.interrupt_session(state.session_id),
@@ -921,6 +948,7 @@ class InterruptLockTests(unittest.IsolatedAsyncioTestCase):
                             interactive_idle_timeout=30,
                         )
                     )
+                    _advertise_interrupt(manager, state.session_id)
                     await started.wait()
                     resume_task = asyncio.create_task(manager.resume_session(state.session_id))
                     interrupt_task = asyncio.create_task(
@@ -1027,6 +1055,7 @@ class InterruptFallbackTests(unittest.IsolatedAsyncioTestCase):
                                 interactive_idle_timeout=30,
                             )
                         )
+                        _advertise_interrupt(manager, state.session_id)
                         await started.wait()
                         interrupted = await asyncio.wait_for(
                             manager.interrupt_session(state.session_id),
@@ -1072,6 +1101,7 @@ class InterruptFallbackTests(unittest.IsolatedAsyncioTestCase):
                             interactive_idle_timeout=30,
                         )
                     )
+                    _advertise_interrupt(manager, state.session_id)
                     await started.wait()
                     interrupted = await asyncio.wait_for(
                         manager.interrupt_session(state.session_id),
@@ -1110,6 +1140,7 @@ class InterruptFallbackTests(unittest.IsolatedAsyncioTestCase):
                             interactive_idle_timeout=30,
                         )
                     )
+                    _advertise_interrupt(manager, state.session_id)
                     await asyncio.wait_for(runner.planned_started.wait(), timeout=2.0)
                     first = await asyncio.wait_for(
                         manager.interrupt_session(state.session_id),
@@ -1173,6 +1204,7 @@ class InterruptFallbackTests(unittest.IsolatedAsyncioTestCase):
                                 interactive_idle_timeout=30,
                             )
                         )
+                        _advertise_interrupt(manager, state.session_id)
                         await started.wait()
                         await manager.register_approval(
                             state.session_id,
@@ -1193,13 +1225,126 @@ class InterruptFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(managed.approvals.unresolved_count(), 0)
 
 
+class InterruptFailClosedTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mixed_roster_interrupt_is_unsupported_without_mutation(self) -> None:
+        started = asyncio.Event()
+        interruptible = HangRunner("claude", started, acknowledge=True)
+        runners = {
+            "claude_cli": interruptible,
+            "codex_cli": CompletingRunner("codex"),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="mixed roster interrupt",
+                            mock=True,
+                            workflow="cross-review",
+                            max_turns=3,
+                            timeout=5,
+                            workdir=root,
+                            interactive=True,
+                            interactive_idle_timeout=30,
+                        )
+                    )
+                    _advertise_interrupt(
+                        manager,
+                        state.session_id,
+                        {"claude_cli": True, "codex_cli": False},
+                    )
+                    await started.wait()
+                    managed = manager._sessions[state.session_id]
+                    referee = managed.referee
+                    self.assertIsNotNone(referee)
+                    assert referee is not None
+                    await manager.register_approval(
+                        state.session_id,
+                        request_id="a1",
+                        agent_id="claude_cli",
+                        tool_name="Bash",
+                        summary="true",
+                        turn_id="turn-1",
+                    )
+                    unresolved_before = managed.approvals.unresolved_count()
+                    status_before = manager.get_session(state.session_id).status
+                    blocker_task = asyncio.create_task(asyncio.Event().wait())
+                    try:
+                        referee._in_flight_runner_tasks.add(blocker_task)
+                        referee._in_flight_agents[blocker_task] = "codex_cli"
+                        with self.assertRaises(InterruptError) as raised:
+                            await manager.interrupt_session(state.session_id)
+                        later = manager.get_session(state.session_id)
+                        interrupt_calls = interruptible.interrupt_calls
+                        turn_interrupt = managed.stop_signal.turn_interrupt_requested()
+                        unresolved_after = managed.approvals.unresolved_count()
+                    finally:
+                        blocker_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await blocker_task
+                    await manager.stop_session(state.session_id)
+        self.assertEqual(raised.exception.code, "unsupported")
+        self.assertIn("codex_cli", str(raised.exception))
+        self.assertEqual(interrupt_calls, 0)
+        self.assertFalse(turn_interrupt)
+        self.assertEqual(unresolved_after, unresolved_before)
+        self.assertEqual(unresolved_before, 1)
+        self.assertEqual(later.status, status_before)
+        self.assertIsNone(later.interrupt)
+
+    async def test_mcp_interrupt_unsupported_while_running(self) -> None:
+        from agent_collab.mcp_tools import SessionManagerToolBackend, handle_tool
+
+        started = asyncio.Event()
+        hang = HangRunner("claude", started)
+        runners = {"claude_cli": hang, "codex_cli": CompletingRunner("codex")}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = SessionManager()
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(root / "home")}):
+                with mock.patch.object(Referee, "_runners", return_value=runners):
+                    state = await manager.start_session(
+                        StartSessionRequest(
+                            task="mcp unsupported interrupt",
+                            mock=True,
+                            workflow="solo",
+                            max_turns=1,
+                            timeout=5,
+                            workdir=root,
+                            interactive=True,
+                            interactive_idle_timeout=30,
+                        )
+                    )
+                    await started.wait()
+                    self.assertEqual(manager.get_session(state.session_id).status, "running")
+                    result = await handle_tool(
+                        "agent_collab_interrupt",
+                        {"session_id": state.session_id},
+                        SessionManagerToolBackend(manager),
+                    )
+                    later = manager.get_session(state.session_id)
+                    interrupt_calls = hang.interrupt_calls
+                    await manager.stop_session(state.session_id)
+        self.assertTrue(result.get("isError"))
+        payload = json.loads(result["content"][0]["text"])
+        self.assertEqual(payload["code"], "unsupported")
+        self.assertEqual(later.status, "running")
+        self.assertEqual(interrupt_calls, 0)
+
+
 class InterruptSurfaceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_http_maps_interrupt_errors_to_404_and_409(self) -> None:
+    async def test_http_maps_interrupt_errors_to_404_409_and_400(self) -> None:
         manager = mock.Mock()
         server = AgentCollabHttpServer(manager=manager)
         cases = (
             (InterruptError("not_found", "unknown session_id gone"), 404),
             (InterruptError("conflict", "no in-flight turn to interrupt"), 409),
+            (
+                InterruptError("unsupported", "interrupt is unsupported for in-flight agents: xai"),
+                400,
+            ),
         )
         for exc, status in cases:
             manager.interrupt_session = mock.AsyncMock(side_effect=exc)

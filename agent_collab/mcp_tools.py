@@ -43,6 +43,8 @@ TOOLS = [
                         "delegate",
                         "start",
                         "watch",
+                        "interrupt",
+                        "resume",
                         "options",
                         "errors",
                         "workflows",
@@ -77,6 +79,8 @@ TOOLS = [
             "Start a supervised collaboration session over the configured agent backends "
             "(Claude, Codex, Antigravity, xAI, ...) and return a session id. "
             "workdir is required because it selects project config and subprocess cwd. "
+            "Omitted workflow is cross-review (three paid turns); pass solo for one agent. "
+            "Confirm models with the user before a paid start. "
             "Call agent_collab_describe_options first before passing non-default backend_options "
             "or members (per-workflow slot names and eligible agents are advertised under "
             "workflows[].member_selection). The response settings default to a compact view; "
@@ -275,9 +279,10 @@ TOOLS = [
     {
         "name": "agent_collab_resume",
         "description": (
-            "Resume an interrupted or reloaded daemon-owned session after an explicit request. "
-            "Requires a fully eligible resume descriptor; never auto-starts on restore. "
-            "A live session is a conflict. Recovery from a quarantined resume is a new session."
+            "Resume a completed, reloaded daemon-owned session after an explicit request. "
+            "Eligibility is completed-only. Start-time resumable=false is expected until a "
+            "completed descriptor exists. Never auto-starts on restore. A live session is a "
+            "conflict. A quarantined resume cannot be repaired in place; start a new session."
         ),
         "inputSchema": {
             "type": "object",
@@ -290,6 +295,9 @@ TOOLS = [
         "description": (
             "Interrupt the in-flight turn of a live interactive session and park at "
             "awaiting_input so the next post_message can steer. The session stays alive. "
+            "Check per-agent capabilities.interrupt; session interruptible is the AND of "
+            "selected backends, not of the in-flight set. Any in-flight backend with "
+            "interrupt=false fails closed (code=unsupported) with no session mutation. "
             "A session that is not live, not interactive, or has no in-flight turn is a "
             "conflict. Stop ends the session; do not use stop to keep a session alive."
         ),
@@ -574,6 +582,8 @@ GUIDANCE_TOPICS = (
     "delegate",
     "start",
     "watch",
+    "interrupt",
+    "resume",
     "options",
     "errors",
     "workflows",
@@ -586,6 +596,8 @@ _GUIDANCE_HEADINGS = {
     "delegate": "## Delegate",
     "start": "## Start",
     "watch": "## Watch",
+    "interrupt": "## Interrupt",
+    "resume": "## Resume",
     "options": "## Options",
     "errors": "## Errors",
     "workflows": "## Workflows",

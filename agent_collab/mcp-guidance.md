@@ -2,8 +2,8 @@
 
 Guidance for agents using the agent-collab MCP tools. Fetch one topic with
 `agent_collab_guidance` and `topic` set to one of: `overview`, `delegate`,
-`start`, `watch`, `options`, `errors`, `workflows`, `review-recipe`. No topic
-returns this whole document; `overview` returns only the overview section.
+`start`, `watch`, `interrupt`, `resume`, `options`, `errors`, `workflows`, `review-recipe`.
+No topic returns this whole document; `overview` returns only the overview section.
 
 Everything here is MCP-only: it describes MCP tool calls, never CLI commands
 or local filesystem paths. Read a transcript with `agent_collab_read_transcript`.
@@ -316,6 +316,43 @@ the field, exactly as it always has: there, the id is the request `cursor` plus
 the event's index.
 `agent_collab_read_transcript` likewise summarizes tool payloads unless
 `tool_output: "full"` is passed.
+
+## Interrupt
+
+`agent_collab_interrupt` parks a live interactive in-flight turn at
+`awaiting_input` so `post_message` can steer. `agent_collab_stop` ends the
+session; do not use stop to keep a thread alive.
+
+Check per-agent `settings.agents.<id>.capabilities.interrupt` for every
+in-flight agent. Session `interruptible` is the AND of selected backends, not
+of the in-flight set. Any in-flight agent with `interrupt=false` (or a missing
+capabilities dict/key) fails closed: `code=unsupported` naming the blocking
+agent id(s). Status, pending approvals, and in-flight turns stay unchanged;
+no abort is issued.
+
+`fallback_cancelled` is only an issued abort that missed ACK (or advertised
+interrupt that did not issue). It is not the unsupported path.
+
+Session status `interrupted` means the daemon died (restore of a live
+session). Operator abort is a turn outcome `interrupted` /
+`local_turn_interrupted` and does not make the session resumable after reload.
+
+## Resume
+
+`agent_collab_resume` is completed-only: `last_turn_status` must be
+`completed` for every started agent. Operator-interrupted turns
+(`last_turn_status=interrupted`) are ineligible even with
+`interrupt_acknowledged`. Session status `interrupted` is daemon death, not
+eligibility.
+
+Start-time `resumable=false` is expected: capture is empty until a completed
+descriptor exists. Per-agent `settings.agents.<id>.capabilities.resume` is
+the advertisement; start-time session `resumable` is readiness, not a lie.
+
+A live session is a conflict (`code=conflict` / `live`). Restore never
+auto-starts a paid turn. A quarantined descriptor cannot be repaired in
+place; start a new session. Cursor/transcript continue after a successful
+resume; the original task is not re-emitted.
 
 ## Errors
 
