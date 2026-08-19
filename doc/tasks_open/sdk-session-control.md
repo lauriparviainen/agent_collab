@@ -155,7 +155,21 @@ No harvest status recorded here.
 | `antigravity_cli` gemini-3.5-flash-low/`mode=plan`, default `sandbox=read-only` | rejected `code=outer_sandbox_path_permissions` (group/world-writable state dirs) | — | — |
 | `antigravity_cli` gemini-3.5-flash-low/`mode=plan`, `sandbox=none` | accepted | `code=unsupported` (agent named); no mutation | `code=conflict` |
 
-SDK MCP cells not run in this log. `wait_approval` / `list_approvals` not added.
+SDK MCP, same one-line task, `thinking_level=low`. Flags unchanged.
+`wait_approval` / `list_approvals` not added.
+
+| Cell | Start | Harvest |
+|---|---|---|
+| `claude_sdk` sonnet/`thinking_level=low`, `sandbox=read-only` | accepted | `status=done`; turn `completed` |
+| `claude_sdk` sonnet/`thinking_level=low`, `sandbox=none` | accepted | `status=done`; turn `completed` |
+| `codex_sdk` gpt-5.6-luna/`thinking_level=low`, default `sandbox=read-only` | rejected `code=outer_sandbox_path_permissions` | — |
+| `codex_sdk` gpt-5.6-luna/`thinking_level=low`, `sandbox=none` | accepted | `status=done`; turn `completed` |
+| `xai_sdk` grok-4.6/`thinking_level=low`, `sandbox=read-only` | accepted (`enforcement=not_applicable_no_local_effects`) | `status=done`; turn `completed`; `provider_stop_reason=STOP` |
+| `xai_sdk` `sandbox=none` | not required | — |
+| `antigravity_sdk` gemini-3.5-flash-low, `sandbox=read-only` | accepted | `status=failed`; `code=provider_transport_failed`; exception `AntigravityValidationError` |
+| `antigravity_sdk` gemini-3.5-flash-low, `sandbox=none` | accepted | `status=failed`; `code=provider_transport_failed`; in-process named missing Gemini API key |
+
+`antigravity_sdk` skipped as host-unrunnable (no Gemini/Vertex credentials). Flags unchanged. Q4 not opened; #20 stays open.
 
 ## Purpose and scope
 
