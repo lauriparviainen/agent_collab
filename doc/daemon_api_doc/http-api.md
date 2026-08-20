@@ -147,7 +147,7 @@ Approve or deny one parked tool-approval request
 
 ### POST `/sessions/{session_id}/resume`
 
-Resume an interrupted or reloaded session
+Resume a stopped or interrupted session
 
 - Operation ID: `resume_session_post`
 - Authentication: Bearer token

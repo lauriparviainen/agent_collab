@@ -18,7 +18,7 @@ SLASH_COMMANDS = {
     "refresh": "re-read the active session",
     "stop": "stop the active session",
     "interrupt": "interrupt the in-flight turn",
-    "resume": "resume an interrupted or reloaded session",
+    "resume": "resume a stopped or interrupted session",
     "approval": "approve or deny a parked tool request",
     "quit": "exit",
 }

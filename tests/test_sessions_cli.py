@@ -309,6 +309,26 @@ class ApprovalCliTests(unittest.TestCase):
         self.assertIn("Error:", err)
         self.assertIn("unknown approval request_id", err)
 
+    def test_approval_delivery_failure_is_not_a_silent_success(self):
+        client = mock.Mock()
+        client.resolve_approval.return_value = ApprovalDecisionResponseModel.from_dict(
+            {
+                "session_id": "s1",
+                "request_id": "a1",
+                "outcome": "auto_denied",
+                "reason": "delivery_failed",
+                "status": "delivery_failed",
+                "turn_id": "turn-1",
+                "worker_instance": None,
+            }
+        )
+
+        code, out, _err = _run(["approval", "s1", "a1", "--decision", "approve"], client)
+
+        self.assertEqual(code, 1)
+        client.resolve_approval.assert_called_once_with("s1", "a1", "approve")
+        self.assertIn("auto_denied", out)
+
     def test_result_prints_pending_approvals_when_awaiting_approval(self):
         client = mock.Mock()
         client.wait_result.return_value = _session_result(

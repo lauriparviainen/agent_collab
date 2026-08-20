@@ -86,8 +86,7 @@ class ResumeError(ValueError):
     Codes: ``conflict``, ``ineligible``, ``incompatible``, ``quarantined``,
     ``not_found``. HTTP maps ``conflict`` to 409, ``not_found`` to 404, and the
     rest to 400 — same shape as ``ApprovalDecisionError``. A live session
-    raises ``conflict``; no site raises ``live``, which the HTTP mapper still
-    accepts defensively.
+    raises ``conflict``.
     """
 
     def __init__(self, code: str, message: str) -> None:

@@ -361,7 +361,7 @@ def _summary(route: Any) -> str:
         "post_message": "Post input to an interactive session",
         "read_transcript": "Read a session transcript",
         "resolve_approval": "Approve or deny one parked tool-approval request",
-        "resume_session": "Resume an interrupted or reloaded session",
+        "resume_session": "Resume a stopped or interrupted session",
         "interrupt_session": "Interrupt the in-flight turn of a live interactive session",
         "stop_session": "Stop a live session",
         "prune_sessions": "Preview or apply terminal-session retention",

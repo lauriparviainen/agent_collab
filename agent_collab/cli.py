@@ -33,7 +33,7 @@ PUBLIC_COMMANDS = (
     ("watch", "Watch a live session or stored JSONL transcript."),
     ("stop", "Stop a daemon-owned session."),
     ("interrupt", "Interrupt the in-flight turn of a live interactive session."),
-    ("resume", "Resume an interrupted or reloaded daemon-owned session."),
+    ("resume", "Resume a stopped or interrupted daemon-owned session."),
     ("approval", "Approve or deny a parked tool-approval request."),
     ("sessions", "Manage stored sessions, including pruning old terminal sessions."),
     ("config", "Show the merged config files for a workdir, or create the user config."),
@@ -1340,7 +1340,7 @@ def _main_interrupt(argv) -> int:
 def _main_resume(argv) -> int:
     parser = build_session_parser(
         "agent-collab resume",
-        "Resume an interrupted or reloaded daemon session.",
+        "Resume a stopped or interrupted daemon session.",
     )
     args = parser.parse_args(argv)
     try:
@@ -1395,6 +1395,9 @@ def _main_approval(argv) -> int:
             )
     except Exception as exc:
         error(str(exc))
+        return 1
+    expected = "approved" if args.decision == "approve" else "denied"
+    if result.outcome != expected:
         return 1
     return 0
 

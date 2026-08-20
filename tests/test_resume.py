@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 from datetime import datetime, timedelta, timezone
 import os
+import re
 import tempfile
 import threading
 import unittest
@@ -1123,6 +1125,43 @@ class ResumePhaseRestoreTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertGreaterEqual(len(after.turn_outcomes or []), 2)
         self.assertEqual((after.workflow_phase or {}).get("completed_stages"), 1)
+
+
+class ResumeErrorContractTests(unittest.TestCase):
+    def test_resume_error_codes_are_exactly_the_documented_set(self):
+        root = Path(__file__).resolve().parents[1]
+        resume_src = (root / "agent_collab" / "resume.py").read_text(encoding="utf-8")
+        daemon_src = (root / "agent_collab" / "daemon.py").read_text(encoding="utf-8")
+        match = re.search(
+            r"class ResumeError.*?\n    \"\"\"(.*?)\"\"\"",
+            resume_src,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        docstring = " ".join(match.group(1).split())
+        codes_match = re.search(r"Codes:\s*(.*?)\.", docstring)
+        self.assertIsNotNone(codes_match)
+        documented = set(re.findall(r"``(\w+)``", codes_match.group(1)))
+        constructed: set[str] = set()
+        for source in (resume_src, daemon_src):
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                name = None
+                if isinstance(func, ast.Name):
+                    name = func.id
+                elif isinstance(func, ast.Attribute):
+                    name = func.attr
+                if name != "ResumeError" or not node.args:
+                    continue
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    constructed.add(first.value)
+        self.assertEqual(documented, constructed)
+        self.assertNotIn("live", documented)
+        self.assertNotIn("live", constructed)
 
 
 class EventResumeLoadTests(unittest.TestCase):

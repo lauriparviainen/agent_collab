@@ -231,7 +231,7 @@ class AgentCollabHttpServer:
         except ResumeError as exc:
             if exc.code == "not_found":
                 status = 404
-            elif exc.code in {"conflict", "live"}:
+            elif exc.code == "conflict":
                 status = 409
             else:
                 status = 400

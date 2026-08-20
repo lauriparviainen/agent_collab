@@ -535,6 +535,38 @@ class ApprovalRegistrySettleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(resolved[0]["raw"]["outcome"], "auto_denied")
                 self.assertEqual(managed.approvals.get_resolved("a1").outcome, "auto_denied")
 
+    async def test_undeliverable_approve_is_auto_denied_delivery_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(Path(tmp) / "home")}):
+                manager = SessionManager()
+                managed = self._managed(manager)
+                sent = []
+
+                async def send_decision(decision):
+                    sent.append(decision)
+                    if decision == "approve":
+                        await asyncio.sleep(10)
+                    return True
+
+                await manager.register_approval(
+                    managed.state.session_id,
+                    request_id="a1",
+                    agent_id="claude_cli",
+                    tool_name="Bash",
+                    summary="true",
+                    send_decision=send_decision,
+                )
+                with mock.patch("agent_collab.daemon.WORKER_DECISION_TIMEOUT_SECONDS", 0.01):
+                    result = await manager.resolve_approval(
+                        managed.state.session_id, "a1", "approve"
+                    )
+                self.assertEqual(result["status"], "delivery_failed")
+                self.assertEqual(result["outcome"], "auto_denied")
+                self.assertEqual(sent, ["approve", "deny"])
+                resolved = managed.approvals.get_resolved("a1")
+                self.assertEqual(resolved.outcome, "auto_denied")
+                self.assertEqual(resolved.reason, "delivery_failed")
+
     async def test_reregister_of_resolved_id_does_not_park(self):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(Path(tmp) / "home")}):

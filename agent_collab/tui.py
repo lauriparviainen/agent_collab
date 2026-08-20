@@ -92,7 +92,7 @@ HELP_LINES = (
     "/refresh                 re-read active session from cursor 0",
     "/stop                    stop active daemon session",
     "/interrupt               interrupt the in-flight turn",
-    "/resume                  resume an interrupted or reloaded session",
+    "/resume                  resume a stopped or interrupted session",
     "/approval REQ approve|deny  decide a parked tool request",
     "/quit                    exit",
     "",

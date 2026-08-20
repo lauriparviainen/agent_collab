@@ -3172,7 +3172,7 @@
             "bearerAuth": []
           }
         ],
-        "summary": "Resume an interrupted or reloaded session"
+        "summary": "Resume a stopped or interrupted session"
       }
     },
     "/sessions/{session_id}/stop": {
