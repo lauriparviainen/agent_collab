@@ -37,6 +37,7 @@ from agent_collab.resume import (
     fingerprint_from_session,
     fingerprints_match,
     last_turn_status_from_record,
+    projection_captured_resume_agent_ids,
     required_resume_agent_ids,
     require_resume_session_id,
     session_phase_blocks_resume,
@@ -286,6 +287,23 @@ class ResumeEligibilityTests(unittest.TestCase):
         with mock.patch("agent_collab.backends.capabilities_for", side_effect=_resume_stub):
             self.assertFalse(SessionManager._project_session_capabilities(state)["resumable"])
 
+    def test_resumable_projection_agrees_with_the_resume_gate(self):
+        parked = {"completed_stages": 1, "parked_in_input_loop": False}
+        with mock.patch("agent_collab.backends.capabilities_for", side_effect=_resume_stub):
+            for status in ("done", "failed"):
+                state = _state(status=status, interactive=True, workflow_phase=parked)
+                self.assertEqual(projection_captured_resume_agent_ids(state), frozenset())
+                self.assertFalse(SessionManager._project_session_capabilities(state)["resumable"])
+                with self.assertRaises(ResumeError) as raised:
+                    validate_session_resume(state)
+                self.assertEqual(raised.exception.code, "ineligible")
+            for status in ("stopped", "interrupted"):
+                state = _state(status=status, interactive=True, workflow_phase=parked)
+                self.assertTrue(SessionManager._project_session_capabilities(state)["resumable"])
+                validate_session_resume(state)
+            live = _state(status="running", interactive=True, workflow_phase=parked)
+            self.assertTrue(SessionManager._project_session_capabilities(live)["resumable"])
+
     def test_never_started_session_is_not_resumable(self):
         state = _state(agent_sessions={})
         self.assertEqual(required_resume_agent_ids(state), frozenset())
@@ -339,7 +357,7 @@ class ResumeClaimTests(unittest.IsolatedAsyncioTestCase):
             sandbox_plan=SimpleNamespace(),
         )
 
-    async def _interrupted_manager(self, root: Path) -> tuple[SessionManager, str]:
+    async def _index_manager(self, root: Path, *, status: str) -> tuple[SessionManager, str]:
         index_path = root / "index.json"
         workdir = str(root)
         fingerprint = fingerprint_from_session(
@@ -355,7 +373,7 @@ class ResumeClaimTests(unittest.IsolatedAsyncioTestCase):
         )
         record = {
             "session_id": "resume-1",
-            "status": "interrupted",
+            "status": status,
             "task": "t",
             "workflow": "solo",
             "workdir": workdir,
@@ -380,6 +398,186 @@ class ResumeClaimTests(unittest.IsolatedAsyncioTestCase):
         SessionIndex(index_path).upsert(record)
         manager = SessionManager(index_path=index_path, default_workdir=root)
         return manager, "resume-1"
+
+    async def _interrupted_manager(self, root: Path) -> tuple[SessionManager, str]:
+        return await self._index_manager(root, status="interrupted")
+
+    async def _stopped_manager(self, root: Path) -> tuple[SessionManager, str]:
+        manager, session_id = await self._index_manager(root, status="stopped")
+        managed = manager._sessions[session_id]
+        managed.state.stop = {
+            "requested": True,
+            "provider_acknowledged": False,
+            "fallback_cancelled": True,
+            "approvals_denied": 0,
+        }
+        managed.state.interrupt = {
+            "requested": True,
+            "provider_acknowledged": True,
+            "fallback_cancelled": False,
+            "approvals_denied": 1,
+        }
+        return manager, session_id
+
+    async def test_resume_clears_stop_and_interrupt_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager, session_id = await self._stopped_manager(root)
+            hang = asyncio.Event()
+
+            async def hang_run(managed, resume=False):
+                del managed, resume
+                await hang.wait()
+
+            before = manager.get_session(session_id)
+            self.assertIsNotNone(before.stop)
+            self.assertIsNotNone(before.interrupt)
+            with (
+                mock.patch(
+                    "agent_collab.backends.capabilities_for",
+                    side_effect=_resume_stub,
+                ),
+                mock.patch.object(
+                    manager,
+                    "_prepare_session_start",
+                    side_effect=lambda request: self._prepared(manager.get_session(session_id)),
+                ),
+                mock.patch.object(manager, "_run_session", side_effect=hang_run),
+            ):
+                resumed = await manager.resume_session(session_id)
+            self.assertEqual(resumed.status, "running")
+            self.assertIsNone(resumed.stop)
+            self.assertIsNone(resumed.interrupt)
+            later = manager.get_session(session_id)
+            self.assertIsNone(later.stop)
+            self.assertIsNone(later.interrupt)
+            hang.set()
+            managed = manager._sessions[session_id]
+            if managed.task is not None:
+                await managed.task
+
+    async def test_resume_of_stopped_parked_session_reopens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager, session_id = await self._stopped_manager(root)
+            hang = asyncio.Event()
+
+            async def hang_run(managed, resume=False):
+                del managed, resume
+                await hang.wait()
+
+            with (
+                mock.patch(
+                    "agent_collab.backends.capabilities_for",
+                    side_effect=_resume_stub,
+                ),
+                mock.patch.object(
+                    manager,
+                    "_prepare_session_start",
+                    side_effect=lambda request: self._prepared(manager.get_session(session_id)),
+                ),
+                mock.patch.object(manager, "_run_session", side_effect=hang_run),
+            ):
+                resumed = await manager.resume_session(session_id)
+            self.assertEqual(resumed.status, "running")
+            hang.set()
+            managed = manager._sessions[session_id]
+            if managed.task is not None:
+                await managed.task
+
+    async def test_manager_resume_of_done_session_is_ineligible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager, session_id = await self._index_manager(root, status="done")
+            with self.assertRaises(ResumeError) as raised:
+                await manager.resume_session(session_id)
+            self.assertEqual(raised.exception.code, "ineligible")
+            self.assertEqual(manager.get_session(session_id).status, "done")
+
+    async def test_manager_resume_of_failed_session_is_ineligible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager, session_id = await self._index_manager(root, status="failed")
+            with self.assertRaises(ResumeError) as raised:
+                await manager.resume_session(session_id)
+            self.assertEqual(raised.exception.code, "ineligible")
+            self.assertEqual(manager.get_session(session_id).status, "failed")
+
+    async def test_failed_resume_leaves_session_status_and_request_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager, session_id = await self._interrupted_manager(root)
+            before = manager.get_session(session_id)
+            with (
+                mock.patch(
+                    "agent_collab.backends.capabilities_for",
+                    side_effect=_resume_stub,
+                ),
+                mock.patch.object(
+                    manager,
+                    "_prepare_session_start",
+                    side_effect=lambda request: self._prepared(manager.get_session(session_id)),
+                ),
+                mock.patch.object(
+                    manager,
+                    "_refresh_session_capabilities",
+                    side_effect=RuntimeError("boom"),
+                ),
+            ):
+                with self.assertRaises(RuntimeError):
+                    await manager.resume_session(session_id)
+            after = manager.get_session(session_id)
+            self.assertEqual(after.status, "interrupted")
+            self.assertEqual(after.status, before.status)
+            index = SessionIndex(root / "index.json").load()
+            self.assertEqual(index["resume-1"]["status"], "interrupted")
+
+    async def test_approval_registry_is_reset_by_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager, session_id = await self._interrupted_manager(root)
+            hang = asyncio.Event()
+
+            async def hang_run(managed, resume=False):
+                del managed, resume
+                await hang.wait()
+
+            managed = manager._sessions[session_id]
+            managed.approvals.finish_turn("turn-1")
+            managed.approval_generation = 7
+            with (
+                mock.patch(
+                    "agent_collab.backends.capabilities_for",
+                    side_effect=_resume_stub,
+                ),
+                mock.patch.object(
+                    manager,
+                    "_prepare_session_start",
+                    side_effect=lambda request: self._prepared(manager.get_session(session_id)),
+                ),
+                mock.patch.object(manager, "_run_session", side_effect=hang_run),
+            ):
+                await manager.resume_session(session_id)
+            self.assertFalse(managed.approvals.turn_finished("turn-1"))
+            self.assertEqual(managed.approval_generation, 0)
+            parked = await manager.register_approval(
+                session_id,
+                request_id="a2",
+                agent_id="claude",
+                tool_name="Bash",
+                summary="late",
+                turn_id="turn-1",
+            )
+            self.assertNotEqual(parked.get("status"), "late_frame")
+            self.assertEqual(managed.approvals.unresolved_count(), 1)
+            pending = managed.approvals.get_pending("a2")
+            if pending is not None:
+                from agent_collab.approvals import cancel_approval_deadline
+
+                cancel_approval_deadline(pending)
+            hang.set()
+            if managed.task is not None:
+                await managed.task
 
     async def test_live_session_resume_is_conflict(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -567,6 +567,42 @@ class ApprovalRegistrySettleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(resolved.outcome, "auto_denied")
                 self.assertEqual(resolved.reason, "delivery_failed")
 
+    async def test_approve_does_not_deliver_then_report_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(Path(tmp) / "home")}):
+                manager = SessionManager()
+                managed = self._managed(manager)
+                entered, release = asyncio.Event(), asyncio.Event()
+                sent = []
+
+                async def send_decision(decision):
+                    sent.append(decision)
+                    entered.set()
+                    await release.wait()
+                    return True
+
+                await manager.register_approval(
+                    managed.state.session_id,
+                    request_id="a1",
+                    agent_id="claude_cli",
+                    tool_name="Bash",
+                    summary="true",
+                    send_decision=send_decision,
+                )
+                task = asyncio.create_task(
+                    manager.resolve_approval(managed.state.session_id, "a1", "approve")
+                )
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                await manager._auto_deny_pending(managed, "stop")
+                release.set()
+                try:
+                    result = await asyncio.wait_for(task, timeout=1)
+                except ApprovalDecisionError as exc:
+                    self.fail(f"approve delivered then reported {exc.code}: sent={sent}")
+                self.assertIn("approve", sent)
+                self.assertEqual(result["status"], "ok")
+                self.assertEqual(result["outcome"], "approved")
+
     async def test_reregister_of_resolved_id_does_not_park(self):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict(os.environ, {"AGENT_COLLAB_HOME": str(Path(tmp) / "home")}):

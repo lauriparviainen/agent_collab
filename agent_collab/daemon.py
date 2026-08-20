@@ -2057,13 +2057,39 @@ class SessionManager:
             managed.stop_signal = RefereeStopSignal()
             managed.append_event = None
             managed.appender_ready = asyncio.Event()
-            self._reopen_for_resume(managed)
-            self._refresh_session_capabilities(managed.state)
-            self._persist(managed.state)
-            managed.task = asyncio.create_task(
-                self._run_session(managed, resume=True),
-                name=f"agent-collab-session-{managed.state.session_id}",
+            for entry in managed.approvals.pending_in_event_order():
+                cancel_approval_deadline(entry)
+            managed.approvals = ApprovalRegistry()
+            managed.approval_generation = 0
+            prior = (
+                managed.state.status,
+                managed.state.ended_at,
+                managed.state.error,
+                managed.state.failure,
+                managed.state.stop,
+                managed.state.interrupt,
             )
+            try:
+                self._reopen_for_resume(managed)
+                self._refresh_session_capabilities(managed.state)
+                self._persist(managed.state)
+                managed.task = asyncio.create_task(
+                    self._run_session(managed, resume=True),
+                    name=f"agent-collab-session-{managed.state.session_id}",
+                )
+            except Exception:
+                if managed.task is None:
+                    (
+                        managed.state.status,
+                        managed.state.ended_at,
+                        managed.state.error,
+                        managed.state.failure,
+                        managed.state.stop,
+                        managed.state.interrupt,
+                    ) = prior
+                    managed.state.updated_at = utc_timestamp()
+                    self._persist(managed.state)
+                raise
             self._log_lifecycle(
                 f"session {managed.state.session_id} resumed workflow={managed.state.workflow}"
             )
@@ -2185,6 +2211,8 @@ class SessionManager:
         state.ended_at = None
         state.error = None
         state.failure = None
+        state.stop = None
+        state.interrupt = None
         state.updated_at = utc_timestamp()
         self._persist(state)
 
@@ -2528,11 +2556,11 @@ class SessionManager:
             )
         pending.send_in_flight = True
         try:
-            delivered = await self._send_worker_decision(pending, decision)
             still = managed.approvals.take_pending(request_id)
             if still is None:
                 raise ApprovalDecisionError("stale", f"approval request_id {request_id!r} is stale")
             cancel_approval_deadline(pending)
+            delivered = await self._send_worker_decision(pending, decision)
             if decision == "approve" and not delivered:
                 managed.approvals.complete(pending, "auto_denied", "delivery_failed")
                 await self._emit_approval_resolved(managed, pending)

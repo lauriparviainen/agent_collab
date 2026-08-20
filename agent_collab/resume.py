@@ -495,9 +495,15 @@ def projection_captured_resume_agent_ids(
     ``resume``. Unstarted members (no row) are treated as captured so they do
     not fail that membership check. Agents with an ineligible row are not
     unstarted. When nothing is eligible the set stays empty so a never-invoked
-    or quarantined session does not project ``resumable``.
+    or quarantined session does not project ``resumable``. Session status
+    ``done`` / ``failed`` also empties the set so projection agrees with
+    ``validate_session_resume``; live statuses still project descriptor
+    readiness.
     """
 
+    status = str(getattr(state, "status", "") or "")
+    if status in {DONE, FAILED}:
+        return frozenset()
     eligible = eligible_resume_agent_ids(
         state, transcript_len=transcript_len, compare_fingerprints=compare_fingerprints
     )
