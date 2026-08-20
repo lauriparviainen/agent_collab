@@ -13,6 +13,16 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Close the session-control runtime defects from the 2026-08-20 review:
+  resume clears stale `stop`/`interrupt` and projects `resumable=false` on
+  `done`/`failed`; `agent-collab approval` exits 1 on
+  `auto_denied`/`delivery_failed`; `tool_gate` is load-bearing so
+  `codex_sdk` (flag still false) cannot park; resume resets the in-process
+  approval registry, rolls back a failed reopen, and claims an approval
+  before delivering it. Resume/interrupt HTTP bodies reject unknown fields;
+  pytest `testpaths` is `tests` only; AliasAudit fixtures are umask-stable
+  (#20).
+
 - Rewrite `mcp-guidance.md` so each contract has exactly one `##` owner,
   then run a documentation honesty pass over the session-control surface:
   MCP guidance and tool descriptions now state real resume eligibility

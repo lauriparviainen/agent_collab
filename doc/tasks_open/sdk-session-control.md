@@ -174,34 +174,30 @@ the outer Bubblewrap barrier disabled.
 
 `antigravity_sdk` both cells host-unrunnable leftover, not unrun skips (start accepted; harvest `status=failed` / `code=provider_transport_failed`). Flags unchanged. Q4 not opened; #20 stays open.
 
-### Review 2026-08-20 — open pre-close items
+### Review 2026-08-20 — pre-close items
 
 Four independent read-only reviews of the branch were reconciled on
-2026-08-20. This pass landed the documentation half only: MCP guidance and
-tool-description honesty (resume eligibility and paid stages, interrupt stage
-abandonment and approval denial, approval `outcome`, the never-raised `live`
-code), `README.md` SDK status and the CLI steering commands, the `claude_cli` /
-`codex_cli` READMEs, and the `AgentRunner.conversation_active`,
-`BackendCapabilities`, and `ResumeError` docstrings. No capability flag moved
-and no runtime behaviour changed.
+2026-08-20. The documentation half landed at `ba130d9`. The runtime half
+below is now closed on this branch. Campaign cells stay **open** — do not
+close #20 from this pass.
 
-The runtime defects below stay **open** and are pre-close items under the
-finding taxonomy above (an operation that lies, or a running agent that cannot
-complete an advertised loop):
+| # | Defect | Status |
+|---|---|---|
+| D1 | Resume left a stale `stop` / `interrupt` block on the reopened session. | **Fixed** `c160bfe`. `_reopen_for_resume` clears both; manager stopped→resume pin. |
+| D2 | `capabilities.resumable` projected true on `done` / `failed`. | **Fixed** `c160bfe` (empty capture set for those statuses) and `377cbce` (Resume topic no longer says a `done` session can still project `resumable`). Live statuses still project descriptor readiness. |
+| D5 | CLI `approval` exited 0 on `auto_denied` / `delivery_failed`. | **Fixed** `03b6648`. MCP payload stays a non-error; CLI exit is 1 when `outcome` is not the requested decision. |
+| D6 | `codex_sdk` advertised `tool_gate=False` but still parked. | **Fixed** `c010414`. Referee and worker `open` bind approvals only when `capabilities.tool_gate` is true, so Codex keeps auto-review. **Flag stays false** — 935-line hermetic `test_tool_gate.py` is not both-path credentialed worker-park proof. |
+| D7 | CLI in-session continuity while `capabilities.continuity` is false. | **Open as documented divergence.** Guidance already describes observed behaviour; flag gating deferred to the CLI-continuity follow-up. Hermetic pin: `tests/test_referee.py::test_cli_runner_continuity_is_live_while_flag_is_false`. |
+| D8 | Nothing pinned the production capability matrix. | **Fixed** `c010414` `tests/backends/test_capability_matrix.py`. |
+| D9 | Dead ResumeError code `live`. | **Fixed** `03b6648`. HTTP mapper no longer special-cases `live`; remaining copy says "stopped or interrupted". |
+| D11 | Bare `pytest` collected `integration_tests/`. | **Fixed** `21a5dd5` `pyproject.toml` `testpaths = ["tests"]`. |
+| umask | `AliasAuditTests` red at umask 002. | **Fixed** `21a5dd5`. Fixtures chmod writable temp roots; production `paths.py` guard unchanged. Gate green at umask 002 and 022. |
+| S4 | In-process resume kept `_finished_turns` → `late_frame`. | **Fixed** `c160bfe`. Resume resets `managed.approvals` and `approval_generation`. |
+| S5 | Failed `_reopen_for_resume` could persist `running`. | **Fixed** `c160bfe` / `377cbce`. Roll back when the new task was not spawned, including when a prior done task object is still attached. |
+| S6 | Approve delivered before claim could report `stale`. | **Fixed** `c160bfe`. `take_pending` before `_send_worker_decision`. |
+| S10 | Resume/interrupt HTTP `from_dict` swallowed unknown fields. | **Fixed** `21a5dd5`. Unknown keys 400; route tests in `tests/test_server_http.py`. |
 
-| # | Defect | Where | Kind |
-|---|---|---|---|
-| D1 | Resume leaves the stale `stop` / `interrupt` block on the reopened session, so every resume response and later `status` reports an abort no longer in effect. | `daemon.py` `_reopen_for_resume` clears `status` / `ended_at` / `error` / `failure` only | product bug |
-| D2 | `capabilities.resumable` can project true on a `done` / `failed` session that `agent_collab_resume` refuses as `ineligible`: the projection consults descriptors and phase, never session status. | `resume.py` `projection_captured_resume_agent_ids` vs `validate_session_resume` | product bug |
-| D5 | An undeliverable `approve` is recorded `outcome="auto_denied"` / `reason="delivery_failed"`, a deny is sent instead, and the MCP call still returns a non-error payload; the CLI prints the outcome and exits 0. | `daemon.py` approval decision path, `cli.py` approval command | product bug (docs half landed; CLI exit code open) |
-| D6 | `codex_sdk` advertises `tool_gate=False` yet the approval callback is bound with no capability check, so a gated tool request parks until the 120 s deadline auto-denies it. | `referee.py` runner construction binds `set_approval_callback` unconditionally | product bug / divergence |
-| D7 | All four CLI backends continue a provider thread in-session (`--resume <id>`, `codex exec resume <id>`) while `capabilities.continuity` stays false; the referee decides delta-vs-stateless from `runner.conversation_active()`, never from the flag. | `referee.py`, `runners.py`, `backends/common/cli.py` | divergence — documented here and in the guidance; flag gating deferred to the CLI-continuity follow-up |
-| D9 | `ResumeError` code `live` was documented but is never raised. | `resume.py`, `mcp-guidance.md`, `server_http.py` | guidance gap (fixed: dropped from the guidance and the docstring; the `server_http` mapper still accepts it defensively) |
-
-Missing coverage recorded with them: nothing pins the production capability
-matrix (no test asserts `codex_sdk.tool_gate is False` or any CLI flag), and a
-bare `pytest` at repo root has no `testpaths`, so it collects
-`integration_tests/` and spends provider money.
+**Follow-up issue text (do not open unless asked).** Runner/backend dedup from the 2026-08-20 synthesis §4: one `WorkerBackedSdkRunner` mixin (~383 identical lines across Claude/Codex/Antigravity SDK runners), one `park_in_process` helper, and moving `_BINARY_IDENTITY` / `_STATE_ROOT_KIND` / `_VERSION_FLOORS` onto backend objects. Not a close precondition.
 
 Not yet driven over MCP, and therefore unrun rather than negative: the
 checklist-mandated mock smoke cell; restart-safe resume across a daemon restart
@@ -223,14 +219,11 @@ table's harvest column stays `unlogged` — no CLI cell harvested a turn.
   resume-eligible and is cheaper, but #20 defines resume as reopening a
   captured provider session *across a daemon reload*; stop→resume is not an
   acceptable substitute for that proof.
-- Host gate hazard: the hermetic suite is umask-sensitive. At `umask 002`,
-  16 `tests/sandbox/test_paths.py::AliasAuditTests` cases fail because
-  `mkdtemp()` inherits mode `0775` and the writable-path guard fail-closes with
-  `outer_sandbox_path_permissions` before the assertion under test is reached;
-  the same command at `umask 022` is green. Neither file is touched by this
-  branch, so this is not a regression — run the gate at `umask 022` until the
-  fixtures set an explicit mode. It is the same root cause as the
-  `outer_sandbox_path_permissions` start rejections logged above.
+- Host gate hazard: default `sandbox=read-only` still rejects
+  `code=outer_sandbox_path_permissions` on group/world-writable state dirs
+  for several backends. That is a DX follow-up, not a product lie. The
+  hermetic `AliasAuditTests` fixtures now chmod writable temp roots so the
+  suite is green at umask 002; the production guard is unchanged.
 
 ## Purpose and scope
 
