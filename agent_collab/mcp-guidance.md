@@ -45,7 +45,13 @@ Run another agent as a subagent and collect its result over MCP alone:
      `pending_approvals`). One `agent_collab_approval` per `request_id`
      (`approve` or `deny`). Digest drops `request_id`; take it from the
      park payload. Remaining requests stay parked. There is no
-     `wait_approval` or `list_approvals`.
+     `wait_approval` or `list_approvals`. Read the decision response
+     `outcome`, not just the absence of an error: an `approve` whose
+     decision frame cannot reach the agent comes back `outcome:
+     "auto_denied"`, `status: "delivery_failed"`, and the tool was denied.
+     `pending_approvals_omitted > 0` means more requests are parked than
+     the payload budget could list; resolve the listed ones and re-poll
+     `wait_result` for the rest.
    - `settled: false`: heartbeat — re-poll immediately, no 20s pace.
    `timeout_ms: 0` is an instant peek. Default `timeout_ms` is 45000; do
    not exceed it (clients kill near 60 s). Use `wait_result` alone only
@@ -54,9 +60,16 @@ Run another agent as a subagent and collect its result over MCP alone:
    with `agent_collab_wait_result`, not a watch loop — status stays
    `awaiting_input` for the whole directed turn. `target` picks one agent;
    solo untargeted posts route to the sole agent. Follow-up cost depends
-   on `settings.agents.<id>.capabilities.continuity`. Steer in-flight with
-   `agent_collab_interrupt` (Interrupt), then `post_message`.
+   on whether that agent's runner still holds provider context, not on the
+   flag alone: `settings.agents.<id>.capabilities.continuity` is the
+   advertised both-path-proven claim, and every CLI backend continues its
+   provider thread inside one live session while that flag stays `false`,
+   so a CLI follow-up after a completed turn costs a delta, not a re-sent
+   task. Steer in-flight with `agent_collab_interrupt` (Interrupt), then
+   `post_message`.
 6. End with `agent_collab_stop`, or let `interactive_idle_timeout` close it.
+   `terminal: true` is not always the end of the thread: `stopped` and
+   `interrupted` may still be reopened with `agent_collab_resume` (Resume).
 
 ## Start
 
@@ -141,8 +154,14 @@ EVENT_ID`, `limit: 1`, `tool_output: "full"`; no `types` on a re-fetch —
 ## Interrupt
 
 `agent_collab_interrupt` parks a live interactive in-flight turn at
-`awaiting_input` so `post_message` can steer. `agent_collab_stop` ends the
-session; do not use stop to keep a thread alive.
+`awaiting_input` so `post_message` can steer. It abandons every remaining
+planned workflow stage: the session then continues only as directed turns and
+ends `done` when the input loop closes. It also denies every pending tool
+approval (count in `interrupt.approvals_denied`). It is not idempotent: a
+second call is a `conflict`, as is any session that is not live, not
+interactive, or has no in-flight turn. `agent_collab_stop` ends the session; do
+not use stop to keep an *in-flight turn* alive. Stop on an already-parked
+session is the route to a resumable session (topic `resume`).
 
 Check per-agent `settings.agents.<id>.capabilities.interrupt` for every
 in-flight agent. Session `interruptible` is the AND of selected backends, not
@@ -160,20 +179,34 @@ session). Operator abort is a turn outcome `interrupted` /
 
 ## Resume
 
-`agent_collab_resume` is completed-only: `last_turn_status` must be
-`completed` for every started agent. Operator-interrupted turns
-(`last_turn_status=interrupted`) are ineligible even with
-`interrupt_acknowledged`. Session status `interrupted` is daemon death, not
-eligibility.
+`agent_collab_resume` needs two things at once. Session status must be
+`stopped` or `interrupted` (topic `interrupt` owns what `interrupted` means);
+`done` and `failed` are `ineligible` and cannot be reopened. And
+`last_turn_status` must be `completed` for every started agent — read it from
+`agent_sessions.<agent_id>.last_turn_status` on `agent_collab_status`.
+Operator-interrupted turns (`last_turn_status=interrupted`) are ineligible
+even with `interrupt_acknowledged`.
+
+To reach an eligible state deliberately: start `interactive: true`, let a turn
+complete and park at `awaiting_input`, then `agent_collab_stop` — a stopped
+parked session is resume-eligible. An `interactive: false` session (including
+the review recipe) that ran every planned stage ends `done` and cannot be
+reopened; one stopped or reloaded mid-workflow keeps its remaining stages.
 
 Start-time `resumable=false` is expected: capture is empty until a completed
 descriptor exists. Per-agent `settings.agents.<id>.capabilities.resume` is
-the advertisement; start-time session `resumable` is readiness, not a lie.
+the advertisement; session `resumable` reports descriptor readiness and does
+not by itself decide the call — a `done` session can still project
+`resumable` and be refused as `ineligible`.
 
-A live session is a conflict (`code=conflict` / `live`). Restore never
-auto-starts a paid turn. A quarantined descriptor cannot be repaired in
-place; start a new session. Cursor/transcript continue after a successful
-resume; the original task is not re-emitted.
+A live session is a `conflict`. Daemon restore alone never starts a paid turn,
+but `agent_collab_resume` can: reopening a session parked in the input loop
+costs nothing and returns at `awaiting_input`, while reopening one with planned
+stages left runs them as paid turns — confirm the cost with the user first, as
+for a start. A quarantined descriptor cannot be repaired in place; start a new
+session. Cursor/transcript continue after a successful resume; the original
+task is not re-emitted — after resume collect with `agent_collab_wait_result`,
+then `agent_collab_post_message`.
 
 ## Options
 
@@ -231,7 +264,7 @@ config, not project. Prefer the real-turn error over discovery. Unknown
 workflow/agent: `agent_collab_describe_options` for the same `workdir`.
 Unknown `session_id`: mistyped id or a different daemon.
 
-`agent_collab_resume` codes: `conflict`/`live`, `ineligible`, `incompatible`,
+`agent_collab_resume` codes: `conflict`, `ineligible`, `incompatible`,
 `quarantined`, `not_found`. Do not retry a quarantined resume in place.
 `agent_collab_interrupt` codes: `conflict`, `not_found`, `unsupported`.
 `agent_collab_approval` codes: `not_found`, `conflict`, `stale`.

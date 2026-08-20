@@ -13,6 +13,20 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Rewrite `mcp-guidance.md` so each contract has exactly one `##` owner,
+  then run a documentation honesty pass over the session-control surface:
+  MCP guidance and tool descriptions now state real resume eligibility
+  (session `stopped` / `interrupted` plus `last_turn_status=completed`;
+  `done` / `failed` ineligible) and that resuming a session with planned
+  stages left costs paid turns; interrupt documents stage abandonment,
+  pending-approval denial, and its non-idempotence; the approval surface
+  documents `outcome="auto_denied"` / `status="delivery_failed"`; the
+  never-raised resume code `live` is dropped from the guidance and the
+  `ResumeError` docstring. README replaces the stale "not fully
+  implemented" SDK claim and names the `interrupt` / `resume` / `approval`
+  commands; the `claude_cli` and `codex_cli` READMEs describe in-session
+  resume-by-id with the public flags still false (#20).
+
 - Fail closed on in-flight interrupt when any in-flight agent does not
   advertise `interrupt`: `code=unsupported` with no session mutation.
   Mixed-roster names the blocking agent. `fallback_cancelled` remains

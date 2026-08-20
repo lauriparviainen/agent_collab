@@ -493,6 +493,11 @@ agent-collab start --watch --workdir /path/to/project \
 agent-collab tui
 ```
 
+Daemon-owned sessions are also steerable from the CLI: `agent-collab interrupt`
+parks the in-flight turn of a live interactive session, `agent-collab resume`
+reopens a stopped or reloaded session on its captured provider threads, and
+`agent-collab approval` answers one parked tool-approval request.
+
 One daemon can serve many projects. Every session carries its own `workdir`,
 which selects project configuration and becomes the agents' working directory.
 Project config may rename globally known agents and compose workflows, but all
@@ -541,11 +546,14 @@ command-line tool as a subprocess, and `sdk` calls its Python SDK in-process.
 The `cli` backends work with the base install; each `sdk` backend needs its
 provider's optional dependency extra (see [Install](#install)).
 
-> **SDK status:** The SDK backends are experimental. Basic in-process turns and
-> provider-session identity work, but native session resume, provider-confirmed
-> interruption, and interactive tool approval are not fully implemented;
-> capability flags remain conservative. Follow the design refresh and full SDK
-> capability work in [issue #20](https://github.com/lauriparviainen/agent_collab/issues/20).
+> **SDK status:** The SDK backends are experimental but no longer minimal.
+> `claude_sdk` and `antigravity_sdk` advertise continuity, restart-safe resume,
+> provider-confirmed interruption, and interactive tool approval; `codex_sdk`
+> advertises the first three, and its `tool_gate` flag stays `false` because the
+> worker-sandbox park is unproven; `xai_sdk` advertises continuity only. The
+> `cli` backends advertise none of the four — see each backend's README for what
+> is implemented versus advertised. Follow the remaining capability work in
+> [issue #20](https://github.com/lauriparviainen/agent_collab/issues/20).
 
 | Provider | CLI backend | SDK backend | CLI enabled by default |
 | --- | --- | --- | --- |

@@ -49,9 +49,10 @@ CREDENTIALS_UNKNOWN = "unknown"
 class BackendCapabilities:
     """What a backend can actually do for a session.
 
-    Every capability defaults to ``False`` and stays ``False`` for every backend
-    in this stage: the flags exist so later stages can turn a running code path
-    ``True`` without a schema change, never so a provider brand can imply one.
+    Every capability defaults to ``False``: a backend turns one ``True`` only
+    once the running code path has its proof, never because a provider brand
+    implies it. The shipped matrix lives in
+    ``doc/tasks_open/sdk-session-control.md``; CLI backends keep all four false.
 
     ``continuity`` is the in-session fact — the runner continues its provider
     thread on the next turn (delta prompt, no task re-send) — and is deliberately

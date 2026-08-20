@@ -18,7 +18,7 @@ default is `default` (headless runs deny write/exec tools instead of prompting);
 
 ## Events and identity
 
-Text becomes `claude/message`; tool blocks become `tool/tool_call`, `command`, or `file_change`; errors become `error/error`. Thinking is emitted only as verbose status and signatures are never emitted. A result/system `session_id` is captured as provider identity kind `session`, but resume is not implemented.
+Text becomes `claude/message`; tool blocks become `tool/tool_call`, `command`, or `file_change`; errors become `error/error`. Thinking is emitted only as verbose status and signatures are never emitted. A result/system `session_id` is captured as provider identity kind `session` and is used for in-session continuation: after a completed turn that captured it, later turns in the same live session re-invoke with `--resume <id>` plus the referee delta prompt. User-configured `--resume` / `--continue` are rejected; only the typed internal descriptor may select a session.
 
 ## Turn outcome
 
@@ -29,9 +29,13 @@ it. Partial text and exit zero do not replace the marker.
 
 ## Capabilities and security
 
-`resume`, `interrupt`, and `tool_gate` are false. Execution uses the resolved
-agent cwd and closes stdin. Recursive agent spawning remains prohibited by
-referee guardrails.
+`resume`, `interrupt`, and `tool_gate` are false. `continuity` stays false
+until a credentialed two-turn proof passes on both the direct (`sandbox=none`)
+and outer (`sandbox=read-only`) launch paths, so the in-session `--resume <id>`
+continuation described above runs while that flag is still false — see
+`doc/tasks_open/sdk-session-control.md`. Execution uses the resolved agent cwd
+and closes stdin. Recursive agent spawning remains prohibited by referee
+guardrails.
 
 The separate top-level outer policy supports `sandbox="read-only"` in Stage 2.
 It reuses the common Linux Bubblewrap launcher and declares the complete

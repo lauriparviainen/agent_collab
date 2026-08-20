@@ -205,16 +205,52 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("wait_approval", text)
         self.assertNotIn("list_approvals", text)
 
-    def test_resume_topic_pins_completed_only_eligibility(self):
+    def test_resume_topic_pins_status_and_turn_eligibility(self):
         text = handle_tool("agent_collab_guidance", {"topic": "resume"})["content"][0]["text"]
         self.assertTrue(text.startswith("## Resume"))
-        self.assertIn("completed", text)
-        self.assertIn("resumable", text)
-        self.assertIn("quarantin", text)
-        self.assertIn("conflict", text)
+        # Both halves of the gate (resume.py validate_session_resume): session
+        # status in {stopped, interrupted}, and last_turn_status completed for
+        # every started agent, read from the agent_sessions block.
+        for required in (
+            "stopped",
+            "interrupted",
+            "`done`",
+            "ineligible",
+            "completed",
+            "agent_sessions",
+            "resumable",
+            "quarantin",
+            "conflict",
+        ):
+            self.assertIn(required, text)
         self.assertNotIn("## Interrupt", text)
         self.assertNotIn("wait_approval", text)
         self.assertNotIn("list_approvals", text)
+        # `live` is a documented-but-never-raised ResumeError code.
+        self.assertNotIn("`live`", text)
+
+    def test_resume_topic_warns_that_reopening_planned_stages_is_paid(self):
+        text = handle_tool("agent_collab_guidance", {"topic": "resume"})["content"][0]["text"]
+        self.assertIn("paid turns", text)
+        self.assertIn("interactive", text)
+        self.assertIn("agent_collab_wait_result", text)
+        self.assertIn("agent_collab_post_message", text)
+
+    def test_interrupt_topic_owns_stage_abandonment_and_approval_denial(self):
+        text = handle_tool("agent_collab_guidance", {"topic": "interrupt"})["content"][0]["text"]
+        for required in ("abandons", "approvals_denied", "not idempotent", "conflict"):
+            self.assertIn(required, text)
+        resume = handle_tool("agent_collab_guidance", {"topic": "resume"})["content"][0]["text"]
+        self.assertNotIn("abandons", resume)
+
+    def test_approval_surface_documents_undeliverable_approve(self):
+        tools = {tool["name"]: tool for tool in TOOLS}
+        approval = tools["agent_collab_approval"]["description"]
+        delegate = handle_tool("agent_collab_guidance", {"topic": "delegate"})["content"][0]["text"]
+        for text in (approval, delegate):
+            self.assertIn("auto_denied", text)
+            self.assertIn("delivery_failed", text)
+        self.assertIn("pending_approvals_omitted", delegate)
 
     def test_start_interrupt_resume_descriptions_match_contracts(self):
         tools = {tool["name"]: tool for tool in TOOLS}
@@ -225,8 +261,20 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("solo", start)
         self.assertIn("unsupported", interrupt)
         self.assertIn("capabilities.interrupt", interrupt)
-        self.assertIn("completed", resume)
-        self.assertIn("resumable=false", resume)
+        self.assertIn("abandons", interrupt)
+        self.assertIn("approvals", interrupt)
+        self.assertIn("conflict", interrupt)
+        for required in (
+            "'stopped'",
+            "'interrupted'",
+            "'done'",
+            "ineligible",
+            "completed",
+            "agent_sessions",
+            "paid turns",
+            "resumable=false",
+        ):
+            self.assertIn(required, resume)
         self.assertNotIn("wait_approval", interrupt)
         self.assertNotIn("list_approvals", interrupt)
 

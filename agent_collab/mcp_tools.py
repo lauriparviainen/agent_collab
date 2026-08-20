@@ -263,8 +263,10 @@ TOOLS = [
             "from wait_result or status pending_approvals (request_id, agent_id, tool_name, "
             "summary, summary_truncated, decision_options). One request per call; duplicates of "
             "the same decision are idempotent; a different decision is a conflict. Remaining "
-            "unresolved requests stay parked. timeout_ms on wait_events/wait_result is not the "
-            "approval deadline."
+            "unresolved requests stay parked. Check the response outcome: an approve whose "
+            "decision frame cannot reach the agent returns outcome='auto_denied', "
+            "status='delivery_failed' — the tool was denied, not approved. timeout_ms on "
+            "wait_events/wait_result is not the approval deadline."
         ),
         "inputSchema": {
             "type": "object",
@@ -279,10 +281,15 @@ TOOLS = [
     {
         "name": "agent_collab_resume",
         "description": (
-            "Resume a completed, reloaded daemon-owned session after an explicit request. "
-            "Eligibility is completed-only. Start-time resumable=false is expected until a "
-            "completed descriptor exists. Never auto-starts on restore. A live session is a "
-            "conflict. A quarantined resume cannot be repaired in place; start a new session."
+            "Reopen a non-live daemon-owned session on its captured provider threads after an "
+            "explicit request. Requires session status 'stopped' or 'interrupted' (daemon "
+            "reload) and last_turn_status='completed' for every started agent (read it from "
+            "agent_sessions.<agent_id>); session status 'done' or 'failed' is ineligible and "
+            "cannot be reopened. Start-time resumable=false is expected until a completed "
+            "descriptor exists. Reopening an interactive parked session costs nothing; "
+            "reopening a session with planned stages left runs them as paid turns — confirm "
+            "first. Never auto-starts on restore. A live session is a conflict. A quarantined "
+            "resume cannot be repaired in place; start a new session."
         ),
         "inputSchema": {
             "type": "object",
@@ -295,11 +302,13 @@ TOOLS = [
         "description": (
             "Interrupt the in-flight turn of a live interactive session and park at "
             "awaiting_input so the next post_message can steer. The session stays alive. "
-            "Check per-agent capabilities.interrupt; session interruptible is the AND of "
-            "selected backends, not of the in-flight set. Any in-flight backend with "
-            "interrupt=false fails closed (code=unsupported) with no session mutation. "
-            "A session that is not live, not interactive, or has no in-flight turn is a "
-            "conflict. Stop ends the session; do not use stop to keep a session alive."
+            "It abandons the remaining planned workflow stages and denies pending tool "
+            "approvals. Check per-agent capabilities.interrupt; session interruptible is "
+            "the AND of selected backends, not of the in-flight set. Any in-flight backend "
+            "with interrupt=false fails closed (code=unsupported) with no session mutation. "
+            "A session that is not live, not interactive, has no in-flight turn, or is "
+            "already parked is a conflict: interrupt is not idempotent. Stop ends the "
+            "session; do not use stop to keep an in-flight turn alive."
         ),
         "inputSchema": {
             "type": "object",

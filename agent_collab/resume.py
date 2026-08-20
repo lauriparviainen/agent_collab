@@ -83,10 +83,11 @@ _VERSION_FLOORS = {
 class ResumeError(ValueError):
     """Structured resume failure.
 
-    Codes: ``conflict``, ``live``, ``ineligible``, ``incompatible``,
-    ``quarantined``, ``not_found``. HTTP maps ``conflict``/``live`` to 409,
-    ``not_found`` to 404, and the rest to 400 — same shape as
-    ``ApprovalDecisionError``.
+    Codes: ``conflict``, ``ineligible``, ``incompatible``, ``quarantined``,
+    ``not_found``. HTTP maps ``conflict`` to 409, ``not_found`` to 404, and the
+    rest to 400 — same shape as ``ApprovalDecisionError``. A live session
+    raises ``conflict``; no site raises ``live``, which the HTTP mapper still
+    accepts defensively.
     """
 
     def __init__(self, code: str, message: str) -> None:

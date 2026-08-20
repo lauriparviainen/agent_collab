@@ -18,7 +18,7 @@ the write opt-in.
 
 ## Events and identity
 
-Agent messages, commands, file changes, tools, errors, and verbose statuses are mapped from JSONL. `thread.started.thread_id` is captured as provider identity kind `thread`, but resume is not implemented.
+Agent messages, commands, file changes, tools, errors, and verbose statuses are mapped from JSONL. `thread.started.thread_id` is captured as provider identity kind `thread` and is used for in-session continuation: after a completed turn that captured it, later turns in the same live session are rewritten to `codex [root opts] exec resume [opts] <thread-id>` plus the referee delta prompt. User-configured `resume` / `--resume` is rejected; only the typed internal descriptor may select a thread.
 
 ## Turn outcome
 
@@ -29,9 +29,13 @@ malformed output, transport failure, or nonzero exit fails closed.
 
 ## Capabilities and security
 
-`resume`, `interrupt`, and `tool_gate` are false. Execution is cwd-scoped with
-stdin closed. Provider-native sandbox and approval policy remain explicit
-backend options.
+`resume`, `interrupt`, and `tool_gate` are false. `continuity` stays false
+until a credentialed two-turn proof passes on both the direct (`sandbox=none`)
+and outer (`sandbox=read-only`) launch paths, so the in-session `exec resume`
+continuation described above runs while that flag is still false — see
+`doc/tasks_open/sdk-session-control.md`. Execution is cwd-scoped with stdin
+closed. Provider-native sandbox and approval policy remain explicit backend
+options.
 
 The separate top-level outer policy supports `sandbox="read-only"` in Stage 1.
 It resolves the complete effective `CODEX_HOME` as persistent writable state,

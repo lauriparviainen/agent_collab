@@ -62,8 +62,12 @@ class AgentRunner:
     def conversation_active(self) -> bool:
         """True when the runner holds provider-side context the next ``run_turn``
         will continue, so the referee sends a delta continuation prompt instead of
-        re-sending guardrails, task, and window. Default False: stateless runners
-        (every CLI and mock runner) rebuild context from the prompt each turn."""
+        re-sending guardrails, task, and window. Default False: a runner that holds
+        no provider context rebuilds it from the prompt each turn.
+        ``SubprocessRunner`` overrides this and returns True once its backend
+        supplied a resume finalizer and a completed turn captured one provider id
+        (see ``_finish_cli_state``), independently of the advertised
+        ``capabilities.continuity`` flag."""
 
         return False
 

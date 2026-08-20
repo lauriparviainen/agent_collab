@@ -143,7 +143,9 @@ Q3 (expired Antigravity id), Q7 (CLI version floors), and Q8 (Grok
 ### MCP campaign leftover log (2026-08-20)
 
 CLI MCP against the installed user daemon. Low reasoning. Flags unchanged.
-No harvest status recorded here.
+Harvest is `unlogged` for every row below: no CLI cell harvested a turn. Every
+`sandbox=none` row ran with the outer Bubblewrap barrier disabled — the agent
+saw the real workdir under provider-native limits only.
 
 | Cell | Start | Interrupt (in-flight) | Resume (live) |
 |---|---|---|---|
@@ -156,7 +158,8 @@ No harvest status recorded here.
 | `antigravity_cli` gemini-3.5-flash-low/`mode=plan`, `sandbox=none` | accepted | `code=unsupported` (agent named); no mutation | `code=conflict` |
 
 SDK MCP, same one-line task, `thinking_level=low`. Flags unchanged.
-`wait_approval` / `list_approvals` not added.
+`wait_approval` / `list_approvals` not added. Every `sandbox=none` row ran with
+the outer Bubblewrap barrier disabled.
 
 | Cell | Start | Harvest |
 |---|---|---|
@@ -170,6 +173,64 @@ SDK MCP, same one-line task, `thinking_level=low`. Flags unchanged.
 | `antigravity_sdk` gemini-3.5-flash-low, `sandbox=none` | accepted | `status=failed`; `code=provider_transport_failed`; in-process named missing Gemini API key |
 
 `antigravity_sdk` both cells host-unrunnable leftover, not unrun skips (start accepted; harvest `status=failed` / `code=provider_transport_failed`). Flags unchanged. Q4 not opened; #20 stays open.
+
+### Review 2026-08-20 — open pre-close items
+
+Four independent read-only reviews of the branch were reconciled on
+2026-08-20. This pass landed the documentation half only: MCP guidance and
+tool-description honesty (resume eligibility and paid stages, interrupt stage
+abandonment and approval denial, approval `outcome`, the never-raised `live`
+code), `README.md` SDK status and the CLI steering commands, the `claude_cli` /
+`codex_cli` READMEs, and the `AgentRunner.conversation_active`,
+`BackendCapabilities`, and `ResumeError` docstrings. No capability flag moved
+and no runtime behaviour changed.
+
+The runtime defects below stay **open** and are pre-close items under the
+finding taxonomy above (an operation that lies, or a running agent that cannot
+complete an advertised loop):
+
+| # | Defect | Where | Kind |
+|---|---|---|---|
+| D1 | Resume leaves the stale `stop` / `interrupt` block on the reopened session, so every resume response and later `status` reports an abort no longer in effect. | `daemon.py` `_reopen_for_resume` clears `status` / `ended_at` / `error` / `failure` only | product bug |
+| D2 | `capabilities.resumable` can project true on a `done` / `failed` session that `agent_collab_resume` refuses as `ineligible`: the projection consults descriptors and phase, never session status. | `resume.py` `projection_captured_resume_agent_ids` vs `validate_session_resume` | product bug |
+| D5 | An undeliverable `approve` is recorded `outcome="auto_denied"` / `reason="delivery_failed"`, a deny is sent instead, and the MCP call still returns a non-error payload; the CLI prints the outcome and exits 0. | `daemon.py` approval decision path, `cli.py` approval command | product bug (docs half landed; CLI exit code open) |
+| D6 | `codex_sdk` advertises `tool_gate=False` yet the approval callback is bound with no capability check, so a gated tool request parks until the 120 s deadline auto-denies it. | `referee.py` runner construction binds `set_approval_callback` unconditionally | product bug / divergence |
+| D7 | All four CLI backends continue a provider thread in-session (`--resume <id>`, `codex exec resume <id>`) while `capabilities.continuity` stays false; the referee decides delta-vs-stateless from `runner.conversation_active()`, never from the flag. | `referee.py`, `runners.py`, `backends/common/cli.py` | divergence — documented here and in the guidance; flag gating deferred to the CLI-continuity follow-up |
+| D9 | `ResumeError` code `live` was documented but is never raised. | `resume.py`, `mcp-guidance.md`, `server_http.py` | guidance gap (fixed: dropped from the guidance and the docstring; the `server_http` mapper still accepts it defensively) |
+
+Missing coverage recorded with them: nothing pins the production capability
+matrix (no test asserts `codex_sdk.tool_gate is False` or any CLI flag), and a
+bare `pytest` at repo root has no `testpaths`, so it collects
+`integration_tests/` and spends provider money.
+
+Not yet driven over MCP, and therefore unrun rather than negative: the
+checklist-mandated mock smoke cell; restart-safe resume across a daemon restart
+(`claude_sdk`, `codex_sdk`); advertised interrupt (`claude_sdk`, `codex_sdk`);
+`tool_gate` park (`claude_sdk`); fail-closed interrupt (`xai_sdk`). The CLI
+table's harvest column stays `unlogged` — no CLI cell harvested a turn.
+
+**Corrections for the credentialed cells still to run.**
+
+- The planned `xai_sdk` fail-closed interrupt cell must start
+  `interactive: true`. Turn-level interrupt rejects a non-interactive session
+  with `code=conflict` *before* the capability check, so a non-interactive cell
+  proves nothing and would be logged as a spurious `conflict`. The logged CLI
+  interrupt rows above returned `code=unsupported`, which is reachable only on
+  an interactive session with an in-flight turn, so they are valid fail-closed
+  evidence; every future interrupt row records `interactive` explicitly.
+- The restart-safe resume cells must use a real daemon restart plus an MCP
+  client reconnect. `stop` of a parked completed session is now documented as
+  resume-eligible and is cheaper, but #20 defines resume as reopening a
+  captured provider session *across a daemon reload*; stop→resume is not an
+  acceptable substitute for that proof.
+- Host gate hazard: the hermetic suite is umask-sensitive. At `umask 002`,
+  16 `tests/sandbox/test_paths.py::AliasAuditTests` cases fail because
+  `mkdtemp()` inherits mode `0775` and the writable-path guard fail-closes with
+  `outer_sandbox_path_permissions` before the assertion under test is reached;
+  the same command at `umask 022` is green. Neither file is touched by this
+  branch, so this is not a regression — run the gate at `umask 022` until the
+  fixtures set an explicit mode. It is the same root cause as the
+  `outer_sandbox_path_permissions` start rejections logged above.
 
 ## Purpose and scope
 
