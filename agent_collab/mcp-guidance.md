@@ -195,9 +195,10 @@ reopened; one stopped or reloaded mid-workflow keeps its remaining stages.
 
 Start-time `resumable=false` is expected: capture is empty until a completed
 descriptor exists. Per-agent `settings.agents.<id>.capabilities.resume` is
-the advertisement; session `resumable` reports descriptor readiness and does
-not by itself decide the call — a `done` session can still project
-`resumable` and be refused as `ineligible`.
+the advertisement; session `resumable` reports descriptor readiness on a
+live or resume-eligible session and is false on `done` / `failed`. It does
+not by itself decide the call — a live session can still project `resumable`
+and be refused as `conflict`.
 
 A live session is a `conflict`. Daemon restore alone never starts a paid turn,
 but `agent_collab_resume` can: reopening a session parked in the input loop

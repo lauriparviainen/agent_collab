@@ -289,20 +289,19 @@ class ResumeEligibilityTests(unittest.TestCase):
 
     def test_resumable_projection_agrees_with_the_resume_gate(self):
         parked = {"completed_stages": 1, "parked_in_input_loop": False}
-        with mock.patch("agent_collab.backends.capabilities_for", side_effect=_resume_stub):
-            for status in ("done", "failed"):
-                state = _state(status=status, interactive=True, workflow_phase=parked)
-                self.assertEqual(projection_captured_resume_agent_ids(state), frozenset())
-                self.assertFalse(SessionManager._project_session_capabilities(state)["resumable"])
-                with self.assertRaises(ResumeError) as raised:
-                    validate_session_resume(state)
-                self.assertEqual(raised.exception.code, "ineligible")
-            for status in ("stopped", "interrupted"):
-                state = _state(status=status, interactive=True, workflow_phase=parked)
-                self.assertTrue(SessionManager._project_session_capabilities(state)["resumable"])
+        for status in ("done", "failed"):
+            state = _state(status=status, interactive=True, workflow_phase=parked)
+            self.assertEqual(projection_captured_resume_agent_ids(state), frozenset())
+            self.assertFalse(SessionManager._project_session_capabilities(state)["resumable"])
+            with self.assertRaises(ResumeError) as raised:
                 validate_session_resume(state)
-            live = _state(status="running", interactive=True, workflow_phase=parked)
-            self.assertTrue(SessionManager._project_session_capabilities(live)["resumable"])
+            self.assertEqual(raised.exception.code, "ineligible")
+        for status in ("stopped", "interrupted"):
+            state = _state(status=status, interactive=True, workflow_phase=parked)
+            self.assertTrue(SessionManager._project_session_capabilities(state)["resumable"])
+            validate_session_resume(state)
+        live = _state(status="running", interactive=True, workflow_phase=parked)
+        self.assertTrue(SessionManager._project_session_capabilities(live)["resumable"])
 
     def test_never_started_session_is_not_resumable(self):
         state = _state(agent_sessions={})
@@ -492,7 +491,9 @@ class ResumeClaimTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ResumeError) as raised:
                 await manager.resume_session(session_id)
             self.assertEqual(raised.exception.code, "ineligible")
-            self.assertEqual(manager.get_session(session_id).status, "done")
+            after = manager.get_session(session_id)
+            self.assertEqual(after.status, "done")
+            self.assertFalse((after.capabilities or {}).get("resumable"))
 
     async def test_manager_resume_of_failed_session_is_ineligible(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -501,7 +502,9 @@ class ResumeClaimTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ResumeError) as raised:
                 await manager.resume_session(session_id)
             self.assertEqual(raised.exception.code, "ineligible")
-            self.assertEqual(manager.get_session(session_id).status, "failed")
+            after = manager.get_session(session_id)
+            self.assertEqual(after.status, "failed")
+            self.assertFalse((after.capabilities or {}).get("resumable"))
 
     async def test_failed_resume_leaves_session_status_and_request_untouched(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -531,6 +534,42 @@ class ResumeClaimTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(after.status, before.status)
             index = SessionIndex(root / "index.json").load()
             self.assertEqual(index["resume-1"]["status"], "interrupted")
+
+    async def test_failed_resume_rolls_back_when_prior_task_is_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager, session_id = await self._stopped_manager(root)
+            managed = manager._sessions[session_id]
+
+            async def already_done():
+                return None
+
+            managed.task = asyncio.create_task(already_done())
+            await managed.task
+            self.assertIsNotNone(managed.task)
+            self.assertTrue(managed.task.done())
+            with (
+                mock.patch(
+                    "agent_collab.backends.capabilities_for",
+                    side_effect=_resume_stub,
+                ),
+                mock.patch.object(
+                    manager,
+                    "_prepare_session_start",
+                    side_effect=lambda request: self._prepared(manager.get_session(session_id)),
+                ),
+                mock.patch.object(
+                    manager,
+                    "_refresh_session_capabilities",
+                    side_effect=RuntimeError("boom"),
+                ),
+            ):
+                with self.assertRaises(RuntimeError):
+                    await manager.resume_session(session_id)
+            after = manager.get_session(session_id)
+            self.assertEqual(after.status, "stopped")
+            index = SessionIndex(root / "index.json").load()
+            self.assertEqual(index["resume-1"]["status"], "stopped")
 
     async def test_approval_registry_is_reset_by_resume(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2069,6 +2069,7 @@ class SessionManager:
                 managed.state.stop,
                 managed.state.interrupt,
             )
+            prior_task = managed.task
             try:
                 self._reopen_for_resume(managed)
                 self._refresh_session_capabilities(managed.state)
@@ -2078,7 +2079,7 @@ class SessionManager:
                     name=f"agent-collab-session-{managed.state.session_id}",
                 )
             except Exception:
-                if managed.task is None:
+                if managed.task is prior_task:
                     (
                         managed.state.status,
                         managed.state.ended_at,
