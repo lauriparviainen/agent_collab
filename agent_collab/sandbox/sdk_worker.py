@@ -272,7 +272,8 @@ async def _serve(channel: int) -> int:
             try:
                 backend = factories[backend_id]()
                 await backend.open(open_payload)
-                backend.bind_approvals(request_approval)
+                if open_payload.get("tool_gate") is True:
+                    backend.bind_approvals(request_approval)
             except Exception as exc:
                 await _send_error(
                     loop,

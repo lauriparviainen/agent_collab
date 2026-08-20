@@ -14,8 +14,9 @@ from typing import Any, List, Mapping
 import unittest
 from unittest import mock
 
-from agent_collab.backends.base import BackendUnavailable
+from agent_collab.backends.base import BackendCapabilities, BackendUnavailable
 from agent_collab.backends.codex_sdk.backend import (
+    CodexSdkBackend,
     CodexSdkRunner,
     CodexTurnOutcome,
     _default_conversation,
@@ -59,6 +60,15 @@ def _patch_openai_codex(module: ModuleType):
 
 
 AGENT = AgentConfig(id="claude_cli", type="codex", backend="sdk")
+
+
+def _force_tool_gate(enabled: bool = True):
+    return mock.patch(
+        "agent_collab.backends.capabilities_for",
+        return_value=BackendCapabilities(
+            resume=True, interrupt=True, continuity=True, tool_gate=enabled
+        ),
+    )
 
 
 def _is_accept(result: Any) -> bool:
@@ -306,6 +316,7 @@ class CodexSdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
                             "backend": "codex_sdk",
                             "workspace": "/tmp",
                             "options": {"sandbox": "read-only"},
+                            "tool_gate": True,
                         },
                     ),
                 )
@@ -496,9 +507,11 @@ class CodexSdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
                     "options": {},
                     "verbose": False,
                     "agent_env": {},
+                    "tool_gate": True,
                 }
             )
         self.assertIsNone(backend._request_approval)
+        self.assertIsNotNone(backend._sync_approval_handler)
         outcome = await asyncio.wait_for(backend.run("gate", run_id="run-1"), timeout=2.0)
         _events, result = outcome
         self.assertEqual(result.outcome, "completed")
@@ -506,8 +519,39 @@ class CodexSdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(_is_deny(conv.results[0]))
         await backend.close()
 
+    async def test_ungated_open_does_not_install_host_handler(self) -> None:
+        backend = CodexSdkWorkerBackend()
+        seen = {}
+
+        def fake_conv(*_args: Any, **kwargs: Any):
+            seen["approval_handler"] = kwargs.get("approval_handler")
+            return SimpleNamespace(
+                run=None, note_session_id=lambda *_a, **_k: None, close=None, reset=None
+            )
+
+        with mock.patch(
+            "agent_collab.backends.codex_sdk.worker._default_conversation",
+            fake_conv,
+        ):
+            await backend.open(
+                {
+                    "workspace": "/tmp",
+                    "options": {},
+                    "verbose": False,
+                    "agent_env": {},
+                }
+            )
+        self.assertIsNone(backend._request_approval)
+        self.assertIsNone(backend._sync_approval_handler)
+        self.assertIsNone(seen.get("approval_handler"))
+
 
 class CodexSdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        patcher = _force_tool_gate(True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     async def test_in_process_approve_parks_and_executes(self) -> None:
         state: dict[str, Any] = {"gate_mode": "park"}
         held: dict[str, Any] = {}
@@ -719,6 +763,11 @@ class CodexSdkInProcessToolGateTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CodexSdkSessionToolGateTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        patcher = _force_tool_gate(True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     async def _start_gated_session(
         self,
         state: dict[str, Any],
@@ -920,15 +969,34 @@ class CodexSdkSessionToolGateTests(unittest.IsolatedAsyncioTestCase):
                 await runner.close()
 
 
-class CodexSdkToolGateCapabilityTests(unittest.TestCase):
+class CodexSdkToolGateCapabilityTests(unittest.IsolatedAsyncioTestCase):
     def test_production_capabilities(self):
         from agent_collab import backends
 
+        self.assertFalse(CodexSdkBackend().capabilities.tool_gate)
         caps = backends.capabilities_for("codex", "sdk")
         self.assertEqual(
             caps.to_dict(),
             {"resume": True, "interrupt": True, "tool_gate": False, "continuity": True},
         )
+
+    async def test_capabilities_tool_gate_is_false_and_no_host_handler_is_installed(self):
+        state: dict[str, Any] = {}
+        runner = CodexSdkRunner(AGENT, False, {}, conversation_factory=_default_conversation)
+        runner.set_approval_callback(lambda payload: None)
+        module, _, _ = _fake_module(state, [_turn_result(final_response="Done.")])
+        with _patch_openai_codex(module):
+
+            async def emit(_event: Event) -> None:
+                return None
+
+            outcome = await runner.run_turn("plain", Path("/workspace"), emit)
+            await runner.close()
+        self.assertEqual(outcome.outcome, "completed")
+        self.assertIsNone(state["async_codex_clients"][0]._client._sync._approval_handler)
+        for kwargs in state.get("starts", []):
+            self.assertNotEqual(kwargs.get("approvalPolicy"), HOST_REVIEW_APPROVAL_POLICY)
+        self.assertEqual(state.get("inner_starts", []), [])
 
 
 if __name__ == "__main__":

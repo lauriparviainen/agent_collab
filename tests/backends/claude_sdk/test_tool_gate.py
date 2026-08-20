@@ -119,6 +119,7 @@ class ClaudeSdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
                             "backend": "claude_sdk",
                             "workspace": "/tmp",
                             "options": {"permission_mode": "default"},
+                            "tool_gate": True,
                         },
                     ),
                 )

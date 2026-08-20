@@ -115,7 +115,11 @@ class WorkerBackendHookTests(unittest.IsolatedAsyncioTestCase):
                     make_frame(
                         "open",
                         request_id="open-1",
-                        payload={"backend": backend_id, "workspace": "/tmp"},
+                        payload={
+                            "backend": backend_id,
+                            "workspace": "/tmp",
+                            "tool_gate": True,
+                        },
                     ),
                 )
                 ready = await recv_frame(reader)

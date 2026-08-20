@@ -485,6 +485,9 @@ class CodexSdkRunner(AgentRunner):
                 verbose=self.verbose,
                 resume=resume,
             )
+            from .. import capabilities_for
+
+            payload["tool_gate"] = capabilities_for(self.agent.type, "sdk").tool_gate
             session = SupervisedWorkerSession(
                 process,
                 reader,
@@ -591,7 +594,12 @@ class CodexSdkRunner(AgentRunner):
         if self._conversation is None:
             factory = self._conversation_factory
             approval_handler = None
-            if getattr(self, "_approval_callback", None) is not None:
+            from .. import capabilities_for
+
+            if (
+                getattr(self, "_approval_callback", None) is not None
+                and capabilities_for(self.agent.type, "sdk").tool_gate
+            ):
                 approval_handler = make_sync_approval_handler(
                     loop=asyncio.get_running_loop(),
                     park_async=self._park_tool_approval,

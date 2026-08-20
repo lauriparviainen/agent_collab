@@ -799,6 +799,9 @@ class AntigravitySdkRunner(AgentRunner):
                 conversation_id=self._captured_conversation_id,
                 resume=resume,
             )
+            from .. import capabilities_for
+
+            payload["tool_gate"] = capabilities_for(self.agent.type, "sdk").tool_gate
             session = SupervisedWorkerSession(
                 process,
                 reader,

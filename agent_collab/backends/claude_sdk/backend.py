@@ -496,6 +496,9 @@ class ClaudeSdkRunner(AgentRunner):
                 verbose=self.verbose,
                 resume=resume,
             )
+            from .. import capabilities_for
+
+            payload["tool_gate"] = capabilities_for(self.agent.type, "sdk").tool_gate
             session = SupervisedWorkerSession(
                 process,
                 reader,

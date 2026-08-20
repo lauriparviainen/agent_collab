@@ -64,6 +64,45 @@ class RefereeTests(unittest.TestCase):
             build.assert_called_once()
             self.assertEqual(build.call_args.args[-1], claude_plan)
 
+    def test_set_approval_callback_only_for_tool_gate_backends(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = CollaborationConfig(
+                agents={
+                    "claude": AgentConfig(
+                        id="claude", type="claude", command="claude", backend="sdk"
+                    ),
+                    "codex": AgentConfig(id="codex", type="codex", command="codex", backend="sdk"),
+                },
+                workflows={"pair": WorkflowConfig(id="pair", sequence=["claude", "codex"])},
+            )
+            callback = mock.Mock()
+            claude_runner = mock.Mock(spec=AgentRunner)
+            codex_runner = mock.Mock(spec=AgentRunner)
+
+            def build(agent, *_args, **_kwargs):
+                return claude_runner if agent.id == "claude" else codex_runner
+
+            referee = Referee(
+                RefereeConfig(
+                    sandbox="none",
+                    sandbox_plan=SimpleNamespace(agents={"claude": None, "codex": None}),
+                    workflow="pair",
+                    collab_config=config,
+                    workdir=root,
+                    log_dir=root,
+                    color=False,
+                    approval_callback=callback,
+                    agent_backends={"claude": "sdk", "codex": "sdk"},
+                ),
+                printer=lambda event: None,
+            )
+            with mock.patch("agent_collab.referee.configured_runner", side_effect=build):
+                referee._runners()
+
+            claude_runner.set_approval_callback.assert_called_once_with(callback)
+            codex_runner.set_approval_callback.assert_not_called()
+
     def test_direct_read_only_plan_runs_engine_preflight_before_runners(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1374,6 +1413,33 @@ class ContinuationPromptTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(prompt, sentinel)
         self.assertEqual(referee._agent_watermarks["claude"], len(transcript))
+
+    def test_cli_runner_continuity_is_live_while_flag_is_false(self):
+        # D7 divergence (doc/tasks_open/sdk-session-control.md): referee
+        # chooses delta vs stateless from runner.conversation_active(), never
+        # from capabilities.continuity. Do not gate continuity on the flag.
+        from agent_collab import backends
+        from agent_collab.runners import CLI_RESUME_ACTIVE, SubprocessRunner
+
+        self.assertFalse(backends.capabilities_for("claude", "cli").continuity)
+        runner = SubprocessRunner(
+            "claude",
+            ["claude"],
+            parser=object(),
+            source="claude",
+            resume_finalizer=lambda command, _descriptor: tuple(command),
+        )
+        runner._cli_state = CLI_RESUME_ACTIVE
+        self.assertTrue(runner.conversation_active())
+        prompt = self._referee()._build_turn_prompt(
+            runner,
+            [Event.create("human", "message", "hello")],
+            "claude",
+            "ROLE",
+            lambda: "STATELESS-SHOULD-NOT-BE-USED",
+        )
+        self.assertIn("NEW EVENTS SINCE YOUR LAST TURN:", prompt)
+        self.assertNotIn("STATELESS-SHOULD-NOT-BE-USED", prompt)
 
     def test_active_build_sends_only_the_post_watermark_delta(self):
         from agent_collab.backends.common.sdk import provider_session_event

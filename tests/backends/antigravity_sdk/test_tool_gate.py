@@ -318,6 +318,7 @@ class AntigravitySdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
                                 "options": {},
                                 "save_dir": str(traj),
                                 "app_data_dir": str(app),
+                                "tool_gate": True,
                             },
                         ),
                     )

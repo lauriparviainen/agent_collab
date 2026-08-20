@@ -456,7 +456,11 @@ class Referee:
                     self.sandbox_plan.agents.get(agent_id),
                 )
             if self.config.approval_callback is not None:
-                runners[agent_id].set_approval_callback(self.config.approval_callback)
+                from .backends import capabilities_for, resolve_backend_id
+
+                backend_id = self._backend_for(agent_id) or resolve_backend_id(agent)
+                if capabilities_for(agent.type, backend_id).tool_gate:
+                    runners[agent_id].set_approval_callback(self.config.approval_callback)
         return runners
 
     def _backend_for(self, agent_id: str) -> Optional[str]:

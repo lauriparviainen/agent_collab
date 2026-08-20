@@ -52,22 +52,25 @@ class CodexSdkWorkerBackend:
             command=codex_bin if isinstance(codex_bin, str) else None,
         )
         # Codex thread cwd is the effective agent cwd, not only the session root.
-        # Worker serve always binds approvals; install the host handler so the
-        # SDK default accept cannot shadow the gate. Capture the serve loop
-        # here, not inside the reader-thread handler.
-        self._approval_loop = asyncio.get_running_loop()
-        self._sync_approval_handler = make_sync_approval_handler(
-            loop=self._approval_loop,
-            park_async=self._park_tool_approval,
-        )
+        # Install the host handler only when the open payload advertises a tool
+        # gate; otherwise keep the SDK auto-review default so tool_gate=False
+        # cannot park.
         from ...resume import require_resume_session_id
 
         resume_id = require_resume_session_id(payload)
+        approval_handler = None
+        if payload.get("tool_gate") is True:
+            self._approval_loop = asyncio.get_running_loop()
+            self._sync_approval_handler = make_sync_approval_handler(
+                loop=self._approval_loop,
+                park_async=self._park_tool_approval,
+            )
+            approval_handler = self._sync_approval_handler
         conversation = _default_conversation(
             agent,
             options,
             cwd,
-            approval_handler=self._sync_approval_handler,
+            approval_handler=approval_handler,
         )
         if resume_id is not None:
             conversation.note_session_id(resume_id)
