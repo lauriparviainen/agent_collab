@@ -965,9 +965,13 @@ class ApprovalDecisionRequestModel:
 class ResumeSessionRequestModel:
     """``POST /sessions/{id}/resume`` request. Empty body; reserved for options."""
 
+    WIRE_FIELDS: ClassVar[Tuple[str, ...]] = ()
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ResumeSessionRequestModel":
-        del data
+        unknown = sorted(set(data) - set(cls.WIRE_FIELDS))
+        if unknown:
+            raise ValueError(f"unknown resume field {unknown[0]!r}")
         return cls()
 
     def to_dict(self) -> Dict[str, Any]:
@@ -978,9 +982,13 @@ class ResumeSessionRequestModel:
 class InterruptSessionRequestModel:
     """``POST /sessions/{id}/interrupt`` request. Empty body; reserved for options."""
 
+    WIRE_FIELDS: ClassVar[Tuple[str, ...]] = ()
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "InterruptSessionRequestModel":
-        del data
+        unknown = sorted(set(data) - set(cls.WIRE_FIELDS))
+        if unknown:
+            raise ValueError(f"unknown interrupt field {unknown[0]!r}")
         return cls()
 
     def to_dict(self) -> Dict[str, Any]:

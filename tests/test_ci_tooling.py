@@ -67,6 +67,8 @@ class StaticToolingContractTests(unittest.TestCase):
         self.assertRegex(formatter, r'(?m)^quote-style\s*=\s*"double"\s*$')
         self.assertRegex(formatter, r'(?m)^indent-style\s*=\s*"space"\s*$')
         self.assertRegex(formatter, r'(?m)^line-ending\s*=\s*"lf"\s*$')
+        pytest_ini = self._toml_table(pyproject, "tool.pytest.ini_options")
+        self.assertRegex(pytest_ini, r'(?m)^testpaths\s*=\s*\["tests"\]\s*$')
 
     def test_base_install_is_sdk_free_and_all_extra_matches_shared_sdk_pins(self):
         """Provider extras are opt-in; `all` omits only the known protobuf conflict."""

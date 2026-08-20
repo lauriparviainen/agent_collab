@@ -18,7 +18,10 @@ Python approval.
 
 The suite is credential-free and network-free, but it intentionally tests
 subprocess lifecycle, signals, localhost services, filesystem behavior, and
-asyncio/thread coordination. An outer sandbox can change those semantics. In
+asyncio/thread coordination. An outer sandbox can change those semantics.
+`AliasAuditTests` chmod writable fixture temp roots so a host umask of 002
+does not fail-close `paths.py` with `outer_sandbox_path_permissions` before
+the alias assertion; the production writable-path guard is unchanged. In
 particular, a nested Codex sandbox has been observed to leave
 `asyncio.to_thread(subprocess.run, ...)` waiting after the child and worker
 thread have finished. The full suite then appears to hang in

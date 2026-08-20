@@ -1399,5 +1399,120 @@ class ApprovalRouteTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["error"], str(exc))
 
 
+class ResumeInterruptRouteTests(unittest.IsolatedAsyncioTestCase):
+    def _session_payload(self):
+        state = mock.Mock()
+        state.to_dict.return_value = {"session_id": "s1", "status": "running"}
+        return state
+
+    async def test_resume_route_calls_manager(self):
+        manager = mock.Mock()
+        manager.resume_session = mock.AsyncMock(return_value=self._session_payload())
+        server = AgentCollabHttpServer(manager=manager)
+        response = await server._dispatch("POST", "/sessions/s1/resume", {}, b"{}")
+        manager.resume_session.assert_awaited_once_with("s1")
+        self.assertEqual(response["session_id"], "s1")
+
+    async def test_interrupt_route_calls_manager(self):
+        manager = mock.Mock()
+        manager.interrupt_session = mock.AsyncMock(return_value=self._session_payload())
+        server = AgentCollabHttpServer(manager=manager)
+        response = await server._dispatch("POST", "/sessions/s1/interrupt", {}, b"{}")
+        manager.interrupt_session.assert_awaited_once_with("s1")
+        self.assertEqual(response["session_id"], "s1")
+
+    async def test_resume_unknown_body_field_is_400(self):
+        manager = mock.Mock()
+        manager.resume_session = mock.AsyncMock()
+        server = AgentCollabHttpServer(manager=manager)
+        with self.assertRaises(HttpError) as ctx:
+            await server._dispatch(
+                "POST",
+                "/sessions/s1/resume",
+                {},
+                json.dumps({"bogus": True}).encode(),
+            )
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertIn("unknown resume field", ctx.exception.message)
+        self.assertIn("bogus", ctx.exception.message)
+        manager.resume_session.assert_not_called()
+
+    async def test_interrupt_unknown_body_field_is_400(self):
+        manager = mock.Mock()
+        manager.interrupt_session = mock.AsyncMock()
+        server = AgentCollabHttpServer(manager=manager)
+        with self.assertRaises(HttpError) as ctx:
+            await server._dispatch(
+                "POST",
+                "/sessions/s1/interrupt",
+                {},
+                json.dumps({"bogus": True}).encode(),
+            )
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertIn("unknown interrupt field", ctx.exception.message)
+        self.assertIn("bogus", ctx.exception.message)
+        manager.interrupt_session.assert_not_called()
+
+    async def test_resume_errors_map_to_404_409_400(self):
+        from agent_collab.resume import ResumeError
+
+        manager = mock.Mock()
+        server = AgentCollabHttpServer(manager=manager)
+        cases = (
+            (ResumeError("not_found", "unknown session_id 's1'"), 404),
+            (ResumeError("conflict", "session is live"), 409),
+            (ResumeError("ineligible", "session status 'done' is not resumable"), 400),
+            (ResumeError("incompatible", "fingerprint mismatch"), 400),
+            (
+                ResumeError("quarantined", "a quarantined agent makes session resume unavailable"),
+                400,
+            ),
+        )
+        for exc, status in cases:
+            manager.resume_session = mock.AsyncMock(side_effect=exc)
+            writer = _CaptureWriter()
+            body = b"{}"
+            request = (
+                b"POST /sessions/s1/resume HTTP/1.1\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode()
+                + body
+            )
+            await server._handle_connection(_request_reader(request), writer)
+            head, response_body = bytes(writer.buffer).split(b"\r\n\r\n", 1)
+            self.assertIn(f"HTTP/1.1 {status}".encode(), head)
+            payload = json.loads(response_body)
+            self.assertEqual(payload["code"], exc.code)
+            self.assertEqual(payload["error"], str(exc))
+
+    async def test_interrupt_errors_map_to_404_409_400(self):
+        from agent_collab.resume import InterruptError
+
+        manager = mock.Mock()
+        server = AgentCollabHttpServer(manager=manager)
+        cases = (
+            (InterruptError("not_found", "unknown session_id 's1'"), 404),
+            (InterruptError("conflict", "no in-flight turn to interrupt"), 409),
+            (
+                InterruptError("unsupported", "interrupt is unsupported for in-flight agents: x"),
+                400,
+            ),
+        )
+        for exc, status in cases:
+            manager.interrupt_session = mock.AsyncMock(side_effect=exc)
+            writer = _CaptureWriter()
+            body = b"{}"
+            request = (
+                b"POST /sessions/s1/interrupt HTTP/1.1\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode()
+                + body
+            )
+            await server._handle_connection(_request_reader(request), writer)
+            head, response_body = bytes(writer.buffer).split(b"\r\n\r\n", 1)
+            self.assertIn(f"HTTP/1.1 {status}".encode(), head)
+            payload = json.loads(response_body)
+            self.assertEqual(payload["code"], exc.code)
+            self.assertEqual(payload["error"], str(exc))
+
+
 if __name__ == "__main__":
     unittest.main()

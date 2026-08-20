@@ -27,6 +27,7 @@ from agent_collab.api_schema import (
     AgentAnswerModel,
     ApprovalDecisionRequestModel,
     ApprovalDecisionResponseModel,
+    InterruptSessionRequestModel,
     DaemonReadinessModel,
     EventBatchModel,
     EventModel,
@@ -38,6 +39,7 @@ from agent_collab.api_schema import (
     PruneResultModel,
     PruneSessionsRequestModel,
     ReadEventsRequestModel,
+    ResumeSessionRequestModel,
     SessionListModel,
     SessionResultModel,
     SessionStateModel,
@@ -545,6 +547,8 @@ class ModelRoundTripTests(unittest.TestCase):
             (TranscriptRequestModel, {"tool_output": "full"}),
             (PruneSessionsRequestModel, {}),
             (PruneSessionsRequestModel, {"apply": True, "older_than": "7d", "keep": 3}),
+            (ResumeSessionRequestModel, {}),
+            (InterruptSessionRequestModel, {}),
         ]
         for model, payload in cases:
             with self.subTest(model=model.__name__, payload=payload):
@@ -617,6 +621,14 @@ class ModelRoundTripTests(unittest.TestCase):
         for value in ("eventually", "", 3, True):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 OptionsRequestModel.from_dict({"workdir": "/w", "model_refresh": value})
+
+    def test_resume_and_interrupt_requests_reject_unknown_fields(self):
+        with self.assertRaisesRegex(ValueError, "unknown resume field 'bogus'"):
+            ResumeSessionRequestModel.from_dict({"bogus": True})
+        with self.assertRaisesRegex(ValueError, "unknown interrupt field 'bogus'"):
+            InterruptSessionRequestModel.from_dict({"bogus": True})
+        self.assertEqual(ResumeSessionRequestModel.from_dict({}).to_dict(), {})
+        self.assertEqual(InterruptSessionRequestModel.from_dict({}).to_dict(), {})
 
     def test_prune_request_rejects_bad_input(self):
         for payload in (

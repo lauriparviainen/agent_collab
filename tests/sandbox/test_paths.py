@@ -230,6 +230,11 @@ class AliasAuditTests(unittest.TestCase):
         access: PathAccess,
         origin: PathOrigin,
     ) -> MountOperation:
+        # mkdtemp() inherits the caller's umask (0775 at 002). The production
+        # writable-path guard fail-closes on group/world-writable dests; chmod
+        # here so the assertion under test is reached without weakening it.
+        if access is PathAccess.WRITABLE:
+            path.chmod(0o700)
         return MountOperation(
             path,
             path,
