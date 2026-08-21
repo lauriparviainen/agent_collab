@@ -128,22 +128,31 @@ hostnames.
 
 ### Leftover flags (independent of close)
 
-| Leftover | Blocker |
-|---|---|
-| `xai_sdk.resume` | Close still deletes stored completions. Flip only after retain-on-close plus credentialed reload proof. |
-| `xai_sdk.interrupt` / `tool_gate` | Permanent. Unary `GetCompletion`; no host permission callback. |
-| All CLI `interrupt` / `tool_gate` | Permanent. One-shot print transports. |
-| CLI `continuity` / `resume` | This campaign skips outer-sandbox live MCP. Codex CLI first ordinary turn `subprocess_exit_nonzero`. |
-| `codex_sdk.tool_gate` | Worker parks unproven; inner `danger-full-access`; nested Bubblewrap cannot create a user namespace. |
+Opened as sub-issues of [#20](https://github.com/lauriparviainen/agent_collab/issues/20) after close. Do not flip from the recorded-negative evaluation issues.
+
+| Leftover | Blocker | Issue |
+|---|---|---|
+| `xai_sdk.resume` | Close still deletes stored completions. Flip only after retain-on-close plus credentialed reload proof. | [#73](https://github.com/lauriparviainen/agent_collab/issues/73) |
+| `xai_sdk.interrupt` / `tool_gate` | Permanent until re-evaluated. Unary `GetCompletion`; no host permission callback. | [#64](https://github.com/lauriparviainen/agent_collab/issues/64) |
+| All CLI `interrupt` / `tool_gate` | Permanent until re-evaluated. One-shot print transports. | [#64](https://github.com/lauriparviainen/agent_collab/issues/64) |
+| CLI `continuity` / `resume` | This campaign skipped outer-sandbox live MCP. Codex CLI first ordinary turn `subprocess_exit_nonzero`. | [#72](https://github.com/lauriparviainen/agent_collab/issues/72) |
+| `codex_sdk.tool_gate` | Worker parks unproven; inner `danger-full-access`; nested Bubblewrap cannot create a user namespace. | [#74](https://github.com/lauriparviainen/agent_collab/issues/74) |
 
 **Q4 trajectory retention.** `{AGENT_COLLAB_HOME}/trajectories/{session_id}`
 outlives the session; no sweeper. Opened at #20 close as
-[#63](https://github.com/lauriparviainen/agent_collab/issues/63). Does not
-flip leftover flags. Runner/backend dedup and default-sandbox
-`outer_sandbox_path_permissions` DX stay unopened unless asked.
+[#63](https://github.com/lauriparviainen/agent_collab/issues/63).
 
-Q3 (expired Antigravity id), Q7 (CLI version floors), and Q8 (Grok
-`--session-id`) stay recorded follow-ups, not close blockers.
+Other leftover sub-issues: `antigravity_sdk` host-unrunnable
+[#65](https://github.com/lauriparviainen/agent_collab/issues/65) (flags stay
+true; do not unflip); Q3 expired Antigravity id
+[#66](https://github.com/lauriparviainen/agent_collab/issues/66); Q7 CLI
+version floors [#67](https://github.com/lauriparviainen/agent_collab/issues/67);
+Q8 Grok `--session-id`
+[#68](https://github.com/lauriparviainen/agent_collab/issues/68); default-sandbox
+`outer_sandbox_path_permissions` DX
+[#69](https://github.com/lauriparviainen/agent_collab/issues/69); runner/backend
+dedup [#70](https://github.com/lauriparviainen/agent_collab/issues/70); Q9/Q10
+live park tails [#71](https://github.com/lauriparviainen/agent_collab/issues/71).
 
 ### MCP campaign leftover log (2026-08-20)
 
@@ -207,15 +216,15 @@ logged below. `claude-agent-sdk` floor is `0.2.143` / bundled CLI 2.1.238
 | S10 | Resume/interrupt HTTP `from_dict` swallowed unknown fields. | **Fixed** `21a5dd5`. Unknown keys 400; route tests in `tests/test_server_http.py`. |
 | teardown | Graceful daemon restart of a parked live wait published `failed` / `referee_cancelled_unexpected`, so restore could not map to `interrupted`. | **Fixed** `7b80570`. Cancel of a live wait without `stop_session` leaves the live status; restore maps it to `interrupted`. Proven on `codex_sdk` cell 2 and `claude_sdk` cell 1. |
 
-**Follow-up issue text (open when #20 closes / do not open unless asked).**
-Runner/backend dedup from the 2026-08-20 synthesis §4: one
-`WorkerBackedSdkRunner` mixin (~383 identical lines across
+**Follow-up issues (opened after #20 close; linked as sub-issues).**
+Runner/backend dedup is [#70](https://github.com/lauriparviainen/agent_collab/issues/70):
+one `WorkerBackedSdkRunner` mixin (~383 identical lines across
 Claude/Codex/Antigravity SDK runners), one `park_in_process` helper, and
 moving `_BINARY_IDENTITY` / `_STATE_ROOT_KIND` / `_VERSION_FLOORS` onto
-backend objects. Not a close precondition. D7 stays the documented
-CLI-continuity divergence (flag gating deferred to the CLI-continuity
-leftover-flag PR). Default-sandbox `outer_sandbox_path_permissions` DX
-is a separate small issue; do not open unless asked.
+backend objects. D7 stays the documented CLI-continuity divergence; flag
+gating is [#72](https://github.com/lauriparviainen/agent_collab/issues/72).
+Default-sandbox `outer_sandbox_path_permissions` DX is
+[#69](https://github.com/lauriparviainen/agent_collab/issues/69).
 
 Advertised `claude_sdk` forks ran over MCP after host login: restart-safe
 resume (cell 1, worker `sandbox=read-only`), interrupt (cell 3, worker),
@@ -1825,7 +1834,9 @@ the feature. A skipped provider keeps the production capability false.
    record but does not itself close this question. Production
    `antigravity_sdk.interrupt` is therefore true.
 3. Antigravity's unknown/expired-id rejection has never been exercised against a
-   live provider — only the documented `RESUME` contract backs it. (Stage 4)
+   live provider — only the documented `RESUME` contract backs it.
+   Opened as [#66](https://github.com/lauriparviainen/agent_collab/issues/66).
+   (Stage 4)
 4. What retention policy governs durable trajectory roots once they outlive the
    session? **Recorded 2026-08-17.** Increment 3 made Antigravity SDK
    trajectories host-persistent and session-keyed
@@ -1882,11 +1893,13 @@ the feature. A skipped provider keeps the production capability false.
    resume builders? `antigravity_cli` is decided at `agy >= 1.1.8` and that
    floor is the only `version_floor` written into the resume fingerprint.
    Claude, Codex, and Grok floors were not re-verified in increment 4 and
-   were not invented. (Stage 4)
+   were not invented. Opened as
+   [#67](https://github.com/lauriparviainen/agent_collab/issues/67). (Stage 4)
 8. Grok's current documentation describes `--session-id` differently from the
    installed 0.2.112 help, which says it creates a new session and must not
    already exist. Re-verify on upgrade; use explicit `--resume`, never
-   `--session-id`, for the current pin. (Stage 4)
+   `--session-id`, for the current pin. Opened as
+   [#68](https://github.com/lauriparviainen/agent_collab/issues/68). (Stage 4)
 9. Do the provider SDKs or their bundled CLIs hold their own decision deadline
    on a pending permission callback? If one does, excluding parked time from
    agent-collab's turn clock is cosmetic beyond that bound; each SDK
@@ -1912,7 +1925,8 @@ the feature. A skipped provider keeps the production capability false.
    **xAI: no callback timer because there is no callback.**
    Do not invent a park deadline. `tool_gate` stays false
    because there is no host permission surface, not because
-   of clocks. (Stage 3)
+   of clocks. Live Q9/Q10 tails opened as
+   [#71](https://github.com/lauriparviainen/agent_collab/issues/71). (Stage 3)
 10. Can each SDK fire multiple permission callbacks concurrently within one
     turn, or are they serialized? The plural `pending_approvals` surface
     assumes concurrency is possible. **Claude: keep the list; implement
