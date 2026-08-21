@@ -180,8 +180,9 @@ Four independent read-only reviews of the branch were reconciled on
 2026-08-20. The documentation half landed at `ba130d9`. The runtime half
 below is now closed on this branch. Campaign cells from 2026-08-21 are
 logged below. `claude-agent-sdk` floor is `0.2.143` / bundled CLI 2.1.238
-(`15dcacf`); the `claude_sdk` advertised forks still fail host OAuth
-(`loggedIn=false`). Do not close #20 from this pass.
+(`15dcacf`). After host `claude auth login`, `claude_sdk` resume,
+interrupt, and `tool_gate` park ran over MCP. Do not close #20 from
+this pass.
 
 | # | Defect | Status |
 |---|---|---|
@@ -198,16 +199,16 @@ logged below. `claude-agent-sdk` floor is `0.2.143` / bundled CLI 2.1.238
 | S5 | Failed `_reopen_for_resume` could persist `running`. | **Fixed** `c160bfe` / `377cbce`. Roll back when the new task was not spawned, including when a prior done task object is still attached. |
 | S6 | Approve delivered before claim could report `stale`. | **Fixed** `c160bfe`. `take_pending` before `_send_worker_decision`. |
 | S10 | Resume/interrupt HTTP `from_dict` swallowed unknown fields. | **Fixed** `21a5dd5`. Unknown keys 400; route tests in `tests/test_server_http.py`. |
-| teardown | Graceful daemon restart of a parked live wait published `failed` / `referee_cancelled_unexpected`, so restore could not map to `interrupted`. | **Fixed** `7b80570`. Cancel of a live wait without `stop_session` leaves the live status; restore maps it to `interrupted`. Proven on `codex_sdk` cell 2. |
+| teardown | Graceful daemon restart of a parked live wait published `failed` / `referee_cancelled_unexpected`, so restore could not map to `interrupted`. | **Fixed** `7b80570`. Cancel of a live wait without `stop_session` leaves the live status; restore maps it to `interrupted`. Proven on `codex_sdk` cell 2 and `claude_sdk` cell 1. |
 
 **Follow-up issue text (do not open unless asked).** Runner/backend dedup from the 2026-08-20 synthesis §4: one `WorkerBackedSdkRunner` mixin (~383 identical lines across Claude/Codex/Antigravity SDK runners), one `park_in_process` helper, and moving `_BINARY_IDENTITY` / `_STATE_ROOT_KIND` / `_VERSION_FLOORS` onto backend objects. Not a close precondition.
 
-Not yet driven over MCP: `claude_sdk` restart-safe resume, advertised
-interrupt, and `tool_gate` park (retried after `15dcacf`; still blocked
-by host OAuth — no live tokens). `codex_sdk` resume and interrupt,
-`xai_sdk` fail-closed interrupt, and mock smoke ran 2026-08-21. The
-2026-08-20 CLI table harvest column stays `unlogged`; a new `claude_cli`
-harvest cell is logged below.
+Advertised `claude_sdk` forks are now driven over MCP after host login
+(resume, interrupt, `tool_gate` park on both worker and in-process).
+`codex_sdk` resume and interrupt, `xai_sdk` fail-closed interrupt, mock
+smoke, and `claude_cli` harvest also ran 2026-08-21. The 2026-08-20 CLI
+table harvest column stays `unlogged` except the new `claude_cli` cell
+below. Leftover flags unchanged. Do not close #20 from this pass.
 
 ### MCP campaign leftover log (2026-08-21)
 
@@ -221,13 +222,13 @@ Public-content only.
 | # | Cell | Observed |
 |---|---|---|
 | 0 | mock smoke, `workflow=solo`, `mock=true`, `sandbox=read-only`, `interactive=true` | start accepted; `wait_result` settled `status=awaiting_input` `terminal=false`; turn `completed`; backend `mock`. Explicitly **not** a control-loop proof. |
-| 1 | `claude_sdk` sonnet/`thinking_level=low`, `interactive=true`, `sandbox=read-only`, restart-safe resume | First sitting: start accepted; harvest `status=failed`; `code=provider_terminal_failure`; turn `failed`; event `authentication_failed` (OAuth session expired, refresh failed). After `15dcacf` (`claude-agent-sdk` 0.2.143 / bundled CLI 2.1.238, durable venv isolated import, daemon restart): start accepted (`enforcement=os_enforced`); harvest `status=failed`; same `code` / `authentication_failed`. Host `claude auth status` is `loggedIn=false` / `authMethod=none`; credentials file has no live access or refresh token. Host-auth leftover, not an SDK-pin bug. Cells 3 and 5 not started on the same missing credential. |
+| 1 | `claude_sdk` sonnet/`thinking_level=low`, `interactive=true`, `sandbox=read-only`, restart-safe resume | First sittings: start accepted; harvest `status=failed`; `code=provider_terminal_failure`; event `authentication_failed` (no live OAuth tokens; host `loggedIn=false`). After host `claude auth login` (`loggedIn=true`, `authMethod=claude.ai`): start accepted (`enforcement=os_enforced`); turn-1 `completed` park `awaiting_input` `resumable=true` `last_turn_status=completed` → daemon restart → `status=interrupted` `resumable=true` → `agent_collab_resume` accepted (`backend_summary.version=0.2.143`) → `wait_result` `awaiting_input` (original task not re-emitted; still one completed turn) → `post_message` → harvest turn-2 `completed` on the same provider session id; `prompt_event_cursor` advanced. Flags unchanged. |
 | 2 | `codex_sdk` gpt-5.6-luna/`thinking_level=low`, `interactive=true`, `sandbox=none`, restart-safe resume | First park→daemon-restart attempt (pre-`7b80570`) harvested `status=failed` `code=referee_cancelled_unexpected` instead of `interrupted`. After the teardown fix and reinstall: park `awaiting_input` turn `completed` → daemon restart → `status=interrupted` `resumable=true` `last_turn_status=completed` → `agent_collab_resume` accepted → `wait_result` `awaiting_input` (original task not re-emitted; still one completed turn) → `post_message` → harvest turn-2 `completed` on the same provider thread. Outer Bubblewrap disabled (`sandbox=none`). Flags unchanged. |
 | 4 | `codex_sdk` gpt-5.6-luna/`thinking_level=low`, `interactive=true`, `sandbox=none`, interrupt | start accepted; in-flight `agent_collab_interrupt` → `status=awaiting_input`; turn-1 `interrupted` / `local_turn_interrupted`; `interrupt.provider_acknowledged=true` `fallback_cancelled=false`; `post_message` accepted; harvest turn-2 `completed` on the same provider thread. Remaining planned stages abandoned (`completed_stages=0`). Flags unchanged. |
 | 6 | `xai_sdk` grok-4.6/`thinking_level=low`, `interactive=true`, `sandbox=read-only`, fail-closed interrupt | start accepted (`enforcement=not_applicable_no_local_effects`); in-flight interrupt → `code=unsupported` naming `xai_sdk (xai_sdk)`; no mutation (`status=running`, `interrupt` unset, `last_turn_status=in_flight`). Recorded negative. Flags unchanged. |
-| 3 | `claude_sdk` interrupt | **unrun** this sitting: same host OAuth gap as cell 1 retry. Not a leftover-flag skip. |
-| 5 | `claude_sdk` tool_gate park | **unrun** this sitting: same host OAuth gap as cell 1 retry. Not a leftover-flag skip. Do not run `codex_sdk` tool_gate (flag false). |
-| 7 | `claude_cli` sonnet/`thinking_level=low`, `sandbox=read-only`, harvest honesty | start accepted (`enforcement=os_enforced`); harvest `status=failed`; `code=provider_terminal_failure`; `process_exit_code=1`; event `authentication_failed` (OAuth session expired). Host-auth leftover, not resume proof. |
+| 3 | `claude_sdk` sonnet/`thinking_level=low`, `interactive=true`, `sandbox=read-only`, interrupt | start accepted (`enforcement=os_enforced`); in-flight `agent_collab_interrupt` → `status=awaiting_input`; turn-1 `interrupted` / `local_turn_interrupted`; `interrupt.provider_acknowledged=true` `fallback_cancelled=false`; `last_turn_status=interrupted` `resumable=false` (completed-only); remaining planned stages abandoned (`completed_stages=0`); `post_message` accepted; harvest turn-2 `completed` on the same provider session id. Flags unchanged. |
+| 5 | `claude_sdk` tool_gate park | Worker `sandbox=read-only`: `permission_mode=default` auto-allowed `Read` and `Bash` (`uname -s`) with no `approval_request` (allow, not a callback skip). A workspace `Write` that the model actually issued parked: `status=awaiting_approval`, `tool_name=Write`, request id present; `agent_collab_approval` deny → `outcome=denied` `status=ok` with `worker_instance` set; `approval_resolved`; turn `completed`. In-process `sandbox=none`: same `Write` park + deny (`worker_instance=null`, `execution_path=sdk-inprocess`); turn `completed`. Do not run `codex_sdk` tool_gate (flag false). Flags unchanged. |
+| 7 | `claude_cli` sonnet/`thinking_level=low`, `interactive=true`, `sandbox=read-only`, harvest honesty | First sitting: start accepted; harvest `authentication_failed`. After host login: start accepted (`enforcement=os_enforced`, `interruptible=false`); `wait_result` `awaiting_input` `terminal=false`; turn `completed`; `process_exit_code=0`. Harvest honesty only; not CLI resume/continuity proof. Flags unchanged. |
 
 **Corrections for the credentialed cells still to run.**
 
