@@ -1815,11 +1815,13 @@ class SessionManager:
                 await self._set_status(managed, DONE)
         except asyncio.CancelledError:
             # Explicit stop has one publisher: stop_session, after this task
-            # settles. A cancellation without that registered cause is a
-            # canonical daemon failure.
+            # settles. Daemon teardown of a live wait must not publish failed:
+            # restore maps remaining live statuses to interrupted. A bare
+            # cancel of a non-live session is still a canonical failure.
             if not managed.stop_signal.session_stopping():
-                failure = SessionFailure(code="referee_cancelled_unexpected")
-                await self._set_status(managed, FAILED, failure=failure)
+                if managed.state.status not in LIVE_WAIT_STATUSES:
+                    failure = SessionFailure(code="referee_cancelled_unexpected")
+                    await self._set_status(managed, FAILED, failure=failure)
         except RequiredTurnFailed as exc:
             await self._set_status(managed, FAILED, failure=exc.failure)
         except ParallelStageFailed as exc:

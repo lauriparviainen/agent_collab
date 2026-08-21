@@ -13,6 +13,10 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Leave a parked live wait intact when the session task is cancelled
+  without an explicit stop, so a daemon restart restores `interrupted`
+  instead of publishing `failed` / `referee_cancelled_unexpected` (#20).
+
 - Close the session-control runtime defects from the 2026-08-20 review:
   resume clears stale `stop`/`interrupt` and projects `resumable=false` on
   `done`/`failed`; `agent-collab approval` exits 1 on

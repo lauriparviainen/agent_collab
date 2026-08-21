@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 from datetime import datetime, timedelta, timezone
 import os
 import re
@@ -617,6 +618,43 @@ class ResumeClaimTests(unittest.IsolatedAsyncioTestCase):
             hang.set()
             if managed.task is not None:
                 await managed.task
+
+    async def test_cancelled_parked_session_stays_live_for_restore_interrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            index_path = root / "index.json"
+            manager = SessionManager(index_path=index_path, default_workdir=root)
+            state = await manager.start_session(
+                StartSessionRequest(
+                    task="park",
+                    mock=True,
+                    max_turns=1,
+                    timeout=5,
+                    workdir=root,
+                    interactive=True,
+                    interactive_idle_timeout=30,
+                )
+            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 2
+            while loop.time() < deadline:
+                current = manager.get_session(state.session_id)
+                if current.status == "awaiting_input":
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                self.fail("session did not reach awaiting_input")
+            managed = manager._sessions[state.session_id]
+            self.assertIsNotNone(managed.task)
+            managed.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await managed.task
+            parked = manager.get_session(state.session_id)
+            self.assertEqual(parked.status, "awaiting_input")
+            self.assertIsNone(parked.failure)
+            second = SessionManager(index_path=index_path, default_workdir=root)
+            restored = second.get_session(state.session_id)
+            self.assertEqual(restored.status, "interrupted")
 
     async def test_live_session_resume_is_conflict(self):
         with tempfile.TemporaryDirectory() as tmp:
