@@ -1,16 +1,18 @@
 # Provider session control: interrupt, tool approval, restart-safe resume
 
-**Status:** Open. Stages 1–4 shipped. Production flags as of leftover
-2026-08-18: `claude_sdk` and `antigravity_sdk` have continuity, resume,
-interrupt, and tool_gate all true. `codex_sdk` has continuity, resume, and
-interrupt true; `tool_gate` stays false. `xai_sdk` has continuity only;
-resume stays false (close deletes stored completions); interrupt and
-tool_gate are recorded negatives. All CLI `continuity`, `resume`,
-`interrupt`, and `tool_gate` flags are false; CLI interrupt and tool_gate
-are recorded negatives. Remaining work is guidance unslop, an MCP
-experiential campaign after `./agent_collab.sh install`, and leftover
-honesty — not a Stage 5 protocol. Leftover flag flips are independent
-follow-ups, not close preconditions.
+**Status:** Open until the user says close. Stages 1–4 shipped.
+Production flags as of leftover 2026-08-18: `claude_sdk` and
+`antigravity_sdk` have continuity, resume, interrupt, and tool_gate all
+true. `codex_sdk` has continuity, resume, and interrupt true;
+`tool_gate` stays false. `xai_sdk` has continuity only; resume stays
+false (close deletes stored completions); interrupt and tool_gate are
+recorded negatives. All CLI `continuity`, `resume`, `interrupt`, and
+`tool_gate` flags are false; CLI interrupt and tool_gate are recorded
+negatives. Guidance unslop landed. The MCP campaign leftover is recorded
+(2026-08-20 CLI interrupt/resume rows; 2026-08-21 cells 0–7). Close bar
+(campaign + unslop + leftover honesty) is met on this branch; leftover
+flag flips remain independent follow-ups. Recorded negatives stay false.
+Not a Stage 5 protocol.
 
 Design resynced 2026-07-30 against 0.13.0,
 which made the outer read-only Bubblewrap worker the default execution path and
@@ -33,22 +35,23 @@ and SDK backends.
 (#47) built the substrate. [antigravity-read-only-bubblewrap-sandbox.md](../tasks_closed/antigravity-read-only-bubblewrap-sandbox.md)
 (#43) built the worker boundary.
 
-## Completion — remaining work (2026-08-19)
+## Completion — close bar (2026-08-19; leftover 2026-08-21)
 
 Stages 1–4 are settled substrate. Treat the body below as implemented
 rather than re-deriving it. This is not Stage 5: do not invent protocol,
 eligibility, clocks, or public operations, and do not add `wait_approval`
-or `list_approvals`. Remaining work is three workstreams:
+or `list_approvals`. The three close-bar workstreams are recorded:
 
-1. **Guidance unslop** — rewrite `mcp-guidance.md` so each required
-   contract has exactly one `##` owner. Pin tests at contracts, not
-   ornamental sentences.
-2. **MCP experiential campaign** — after `./agent_collab.sh install`,
-   drive campaign-reachable backends through MCP tool calls to the
-   installed user daemon. Not in-process `SessionManager` IT.
+1. **Guidance unslop** — landed. `mcp-guidance.md` owns each required
+   contract once. Tests pin contracts, not ornamental sentences.
+2. **MCP experiential campaign** — recorded 2026-08-20/21 against the
+   installed user daemon. Do not re-run as if unstarted. Advertised
+   `claude_sdk` forks ran over MCP after host login (resume, interrupt,
+   `tool_gate` park). Not in-process `SessionManager` IT.
 3. **Leftover honesty** — keep recorded negatives false; keep blocked
    flags false until both-path proof exists; record campaign findings
-   without transcript dumps.
+   without transcript dumps. Do not describe advertised Claude forks as
+   unrun.
 
 **Close bar (user-confirmed 2026-08-19).** #20 closes after the MCP
 campaign + guidance unslop + leftover honesty even if CLI
@@ -96,9 +99,12 @@ Then mock smoke, then backends in turn through MCP only. Fork sessions
 (interrupt / tool_gate / resume): do not combine an advertised-interrupt
 park with tool_gate or resume on the same session. Skip CLI
 outer-sandbox live MCP this campaign (do not set
-`AGENT_COLLAB_IT_*_SANDBOX_STATE`). If this host cannot run
-`antigravity_sdk` (glibc/Vertex), skip those MCP cells without
-unflipping. Close comment lists skipped cells.
+`AGENT_COLLAB_IT_*_SANDBOX_STATE`). `antigravity_sdk` on this host is a
+host-unrunnable leftover (start accepted; harvest
+`code=provider_transport_failed`), not an unrun skip; do not unflip.
+Close comment lists skipped cells: CLI outer-sandbox live MCP;
+`codex_sdk.tool_gate` (flag false); 2026-08-20 CLI harvest unlogged
+except `claude_cli`; `xai_sdk.resume` recorded negative.
 
 Fail-closed interrupt (`code=unsupported` when any in-flight backend
 does not advertise interrupt) lands before the campaign; do not start
@@ -116,7 +122,7 @@ sandboxes → `xai_sdk` → `antigravity_sdk` last.
 | **guidance gap** | Required contract missing or unusable. | Fix guidance; re-pin tests. |
 | **guidance slop** | Duplicated, hedged, or restated. | Cut or cross-ref. |
 | **recorded negative** | Flag is false for a documented technical reason. Leave false. | Note in leftover log; not a close blocker. |
-| **leftover flag still blocked** | Proof still missing (CLI outer sandbox, Codex CLI first turn, xAI retain-on-close, Codex worker parks, Antigravity host). | Independent PR later; not a close blocker. List skipped cells. |
+| **leftover flag still blocked** | Proof still missing (CLI outer sandbox, Codex CLI first turn, xAI retain-on-close, Codex worker parks). `antigravity_sdk` MCP cells are host-unrunnable leftover; production flags already true. | Independent PR later; not a close blocker. List skipped cells. |
 
 Public-content: describe evidence (status, failure codes, flags, park
 observed / not observed). Do not paste transcripts, prompts, tokens, or
@@ -135,7 +141,12 @@ hostnames.
 **Q4 trajectory retention.** `{AGENT_COLLAB_HOME}/trajectories/{session_id}`
 outlives the session; no sweeper. Do not invent a sweeper now. Keep
 recorded-undecided. Open a small GitHub follow-up issue for the
-retention policy when #20 closes. Does not block #20.
+retention policy when #20 closes / do not open unless asked. Does not
+block #20. Draft (issue-only): title “Decide retention for durable
+Antigravity SDK trajectories”; labels `enhancement`, `daemon`,
+`backends`; Done when the keep-vs-delete policy is written, never-live
+rollback still removes the HOST root, and a still-retained resume can
+reopen the same `save_dir`.
 
 Q3 (expired Antigravity id), Q7 (CLI version floors), and Q8 (Grok
 `--session-id`) stay recorded follow-ups, not close blockers.
@@ -143,7 +154,9 @@ Q3 (expired Antigravity id), Q7 (CLI version floors), and Q8 (Grok
 ### MCP campaign leftover log (2026-08-20)
 
 CLI MCP against the installed user daemon. Low reasoning. Flags unchanged.
-Harvest is `unlogged` for every row below: no CLI cell harvested a turn. Every
+Harvest was unlogged on 2026-08-20: no CLI cell that day harvested a turn.
+Interrupt/resume rows below still stand. Only `claude_cli` harvest is logged
+later (2026-08-21 cell 7); other CLI harvests remain unlogged. Every
 `sandbox=none` row ran with the outer Bubblewrap barrier disabled — the agent
 saw the real workdir under provider-native limits only.
 
@@ -170,7 +183,7 @@ the outer Bubblewrap barrier disabled.
 | `xai_sdk` grok-4.6/`thinking_level=low`, `sandbox=read-only` | accepted (`enforcement=not_applicable_no_local_effects`) | `status=done`; turn `completed`; `provider_stop_reason=STOP` |
 | `xai_sdk` `sandbox=none` | not required | — |
 | `antigravity_sdk` gemini-3.5-flash-low, `sandbox=read-only` | accepted | `status=failed`; `code=provider_transport_failed`; exception `AntigravityValidationError` |
-| `antigravity_sdk` gemini-3.5-flash-low, `sandbox=none` | accepted | `status=failed`; `code=provider_transport_failed`; in-process named missing Gemini API key |
+| `antigravity_sdk` gemini-3.5-flash-low, `sandbox=none` | accepted | `status=failed`; `code=provider_transport_failed` |
 
 `antigravity_sdk` both cells host-unrunnable leftover, not unrun skips (start accepted; harvest `status=failed` / `code=provider_transport_failed`). Flags unchanged. Q4 not opened; #20 stays open.
 
@@ -180,9 +193,8 @@ Four independent read-only reviews of the branch were reconciled on
 2026-08-20. The documentation half landed at `ba130d9`. The runtime half
 below is now closed on this branch. Campaign cells from 2026-08-21 are
 logged below. `claude-agent-sdk` floor is `0.2.143` / bundled CLI 2.1.238
-(`15dcacf`). After host `claude auth login`, `claude_sdk` resume,
-interrupt, and `tool_gate` park ran over MCP. Do not close #20 from
-this pass.
+(`15dcacf`). After host login, `claude_sdk` resume, interrupt, and
+`tool_gate` park ran over MCP. Do not close #20 from this pass.
 
 | # | Defect | Status |
 |---|---|---|
@@ -201,14 +213,27 @@ this pass.
 | S10 | Resume/interrupt HTTP `from_dict` swallowed unknown fields. | **Fixed** `21a5dd5`. Unknown keys 400; route tests in `tests/test_server_http.py`. |
 | teardown | Graceful daemon restart of a parked live wait published `failed` / `referee_cancelled_unexpected`, so restore could not map to `interrupted`. | **Fixed** `7b80570`. Cancel of a live wait without `stop_session` leaves the live status; restore maps it to `interrupted`. Proven on `codex_sdk` cell 2 and `claude_sdk` cell 1. |
 
-**Follow-up issue text (do not open unless asked).** Runner/backend dedup from the 2026-08-20 synthesis §4: one `WorkerBackedSdkRunner` mixin (~383 identical lines across Claude/Codex/Antigravity SDK runners), one `park_in_process` helper, and moving `_BINARY_IDENTITY` / `_STATE_ROOT_KIND` / `_VERSION_FLOORS` onto backend objects. Not a close precondition.
+**Follow-up issue text (open when #20 closes / do not open unless asked).**
+Runner/backend dedup from the 2026-08-20 synthesis §4: one
+`WorkerBackedSdkRunner` mixin (~383 identical lines across
+Claude/Codex/Antigravity SDK runners), one `park_in_process` helper, and
+moving `_BINARY_IDENTITY` / `_STATE_ROOT_KIND` / `_VERSION_FLOORS` onto
+backend objects. Not a close precondition. D7 stays the documented
+CLI-continuity divergence (flag gating deferred to the CLI-continuity
+leftover-flag PR). Default-sandbox `outer_sandbox_path_permissions` DX
+is a separate small issue; do not open unless asked.
 
-Advertised `claude_sdk` forks are now driven over MCP after host login
-(resume, interrupt, `tool_gate` park on both worker and in-process).
-`codex_sdk` resume and interrupt, `xai_sdk` fail-closed interrupt, mock
-smoke, and `claude_cli` harvest also ran 2026-08-21. The 2026-08-20 CLI
-table harvest column stays `unlogged` except the new `claude_cli` cell
-below. Leftover flags unchanged. Do not close #20 from this pass.
+Advertised `claude_sdk` forks ran over MCP after host login: restart-safe
+resume (cell 1, worker `sandbox=read-only`), interrupt (cell 3, worker),
+`tool_gate` park (cell 5, worker Write park+deny and in-process Write
+park+deny). Do not describe those forks as unrun. `codex_sdk` resume and
+interrupt ran `sandbox=none` only (cells 2, 4). Also ran: mock (0),
+`xai_sdk` fail-closed interrupt (6), `claude_cli` harvest honesty (7).
+2026-08-20 CLI interrupt/resume rows stand; only `claude_cli` harvest is
+now logged. `antigravity_sdk` remains the 2026-08-20 host-unrunnable
+leftover, not an unrun skip. `codex_sdk.tool_gate` was not run (flag
+false). CLI outer-sandbox live MCP skipped this campaign. Leftover flags
+unchanged. Do not close #20 from this pass.
 
 ### MCP campaign leftover log (2026-08-21)
 
@@ -222,33 +247,37 @@ Public-content only.
 | # | Cell | Observed |
 |---|---|---|
 | 0 | mock smoke, `workflow=solo`, `mock=true`, `sandbox=read-only`, `interactive=true` | start accepted; `wait_result` settled `status=awaiting_input` `terminal=false`; turn `completed`; backend `mock`. Explicitly **not** a control-loop proof. |
-| 1 | `claude_sdk` sonnet/`thinking_level=low`, `interactive=true`, `sandbox=read-only`, restart-safe resume | First sittings: start accepted; harvest `status=failed`; `code=provider_terminal_failure`; event `authentication_failed` (no live OAuth tokens; host `loggedIn=false`). After host `claude auth login` (`loggedIn=true`, `authMethod=claude.ai`): start accepted (`enforcement=os_enforced`); turn-1 `completed` park `awaiting_input` `resumable=true` `last_turn_status=completed` → daemon restart → `status=interrupted` `resumable=true` → `agent_collab_resume` accepted (`backend_summary.version=0.2.143`) → `wait_result` `awaiting_input` (original task not re-emitted; still one completed turn) → `post_message` → harvest turn-2 `completed` on the same provider session id; `prompt_event_cursor` advanced. Flags unchanged. |
+| 1 | `claude_sdk` sonnet/`thinking_level=low`, `interactive=true`, `sandbox=read-only`, restart-safe resume | First sittings: start accepted; harvest `status=failed`; `code=provider_terminal_failure`; event `authentication_failed`. After host login: start accepted (`enforcement=os_enforced`); turn-1 `completed` park `awaiting_input` `resumable=true` `last_turn_status=completed` → daemon restart → `status=interrupted` `resumable=true` → `agent_collab_resume` accepted (`backend_summary.version=0.2.143`) → `wait_result` `awaiting_input` (original task not re-emitted; still one completed turn) → `post_message` → harvest turn-2 `completed` on the same provider session id; `prompt_event_cursor` advanced. Flags unchanged. |
 | 2 | `codex_sdk` gpt-5.6-luna/`thinking_level=low`, `interactive=true`, `sandbox=none`, restart-safe resume | First park→daemon-restart attempt (pre-`7b80570`) harvested `status=failed` `code=referee_cancelled_unexpected` instead of `interrupted`. After the teardown fix and reinstall: park `awaiting_input` turn `completed` → daemon restart → `status=interrupted` `resumable=true` `last_turn_status=completed` → `agent_collab_resume` accepted → `wait_result` `awaiting_input` (original task not re-emitted; still one completed turn) → `post_message` → harvest turn-2 `completed` on the same provider thread. Outer Bubblewrap disabled (`sandbox=none`). Flags unchanged. |
 | 4 | `codex_sdk` gpt-5.6-luna/`thinking_level=low`, `interactive=true`, `sandbox=none`, interrupt | start accepted; in-flight `agent_collab_interrupt` → `status=awaiting_input`; turn-1 `interrupted` / `local_turn_interrupted`; `interrupt.provider_acknowledged=true` `fallback_cancelled=false`; `post_message` accepted; harvest turn-2 `completed` on the same provider thread. Remaining planned stages abandoned (`completed_stages=0`). Flags unchanged. |
 | 6 | `xai_sdk` grok-4.6/`thinking_level=low`, `interactive=true`, `sandbox=read-only`, fail-closed interrupt | start accepted (`enforcement=not_applicable_no_local_effects`); in-flight interrupt → `code=unsupported` naming `xai_sdk (xai_sdk)`; no mutation (`status=running`, `interrupt` unset, `last_turn_status=in_flight`). Recorded negative. Flags unchanged. |
 | 3 | `claude_sdk` sonnet/`thinking_level=low`, `interactive=true`, `sandbox=read-only`, interrupt | start accepted (`enforcement=os_enforced`); in-flight `agent_collab_interrupt` → `status=awaiting_input`; turn-1 `interrupted` / `local_turn_interrupted`; `interrupt.provider_acknowledged=true` `fallback_cancelled=false`; `last_turn_status=interrupted` `resumable=false` (completed-only); remaining planned stages abandoned (`completed_stages=0`); `post_message` accepted; harvest turn-2 `completed` on the same provider session id. Flags unchanged. |
-| 5 | `claude_sdk` tool_gate park | Worker `sandbox=read-only`: `permission_mode=default` auto-allowed `Read` and `Bash` (`uname -s`) with no `approval_request` (allow, not a callback skip). A workspace `Write` that the model actually issued parked: `status=awaiting_approval`, `tool_name=Write`, request id present; `agent_collab_approval` deny → `outcome=denied` `status=ok` with `worker_instance` set; `approval_resolved`; turn `completed`. In-process `sandbox=none`: same `Write` park + deny (`worker_instance=null`, `execution_path=sdk-inprocess`); turn `completed`. Do not run `codex_sdk` tool_gate (flag false). Flags unchanged. |
+| 5 | `claude_sdk` tool_gate park | Worker `sandbox=read-only`: `permission_mode=default` auto-allowed `Read` and `Bash` with no `approval_request` (allow, not a callback skip). A workspace `Write` that the model actually issued parked: `status=awaiting_approval`, `tool_name=Write`, request id present; `agent_collab_approval` deny → `outcome=denied` `status=ok` with `worker_instance` set; `approval_resolved`; turn `completed`. In-process `sandbox=none`: same `Write` park + deny (`worker_instance=null`, `execution_path=sdk-inprocess`); turn `completed`. Do not run `codex_sdk` tool_gate (flag false). Flags unchanged. |
 | 7 | `claude_cli` sonnet/`thinking_level=low`, `interactive=true`, `sandbox=read-only`, harvest honesty | First sitting: start accepted; harvest `authentication_failed`. After host login: start accepted (`enforcement=os_enforced`, `interruptible=false`); `wait_result` `awaiting_input` `terminal=false`; turn `completed`; `process_exit_code=0`. Harvest honesty only; not CLI resume/continuity proof. Flags unchanged. |
 
-**Corrections for the credentialed cells still to run.**
+**Campaign leftovers (not unrun advertised Claude forks).** Cells 1/3/5/7
+succeeded. `xai_sdk` cell 6 already used `interactive=true` (fail-closed
+`code=unsupported`, no mutation). Resume cells 1–2 already used a real
+daemon restart plus MCP reconnect. `stop` of a parked completed session
+is resume-eligible and cheaper, but #20 defines resume as reopening a
+captured provider session *across a daemon reload*; stop→resume is not a
+substitute for that proof. Turn-level interrupt rejects a non-interactive
+session with `code=conflict` *before* the capability check, so a
+non-interactive interrupt cell proves nothing.
 
-- The planned `xai_sdk` fail-closed interrupt cell must start
-  `interactive: true`. Turn-level interrupt rejects a non-interactive session
-  with `code=conflict` *before* the capability check, so a non-interactive cell
-  proves nothing and would be logged as a spurious `conflict`. The logged CLI
-  interrupt rows above returned `code=unsupported`, which is reachable only on
-  an interactive session with an in-flight turn, so they are valid fail-closed
-  evidence; every future interrupt row records `interactive` explicitly.
-- The restart-safe resume cells must use a real daemon restart plus an MCP
-  client reconnect. `stop` of a parked completed session is now documented as
-  resume-eligible and is cheaper, but #20 defines resume as reopening a
-  captured provider session *across a daemon reload*; stop→resume is not an
-  acceptable substitute for that proof.
-- Host gate hazard: default `sandbox=read-only` still rejects
-  `code=outer_sandbox_path_permissions` on group/world-writable state dirs
-  for several backends. That is a DX follow-up, not a product lie. The
-  hermetic `AliasAuditTests` fixtures now chmod writable temp roots so the
-  suite is green at umask 002; the production guard is unchanged.
+**Skipped cells a close comment must carry.** `antigravity_sdk`
+host-unrunnable leftover (harvest `code=provider_transport_failed`), not
+an unrun skip. CLI outer-sandbox live MCP skipped this campaign.
+`codex_sdk.tool_gate` not run (flag false). 2026-08-20 CLI
+interrupt/resume rows stand; only `claude_cli` harvest is now logged.
+`xai_sdk.resume` recorded negative.
+
+Host gate hazard: default `sandbox=read-only` still rejects
+`code=outer_sandbox_path_permissions` on group/world-writable state dirs
+for several backends. That is a DX follow-up, not a product lie. The
+hermetic `AliasAuditTests` fixtures now chmod writable temp roots so the
+suite is green at umask 002; the production guard is unchanged. Do not
+open a DX issue unless asked.
 
 ## Purpose and scope
 

@@ -13,6 +13,9 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Record the installed-daemon MCP campaign leftover for provider session
+  control. Leftover flags unchanged (#20).
+
 - Raise the `claude-agent-sdk` floor to 0.2.143 so `claude_sdk` uses the
   bundled Claude CLI 2.1.238 rather than 2.1.218 from 0.2.126. The mapper
   stays duck-typed across the 0.2.137 `Message` union widening; `ResultError`
