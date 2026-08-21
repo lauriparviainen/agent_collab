@@ -6,7 +6,7 @@ import time. So importing this module (which the registry does at startup) costs
 nothing and needs no dependency; a missing wheel degrades to an *unavailable*
 backend (a fast, hinted start rejection) rather than an import crash.
 
-**Conversation lifecycle** (verified on ``claude-agent-sdk`` 0.2.126): one
+**Conversation lifecycle** (verified on ``claude-agent-sdk`` 0.2.143): one
 persistent ``ClaudeSDKClient`` per runner/session accepts sequential
 ``query()`` / ``receive_response()`` turns on one live provider session whose
 id stays stable across turns. After an abnormal turn the conversation adapter
@@ -623,7 +623,7 @@ class ClaudeSdkRunner(AgentRunner):
         return self._conversation
 
 
-# Installed claude-agent-sdk 0.2.126 documents these ResultMessage.terminal_reason
+# Installed claude-agent-sdk 0.2.143 documents these ResultMessage.terminal_reason
 # values as the interrupt/abort markers. Live CLI emission is not credentialed.
 _INTERRUPT_TERMINAL_REASONS = frozenset({"aborted_streaming", "aborted_tools"})
 

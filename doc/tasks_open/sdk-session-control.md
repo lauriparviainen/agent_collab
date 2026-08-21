@@ -597,12 +597,14 @@ roots pass through the outer sandbox adapter.
 
 Settled as product policy for `claude_sdk` from static inspect of pin
 `claude-agent-sdk` 0.2.126 / bundled CLI 2.1.218 plus a three-reviewer
-consensus scored for versatility and ease of use. 2026-08-16 live turns
-parked on both production paths (deny, approve, parked-interval clock
-exclusion). Production `claude_sdk.tool_gate` is true. Live two-at-once /
-abort-during-park remain unverified and are not a flip blocker. xAI
-questions 5, 9, and 10 are recorded in *Decision (2026-08-16): xAI
-Stage 3 interrupt and tool-gate policy*.
+consensus scored for versatility and ease of use. The 2026-08-21 floor is
+`0.2.143` / bundled CLI 2.1.238; the `can_use_tool` contract and this
+policy are unchanged. 2026-08-16 live turns parked on both production
+paths (deny, approve, parked-interval clock exclusion). Production
+`claude_sdk.tool_gate` is true. Live two-at-once / abort-during-park
+remain unverified and are not a flip blocker. xAI questions 5, 9, and 10
+are recorded in *Decision (2026-08-16): xAI Stage 3 interrupt and
+tool-gate policy*.
 
 **Open question 5 (Claude):** `can_use_tool` is not gated by account or plan
 entitlements in the SDK or CLI source. Silent skip is a **permission-mode /
@@ -2031,7 +2033,17 @@ the tests, not this document, are their guarantee.
 - *[interrupt/tool_gate]* The one-shot print transport has no verified
   bidirectional control path; both remain false.
 
-### claude_sdk — `claude-agent-sdk` 0.2.126, bundled CLI 2.1.218 (verified 2026-08-16)
+### claude_sdk — `claude-agent-sdk` 0.2.143, bundled CLI 2.1.238 (verified 2026-08-21)
+
+Pin raised from 0.2.126 / CLI 2.1.218 (live-verified 2026-08-16) so the
+worker uses the same bundled CLI line as a current host `claude` 2.1.238
+install. Mapper remains duck-typed: `ConversationResetMessage` (0.2.137)
+is ignored without `content` / `is_error`; `ResultError` (0.2.140,
+`ProcessError` subclass) still maps through the existing transport-exception
+path. Skill-name validation (0.2.129) does not apply — this backend does
+not pass `skills`. Continuity / resume / interrupt / tool_gate evidence
+below is the 2026-08-16 both-path proof unless a later leftover log row
+supersedes it.
 
 - *[continuity — shipped]* One connected `ClaudeSDKClient` (`connect` / `query` /
   `receive_response` / `interrupt` / `disconnect`) accepts sequential turns on
@@ -2096,7 +2108,9 @@ the tests, not this document, are their guarantee.
   settled (see *Decision (2026-08-16)*): no provider decision timer, so no
   clamp; agent-collab owns a 120 s fail-closed deny; `pending_approvals`
   stays a list; implement overlap, do not serialize; `can_use_tool` is not
-  plan-gated. Static inspect of pin 0.2.126 / CLI 2.1.218 found no
+  plan-gated. Static inspect of pin 0.2.126 / CLI 2.1.218 (re-checked
+  against 0.2.143 / CLI 2.1.238 changelog: no Python-side callback timer
+  added) found no
   Python-side callback timer; the SDK can spawn concurrent
   `can_use_tool` tasks. Both production paths now pass `can_use_tool`
   together with the operator `permission_mode` (shipped default

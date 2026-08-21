@@ -4,7 +4,7 @@ Registered as `claude_sdk` (`type="claude"`, `backend="sdk"`). It calls `claude-
 
 ## Selection and requirements
 
-Select with `backend="sdk"`. Python and `claude-agent-sdk>=0.2.126,<0.3.0`
+Select with `backend="sdk"`. Python and `claude-agent-sdk>=0.2.143,<0.3.0`
 are required. Authentication may use `ANTHROPIC_API_KEY` or the SDK's Claude
 Code sign-in; agent-collab never stores credentials. The Agent SDK exposes
 model selection but no public model-list API, so catalog suggestions remain
@@ -22,7 +22,7 @@ requests conflict. SDK options are never inferred from CLI argv. Runs use
 
 ## Conversation lifecycle
 
-One persistent `ClaudeSDKClient` per runner/session (verified on 0.2.126):
+One persistent `ClaudeSDKClient` per runner/session (verified on 0.2.143):
 lazy connect on the first turn, then sequential `query()`/`receive_response()`
 turns on the same live client and native provider session. After an abnormal
 turn the adapter resets the live client but keeps the captured session id; the

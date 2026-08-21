@@ -236,9 +236,13 @@ The original Stage 5.1 A1 spike resolved all SDKs together under Python
 - `google-antigravity==0.1.5`.
 - `xai-sdk==1.17.0` (bounded by the project to `>=1.17,<1.18`).
 
-The 2026-07-24 Stage 6 refresh leaves the active verified floors at:
+The 2026-07-24 Stage 6 refresh left the verified floors at
+`claude-agent-sdk==0.2.126`, `openai-codex==0.144.4`,
+`google-antigravity==0.1.8`, and `xai-sdk==1.17.0`. The 2026-08-21 Claude
+bump raises that one floor so the worker's bundled CLI matches a current
+host `claude` 2.1.238 install:
 
-- `claude-agent-sdk==0.2.126`,
+- `claude-agent-sdk==0.2.143` (bundled Claude CLI 2.1.238),
 - `openai-codex==0.144.4`,
 - `google-antigravity==0.1.8`,
 - `xai-sdk==1.17.0`.

@@ -7,7 +7,7 @@ fields so the event mapper, option mapping, probe, and provider-session capture
 are all covered without installing ``claude-agent-sdk`` or calling a model.
 Production tests replace the lazy SDK import with a fake persistent
 ``ClaudeSDKClient``, including resume after reset and undelivered-prompt replay
-(lifecycle verified on ``claude-agent-sdk`` 0.2.126).
+(lifecycle verified on ``claude-agent-sdk`` 0.2.143).
 """
 
 import asyncio
@@ -1280,7 +1280,7 @@ class ClaudeProductionFactoryTests(unittest.TestCase):
         # init message). If the turn then ends without a terminal result, the
         # delivered prompt already lives in provider context — the reconnect
         # must resume the captured id, never silently open a fresh session
-        # (verified resumable on 0.2.126 even when turn 1 never finished).
+        # (verified resumable on 0.2.143 even when turn 1 never finished).
         state = {}
         module = self._fake_module(
             state,

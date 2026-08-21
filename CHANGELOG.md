@@ -13,6 +13,12 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Raise the `claude-agent-sdk` floor to 0.2.143 so `claude_sdk` uses the
+  bundled Claude CLI 2.1.238 rather than 2.1.218 from 0.2.126. The mapper
+  stays duck-typed across the 0.2.137 `Message` union widening; `ResultError`
+  (0.2.140) remains a `ProcessError` subclass on the existing transport path
+  (#20).
+
 - Leave a parked live wait intact when the session task is cancelled
   without an explicit stop, so a daemon restart restores `interrupted`
   instead of publishing `failed` / `referee_cancelled_unexpected` (#20).

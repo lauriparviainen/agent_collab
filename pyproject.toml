@@ -25,8 +25,9 @@ dependencies = [
 ]
 
 # SDK ranges are bounded to the compatible release lines verified on Python
-# 3.12.13. The 2026-07-24 refresh covers Claude 0.2.126, Codex 0.144.4,
-# Antigravity 0.1.8, and xAI 1.17.0, including the Codex/xAI model-list APIs.
+# 3.12.13. The 2026-07-24 refresh covers Codex 0.144.4, Antigravity 0.1.8,
+# and xAI 1.17.0, including the Codex/xAI model-list APIs. The 2026-08-21
+# Claude bump raises claude-agent-sdk to 0.2.143 (bundled CLI 2.1.238).
 # The Antigravity-only extra adds its verified protobuf runtime floor. `all`
 # intentionally omits that one runtime constraint because xAI 1.17 declares
 # protobuf <7, so one resolver transaction cannot satisfy both; the durable
@@ -38,7 +39,7 @@ dependencies = [
 # the install script or mirror its two-phase order.
 [project.optional-dependencies]
 claude = [
-    "claude-agent-sdk>=0.2.126,<0.3.0",
+    "claude-agent-sdk>=0.2.143,<0.3.0",
 ]
 codex = [
     "openai-codex>=0.144.4,<0.145.0",
@@ -53,7 +54,7 @@ xai = [
     "xai-sdk>=1.17,<1.18",
 ]
 all = [
-    "claude-agent-sdk>=0.2.126,<0.3.0",
+    "claude-agent-sdk>=0.2.143,<0.3.0",
     "openai-codex>=0.144.4,<0.145.0",
     "google-antigravity>=0.1.8,<0.2.0",
     "xai-sdk>=1.17,<1.18",
