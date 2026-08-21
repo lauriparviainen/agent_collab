@@ -1415,7 +1415,7 @@ class ContinuationPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(referee._agent_watermarks["claude"], len(transcript))
 
     def test_cli_runner_continuity_is_live_while_flag_is_false(self):
-        # D7 divergence (doc/tasks_open/sdk-session-control.md): referee
+        # D7 divergence (doc/tasks_closed/sdk-session-control.md): referee
         # chooses delta vs stateless from runner.conversation_active(), never
         # from capabilities.continuity. Do not gate continuity on the flag.
         from agent_collab import backends

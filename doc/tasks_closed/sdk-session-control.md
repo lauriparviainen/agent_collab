@@ -1,18 +1,16 @@
 # Provider session control: interrupt, tool approval, restart-safe resume
 
-**Status:** Open until the user says close. Stages 1–4 shipped.
-Production flags as of leftover 2026-08-18: `claude_sdk` and
-`antigravity_sdk` have continuity, resume, interrupt, and tool_gate all
-true. `codex_sdk` has continuity, resume, and interrupt true;
-`tool_gate` stays false. `xai_sdk` has continuity only; resume stays
-false (close deletes stored completions); interrupt and tool_gate are
-recorded negatives. All CLI `continuity`, `resume`, `interrupt`, and
-`tool_gate` flags are false; CLI interrupt and tool_gate are recorded
-negatives. Guidance unslop landed. The MCP campaign leftover is recorded
-(2026-08-20 CLI interrupt/resume rows; 2026-08-21 cells 0–7). Close bar
-(campaign + unslop + leftover honesty) is met on this branch; leftover
-flag flips remain independent follow-ups. Recorded negatives stay false.
-Not a Stage 5 protocol.
+**Status:** Closed 2026-08-22 on `sdk-session-control`. Stages 1–4
+shipped. Close bar met: MCP campaign leftover recorded, guidance unslop
+landed, leftover honesty recorded. Production flags as of leftover
+2026-08-18: `claude_sdk` and `antigravity_sdk` have continuity, resume,
+interrupt, and tool_gate all true. `codex_sdk` has continuity, resume,
+and interrupt true; `tool_gate` stays false. `xai_sdk` has continuity
+only; resume stays false (close deletes stored completions); interrupt
+and tool_gate are recorded negatives. All CLI `continuity`, `resume`,
+`interrupt`, and `tool_gate` flags are false; CLI interrupt and
+tool_gate are recorded negatives. Leftover flag flips remain independent
+follow-ups. Recorded negatives stay false. Not a Stage 5 protocol.
 
 Design resynced 2026-07-30 against 0.13.0,
 which made the outer read-only Bubblewrap worker the default execution path and
@@ -53,11 +51,11 @@ or `list_approvals`. The three close-bar workstreams are recorded:
    without transcript dumps. Do not describe advertised Claude forks as
    unrun.
 
-**Close bar (user-confirmed 2026-08-19).** #20 closes after the MCP
-campaign + guidance unslop + leftover honesty even if CLI
+**Close bar (user-confirmed 2026-08-19; closed 2026-08-22).** #20 closed
+after the MCP campaign + guidance unslop + leftover honesty. CLI
 resume/continuity, `xai_sdk.resume`, and `codex_sdk.tool_gate` stay
-false. Leftover flag flips are independent follow-ups, not close
-preconditions. Recorded negatives stay false.
+false. Leftover flag flips remain independent follow-ups. Recorded
+negatives stay false.
 
 ### Production capabilities (leftover 2026-08-18)
 
@@ -139,14 +137,10 @@ hostnames.
 | `codex_sdk.tool_gate` | Worker parks unproven; inner `danger-full-access`; nested Bubblewrap cannot create a user namespace. |
 
 **Q4 trajectory retention.** `{AGENT_COLLAB_HOME}/trajectories/{session_id}`
-outlives the session; no sweeper. Do not invent a sweeper now. Keep
-recorded-undecided. Open a small GitHub follow-up issue for the
-retention policy when #20 closes / do not open unless asked. Does not
-block #20. Draft (issue-only): title “Decide retention for durable
-Antigravity SDK trajectories”; labels `enhancement`, `daemon`,
-`backends`; Done when the keep-vs-delete policy is written, never-live
-rollback still removes the HOST root, and a still-retained resume can
-reopen the same `save_dir`.
+outlives the session; no sweeper. Opened at #20 close as
+[#63](https://github.com/lauriparviainen/agent_collab/issues/63). Does not
+flip leftover flags. Runner/backend dedup and default-sandbox
+`outer_sandbox_path_permissions` DX stay unopened unless asked.
 
 Q3 (expired Antigravity id), Q7 (CLI version floors), and Q8 (Grok
 `--session-id`) stay recorded follow-ups, not close blockers.
@@ -271,6 +265,10 @@ an unrun skip. CLI outer-sandbox live MCP skipped this campaign.
 `codex_sdk.tool_gate` not run (flag false). 2026-08-20 CLI
 interrupt/resume rows stand; only `claude_cli` harvest is now logged.
 `xai_sdk.resume` recorded negative.
+
+**Closed 2026-08-22.** User accepted the close package. Q4 opened as
+[#63](https://github.com/lauriparviainen/agent_collab/issues/63). Leftover
+flag flips remain independent follow-ups.
 
 Host gate hazard: default `sandbox=read-only` still rejects
 `code=outer_sandbox_path_permissions` on group/world-writable state dirs
@@ -1835,7 +1833,8 @@ the feature. A skipped provider keeps the production capability false.
    removed on session close, runner cleanup, or
    `cleanup_created_session_private_roots`. No sweeper, prune hook, or
    retention policy was added. Roots now outlive the session; policy is
-   undecided. (Stage 4)
+   undecided. Opened at close as
+   [#63](https://github.com/lauriparviainen/agent_collab/issues/63). (Stage 4)
 5. Do any providers gate tool-approval callbacks behind account or plan
    entitlements that a credentialed test would silently skip? **Claude:
    no.** `can_use_tool` is not plan-gated; silent skip is permission-mode

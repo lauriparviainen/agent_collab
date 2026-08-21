@@ -52,7 +52,7 @@ class BackendCapabilities:
     Every capability defaults to ``False``: a backend turns one ``True`` only
     once the running code path has its proof, never because a provider brand
     implies it. The shipped matrix lives in
-    ``doc/tasks_open/sdk-session-control.md``; CLI backends keep all four false.
+    ``doc/tasks_closed/sdk-session-control.md``; CLI backends keep all four false.
 
     ``continuity`` is the in-session fact — the runner continues its provider
     thread on the next turn (delta prompt, no task re-send) — and is deliberately

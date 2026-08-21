@@ -13,6 +13,9 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Close provider session control after the installed-daemon MCP campaign
+  leftover. Leftover flag flips remain follow-ups (#20).
+
 - Record the installed-daemon MCP campaign leftover for provider session
   control. Leftover flags unchanged (#20).
 

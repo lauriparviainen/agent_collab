@@ -33,7 +33,7 @@ it. Partial text and exit zero do not replace the marker.
 until a credentialed two-turn proof passes on both the direct (`sandbox=none`)
 and outer (`sandbox=read-only`) launch paths, so the in-session `--resume <id>`
 continuation described above runs while that flag is still false — see
-`doc/tasks_open/sdk-session-control.md`. Execution uses the resolved agent cwd
+`doc/tasks_closed/sdk-session-control.md`. Execution uses the resolved agent cwd
 and closes stdin. Recursive agent spawning remains prohibited by referee
 guardrails.
 

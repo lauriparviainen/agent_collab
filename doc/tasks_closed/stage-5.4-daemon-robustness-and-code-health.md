@@ -23,7 +23,7 @@ review, plus close the tooling gap (no CI, no lint/type config). This stage
 adds no new features. Permanent-token auth, workdir restrictions, and session
 retention were handled by their dedicated tasks; native resume, interrupt, and
 tool-gate work remains tracked by
-[sdk-session-control.md](../tasks_open/sdk-session-control.md) and is out of
+[sdk-session-control.md](sdk-session-control.md) and is out of
 scope here.
 
 ## High priority

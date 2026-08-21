@@ -12,9 +12,9 @@ is still open. Planning reviewed 2026-08-16.
 **Predecessor:** [stage-5.1.1-xai-provider.md](../tasks_closed/stage-5.1.1-xai-provider.md)
 landed `xai_cli` on `streaming-json` and `xai_sdk` as message-only
 `chat.sample()`. [backend-turn-outcomes.md](../tasks_closed/backend-turn-outcomes.md)
-owns terminal classification. [sdk-session-control.md](sdk-session-control.md)
-(#20) owns interrupt, tool gating, and restart-safe resume — this task does
-not flip those flags.
+owns terminal classification. [sdk-session-control.md](../tasks_closed/sdk-session-control.md)
+(#20, closed) owns interrupt, tool gating, and restart-safe resume — this task does
+not flip those leftover flags.
 
 ## Purpose
 
@@ -545,7 +545,7 @@ hermetic fixtures. Only the **`typed` flip** waits on a live recapture
 
 ## Collision with other work
 
-This branch also carries #20 (`sdk-session-control`). `PROTOCOL_VERSION`
+This branch also carried #20 (`sdk-session-control`, closed). `PROTOCOL_VERSION`
 is already 2 and `VALID_TYPES` already includes approval events. This
 task must stay additive on the xAI parsers and the production stream
 loop.

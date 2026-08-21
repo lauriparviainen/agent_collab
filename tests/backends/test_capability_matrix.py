@@ -1,7 +1,7 @@
 """Production BackendCapabilities matrix.
 
 Pins the leftover 2026-08-18 table in
-``doc/tasks_open/sdk-session-control.md`` (Production capabilities). Future
+``doc/tasks_closed/sdk-session-control.md`` (Production capabilities). Future
 flag flips must change this test deliberately.
 """
 
@@ -12,7 +12,7 @@ import unittest
 from agent_collab import backends
 
 
-# doc/tasks_open/sdk-session-control.md — Production capabilities (leftover 2026-08-18).
+# doc/tasks_closed/sdk-session-control.md — Production capabilities (leftover 2026-08-18).
 EXPECTED = {
     "claude_sdk": {
         "continuity": True,

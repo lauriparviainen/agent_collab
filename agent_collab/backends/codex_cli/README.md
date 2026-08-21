@@ -33,7 +33,7 @@ malformed output, transport failure, or nonzero exit fails closed.
 until a credentialed two-turn proof passes on both the direct (`sandbox=none`)
 and outer (`sandbox=read-only`) launch paths, so the in-session `exec resume`
 continuation described above runs while that flag is still false — see
-`doc/tasks_open/sdk-session-control.md`. Execution is cwd-scoped with stdin
+`doc/tasks_closed/sdk-session-control.md`. Execution is cwd-scoped with stdin
 closed. Provider-native sandbox and approval policy remain explicit backend
 options.
 
