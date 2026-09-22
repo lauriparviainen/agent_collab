@@ -24,7 +24,17 @@ Per-backend `continuity` / `resume` / `interrupt` / `tool_gate` live in
 `continuity` are AND-reduced across selected backends. `tool_gate` is
 per-agent, not session-AND'd — never wait for `awaiting_approval` when that
 agent's `tool_gate` is false. Start-time `resumable=false` is expected
-(empty capture). Resume and interrupt: topics `resume` and `interrupt`.
+(empty capture) and stays false for the whole session when a selected
+backend advertises `resume=false`. Resume and interrupt: topics `resume` and
+`interrupt`.
+
+Only SDK backends advertise `resume`, `interrupt`, or `tool_gate`; every CLI
+backend advertises all three false. The shipped `solo`, `cross-review`, and
+`dual-review` workflows select CLI members, so on defaults interrupt fails
+closed (`unsupported`), resume is `incompatible`, and no tool approval ever
+parks. To use those controls, pick an SDK agent with `members`, e.g.
+`{"workflow": "solo", "members": {"claude_cli": "claude_sdk"}}`, after
+confirming it is enabled and healthy in `agent_collab_describe_options`.
 
 ## Delegate
 
@@ -70,6 +80,8 @@ Run another agent as a subagent and collect its result over MCP alone:
 6. End with `agent_collab_stop`, or let `interactive_idle_timeout` close it.
    `terminal: true` is not always the end of the thread: `stopped` and
    `interrupted` may still be reopened with `agent_collab_resume` (Resume).
+   The two endings differ: idle timeout ends `done`, which can never be
+   reopened; `stop` on a parked session keeps the thread reopenable.
 
 ## Start
 
@@ -171,7 +183,10 @@ agent id(s). Status, pending approvals, and in-flight turns stay unchanged;
 no abort is issued.
 
 `fallback_cancelled` is only an issued abort that missed ACK (or advertised
-interrupt that did not issue). It is not the unsupported path.
+interrupt that did not issue). It is not the unsupported path. The returned
+`status` is authoritative: `awaiting_input` means parked; anything else means
+the park did not complete within the acknowledgement window — re-check with
+`agent_collab_status` before posting.
 
 Session status `interrupted` means the daemon died (restore of a live
 session). Operator abort is a turn outcome `interrupted` /
@@ -185,7 +200,9 @@ session). Operator abort is a turn outcome `interrupted` /
 `last_turn_status` must be `completed` for every started agent — read it from
 `agent_sessions.<agent_id>.last_turn_status` on `agent_collab_status`.
 Operator-interrupted turns (`last_turn_status=interrupted`) are ineligible
-even with `interrupt_acknowledged`.
+even with `interrupt_acknowledged`; one later directed turn that ends
+`completed` makes that agent eligible again. An `ineligible` error names each
+blocking agent and its first failing check.
 
 To reach an eligible state deliberately: start `interactive: true`, let a turn
 complete and park at `awaiting_input`, then `agent_collab_stop` — a stopped
@@ -266,7 +283,10 @@ workflow/agent: `agent_collab_describe_options` for the same `workdir`.
 Unknown `session_id`: mistyped id or a different daemon.
 
 `agent_collab_resume` codes: `conflict`, `ineligible`, `incompatible`,
-`quarantined`, `not_found`. Do not retry a quarantined resume in place.
+`quarantined`, `not_found`. `incompatible` means a selected backend does not
+advertise `capabilities.resume` (every CLI backend): the session can never be
+reopened; start a new one with an SDK member (Overview). Do not retry a
+quarantined resume in place.
 `agent_collab_interrupt` codes: `conflict`, `not_found`, `unsupported`.
 `agent_collab_approval` codes: `not_found`, `conflict`, `stale`.
 

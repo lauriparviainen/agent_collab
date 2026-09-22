@@ -110,7 +110,13 @@ TOOLS = [
     },
     {
         "name": "agent_collab_list_sessions",
-        "description": "List daemon-owned agent-collab sessions.",
+        "description": (
+            "List daemon-owned agent-collab sessions (compact). Each row carries status, "
+            "interactive, capabilities (resumable, interruptible, continuity), "
+            "agent_sessions.<agent_id>.last_turn_status, workflow_phase, and pending_approvals: "
+            "enough to pick a session that is resumable (status 'stopped' or 'interrupted' "
+            "with every last_turn_status 'completed') or parked on an approval."
+        ),
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -307,8 +313,11 @@ TOOLS = [
             "the AND of selected backends, not of the in-flight set. Any in-flight backend "
             "with interrupt=false fails closed (code=unsupported) with no session mutation. "
             "A session that is not live, not interactive, has no in-flight turn, or is "
-            "already parked is a conflict: interrupt is not idempotent. Stop ends the "
-            "session; do not use stop to keep an in-flight turn alive."
+            "already parked is a conflict: interrupt is not idempotent. The returned status "
+            "is authoritative: 'awaiting_input' means parked; anything else means the park "
+            "did not complete within the acknowledgement window, so re-check with "
+            "agent_collab_status. Stop ends the session; do not use stop to keep an "
+            "in-flight turn alive."
         ),
         "inputSchema": {
             "type": "object",
@@ -320,7 +329,10 @@ TOOLS = [
         "name": "agent_collab_stop",
         "description": (
             "Request cancellation of a running daemon-owned session. Stop ends the session; "
-            "it is not a keep-alive turn interrupt."
+            "it is not a keep-alive turn interrupt. Stopping a session parked at "
+            "awaiting_input after a completed turn leaves it 'stopped' and resume-eligible "
+            "on a backend with capabilities.resume; letting interactive_idle_timeout close "
+            "it ends 'done', which cannot be reopened."
         ),
         "inputSchema": {
             "type": "object",

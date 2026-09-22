@@ -243,6 +243,54 @@ class McpServerTests(unittest.TestCase):
         resume = handle_tool("agent_collab_guidance", {"topic": "resume"})["content"][0]["text"]
         self.assertNotIn("abandons", resume)
 
+    def test_guidance_says_controls_need_an_sdk_member(self):
+        # A supervisor on shipped defaults (CLI members) gets `unsupported` on
+        # interrupt and `incompatible` on resume; the guidance must say why and
+        # what to change, without inventing tools.
+        overview = handle_tool("agent_collab_guidance", {"topic": "overview"})["content"][0]["text"]
+        for required in (
+            "Only SDK backends advertise",
+            "CLI",
+            "`members`",
+            "claude_sdk",
+            "`unsupported`",
+            "`incompatible`",
+            "stays false for the whole session",
+        ):
+            self.assertIn(required, overview)
+        errors = handle_tool("agent_collab_guidance", {"topic": "errors"})["content"][0]["text"]
+        self.assertIn("`incompatible` means", errors)
+        self.assertIn("capabilities.resume", errors)
+        delegate = handle_tool("agent_collab_guidance", {"topic": "delegate"})["content"][0]["text"]
+        self.assertIn("idle timeout ends `done`", delegate)
+        resume = handle_tool("agent_collab_guidance", {"topic": "resume"})["content"][0]["text"]
+        self.assertIn("eligible again", resume)
+        self.assertIn("first failing check", resume)
+        interrupt = handle_tool("agent_collab_guidance", {"topic": "interrupt"})["content"][0][
+            "text"
+        ]
+        self.assertIn("authoritative", interrupt)
+        self.assertNotIn("wait_approval", overview)
+        self.assertNotIn("list_approvals", overview)
+
+    def test_stop_and_list_sessions_descriptions_carry_resume_route(self):
+        tools = {tool["name"]: tool for tool in TOOLS}
+        stop = tools["agent_collab_stop"]["description"]
+        for required in ("resume-eligible", "'stopped'", "'done'", "interactive_idle_timeout"):
+            self.assertIn(required, stop)
+        listing = tools["agent_collab_list_sessions"]["description"]
+        for required in (
+            "last_turn_status",
+            "pending_approvals",
+            "resumable",
+            "'stopped'",
+            "'interrupted'",
+            "'completed'",
+        ):
+            self.assertIn(required, listing)
+        interrupt = tools["agent_collab_interrupt"]["description"]
+        self.assertIn("authoritative", interrupt)
+
     def test_approval_surface_documents_undeliverable_approve(self):
         tools = {tool["name"]: tool for tool in TOOLS}
         approval = tools["agent_collab_approval"]["description"]
