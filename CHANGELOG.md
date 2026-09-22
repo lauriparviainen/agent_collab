@@ -13,6 +13,8 @@ into a detailed work log.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-22 - Provider session control
+
 - Advertise a worker tool gate only when the session approval registry is
   bound. A worker-backed `claude_sdk` / `antigravity_sdk` run without a
   registry (the non-daemon CLI path) previously denied every gated tool call
