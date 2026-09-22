@@ -284,7 +284,9 @@ class PermissionHelperAsyncTests(unittest.IsolatedAsyncioTestCase):
 
 class AntigravitySdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
     @asynccontextmanager
-    async def _drive(self, backend: AntigravitySdkWorkerBackend, fake_conv):
+    async def _drive(
+        self, backend: AntigravitySdkWorkerBackend, fake_conv, *, tool_gate: bool = True
+    ):
         daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         daemon.setblocking(False)
         with tempfile.TemporaryDirectory() as raw:
@@ -318,7 +320,7 @@ class AntigravitySdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
                                 "options": {},
                                 "save_dir": str(traj),
                                 "app_data_dir": str(app),
-                                "tool_gate": True,
+                                "tool_gate": tool_gate,
                             },
                         ),
                     )
@@ -349,6 +351,21 @@ class AntigravitySdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
                 return frame
             if frame["type"] == "error":
                 self.fail(f"worker error before {frame_type}: {frame}")
+
+    async def test_worker_open_without_gate_installs_no_ask_user_handler(self) -> None:
+        # No registry bound (e.g. a non-daemon CLI run): the worker must not
+        # install an unbound ask_user handler that denies every tool call.
+        backend = AntigravitySdkWorkerBackend()
+        holder: dict[str, Any] = {}
+
+        def fake_conv(*_args: Any, **kwargs: Any):
+            holder["ask_user_handler"] = kwargs.get("ask_user_handler")
+            return _ParkingConversation(backend)
+
+        async with self._drive(backend, fake_conv, tool_gate=False) as (reader, writer):
+            self.assertIsNone(holder["ask_user_handler"])
+            await send_frame(writer, make_frame("close", request_id="close-1"))
+            await self._recv_until(reader, "closed")
 
     async def test_worker_approve_continues_and_executes_tool(self) -> None:
         backend = AntigravitySdkWorkerBackend()

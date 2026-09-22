@@ -33,6 +33,10 @@ from .worker_codec import (
     validate_envelope,
 )
 
+# Longest an emit may wait for the daemon to drain the in-flight event queue
+# before the run fails instead of pinning the worker mid-turn.
+EMIT_BACKPRESSURE_SECONDS = 30.0
+
 EventEmit = Callable[[Any], Awaitable[None]]
 
 
@@ -356,9 +360,15 @@ async def _serve(channel: int) -> int:
                 # Cumulative per-run wire budget (does not reset when drained).
                 if run_event_bytes + encoded_size > MAX_EVENT_BYTES_PER_RUN:
                     raise RuntimeError("worker run exceeded the per-run byte budget")
-                # In-flight queue occupancy: wait if memory would grow too large.
+                # In-flight queue occupancy: wait if memory would grow too large,
+                # but never forever: a daemon that stops draining must not pin
+                # the worker mid-turn.
+                waited = 0.0
                 while queued_event_bytes + encoded_size > MAX_EVENT_BYTES_PER_RUN:
+                    if waited >= EMIT_BACKPRESSURE_SECONDS:
+                        raise RuntimeError("worker event queue backpressure deadline exceeded")
                     await asyncio.sleep(0.01)
+                    waited += 0.01
                 await event_queue.put((payload, encoded_size))
                 queued_event_bytes += encoded_size
                 run_event_bytes += encoded_size
@@ -372,6 +382,12 @@ async def _serve(channel: int) -> int:
             target = envelope.get("run_id")
             if not isinstance(target, str) or target != active_run or backend is None:
                 continue
+            # Fail closed on the worker side too: a park still waiting for a
+            # decision must not outlive the turn it belongs to.
+            for approval_id, future in list(pending_approvals.items()):
+                pending_approvals.pop(approval_id, None)
+                if not future.done():
+                    future.set_result({"decision": "deny", "approval_id": approval_id})
             try:
                 await backend.interrupt(target)
             except Exception:

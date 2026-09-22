@@ -264,6 +264,10 @@ class ResumeEligibilityTests(unittest.TestCase):
         with self.assertRaises(ResumeError) as raised:
             validate_session_resume(blocked)
         self.assertEqual(raised.exception.code, "ineligible")
+        # The message names the blocking agent and its first failing check so
+        # a supervisor can act on it without re-deriving the gate.
+        self.assertIn("codex: last_turn_status='in_flight'", str(raised.exception))
+        self.assertNotIn("claude:", str(raised.exception))
         with mock.patch("agent_collab.backends.capabilities_for", side_effect=_resume_stub):
             summary = SessionManager._project_session_capabilities(blocked)
         self.assertFalse(summary["resumable"])

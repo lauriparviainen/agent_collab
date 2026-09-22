@@ -93,7 +93,7 @@ class PermissionHelperTests(unittest.TestCase):
 
 class ClaudeSdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
     @asynccontextmanager
-    async def _drive(self, backend: ClaudeSdkWorkerBackend, fake_conv):
+    async def _drive(self, backend: ClaudeSdkWorkerBackend, fake_conv, *, tool_gate: bool = True):
         daemon, worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         daemon.setblocking(False)
         with (
@@ -119,7 +119,7 @@ class ClaudeSdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
                             "backend": "claude_sdk",
                             "workspace": "/tmp",
                             "options": {"permission_mode": "default"},
-                            "tool_gate": True,
+                            "tool_gate": tool_gate,
                         },
                     ),
                 )
@@ -183,6 +183,44 @@ class ClaudeSdkWorkerToolGateTests(unittest.IsolatedAsyncioTestCase):
             await send_frame(writer, make_frame("close", request_id="close-1"))
             closed = await self._recv_until(reader, "closed")
             self.assertEqual(closed["type"], "closed")
+
+    async def test_worker_open_without_gate_leaves_provider_permission_mode(self) -> None:
+        # A payload without tool_gate (no registry bound, e.g. a non-daemon CLI
+        # run) must not install can_use_tool: an unbound callback would deny
+        # every tool call with no approval_request anyone could answer.
+        backend = ClaudeSdkWorkerBackend()
+        holder: dict[str, Any] = {}
+
+        def fake_conv(*_args: Any, **kwargs: Any):
+            holder["can_use_tool"] = kwargs.get("can_use_tool")
+            return _ParkingConversation(backend)
+
+        async with self._drive(backend, fake_conv, tool_gate=False) as (reader, writer):
+            self.assertIsNone(holder["can_use_tool"])
+            await send_frame(writer, make_frame("close", request_id="close-1"))
+            await self._recv_until(reader, "closed")
+
+    async def test_worker_interrupt_frame_denies_parked_approval(self) -> None:
+        # Worker-side fail-close: an interrupt frame resolves every parked
+        # can_use_tool as deny, so the park cannot outlive its turn.
+        backend = ClaudeSdkWorkerBackend()
+        holder: dict[str, Any] = {}
+
+        def fake_conv(*_args: Any, **kwargs: Any):
+            conv = _ParkingConversation(backend)
+            holder["conv"] = conv
+            return conv
+
+        async with self._drive(backend, fake_conv) as (reader, writer):
+            await send_frame(writer, make_frame("run", run_id="run-1", prompt="gate"))
+            await self._recv_until(reader, "approval_request")
+            await send_frame(writer, make_frame("interrupt", run_id="run-1"))
+            result = await self._recv_until(reader, "result")
+            self.assertEqual(result["type"], "result")
+            self.assertEqual(holder["conv"].executed, [])
+            self.assertTrue(_is_deny(holder["conv"].results[0]))
+            await send_frame(writer, make_frame("close", request_id="close-1"))
+            await self._recv_until(reader, "closed")
 
     async def test_worker_deny_does_not_execute_tool(self) -> None:
         backend = ClaudeSdkWorkerBackend()

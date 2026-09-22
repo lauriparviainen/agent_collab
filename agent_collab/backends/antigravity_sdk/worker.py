@@ -71,10 +71,11 @@ class AntigravitySdkWorkerBackend:
             env=agent_env,
             backend_config=backend_config,
         )
-        # Worker serve always binds approvals. Install host ask_user("*") so
-        # the historical allow_all skip after outer proof cannot shadow the
-        # gate. LocalAgentConfig.workspaces always includes the session
-        # workspace root so workspace-scoped tools can see siblings of a
+        # Install host ask_user("*") only when the open payload advertises a
+        # tool gate (the daemon bound its registry); an unbound handler would
+        # deny every tool call silently. LocalAgentConfig.workspaces always
+        # includes the session workspace root so workspace-scoped tools can
+        # see siblings of a
         # nested agent cwd. When the Bubblewrap-effective cwd is outside
         # that root (supported absolute agent.cwd override), declare it as
         # an extra workspace so tools do not reject the process cwd tree.
@@ -91,7 +92,9 @@ class AntigravitySdkWorkerBackend:
             save_dir=save_dir,
             app_data_dir=app_data_dir,
             extra_workspaces=extras,
-            ask_user_handler=PinnedAskUserHandler(self._ask_user),
+            ask_user_handler=(
+                PinnedAskUserHandler(self._ask_user) if payload.get("tool_gate") is True else None
+            ),
         )
         if isinstance(conversation_id, str) and conversation_id:
             conversation.note_session_id(conversation_id)

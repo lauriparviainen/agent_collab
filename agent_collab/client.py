@@ -288,4 +288,7 @@ def _format_error_payload(payload: Dict[str, Any]) -> str:
                 message = str(detail.get("message", ""))
                 lines.append(f"{path}: {message}" if path else message)
         return "\n".join(lines)
+    code = payload.get("code")
+    if isinstance(code, str) and code and code != error:
+        return f"{error} (code={code})"
     return str(error)

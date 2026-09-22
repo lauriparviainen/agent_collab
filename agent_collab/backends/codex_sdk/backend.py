@@ -485,9 +485,9 @@ class CodexSdkRunner(AgentRunner):
                 verbose=self.verbose,
                 resume=resume,
             )
-            from .. import capabilities_for
+            from ...approvals import worker_tool_gate
 
-            payload["tool_gate"] = capabilities_for(self.agent.type, "sdk").tool_gate
+            payload["tool_gate"] = worker_tool_gate(self, self.agent.type)
             session = SupervisedWorkerSession(
                 process,
                 reader,

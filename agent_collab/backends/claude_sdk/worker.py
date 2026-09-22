@@ -49,12 +49,17 @@ class ClaudeSdkWorkerBackend:
         resume_id = require_resume_session_id(payload)
         agent = _WorkerAgent(agent_id=self._agent_id, env=agent_env)
         # Outer read-only worker path suppresses ambient project/user MCP.
+        # Install the host permission callback only when the open payload
+        # advertises a tool gate; otherwise the provider permission mode
+        # applies, matching the in-process runner, instead of an unbound
+        # callback denying every tool call.
+        can_use_tool = self._can_use_tool if payload.get("tool_gate") is True else None
         conversation = _default_conversation(
             agent,
             options,
             cwd,
             suppress_ambient_mcp=True,
-            can_use_tool=self._can_use_tool,
+            can_use_tool=can_use_tool,
         )
         if resume_id is not None:
             conversation.note_session_id(resume_id)

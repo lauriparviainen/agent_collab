@@ -346,6 +346,23 @@ def worker_on_approval(runner: Any) -> Optional[Callable[[Mapping[str, Any]], An
     return lambda frame: dispatch_worker_approval(runner, frame)
 
 
+def worker_tool_gate(runner: Any, agent_type: str) -> bool:
+    """Whether the worker ``open`` payload should advertise a tool gate.
+
+    True only when the backend advertises ``tool_gate`` *and* the runner holds
+    a session registry callback. Advertising a gate with no registry bound
+    would make the worker deny every tool call silently (no
+    ``approval_request`` ever reaches a decision surface); without the gate
+    the provider's own permission mode applies, as on the in-process path.
+    """
+
+    from .backends import capabilities_for
+
+    if not capabilities_for(agent_type, "sdk").tool_gate:
+        return False
+    return worker_on_approval(runner) is not None
+
+
 def worker_session_run_kwargs(runner: Any, *, emit: Any) -> Dict[str, Any]:
     """Keyword args for ``SupervisedWorkerSession.run``.
 

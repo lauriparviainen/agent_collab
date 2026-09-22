@@ -371,6 +371,42 @@ def descriptor_is_eligible(
     return True
 
 
+def describe_descriptor_ineligibility(
+    entry: Any,
+    *,
+    transcript_len: Optional[int] = None,
+    expected_fingerprint: Any = None,
+) -> str:
+    """Name the first check that makes one descriptor ineligible.
+
+    Mirrors ``descriptor_is_eligible`` in order; used only for error text.
+    """
+
+    if not isinstance(entry, dict):
+        return "no descriptor captured"
+    if descriptor_is_quarantined(entry):
+        return "quarantined"
+    session_id = entry.get("provider_session_id")
+    if not isinstance(session_id, str) or not session_id:
+        return "no provider session id captured"
+    status = entry.get("last_turn_status")
+    if status not in RESTART_ELIGIBLE_STATUSES:
+        return f"last_turn_status={status!r}"
+    cursor = entry.get("prompt_event_cursor")
+    if not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0:
+        return "prompt_event_cursor is missing"
+    if transcript_len is not None and cursor > transcript_len:
+        return "prompt_event_cursor is past the transcript"
+    fingerprint = entry.get("resume_fingerprint")
+    if not fingerprint_is_well_formed(fingerprint):
+        return "resume_fingerprint is missing"
+    if expected_fingerprint is not None and not fingerprints_match(
+        fingerprint, expected_fingerprint
+    ):
+        return "resume_fingerprint does not match the current settings"
+    return "eligible"
+
+
 def any_agent_quarantined(agent_sessions: Any) -> bool:
     if not isinstance(agent_sessions, dict):
         return False
@@ -552,9 +588,19 @@ def validate_session_resume(
     )
     missing = required - eligible
     if missing:
+        reasons = []
+        for agent_id in sorted(missing):
+            expected = fingerprint_from_session(state, agent_id) if compare_fingerprints else None
+            reason = describe_descriptor_ineligibility(
+                sessions.get(agent_id),
+                transcript_len=transcript_len,
+                expected_fingerprint=expected,
+            )
+            reasons.append(f"{agent_id}: {reason}")
         raise ResumeError(
             "ineligible",
-            "every required agent must hold a fully eligible resume descriptor",
+            "every required agent must hold a fully eligible resume descriptor; "
+            + "; ".join(reasons),
         )
     phase = normalize_workflow_phase(getattr(state, "workflow_phase", None))
     assert phase is not None

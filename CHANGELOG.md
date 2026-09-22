@@ -13,6 +13,27 @@ into a detailed work log.
 
 ## [Unreleased]
 
+- Advertise a worker tool gate only when the session approval registry is
+  bound. A worker-backed `claude_sdk` / `antigravity_sdk` run without a
+  registry (the non-daemon CLI path) previously denied every gated tool call
+  silently; it now falls back to the provider permission mode like the
+  in-process path (#75).
+
+- Fail closed on the worker side: an SDK worker `interrupt` frame resolves
+  every parked approval as deny before aborting the provider turn, and the
+  event emit backpressure wait now has a 30 s deadline instead of pinning the
+  worker forever (#76).
+
+- Name the blocking agent and its first failing check in the resume
+  `ineligible` error, and keep the daemon's structured error `code` on the
+  CLI surface for `resume`, `interrupt`, and `approval` (#77).
+
+- State in MCP guidance and tool descriptions that resume, interrupt, and
+  `tool_gate` need an SDK member (the shipped workflows select CLI members),
+  explain `incompatible`, warn that `interactive_idle_timeout` ends `done`,
+  and add the stop-to-resume route and resumability fields to the `stop` and
+  `list_sessions` descriptions (#78).
+
 - Close provider session control after the installed-daemon MCP campaign
   leftover. Leftover flag flips remain follow-ups (#20).
 

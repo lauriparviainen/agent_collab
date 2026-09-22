@@ -460,6 +460,7 @@ class AntigravitySdkWorkerBackendTests(unittest.IsolatedAsyncioTestCase):
                         "verbose": False,
                         "save_dir": str(traj),
                         "app_data_dir": str(app),
+                        "tool_gate": True,
                     }
                 )
         self.assertEqual(captured["workdir"], workspace.resolve())

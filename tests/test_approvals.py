@@ -25,6 +25,7 @@ from agent_collab.approvals import (
     normalize_approval_deadline,
     park_payload,
     worker_session_run_kwargs,
+    worker_tool_gate,
 )
 from agent_collab.daemon import (
     SessionManager,
@@ -112,6 +113,28 @@ class ParkPayloadBudgetTests(unittest.TestCase):
         blocks, omitted = park_payload([entry], budget=80)
         self.assertEqual(blocks, [])
         self.assertEqual(omitted, 1)
+
+
+class WorkerToolGateTests(unittest.TestCase):
+    """The worker open payload advertises a gate only with a registry bound."""
+
+    class _Runner:
+        _approval_callback = None
+
+    def test_gated_backend_without_registry_does_not_advertise(self):
+        # Non-daemon CLI runs never bind a registry: the worker must fall back
+        # to the provider permission mode instead of denying every tool call.
+        self.assertFalse(worker_tool_gate(self._Runner(), "claude"))
+
+    def test_gated_backend_with_registry_advertises(self):
+        runner = self._Runner()
+        runner._approval_callback = lambda payload: None
+        self.assertTrue(worker_tool_gate(runner, "claude"))
+
+    def test_ungated_backend_never_advertises(self):
+        runner = self._Runner()
+        runner._approval_callback = lambda payload: None
+        self.assertFalse(worker_tool_gate(runner, "codex"))
 
 
 class DispatchWorkerApprovalTests(unittest.TestCase):
